@@ -65,10 +65,11 @@ class ServerService : Service() {
                 
                 _serverInfo.value = ServerInfo(ip = ip, port = port, token = token)
                 
-                // Observe connection state for notification updates
+                // Observe connection state for notification updates and expose to UI
                 launch {
                     server.connectionState.collect { state ->
                         updateNotification(state)
+                        _connectionState.value = state
                     }
                 }
                 
@@ -203,6 +204,10 @@ class ServerService : Service() {
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
         const val EXTRA_COMMAND = "command"
+        
+        // Static flow for UI to observe connection state
+        private val _connectionState = MutableStateFlow<WebSocketServer.ConnectionState>(WebSocketServer.ConnectionState.Stopped)
+        val connectionState: StateFlow<WebSocketServer.ConnectionState> = _connectionState.asStateFlow()
         
         fun start(context: Context) {
             val intent = Intent(context, ServerService::class.java)

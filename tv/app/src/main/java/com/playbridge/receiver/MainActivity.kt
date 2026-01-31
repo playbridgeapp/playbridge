@@ -76,7 +76,7 @@ enum class Screen {
 @Composable
 fun MainContent(pairingStore: PairingStore) {
     var currentScreen by remember { mutableStateOf(Screen.Pairing) }
-    var connectionState by remember { mutableStateOf<WebSocketServer.ConnectionState>(WebSocketServer.ConnectionState.Starting) }
+    val connectionState by ServerService.connectionState.collectAsState()
     var serverIp by remember { mutableStateOf<String?>(null) }
     var serverPort by remember { mutableStateOf<Int?>(null) }
     var authToken by remember { mutableStateOf("") }
@@ -86,16 +86,17 @@ fun MainContent(pairingStore: PairingStore) {
     LaunchedEffect(Unit) {
         authToken = pairingStore.getOrCreateToken()
         serverPort = pairingStore.serverPort.first()
+        serverIp = getLocalIpAddress()
         pairingStore.deviceName.collect { name ->
             deviceName = name
         }
     }
     
-    // Simulate getting server info - in real app, this would come from the service
-    LaunchedEffect(Unit) {
-        // Get IP from network interface
-        serverIp = getLocalIpAddress()
-        connectionState = WebSocketServer.ConnectionState.Running(serverPort ?: 8765)
+    // Auto-navigate to Home when a phone connects
+    LaunchedEffect(connectionState) {
+        if (connectionState is WebSocketServer.ConnectionState.Connected) {
+            currentScreen = Screen.Home
+        }
     }
     
     when (currentScreen) {
@@ -112,7 +113,8 @@ fun MainContent(pairingStore: PairingStore) {
                 ip = serverIp ?: "unknown",
                 port = serverPort ?: 8765,
                 token = authToken,
-                deviceName = deviceName
+                deviceName = deviceName,
+                connectionState = connectionState
             )
         }
     }

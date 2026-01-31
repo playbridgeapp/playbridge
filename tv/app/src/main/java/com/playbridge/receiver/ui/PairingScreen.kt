@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -12,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.style.TextAlign
@@ -21,6 +23,7 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.playbridge.receiver.pairing.QRGenerator
+import com.playbridge.receiver.server.WebSocketServer
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -29,9 +32,11 @@ fun PairingScreen(
     port: Int,
     token: String,
     deviceName: String,
+    connectionState: WebSocketServer.ConnectionState = WebSocketServer.ConnectionState.Stopped,
     modifier: Modifier = Modifier
 ) {
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val isConnected = connectionState is WebSocketServer.ConnectionState.Connected
     
     LaunchedEffect(ip, port, token) {
         qrBitmap = QRGenerator.generate(
@@ -53,13 +58,45 @@ fun PairingScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(32.dp)
         ) {
+            // Status indicator
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when (connectionState) {
+                                is WebSocketServer.ConnectionState.Connected -> Color(0xFF00FF88)
+                                is WebSocketServer.ConnectionState.Running -> Color(0xFFFFAA00)
+                                is WebSocketServer.ConnectionState.Error -> Color(0xFFFF4444)
+                                else -> Color(0xFF666666)
+                            }
+                        )
+                )
+                
+                Text(
+                    text = when (connectionState) {
+                        is WebSocketServer.ConnectionState.Connected -> "Phone Connected!"
+                        is WebSocketServer.ConnectionState.Running -> "Waiting for connection..."
+                        is WebSocketServer.ConnectionState.Starting -> "Starting server..."
+                        is WebSocketServer.ConnectionState.Error -> "Error: ${connectionState.message}"
+                        is WebSocketServer.ConnectionState.Stopped -> "Server stopped"
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (isConnected) Color(0xFF00FF88) else Color.White
+                )
+            }
+            
             Text(
-                text = "Scan to Connect",
+                text = if (isConnected) "Connected!" else "Scan to Connect",
                 style = MaterialTheme.typography.headlineLarge,
-                color = Color.White
+                color = if (isConnected) Color(0xFF00FF88) else Color.White
             )
             
-            // QR Code
+            // QR Code (dim when connected)
             qrBitmap?.let { bitmap ->
                 Box(
                     modifier = Modifier
@@ -70,7 +107,10 @@ fun PairingScreen(
                     Image(
                         bitmap = bitmap.asImageBitmap(),
                         contentDescription = "QR Code for pairing",
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(if (isConnected) Modifier.background(Color.White.copy(alpha = 0.7f)) else Modifier),
+                        alpha = if (isConnected) 0.3f else 1f
                     )
                 }
             } ?: Box(
@@ -103,12 +143,17 @@ fun PairingScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 Text(
-                    text = "Open PlayBridge on your phone\nand scan this code",
+                    text = if (isConnected) {
+                        "Phone is connected!\nPress BACK to return home"
+                    } else {
+                        "Open PlayBridge on your phone\nand scan this code"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.Gray,
+                    color = if (isConnected) Color(0xFF00FF88) else Color.Gray,
                     textAlign = TextAlign.Center
                 )
             }
         }
     }
 }
+
