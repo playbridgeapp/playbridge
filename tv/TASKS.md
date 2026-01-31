@@ -62,7 +62,7 @@ Android TV (Leanback) app that receives video URLs from the phone and plays them
 
 ### Connection Management
 - [ ] Auto-connect to known paired phones
-- [ ] Show connection status indicator on home screen
+- [x] Show connection status indicator on home screen
 - [ ] Handle reconnection when phone disconnects
 
 ### Settings & History

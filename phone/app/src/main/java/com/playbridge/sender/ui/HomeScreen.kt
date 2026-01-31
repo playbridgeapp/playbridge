@@ -21,6 +21,7 @@ fun HomeScreen(
     onSendPing: () -> Unit,
     onDisconnect: () -> Unit,
     onRescan: () -> Unit,
+    onRetry: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -66,10 +67,20 @@ fun HomeScreen(
                     text = when (connectionState) {
                         is WebSocketClient.ConnectionState.Connected -> "Connected to ${connectionState.serverName}"
                         is WebSocketClient.ConnectionState.Connecting -> "Connecting..."
-                        is WebSocketClient.ConnectionState.Error -> "Error: ${connectionState.message}"
+                        is WebSocketClient.ConnectionState.Error -> "Connection Failed"
                         is WebSocketClient.ConnectionState.Disconnected -> "Disconnected"
                     },
                     style = MaterialTheme.typography.titleMedium
+                )
+            }
+            
+            // Error details
+            if (connectionState is WebSocketClient.ConnectionState.Error) {
+                Text(
+                    text = connectionState.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFFF6666),
+                    textAlign = TextAlign.Center
                 )
             }
             
@@ -78,7 +89,11 @@ fun HomeScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        containerColor = if (connectionState is WebSocketClient.ConnectionState.Error) {
+                            MaterialTheme.colorScheme.errorContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        }
                     )
                 ) {
                     Column(
@@ -92,7 +107,11 @@ fun HomeScreen(
                         Text(
                             text = "${tvDevice.ip}:${tvDevice.port}",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            color = if (connectionState is WebSocketClient.ConnectionState.Error) {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
                         )
                     }
                 }
@@ -101,27 +120,71 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(16.dp))
             
             // Actions
-            if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                Button(
-                    onClick = onSendPing,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Send Test Ping")
+            when (connectionState) {
+                is WebSocketClient.ConnectionState.Connected -> {
+                    Button(
+                        onClick = onSendPing,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Send Test Ping")
+                    }
+                    
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Disconnect")
+                    }
                 }
-                
-                OutlinedButton(
-                    onClick = onDisconnect,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Disconnect")
+                is WebSocketClient.ConnectionState.Error -> {
+                    // Retry button - prominent
+                    Button(
+                        onClick = onRetry,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text("Retry Connection")
+                    }
+                    
+                    // Rescan option
+                    OutlinedButton(
+                        onClick = onRescan,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Scan Different TV")
+                    }
+                    
+                    // Clear and start fresh
+                    TextButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Clear & Scan New QR")
+                    }
                 }
-            } else if (connectionState is WebSocketClient.ConnectionState.Disconnected || 
-                       connectionState is WebSocketClient.ConnectionState.Error) {
-                Button(
-                    onClick = onRescan,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Scan QR Code")
+                is WebSocketClient.ConnectionState.Disconnected -> {
+                    if (tvDevice != null) {
+                        Button(
+                            onClick = onRetry,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Reconnect")
+                        }
+                    }
+                    
+                    OutlinedButton(
+                        onClick = onRescan,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Scan QR Code")
+                    }
+                }
+                is WebSocketClient.ConnectionState.Connecting -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(48.dp)
+                    )
                 }
             }
             
@@ -135,7 +198,7 @@ fun HomeScreen(
                     is WebSocketClient.ConnectionState.Connecting ->
                         "Establishing connection..."
                     is WebSocketClient.ConnectionState.Error ->
-                        "Connection failed. Check that the TV app is running."
+                        "Check that:\n• TV app is running\n• Both devices are on same network\n• IP address is correct"
                     is WebSocketClient.ConnectionState.Disconnected ->
                         "Connect to your TV to start casting videos."
                 },
@@ -146,3 +209,4 @@ fun HomeScreen(
         }
     }
 }
+

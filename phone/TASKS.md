@@ -25,6 +25,9 @@ Android phone app with GeckoView browser that detects video URLs and sends them 
 ### Main UI
 - [x] Update `MainActivity.kt` with navigation and permission handling
 - [x] Create `HomeScreen.kt` with connection status and actions
+- [x] Add manual connection dialog (IP/port entry)
+- [x] Add camera zoom control for QR scanning
+- [x] Add network security config for cleartext traffic
 
 ---
 

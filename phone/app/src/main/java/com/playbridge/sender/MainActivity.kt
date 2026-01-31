@@ -164,6 +164,11 @@ fun MainContent(
                 onRescan = {
                     currentScreen = Screen.Scanner
                 },
+                onRetry = {
+                    tvDevice?.let { device ->
+                        webSocketClient.connect(device.ip, device.port, device.token, device.name)
+                    }
+                },
                 modifier = modifier
             )
         }
