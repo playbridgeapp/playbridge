@@ -7,21 +7,24 @@ Android phone app with GeckoView browser that detects video URLs and sends them 
 ## Phase 1: Core Infrastructure
 
 ### Project Setup
-- [ ] Configure `build.gradle.kts` with GeckoView, OkHttp, ML Kit, CameraX dependencies
-- [ ] Create `PhoneCasterApp.kt` application class
-- [ ] Set up AndroidManifest with necessary permissions (camera, network)
+- [x] Configure `build.gradle.kts` with OkHttp, ML Kit, CameraX, DataStore dependencies
+- [x] Set up AndroidManifest with necessary permissions (camera, network)
 
 ### WebSocket Client
-- [ ] Implement `WebSocketClient.kt` with OkHttp
-- [ ] Create `ConnectionManager.kt` with auto-reconnect logic
-- [ ] Create `ConnectionStore.kt` with DataStore for TV connection info
-- [ ] Define `Message.kt` protocol data classes
-- [ ] Implement `TvDevice.kt` model class
+- [x] Implement `WebSocketClient.kt` with OkHttp
+- [x] Create `ConnectionStore.kt` with DataStore for TV connection info
+- [x] Define `Message.kt` protocol data classes
+- [x] Implement `TvDevice.kt` model class
+
 ### QR Scanner
-- [ ] Create `QRScannerFragment.kt` with CameraX + ML Kit
-- [ ] Parse QR code data (IP, port, token, name)
-- [ ] Initiate WebSocket connection after scanning
-- [ ] Store connection info on successful pairing
+- [x] Create `QRScannerScreen.kt` with CameraX + ML Kit
+- [x] Parse QR code data (IP, port, token, name)
+- [x] Initiate WebSocket connection after scanning
+- [x] Store connection info on successful pairing
+
+### Main UI
+- [x] Update `MainActivity.kt` with navigation and permission handling
+- [x] Create `HomeScreen.kt` with connection status and actions
 
 ---
 
