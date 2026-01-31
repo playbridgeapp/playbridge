@@ -17,7 +17,6 @@ Android phone app with GeckoView browser that detects video URLs and sends them 
 - [ ] Create `ConnectionStore.kt` with DataStore for TV connection info
 - [ ] Define `Message.kt` protocol data classes
 - [ ] Implement `TvDevice.kt` model class
-
 ### QR Scanner
 - [ ] Create `QRScannerFragment.kt` with CameraX + ML Kit
 - [ ] Parse QR code data (IP, port, token, name)
