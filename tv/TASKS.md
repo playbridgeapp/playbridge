@@ -7,22 +7,24 @@ Android TV (Leanback) app that receives video URLs from the phone and plays them
 ## Phase 1: Core Infrastructure
 
 ### Project Setup
-- [ ] Configure `build.gradle.kts` with Leanback, Ktor, ZXing dependencies
-- [ ] Create `TvCasterApp.kt` application class
-- [ ] Set up AndroidManifest with TV launcher intent and permissions
+- [x] Configure `build.gradle.kts` with Leanback, Ktor, ZXing dependencies
+- [x] Set up AndroidManifest with TV launcher intent and permissions
 
 ### WebSocket Server
-- [ ] Implement `WebSocketServer.kt` with Ktor
-- [ ] Create `ServerService.kt` foreground service to keep server running
-- [ ] Implement `MessageHandler.kt` to process incoming commands
-- [ ] Define `Message.kt` protocol data classes (command, status, ping/pong)
+- [x] Implement `WebSocketServer.kt` with Ktor 3.0
+- [x] Create `ServerService.kt` foreground service to keep server running
+- [x] Define `Message.kt` protocol data classes (command, status, ping/pong)
 
 ### Pairing System
-- [ ] Create `QRGenerator.kt` using ZXing to generate pairing QR bitmap
-- [ ] Implement `PairingFragment.kt` to display QR code on screen
-- [ ] Create `PairingStore.kt` with DataStore for storing paired devices
-- [ ] Implement `PairedDevice.kt` model class
+- [x] Create `QRGenerator.kt` using ZXing to generate pairing QR bitmap
+- [x] Implement `PairingScreen.kt` to display QR code on screen
+- [x] Create `PairingStore.kt` with DataStore for storing paired devices
+- [x] Implement `PairedDevice.kt` model class
 - [ ] Add token validation for secure pairing
+
+### Main UI
+- [x] Create `HomeScreen.kt` with connection status
+- [x] Update `MainActivity.kt` with navigation and state
 
 ---
 
