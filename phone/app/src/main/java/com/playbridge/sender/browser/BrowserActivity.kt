@@ -25,6 +25,8 @@ import mozilla.components.browser.engine.gecko.GeckoEngineView
 import mozilla.components.concept.engine.EngineSession
 import mozilla.components.concept.fetch.Response
 
+import com.playbridge.sender.connection.ConnectionStore
+import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 
 class BrowserActivity : ComponentActivity() {
@@ -32,11 +34,16 @@ class BrowserActivity : ComponentActivity() {
     companion object {
         private const val TAG = "BrowserActivity"
     }
+    
+    private val webSocketClient = WebSocketClient()
+    private lateinit var connectionStore: ConnectionStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        connectionStore = ConnectionStore(applicationContext)
+        
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
         }
@@ -46,6 +53,17 @@ class BrowserActivity : ComponentActivity() {
 
         setContent {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Browser) }
+            val connectionState by webSocketClient.connectionState.collectAsState()
+            
+            // Auto-connect to stored TV device
+            LaunchedEffect(Unit) {
+                connectionStore.tvDevice.collect { device ->
+                    if (device != null && connectionState is WebSocketClient.ConnectionState.Disconnected) {
+                        Log.d(TAG, "Auto-connecting to TV: ${device.name} at ${device.ip}:${device.port}")
+                        webSocketClient.connect(device.ip, device.port, device.token, device.name)
+                    }
+                }
+            }
             
             // Session and navigation state
             val session = remember { Components.engine.createSession() }
@@ -341,8 +359,61 @@ class BrowserActivity : ComponentActivity() {
                         videos = detectedVideos.toList(),
                         onDismiss = { showVideoSheet = false },
                         onVideoClick = { video ->
-                            // TODO: Send to TV or play locally
-                            android.util.Log.d("BrowserActivity", "Video clicked: ${video.url}")
+                            Log.d(TAG, "=== PLAY ON TV CLICKED ===")
+                            Log.d(TAG, "Video URL: ${video.url}")
+                            Log.d(TAG, "Connection state: $connectionState")
+                            
+                            when (val state = connectionState) {
+                                is WebSocketClient.ConnectionState.Connected -> {
+                                    Log.d(TAG, "Connected to: ${state.serverName}")
+                                    val commandJson = com.playbridge.sender.model.createPlayCommandJson(
+                                        url = video.url,
+                                        title = "Video from browser"
+                                    )
+                                    Log.d(TAG, "Sending play command: $commandJson")
+                                    val sent = webSocketClient.send(commandJson)
+                                    Log.d(TAG, "Command sent: $sent")
+                                    
+                                    if (sent) {
+                                        Toast.makeText(
+                                            this@BrowserActivity,
+                                            "Playing on ${state.serverName}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        Log.e(TAG, "Failed to send command")
+                                        Toast.makeText(
+                                            this@BrowserActivity,
+                                            "Failed to send to TV",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                                is WebSocketClient.ConnectionState.Disconnected -> {
+                                    Log.e(TAG, "Not connected to TV")
+                                    Toast.makeText(
+                                        this@BrowserActivity,
+                                        "Not connected to TV. Please connect from home screen.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                                is WebSocketClient.ConnectionState.Connecting -> {
+                                    Log.w(TAG, "Still connecting to TV")
+                                    Toast.makeText(
+                                        this@BrowserActivity,
+                                        "Connecting to TV...",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                is WebSocketClient.ConnectionState.Error -> {
+                                    Log.e(TAG, "Connection error: ${state.message}")
+                                    Toast.makeText(
+                                        this@BrowserActivity,
+                                        "Connection error: ${state.message}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
                         },
                         onClear = {
                             VideoDetector.clear()
@@ -351,6 +422,11 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
         }
+    }
+    
+    override fun onDestroy() {
+        webSocketClient.destroy()
+        super.onDestroy()
     }
     
     @Composable

@@ -17,6 +17,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Browser toolbar with navigation controls, URL bar, and menu.
@@ -41,7 +43,22 @@ fun BrowserToolbar(
 ) {
     var isEditing by remember { mutableStateOf(false) }
     var editUrl by remember(currentUrl) { mutableStateOf(currentUrl) }
+    val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    var clipboardDetail by remember { mutableStateOf<String?>(null) }
+
+    // Check clipboard when editing starts
+    LaunchedEffect(isEditing) {
+        if (isEditing) {
+            val clipText = clipboardManager.getText()?.text
+            if (!clipText.isNullOrBlank() && clipText != editUrl) {
+                clipboardDetail = clipText
+            } else {
+                clipboardDetail = null
+            }
+        }
+    }
     
     Surface(
         shadowElevation = 8.dp,
@@ -94,9 +111,13 @@ fun BrowserToolbar(
                             if (focusState.isFocused) {
                                 isEditing = true
                             } else {
-                                isEditing = false
-                                // Reset to current URL when focus is lost without navigation
-                                editUrl = currentUrl
+                                scope.launch {
+                                    delay(200)
+                                    if (isEditing) {
+                                        isEditing = false
+                                        editUrl = currentUrl
+                                    }
+                                }
                             }
                         },
                     singleLine = true,
@@ -106,6 +127,20 @@ fun BrowserToolbar(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         ) 
+                    },
+                    trailingIcon = {
+                        if (editUrl.isNotEmpty() && isEditing) {
+                            IconButton(onClick = { 
+                                editUrl = ""
+                                onUrlChange("") // Establish empty state
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear URL",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(
@@ -130,7 +165,6 @@ fun BrowserToolbar(
                 Spacer(modifier = Modifier.width(8.dp))
                 
                 // Menu button
-                // Menu button
                 Box {
                     IconButton(onClick = onMenuClick) {
                         Icon(
@@ -140,6 +174,53 @@ fun BrowserToolbar(
                     }
                     menuContent()
                 }
+            }
+
+            // Clipboard suggestion
+            if (isEditing && clipboardDetail != null) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp), // Less padding
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = MaterialTheme.shapes.medium,
+                    onClick = {
+                        val url = normalizeUrl(clipboardDetail!!)
+                        editUrl = url
+                        onNavigate(url)
+                        isEditing = false
+                        keyboardController?.hide()
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Paste link",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(
+                                text = "Link you copied",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = clipboardDetail!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
             }
             
             // Loading progress indicator

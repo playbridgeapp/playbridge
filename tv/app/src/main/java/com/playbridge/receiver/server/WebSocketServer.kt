@@ -100,15 +100,23 @@ class WebSocketServer(
                 when (frame) {
                     is Frame.Text -> {
                         val text = frame.readText()
-                        Log.d(TAG, "Received: $text")
+                        Log.d(TAG, "=== MESSAGE RECEIVED ===")
+                        Log.d(TAG, "Raw message: $text")
                         
                         val command = parseCommand(text)
+                        Log.d(TAG, "Parsed command: ${command.javaClass.simpleName}")
                         
                         when (command) {
                             is Command.Ping -> {
+                                Log.d(TAG, "Ping received, sending pong")
                                 session.send(Frame.Text(createPongJson()))
                             }
+                            is Command.Play -> {
+                                Log.i(TAG, "Play command parsed - URL: ${command.url}, Title: ${command.title}")
+                                _commands.emit(command)
+                            }
                             else -> {
+                                Log.d(TAG, "Emitting command to flow")
                                 _commands.emit(command)
                             }
                         }

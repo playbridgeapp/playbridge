@@ -86,16 +86,28 @@ class ServerService : Service() {
     }
     
     private fun handleCommand(command: Command) {
+        Log.i(TAG, "=== COMMAND RECEIVED ===")
+        Log.i(TAG, "Command type: ${command.javaClass.simpleName}")
+        
         when (command) {
             is Command.Play -> {
-                Log.i(TAG, "Play command: ${command.url}")
-                // TODO: Launch player activity with URL
-                val intent = Intent(ACTION_PLAY).apply {
-                    putExtra(EXTRA_URL, command.url)
-                    putExtra(EXTRA_TITLE, command.title)
-                    setPackage(packageName)
+                Log.i(TAG, "=== PLAY COMMAND ===")
+                Log.i(TAG, "URL: ${command.url}")
+                Log.i(TAG, "Title: ${command.title}")
+                
+                // Launch PlayerActivity with URL
+                try {
+                    val intent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                        putExtra(EXTRA_URL, command.url)
+                        putExtra(EXTRA_TITLE, command.title)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    Log.i(TAG, "Launching PlayerActivity...")
+                    startActivity(intent)
+                    Log.i(TAG, "PlayerActivity launched successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch PlayerActivity", e)
                 }
-                sendBroadcast(intent)
             }
             is Command.Browser -> {
                 Log.i(TAG, "Browser command: ${command.url}")

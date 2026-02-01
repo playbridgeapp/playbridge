@@ -293,11 +293,11 @@ private fun VideoItemDetailed(
                 ) {
                     Icon(
                         Icons.Default.Send,
-                        contentDescription = "Send to TV",
+                        contentDescription = "Play on TV",
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text("Send to TV")
+                    Text("Play on TV")
                 }
             }
         }
