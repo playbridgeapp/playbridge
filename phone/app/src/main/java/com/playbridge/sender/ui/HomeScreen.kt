@@ -21,6 +21,7 @@ fun HomeScreen(
     onSendPing: () -> Unit,
     onDisconnect: () -> Unit,
     onRescan: () -> Unit,
+    onOpenBrowser: () -> Unit,
     onRetry: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -129,6 +130,13 @@ fun HomeScreen(
                         Text("Send Test Ping")
                     }
                     
+                    Button(
+                        onClick = onOpenBrowser,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Open Browser")
+                    }
+                    
                     OutlinedButton(
                         onClick = onDisconnect,
                         modifier = Modifier.fillMaxWidth()
@@ -180,6 +188,14 @@ fun HomeScreen(
                     ) {
                         Text("Scan QR Code")
                     }
+
+                    // For testing browser even when disconnected
+                    TextButton(
+                        onClick = onOpenBrowser,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Open Browser (Offline)")
+                    }
                 }
                 is WebSocketClient.ConnectionState.Connecting -> {
                     CircularProgressIndicator(
@@ -209,4 +225,3 @@ fun HomeScreen(
         }
     }
 }
-

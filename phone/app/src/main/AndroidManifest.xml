@@ -31,6 +31,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".browser.BrowserActivity"
+            android:exported="false"
+            android:label="Browser"
+            android:theme="@style/Theme.PlayBridge"
+            android:windowSoftInputMode="adjustResize" />
     </application>
 
 </manifest>

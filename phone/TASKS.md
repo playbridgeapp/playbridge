@@ -34,9 +34,13 @@ Android phone app with GeckoView browser that detects video URLs and sends them 
 ## Phase 2: GeckoView Browser
 
 ### Browser Setup
-- [ ] Create `BrowserFragment.kt` with GeckoView
-- [ ] Implement `BrowserToolbar.kt` (URL bar, back/forward, refresh)
-- [ ] Create `GeckoSessionManager.kt` to manage sessions
+- [x] Create `BrowserActivity.kt` with GeckoView (basic scaffold)
+- [x] Implement URL bar with keyboard input and navigation
+- [x] Create `Components.kt` singleton for engine/store initialization
+- [ ] Implement back/forward/refresh controls in toolbar
+- [ ] Create proper `TabManager` using BrowserStore
+- [ ] Wire `TabsScreen.kt` to actual store state
+- [ ] Implement `ExtensionsScreen.kt` with AddonManager
 
 ### Ad Blocking
 - [ ] Implement `AdBlocker.kt` using GeckoView Content Blocking API

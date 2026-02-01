@@ -14,6 +14,8 @@ cameraX = "1.4.1"
 datastore = "1.1.1"
 kotlinxSerialization = "1.7.3"
 coroutines = "1.9.0"
+moz-android-components = "147.0"
+geckoview = "147.0.20260105210555"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -50,6 +52,28 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# Mozilla GeckoView
+geckoview-omni = { group = "org.mozilla.geckoview", name = "geckoview-omni", version.ref = "geckoview" }
+
+# Mozilla Android Components
+moz-concept-engine = { group = "org.mozilla.components", name = "concept-engine", version.ref = "moz-android-components" }
+moz-concept-fetch = { group = "org.mozilla.components", name = "concept-fetch", version.ref = "moz-android-components" }
+moz-browser-engine-gecko = { group = "org.mozilla.components", name = "browser-engine-gecko", version.ref = "moz-android-components" }
+moz-browser-state = { group = "org.mozilla.components", name = "browser-state", version.ref = "moz-android-components" }
+moz-browser-tabstray = { group = "org.mozilla.components", name = "browser-tabstray", version.ref = "moz-android-components" }
+moz-browser-toolbar = { group = "org.mozilla.components", name = "browser-toolbar", version.ref = "moz-android-components" }
+moz-feature-tabs = { group = "org.mozilla.components", name = "feature-tabs", version.ref = "moz-android-components" }
+moz-feature-session = { group = "org.mozilla.components", name = "feature-session", version.ref = "moz-android-components" }
+moz-feature-toolbar = { group = "org.mozilla.components", name = "feature-toolbar", version.ref = "moz-android-components" }
+moz-feature-addons = { group = "org.mozilla.components", name = "feature-addons", version.ref = "moz-android-components" }
+moz-feature-prompts = { group = "org.mozilla.components", name = "feature-prompts", version.ref = "moz-android-components" }
+moz-support-webextensions = { group = "org.mozilla.components", name = "support-webextensions", version.ref = "moz-android-components" }
+moz-support-ktx = { group = "org.mozilla.components", name = "support-ktx", version.ref = "moz-android-components" }
+moz-lib-fetch-okhttp = { group = "org.mozilla.components", name = "lib-fetch-okhttp", version.ref = "moz-android-components" }
+moz-browser-menu = { group = "org.mozilla.components", name = "browser-menu", version.ref = "moz-android-components" }
+moz-ui-widgets = { group = "org.mozilla.components", name = "ui-widgets", version.ref = "moz-android-components" }
+moz-ui-icons = { group = "org.mozilla.components", name = "ui-icons", version.ref = "moz-android-components" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -16,7 +16,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import android.content.Intent
 import androidx.core.content.ContextCompat
+import com.playbridge.sender.browser.BrowserActivity
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.model.QRCodeData
@@ -163,6 +165,10 @@ fun MainContent(
                 },
                 onRescan = {
                     currentScreen = Screen.Scanner
+                },
+                onOpenBrowser = {
+                     val intent = Intent(context, BrowserActivity::class.java)
+                     context.startActivity(intent)
                 },
                 onRetry = {
                     tvDevice?.let { device ->
