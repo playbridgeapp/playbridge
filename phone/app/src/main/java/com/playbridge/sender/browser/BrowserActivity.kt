@@ -274,20 +274,7 @@ class BrowserActivity : ComponentActivity() {
                                 Box(modifier = Modifier.fillMaxSize()) {
                                     BrowserView(session = session)
                                     
-                                    // Video detection FAB
-                                    VideoFAB(
-                                        modifier = Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .padding(16.dp),
-                                        onVideoSelected = { video ->
-                                            // TODO: Send video to TV
-                                            android.widget.Toast.makeText(
-                                                this@BrowserActivity,
-                                                "Video: ${video.type} - ${video.url.take(50)}...",
-                                                android.widget.Toast.LENGTH_LONG
-                                            ).show()
-                                        }
-                                    )
+
                                 }
                             }
                             Screen.Tabs -> TabsScreen(

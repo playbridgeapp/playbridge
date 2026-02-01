@@ -59,7 +59,8 @@ fun BrowserToolbar(
                 Spacer(modifier = Modifier.width(4.dp))
 
                 // Video count badge - always visible
-                val videoCount by VideoDetector.videoCount.collectAsState()
+//                val videoCount by VideoDetector.videoCount.collectAsState()
+                val videoCount = 0;
                 BadgedBox(
                     badge = {
                         Badge(
