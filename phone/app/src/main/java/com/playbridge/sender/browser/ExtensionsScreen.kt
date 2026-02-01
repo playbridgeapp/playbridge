@@ -199,7 +199,8 @@ fun ExtensionsScreen(
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(installedExtensions.filter { it.isBuiltIn == false }) { extension ->
+                    // Show all extensions (including built-in like video detector)
+                    items(installedExtensions) { extension ->
                         ExtensionCard(
                             extension = extension,
                             onUninstall = {

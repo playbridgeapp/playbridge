@@ -34,6 +34,7 @@ fun BrowserToolbar(
     onRefresh: () -> Unit,
     onStop: () -> Unit,
     onMenuClick: () -> Unit,
+    menuContent: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var isEditing by remember { mutableStateOf(false) }
@@ -41,16 +42,42 @@ fun BrowserToolbar(
     val keyboardController = LocalSoftwareKeyboardController.current
     
     Surface(
-        shadowElevation = 4.dp,
-        modifier = modifier.fillMaxWidth()
+        shadowElevation = 8.dp,
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainer, // distinct from background
+        contentColor = MaterialTheme.colorScheme.onSurface
     ) {
-        Column {
+        Column(
+            modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars)
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Video count badge - always visible
+                val videoCount by VideoDetector.videoCount.collectAsState()
+                BadgedBox(
+                    badge = {
+                        Badge(
+                            containerColor = if (videoCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        ) {
+                            Text(videoCount.toString())
+                        }
+                    }
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "$videoCount videos detected",
+                        tint = if (videoCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                
                 // URL Bar
                 TextField(
                     value = editUrl,
@@ -87,31 +114,37 @@ fun BrowserToolbar(
                         }
                     ),
                     colors = TextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                         focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent
+                        unfocusedIndicatorColor = Color.Transparent,
+                        cursorColor = MaterialTheme.colorScheme.primary
                     ),
                     textStyle = MaterialTheme.typography.bodyMedium,
-                    shape = MaterialTheme.shapes.medium
+                    shape = MaterialTheme.shapes.extraLarge // Pill shape
                 )
                 
                 Spacer(modifier = Modifier.width(8.dp))
                 
                 // Menu button
-                IconButton(onClick = onMenuClick) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "Menu"
-                    )
+                // Menu button
+                Box {
+                    IconButton(onClick = onMenuClick) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "Menu"
+                        )
+                    }
+                    menuContent()
                 }
             }
             
             // Loading progress indicator
             if (isLoading) {
                 LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.primary
+                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = Color.Transparent
                 )
             }
         }

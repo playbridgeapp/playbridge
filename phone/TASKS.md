@@ -34,77 +34,144 @@ Android phone app with GeckoView browser that detects video URLs and sends them 
 ## Phase 2: GeckoView Browser
 
 ### Browser Setup
-- [x] Create `BrowserActivity.kt` with GeckoView (basic scaffold)
+- [x] Create `BrowserActivity.kt` with GeckoView
 - [x] Implement URL bar with keyboard input and navigation
 - [x] Create `Components.kt` singleton for engine/store initialization
-- [ ] Implement back/forward/refresh controls in toolbar
+- [x] Add hamburger menu with back/forward/refresh buttons
 - [ ] Create proper `TabManager` using BrowserStore
 - [ ] Wire `TabsScreen.kt` to actual store state
-- [ ] Implement `ExtensionsScreen.kt` with AddonManager
 
-### Ad Blocking
-- [ ] Implement `AdBlocker.kt` using GeckoView Content Blocking API
-- [ ] Add EasyList filter rules to `assets/adblock/`
-- [ ] Enable tracking protection and ad filtering
-
-### Video Detection
-- [ ] Create `VideoDetector.kt` for WebRequest interception
-- [ ] Implement `VideoUrlMatcher.kt` with patterns for m3u8, mp4, mpd, etc.
-- [ ] Create `DetectedVideo.kt` model class
-- [ ] Build WebExtension for request interception
-
-### JavaScript Fallback
-- [ ] Create `web_extension/content.js` for DOM scanning
-- [ ] Implement MutationObserver for dynamic content
-- [ ] Detect video/source/iframe elements with video sources
+### WebExtension Support
+- [x] Add Mozilla Android Components dependencies
+- [x] Implement AddonManager with AMO provider
+- [x] Create `ExtensionsScreen.kt` with install/uninstall
+- [x] Set up PromptDelegate for extension permissions
+- [ ] Bundle video detection extension in assets
 
 ---
 
-## Phase 3: Video Detection UI
+## Phase 3: Video Detection WebExtension
+
+### Extension Structure
+Create bundled WebExtension at `assets/extensions/video_detector/`:
+
+```
+video_detector/
+├── manifest.json     # Extension manifest with webRequest permissions
+├── background.js     # Request interception and video detection
+└── icons/
+    └── icon-48.png   # Extension icon
+```
+
+### manifest.json
+```json
+{
+  "manifest_version": 2,
+  "name": "PlayBridge Video Detector",
+  "version": "1.0",
+  "description": "Detects video URLs for PlayBridge",
+  "background": { "scripts": ["background.js"] },
+  "permissions": [
+    "<all_urls>",
+    "webRequest"
+  ],
+  "browser_specific_settings": {
+    "gecko": { "id": "video-detector@playbridge" }
+  }
+}
+```
+
+### background.js Logic
+```javascript
+// Listen for HTTP responses with video content-types
+browser.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    const contentType = details.responseHeaders.find(
+      h => h.name.toLowerCase() === 'content-type'
+    );
+    if (!contentType) return;
+    
+    const type = contentType.value.toLowerCase();
+    const isVideo = 
+      type.includes('video/') ||
+      type.includes('mpegurl') ||      // HLS
+      type.includes('application/dash') // DASH
+    ;
+    
+    if (isVideo || details.type === 'media') {
+      // Send to native app via messaging
+      browser.runtime.sendNativeMessage('video-detector', {
+        type: 'video_detected',
+        url: details.url,
+        tabId: details.tabId,
+        contentType: type,
+        originUrl: details.originUrl
+      });
+    }
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"]
+);
+
+// Also detect by URL patterns (for .m3u8, .mpd)
+browser.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    const url = details.url.toLowerCase();
+    if (url.includes('.m3u8') || url.includes('.m3u') || 
+        url.includes('.mpd') || url.includes('.mp4')) {
+      browser.runtime.sendNativeMessage('video-detector', {
+        type: 'video_detected',
+        url: details.url,
+        tabId: details.tabId,
+        detectedBy: 'url_pattern'
+      });
+    }
+  },
+  { urls: ["<all_urls>"] }
+);
+```
+
+### Native App Integration
+- [ ] Register native messaging host in GeckoRuntime
+- [ ] Create `VideoDetector.kt` to receive messages from extension
+- [ ] Store detected videos per tab with metadata
+- [ ] Show FAB when videos are detected
+
+---
+
+## Phase 4: Video Detection UI
 
 ### FAB & Bottom Sheet
-- [ ] Create `VideoFAB.kt` floating action button showing video count
-- [ ] Implement `DetectedVideosSheet.kt` bottom sheet with video list
+- [ ] Create `VideoFAB.kt` showing detected video count
+- [ ] Implement `DetectedVideosSheet.kt` bottom sheet
 - [ ] Show video URL, type (HLS/MP4/DASH), and page source
 - [ ] Add option to send selected video to TV
-
-### Connection Status
-- [ ] Create `ConnectionStatusView.kt` floating indicator
-- [ ] Show connected/disconnected/connecting states
-- [ ] Tap to reconnect or view connection details
-
----
-
-## Phase 4: Integration & Polish
 
 ### Send to TV
 - [ ] Send video URL with headers (Referer, User-Agent) to TV
 - [ ] Option to send current page URL to TV browser
 - [ ] Show confirmation when video sent successfully
 
-### Remote Control
-- [ ] Create `RemoteFragment.kt` for TV playback control
-- [ ] Play/pause/seek buttons
-- [ ] Display current playback status from TV
-
-### Navigation & Settings
-- [ ] Implement bottom navigation (Browse, Remote, Settings)
-- [ ] Create settings screen for connection management
-- [ ] Add-block rules configuration
-- [ ] History of sent videos
-
 ---
 
 ## Video Detection Patterns
 
-| Pattern | Type |
-|---------|------|
+| Content-Type | Format |
+|--------------|--------|
+| `video/mp4` | MP4 |
+| `video/webm` | WebM |
+| `video/x-flv` | FLV |
+| `application/vnd.apple.mpegurl` | HLS |
+| `application/x-mpegurl` | HLS |
+| `application/dash+xml` | DASH |
+
+| URL Pattern | Format |
+|-------------|--------|
 | `*.m3u8` | HLS |
+| `*.m3u` | HLS |
 | `*.mpd` | DASH |
-| `*.mp4`, `*.mkv`, `*.webm` | Direct |
+| `*.mp4` | MP4 |
 | `googlevideo.com/videoplayback` | YouTube CDN |
-| `akamaihd.net/*.m3u8` | Akamai CDN |
-| `cloudfront.net/*.m3u8` | CloudFront CDN |
 
 ---
 
@@ -115,8 +182,7 @@ Android phone app with GeckoView browser that detects video URLs and sends them 
 | Fresh install | Shows QR scanner |
 | Scan TV QR code | Connects to TV |
 | App restart | Auto-connects to TV |
-| Browse video site | Detects m3u8/mp4 URLs |
+| Browse video site | FAB shows with video count |
+| Tap FAB | Shows detected videos list |
 | Tap video in list | Sends to TV for playback |
-| Browse ad-heavy site | Ads are blocked |
-| Network change | Attempts reconnection |
-| Use remote controls | TV player responds |
+| Browse ad-heavy site | Ads are blocked by uBlock |

@@ -13,6 +13,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -23,6 +24,8 @@ import kotlinx.coroutines.launch
 import mozilla.components.browser.engine.gecko.GeckoEngineView
 import mozilla.components.concept.engine.EngineSession
 import mozilla.components.concept.fetch.Response
+
+import com.playbridge.sender.ui.theme.PlayBridgeTheme
 
 class BrowserActivity : ComponentActivity() {
     
@@ -131,7 +134,7 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            MaterialTheme {
+            PlayBridgeTheme {
                 Scaffold(
                     topBar = {
                         when (currentScreen) {
@@ -148,87 +151,96 @@ class BrowserActivity : ComponentActivity() {
                                         onForward = { session.goForward() },
                                         onRefresh = { session.reload() },
                                         onStop = { session.stopLoading() },
-                                        onMenuClick = { menuExpanded = true }
-                                    )
-                                    
-                                    // Dropdown menu
-                                    DropdownMenu(
-                                        expanded = menuExpanded,
-                                        onDismissRequest = { menuExpanded = false }
-                                    ) {
-                                        // Navigation buttons row
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                                            horizontalArrangement = Arrangement.SpaceEvenly
-                                        ) {
-                                            IconButton(
-                                                onClick = {
-                                                    session.goBack()
-                                                    menuExpanded = false
-                                                },
-                                                enabled = canGoBack
+                                        onMenuClick = { menuExpanded = true },
+                                        menuContent = {
+                                            // Dropdown menu
+                                            DropdownMenu(
+                                                expanded = menuExpanded,
+                                                onDismissRequest = { menuExpanded = false },
+                                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                                tonalElevation = 8.dp,
+                                                shape = MaterialTheme.shapes.large
                                             ) {
-                                                Icon(
-                                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                                    "Back",
-                                                    tint = if (canGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                )
-                                            }
-                                            IconButton(
-                                                onClick = {
-                                                    session.goForward()
-                                                    menuExpanded = false
-                                                },
-                                                enabled = canGoForward
-                                            ) {
-                                                Icon(
-                                                    Icons.AutoMirrored.Filled.ArrowForward,
-                                                    "Forward",
-                                                    tint = if (canGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                )
-                                            }
-                                            IconButton(
-                                                onClick = {
-                                                    if (isLoading) session.stopLoading() else session.reload()
-                                                    menuExpanded = false
+                                                // Navigation buttons row
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(vertical = 8.dp), // Removed horizontal padding to allow full width evenly
+                                                    horizontalArrangement = Arrangement.SpaceEvenly,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    IconButton(
+                                                        onClick = {
+                                                            session.goBack()
+                                                            menuExpanded = false
+                                                        },
+                                                        enabled = canGoBack
+                                                    ) {
+                                                        Icon(
+                                                            Icons.AutoMirrored.Filled.ArrowBack,
+                                                            "Back",
+                                                            tint = if (canGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = {
+                                                            session.goForward()
+                                                            menuExpanded = false
+                                                        },
+                                                        enabled = canGoForward
+                                                    ) {
+                                                        Icon(
+                                                            Icons.AutoMirrored.Filled.ArrowForward,
+                                                            "Forward",
+                                                            tint = if (canGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = {
+                                                            if (isLoading) session.stopLoading() else session.reload()
+                                                            menuExpanded = false
+                                                        }
+                                                    ) {
+                                                        Icon(
+                                                            if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
+                                                            if (isLoading) "Stop" else "Refresh",
+                                                            tint = MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                    }
                                                 }
-                                            ) {
-                                                Icon(
-                                                    if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
-                                                    if (isLoading) "Stop" else "Refresh"
+                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                                DropdownMenuItem(
+                                                    text = { Text("Tabs", style = MaterialTheme.typography.bodyLarge) },
+                                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null, tint = MaterialTheme.colorScheme.primary) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        currentScreen = Screen.Tabs
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Extensions", style = MaterialTheme.typography.bodyLarge) },
+                                                    leadingIcon = { Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.primary) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        currentScreen = Screen.Extensions
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                )
+                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                                DropdownMenuItem(
+                                                    text = { Text("Install uBlock Origin", style = MaterialTheme.typography.bodyLarge) },
+                                                    leadingIcon = { Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.primary) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        // Open AMO page for uBlock Origin
+                                                        session.loadUrl("https://addons.mozilla.org/android/addon/ublock-origin/")
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                 )
                                             }
                                         }
-                                        HorizontalDivider()
-                                        DropdownMenuItem(
-                                            text = { Text("Tabs") },
-                                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null) },
-                                            onClick = {
-                                                menuExpanded = false
-                                                currentScreen = Screen.Tabs
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Extensions") },
-                                            leadingIcon = { Icon(Icons.Default.Settings, null) },
-                                            onClick = {
-                                                menuExpanded = false
-                                                currentScreen = Screen.Extensions
-                                            }
-                                        )
-                                        HorizontalDivider()
-                                        DropdownMenuItem(
-                                            text = { Text("Install uBlock Origin") },
-                                            leadingIcon = { Icon(Icons.Default.Lock, null) },
-                                            onClick = {
-                                                menuExpanded = false
-                                                // Open AMO page for uBlock Origin
-                                                session.loadUrl("https://addons.mozilla.org/android/addon/ublock-origin/")
-                                            }
-                                        )
-                                    }
+                                    )
                                 }
                             }
                             Screen.Tabs -> {
@@ -258,7 +270,26 @@ class BrowserActivity : ComponentActivity() {
                 ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         when (currentScreen) {
-                            Screen.Browser -> BrowserView(session = session)
+                            Screen.Browser -> {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    BrowserView(session = session)
+                                    
+                                    // Video detection FAB
+                                    VideoFAB(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(16.dp),
+                                        onVideoSelected = { video ->
+                                            // TODO: Send video to TV
+                                            android.widget.Toast.makeText(
+                                                this@BrowserActivity,
+                                                "Video: ${video.type} - ${video.url.take(50)}...",
+                                                android.widget.Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    )
+                                }
+                            }
                             Screen.Tabs -> TabsScreen(
                                 onTabSelected = { currentScreen = Screen.Browser },
                                 onTabClosed = { /* TODO */ }
