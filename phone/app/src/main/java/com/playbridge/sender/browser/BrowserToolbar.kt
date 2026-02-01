@@ -27,6 +27,7 @@ fun BrowserToolbar(
     isLoading: Boolean,
     canGoBack: Boolean,
     canGoForward: Boolean,
+    videoCount: Int = 0,
     onUrlChange: (String) -> Unit,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
@@ -34,6 +35,7 @@ fun BrowserToolbar(
     onRefresh: () -> Unit,
     onStop: () -> Unit,
     onMenuClick: () -> Unit,
+    onVideoClick: () -> Unit = {},
     menuContent: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -58,26 +60,26 @@ fun BrowserToolbar(
             ) {
                 Spacer(modifier = Modifier.width(4.dp))
 
-                // Video count badge - always visible
-//                val videoCount by VideoDetector.videoCount.collectAsState()
-                val videoCount = 0;
-                BadgedBox(
-                    badge = {
-                        Badge(
-                            containerColor = if (videoCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
-                            contentColor = MaterialTheme.colorScheme.onError
-                        ) {
-                            Text(videoCount.toString())
+                // Video count badge - clickable to show detected videos
+                IconButton(onClick = onVideoClick) {
+                    BadgedBox(
+                        badge = {
+                            Badge(
+                                containerColor = if (videoCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+                                contentColor = MaterialTheme.colorScheme.onError
+                            ) {
+                                Text(videoCount.toString())
+                            }
                         }
+                    ) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = "$videoCount videos detected",
+                            tint = if (videoCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                ) {
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "$videoCount videos detected",
-                        tint = if (videoCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 
                 // URL Bar
                 TextField(

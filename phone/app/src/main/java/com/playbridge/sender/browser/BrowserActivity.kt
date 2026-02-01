@@ -40,6 +40,9 @@ class BrowserActivity : ComponentActivity() {
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
         }
+        
+        // Install the bundled video detector extension
+        Components.installBundledExtension()
 
         setContent {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Browser) }
@@ -52,11 +55,40 @@ class BrowserActivity : ComponentActivity() {
             var canGoForward by remember { mutableStateOf(false) }
             var menuExpanded by remember { mutableStateOf(false) }
             
+            // Video detection state
+            var showVideoSheet by remember { mutableStateOf(false) }
+            val detectedVideos = VideoDetector.detectedVideos
+            // Read size reactively to trigger recomposition when videos are added
+            val videoCount by remember { derivedStateOf { detectedVideos.size } }
+            
             // Register navigation observer with download interception
             DisposableEffect(session) {
                 val observer = object : EngineSession.Observer {
                     override fun onLocationChange(url: String, hasUserGesture: Boolean) {
                         currentUrl = url
+                        
+                        // Check for playbridge-video hash signal from content script
+                        if (url.contains("#playbridge-video=")) {
+                            try {
+                                val hashData = url.substringAfter("#playbridge-video=")
+                                val decoded = java.net.URLDecoder.decode(hashData, "UTF-8")
+                                Log.d(TAG, "PlayBridge video signal: $decoded")
+                                
+                                val json = kotlinx.serialization.json.Json.parseToJsonElement(decoded)
+                                if (json is kotlinx.serialization.json.JsonObject) {
+                                    VideoDetector.onMessageReceived(kotlinx.serialization.json.JsonObject(mapOf(
+                                        "type" to kotlinx.serialization.json.JsonPrimitive("video_detected"),
+                                        "url" to (json["url"] ?: kotlinx.serialization.json.JsonPrimitive("")),
+                                        "contentType" to (json["contentType"] ?: kotlinx.serialization.json.JsonNull),
+                                        "detectedBy" to (json["detectedBy"] ?: kotlinx.serialization.json.JsonPrimitive("unknown")),
+                                        "timestamp" to (json["timestamp"] ?: kotlinx.serialization.json.JsonPrimitive(System.currentTimeMillis()))
+                                    )))
+                                    Log.d(TAG, "Video added to VideoDetector from hash signal")
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error parsing playbridge-video hash", e)
+                            }
+                        }
                     }
                     override fun onLoadingStateChange(loading: Boolean) {
                         isLoading = loading
@@ -64,6 +96,18 @@ class BrowserActivity : ComponentActivity() {
                     override fun onNavigationStateChange(canGoBackNow: Boolean?, canGoForwardNow: Boolean?) {
                         canGoBackNow?.let { canGoBack = it }
                         canGoForwardNow?.let { canGoForward = it }
+                    }
+                    
+                    // Detect video count from page title [PlayBridge:X] marker
+                    override fun onTitleChange(title: String) {
+                        Log.d(TAG, "Title changed: $title")
+                        val match = Regex("\\[PlayBridge:(\\d+)\\]").find(title)
+                        if (match != null) {
+                            val count = match.groupValues[1].toIntOrNull() ?: 0
+                            Log.d(TAG, "PlayBridge video count detected: $count")
+                            // Note: The content script also stores videos in localStorage
+                            // but we can't read it directly. The count marker tells us videos exist.
+                        }
                     }
                     
                     // Intercept downloads - this catches XPI files from AMO
@@ -134,6 +178,7 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
+
             PlayBridgeTheme {
                 Scaffold(
                     topBar = {
@@ -145,6 +190,7 @@ class BrowserActivity : ComponentActivity() {
                                         isLoading = isLoading,
                                         canGoBack = canGoBack,
                                         canGoForward = canGoForward,
+                                        videoCount = videoCount,
                                         onUrlChange = { },
                                         onNavigate = { url -> session.loadUrl(url) },
                                         onBack = { session.goBack() },
@@ -152,6 +198,7 @@ class BrowserActivity : ComponentActivity() {
                                         onRefresh = { session.reload() },
                                         onStop = { session.stopLoading() },
                                         onMenuClick = { menuExpanded = true },
+                                        onVideoClick = { showVideoSheet = true },
                                         menuContent = {
                                             // Dropdown menu
                                             DropdownMenu(
@@ -286,6 +333,21 @@ class BrowserActivity : ComponentActivity() {
                             )
                         }
                     }
+                }
+                
+                // Video detection bottom sheet
+                if (showVideoSheet) {
+                    DetectedVideosSheet(
+                        videos = detectedVideos.toList(),
+                        onDismiss = { showVideoSheet = false },
+                        onVideoClick = { video ->
+                            // TODO: Send to TV or play locally
+                            android.util.Log.d("BrowserActivity", "Video clicked: ${video.url}")
+                        },
+                        onClear = {
+                            VideoDetector.clear()
+                        }
+                    )
                 }
             }
         }
