@@ -30,6 +30,7 @@ private const val TAG = "ExtensionsScreen"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExtensionsScreen(
+    session: mozilla.components.concept.engine.EngineSession,
     onBack: () -> Unit = {}
 ) {
     // Use GeckoView's WebExtension directly for installed extensions
@@ -92,27 +93,9 @@ fun ExtensionsScreen(
             
             FilledTonalButton(
                 onClick = {
-                    scope.launch {
-                        try {
-                            Log.d(TAG, "Fetching featured addons from AMO...")
-                            errorMessage = null
-                            val fetched = withTimeoutOrNull(15000L) {
-                                withContext(Dispatchers.IO) {
-                                    Components.addonsProvider.getFeaturedAddons()
-                                }
-                            }
-                            if (fetched != null) {
-                                availableAddons = fetched
-                                showInstallDialog = true
-                                Log.d(TAG, "Fetched ${fetched.size} available addons")
-                            } else {
-                                errorMessage = "Timeout fetching addons. Check your connection."
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to fetch addons", e)
-                            errorMessage = "Failed to fetch addons: ${e.message}"
-                        }
-                    }
+                    // Navigate to Firefox addons page
+                    session.loadUrl("https://addons.mozilla.org/android/")
+                    onBack()  // Go back to browser to see the page
                 }
             ) {
                 Icon(Icons.Default.Add, "Add", modifier = Modifier.size(18.dp))

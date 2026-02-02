@@ -90,11 +90,30 @@ class BrowserActivity : ComponentActivity() {
             // Read size reactively to trigger recomposition when videos are added
             val videoCount by remember { derivedStateOf { detectedVideos.size } }
             
+            // Track if media is actively playing on TV
+            var isMediaPlaying by remember { mutableStateOf(false) }
+            
+            // Track previous URL to avoid clearing on hash changes
+            var previousUrl by remember { mutableStateOf("") }
+            
             // Register navigation observer with download interception
             DisposableEffect(session) {
                 val observer = object : EngineSession.Observer {
                     override fun onLocationChange(url: String, hasUserGesture: Boolean) {
+                        // Get base URL without hash/fragment
+                        val baseUrl = url.substringBefore("#")
+                        val previousBaseUrl = previousUrl.substringBefore("#")
+                        
                         currentUrl = url
+                        
+                        // Clear detected videos only when navigating to a different page
+                        // (ignore hash/fragment changes on the same page)
+                        if (baseUrl != previousBaseUrl && previousBaseUrl.isNotEmpty()) {
+                            VideoDetector.clear()
+                            Log.d(TAG, "Cleared detected videos - navigated from $previousBaseUrl to $baseUrl")
+                        }
+                        
+                        previousUrl = url
                         
                         // Check for playbridge-video hash signal from content script
                         if (url.contains("#playbridge-video=")) {
@@ -331,17 +350,80 @@ class BrowserActivity : ComponentActivity() {
                                                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                 )
                                                 
+                                                // Media controls (only show when connected AND media is playing)
+                                                if (connectionState is WebSocketClient.ConnectionState.Connected && isMediaPlaying) {
+                                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                                    
+                                                    // Media controls header
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Default.Tv,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(20.dp),
+                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                        Spacer(modifier = Modifier.width(12.dp))
+                                                        Text(
+                                                            "Media Controls",
+                                                            style = MaterialTheme.typography.labelLarge,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                    
+                                                    // Control buttons row
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                                                        horizontalArrangement = Arrangement.SpaceEvenly
+                                                    ) {
+                                                        // Track play/pause state
+                                                        var isPlaying by remember { mutableStateOf(false) }
+                                                        
+                                                        // Play/Pause toggle button
+                                                        IconButton(
+                                                            onClick = {
+                                                                val cmd = if (isPlaying) {
+                                                                    com.playbridge.sender.model.createControlCommandJson("pause")
+                                                                } else {
+                                                                    com.playbridge.sender.model.createControlCommandJson("play")
+                                                                }
+                                                                webSocketClient.send(cmd)
+                                                                isPlaying = !isPlaying
+                                                                Toast.makeText(
+                                                                    this@BrowserActivity, 
+                                                                    if (isPlaying) "▶ Playing" else "⏸ Paused", 
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }
+                                                        ) {
+                                                            Icon(
+                                                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                                if (isPlaying) "Pause" else "Play",
+                                                                tint = MaterialTheme.colorScheme.primary
+                                                            )
+                                                        }
+                                                        
+                                                        // Stop button
+                                                        IconButton(
+                                                            onClick = {
+                                                                val cmd = com.playbridge.sender.model.createControlCommandJson("stop")
+                                                                webSocketClient.send(cmd)
+                                                                isMediaPlaying = false
+                                                                Toast.makeText(this@BrowserActivity, "⏹ Stop", Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        ) {
+                                                            Icon(Icons.Default.Stop, "Stop", tint = MaterialTheme.colorScheme.error)
+                                                        }
+                                                    }
+                                                }
+                                                
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                                DropdownMenuItem(
-                                                    text = { Text("Install uBlock Origin", style = MaterialTheme.typography.bodyLarge) },
-                                                    leadingIcon = { Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.primary) },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        // Open AMO page for uBlock Origin
-                                                        session.loadUrl("https://addons.mozilla.org/android/addon/ublock-origin/")
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                )
                                             }
                                         }
                                     )
@@ -421,6 +503,7 @@ class BrowserActivity : ComponentActivity() {
                             Screen.Extensions -> {
                                 BackHandler { currentScreen = Screen.Browser }
                                 ExtensionsScreen(
+                                    session = session,
                                     onBack = { currentScreen = Screen.Browser }
                                 )
                             }
@@ -491,6 +574,7 @@ class BrowserActivity : ComponentActivity() {
                                     Log.d(TAG, "Command sent: $sent")
                                     
                                     if (sent) {
+                                        isMediaPlaying = true
                                         Toast.makeText(
                                             this@BrowserActivity,
                                             "Playing on ${state.serverName}",
