@@ -74,10 +74,16 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
     
-    // Media3 ExoPlayer
+    // Media3 ExoPlayer - Full Suite
     implementation(libs.media3.exoplayer)
-    implementation(libs.media3.ui)
-    implementation(libs.media3.common)
+    implementation(libs.media3.exoplayer.hls)           // HLS streaming (.m3u8)
+    implementation(libs.media3.exoplayer.dash)          // DASH streaming (.mpd)
+    implementation(libs.media3.exoplayer.smoothstreaming) // SmoothStreaming
+    implementation(libs.media3.exoplayer.rtsp)          // RTSP streaming
+    implementation(libs.media3.datasource.okhttp)       // Better HTTP performance
+    implementation(libs.media3.ui)                      // PlayerView UI
+    implementation(libs.media3.common)                  // Common utilities
+    implementation(libs.media3.session)                 // Media session support
     
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

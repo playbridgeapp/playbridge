@@ -111,6 +111,38 @@ class PlayerActivity : ComponentActivity() {
         player = ExoPlayer.Builder(this).build().also { exoPlayer ->
             playerView.player = exoPlayer
             exoPlayer.playWhenReady = true
+            
+            // Add listener for playback events
+            exoPlayer.addListener(object : androidx.media3.common.Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    when (playbackState) {
+                        androidx.media3.common.Player.STATE_BUFFERING -> {
+                            Log.d(TAG, "Buffering...")
+                        }
+                        androidx.media3.common.Player.STATE_READY -> {
+                            Log.i(TAG, "Playback ready")
+                        }
+                        androidx.media3.common.Player.STATE_ENDED -> {
+                            Log.i(TAG, "Playback ended")
+                        }
+                    }
+                }
+                
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    Log.e(TAG, "Playback error: ${error.message}", error)
+                    runOnUiThread {
+                        android.widget.Toast.makeText(
+                            this@PlayerActivity,
+                            "Playback error: ${error.message}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+                
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    Log.d(TAG, "Is playing: $isPlaying")
+                }
+            })
         }
     }
     
