@@ -108,42 +108,56 @@ class PlayerActivity : ComponentActivity() {
     }
     
     private fun initializePlayer() {
-        player = ExoPlayer.Builder(this).build().also { exoPlayer ->
-            playerView.player = exoPlayer
-            exoPlayer.playWhenReady = true
-            
-            // Add listener for playback events
-            exoPlayer.addListener(object : androidx.media3.common.Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    when (playbackState) {
-                        androidx.media3.common.Player.STATE_BUFFERING -> {
-                            Log.d(TAG, "Buffering...")
-                        }
-                        androidx.media3.common.Player.STATE_READY -> {
-                            Log.i(TAG, "Playback ready")
-                        }
-                        androidx.media3.common.Player.STATE_ENDED -> {
-                            Log.i(TAG, "Playback ended")
+        // Configure load control for better live streaming performance
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                15000,  // Min buffer: 15 seconds
+                30000,  // Max buffer: 30 seconds  
+                2500,   // Buffer for playback: 2.5 seconds
+                5000    // Buffer for playback after rebuffer: 5 seconds
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+        
+        player = ExoPlayer.Builder(this)
+            .setLoadControl(loadControl)
+            .build()
+            .also { exoPlayer ->
+                playerView.player = exoPlayer
+                exoPlayer.playWhenReady = true
+                
+                // Add listener for playback events
+                exoPlayer.addListener(object : androidx.media3.common.Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        when (playbackState) {
+                            androidx.media3.common.Player.STATE_BUFFERING -> {
+                                Log.d(TAG, "Buffering...")
+                            }
+                            androidx.media3.common.Player.STATE_READY -> {
+                                Log.i(TAG, "Playback ready")
+                            }
+                            androidx.media3.common.Player.STATE_ENDED -> {
+                                Log.i(TAG, "Playback ended")
+                            }
                         }
                     }
-                }
-                
-                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    Log.e(TAG, "Playback error: ${error.message}", error)
-                    runOnUiThread {
-                        android.widget.Toast.makeText(
-                            this@PlayerActivity,
-                            "Playback error: ${error.message}",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
+                    
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                        Log.e(TAG, "Playback error: ${error.message}", error)
+                        runOnUiThread {
+                            android.widget.Toast.makeText(
+                                this@PlayerActivity,
+                                "Playback error: ${error.message}",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
-                }
-                
-                override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    Log.d(TAG, "Is playing: $isPlaying")
-                }
-            })
-        }
+                    
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        Log.d(TAG, "Is playing: $isPlaying")
+                    }
+                })
+            }
     }
     
     private fun playVideo(url: String, title: String?) {
@@ -152,10 +166,27 @@ class PlayerActivity : ComponentActivity() {
         Log.i(TAG, "Title: $title")
         
         player?.let { exoPlayer ->
+            // Detect if this is a live stream
+            val isLiveStream = url.contains("/live/", ignoreCase = true) || 
+                             url.contains("playlist.m3u8", ignoreCase = true) ||
+                             url.contains("/mono.ts.m3u8", ignoreCase = true)
+            
+            Log.i(TAG, "Detected stream type: ${if (isLiveStream) "LIVE" else "VOD"}")
+            
             val mediaItem = MediaItem.Builder()
                 .setUri(url)
                 .apply {
                     title?.let { setMediaId(it) }
+                    if (isLiveStream) {
+                        // Configure for live streaming
+                        setLiveConfiguration(
+                            MediaItem.LiveConfiguration.Builder()
+                                .setTargetOffsetMs(3000)  // 3 seconds from live edge
+                                .setMinPlaybackSpeed(0.95f)
+                                .setMaxPlaybackSpeed(1.05f)
+                                .build()
+                        )
+                    }
                 }
                 .build()
             
