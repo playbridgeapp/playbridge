@@ -5,6 +5,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,6 +28,9 @@ import mozilla.components.concept.fetch.Response
 
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.model.QRCodeData
+import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.ui.QRScannerScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 
 class BrowserActivity : ComponentActivity() {
@@ -54,6 +58,7 @@ class BrowserActivity : ComponentActivity() {
         setContent {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Browser) }
             val connectionState by webSocketClient.connectionState.collectAsState()
+            val scope = rememberCoroutineScope()
             
             // Auto-connect to stored TV device
             LaunchedEffect(Unit) {
@@ -72,6 +77,12 @@ class BrowserActivity : ComponentActivity() {
             var canGoBack by remember { mutableStateOf(false) }
             var canGoForward by remember { mutableStateOf(false) }
             var menuExpanded by remember { mutableStateOf(false) }
+            
+            // View state - browser or scanner
+            var showScanner by remember { mutableStateOf(false) }
+            
+            // Back press handling
+            var backPressedTime by remember { mutableLongStateOf(0L) }
             
             // Video detection state
             var showVideoSheet by remember { mutableStateOf(false) }
@@ -292,6 +303,34 @@ class BrowserActivity : ComponentActivity() {
                                                     },
                                                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                 )
+                                                
+                                                // Dynamic Connect to TV menu item with status
+                                                val (connectText, connectIcon, connectColor) = when (connectionState) {
+                                                    is WebSocketClient.ConnectionState.Connected -> {
+                                                        val serverName = (connectionState as WebSocketClient.ConnectionState.Connected).serverName
+                                                        Triple("Connected: $serverName", Icons.Default.CheckCircle, MaterialTheme.colorScheme.primary)
+                                                    }
+                                                    is WebSocketClient.ConnectionState.Connecting -> {
+                                                        Triple("Connecting to TV...", Icons.Default.Refresh, MaterialTheme.colorScheme.tertiary)
+                                                    }
+                                                    is WebSocketClient.ConnectionState.Error -> {
+                                                        Triple("Connection Error - Tap to Retry", Icons.Default.Warning, MaterialTheme.colorScheme.error)
+                                                    }
+                                                    else -> {
+                                                        Triple("Connect to TV", Icons.Default.Settings, MaterialTheme.colorScheme.onSurface)
+                                                    }
+                                                }
+                                                
+                                                DropdownMenuItem(
+                                                    text = { Text(connectText, style = MaterialTheme.typography.bodyLarge) },
+                                                    leadingIcon = { Icon(connectIcon, null, tint = connectColor) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        currentScreen = Screen.Scanner
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                )
+                                                
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                                 DropdownMenuItem(
                                                     text = { Text("Install uBlock Origin", style = MaterialTheme.typography.bodyLarge) },
@@ -330,25 +369,102 @@ class BrowserActivity : ComponentActivity() {
                                     }
                                 )
                             }
+                            Screen.Scanner -> {
+                                @OptIn(ExperimentalMaterial3Api::class)
+                                TopAppBar(
+                                    title = { Text("Connect to TV") },
+                                    navigationIcon = {
+                                        IconButton(onClick = { currentScreen = Screen.Browser }) {
+                                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         when (currentScreen) {
                             Screen.Browser -> {
+                                // Browser: first back goes to browser history, second back exits
+                                BackHandler {
+                                    if (canGoBack) {
+                                        session.goBack()
+                                    } else {
+                                        val currentTime = System.currentTimeMillis()
+                                        if (currentTime - backPressedTime > 2000) {
+                                            backPressedTime = currentTime
+                                            Toast.makeText(
+                                                this@BrowserActivity,
+                                                "Press back again to exit",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            finish()
+                                        }
+                                    }
+                                }
+                                
                                 Box(modifier = Modifier.fillMaxSize()) {
                                     BrowserView(session = session)
                                     
 
                                 }
                             }
-                            Screen.Tabs -> TabsScreen(
-                                onTabSelected = { currentScreen = Screen.Browser },
-                                onTabClosed = { /* TODO */ }
-                            )
-                            Screen.Extensions -> ExtensionsScreen(
-                                onBack = { currentScreen = Screen.Browser }
-                            )
+                            Screen.Tabs -> {
+                                BackHandler { currentScreen = Screen.Browser }
+                                TabsScreen(
+                                    onTabSelected = { currentScreen = Screen.Browser },
+                                    onTabClosed = { /* TODO */ }
+                                )
+                            }
+                            Screen.Extensions -> {
+                                BackHandler { currentScreen = Screen.Browser }
+                                ExtensionsScreen(
+                                    onBack = { currentScreen = Screen.Browser }
+                                )
+                            }
+                            Screen.Scanner -> {
+                                BackHandler { currentScreen = Screen.Browser }
+                                QRScannerScreen(
+                                    onQRCodeScanned = { qrData ->
+                                        scope.launch {
+                                            Log.d(TAG, "QR Code scanned: ${qrData.name} at ${qrData.ip}:${qrData.port}")
+                                            
+                                            // Save TV device
+                                            val tvDevice = TvDevice(
+                                                ip = qrData.ip,
+                                                port = qrData.port,
+                                                token = qrData.token,
+                                                name = qrData.name
+                                            )
+                                            connectionStore.saveTvDevice(tvDevice)
+                                            Log.d(TAG, "TV device saved")
+                                            
+                                            // Connect
+                                            webSocketClient.connect(
+                                                qrData.ip,
+                                                qrData.port,
+                                                qrData.token,
+                                                qrData.name
+                                            )
+                                            Log.d(TAG, "Connecting to TV...")
+                                            
+                                            // Show toast
+                                            runOnUiThread {
+                                                Toast.makeText(
+                                                    this@BrowserActivity,
+                                                    "Connecting to ${qrData.name}...",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            
+                                            // Return to browser
+                                            currentScreen = Screen.Browser
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -449,4 +565,5 @@ sealed class Screen {
     object Browser : Screen()
     object Tabs : Screen()
     object Extensions : Screen()
+    object Scanner : Screen()
 }
