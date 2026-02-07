@@ -14,6 +14,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -23,8 +24,17 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import mozilla.components.browser.engine.gecko.GeckoEngineView
+// import mozilla.components.browser.engine.gecko.GeckoEngineSession // Internal, do not use
 import mozilla.components.concept.engine.EngineSession
 import mozilla.components.concept.fetch.Response
+import mozilla.components.browser.state.store.BrowserStore
+import mozilla.components.browser.state.state.BrowserState
+import mozilla.components.browser.state.action.TabListAction
+import mozilla.components.browser.state.action.ContentAction
+import mozilla.components.browser.state.state.TabSessionState
+import mozilla.components.browser.state.state.ContentState
+import java.util.UUID
+import mozilla.components.lib.state.Store
 
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.WebSocketClient
@@ -32,6 +42,7 @@ import com.playbridge.sender.model.QRCodeData
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.QRScannerScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
+import mozilla.components.lib.state.ext.flow
 
 class BrowserActivity : ComponentActivity() {
     
@@ -70,13 +81,78 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             
-            // Session and navigation state
-            val session = remember { Components.engine.createSession() }
+            // Session and navigation state from BrowserStore
+            val store = Components.store
+            var browserState by remember { mutableStateOf(store.state) }
+            
+            // Observe store state changes
+            LaunchedEffect(store) {
+                store.flow().collect { state ->
+                    browserState = state
+                }
+            }
+            // TODO: correct observation logic
+            
+            // Ensure we have at least one tab
+            LaunchedEffect(browserState.tabs.size) {
+                if (browserState.tabs.isEmpty()) {
+                    val tabId = UUID.randomUUID().toString()
+                    store.dispatch(TabListAction.AddTabAction(
+                        tab = TabSessionState(
+                            id = tabId,
+                            content = ContentState(url = "https://www.google.com"),
+                            parentId = null
+                        )
+                    ))
+                }
+            }
+            
+            // Session management
+            val sessions = remember { mutableStateMapOf<String, EngineSession>() }
+            
+            // Sync sessions with tabs (create sessions for all tabs, not just selected)
+            // This ensures background tabs start loading immediately
+            LaunchedEffect(browserState.tabs) {
+                browserState.tabs.forEach { tab ->
+                    if (!sessions.containsKey(tab.id)) {
+                        val newSession = Components.engine.createSession()
+                        if (tab.content.url.isNotEmpty() && tab.content.url != "about:blank") {
+                             newSession.loadUrl(tab.content.url)
+                        } else {
+                             newSession.loadUrl("https://www.google.com")
+                        }
+                        sessions[tab.id] = newSession
+                    }
+                }
+                // Cleanup sessions for closed tabs
+                val activeTabIds = browserState.tabs.map { it.id }.toSet()
+                sessions.keys.retainAll(activeTabIds) 
+            }
+            
+            val selectedTabId = browserState.selectedTabId
+            val selectedTab = browserState.tabs.find { it.id == selectedTabId }
+            val session = if (selectedTab != null) sessions[selectedTab.id] else null
+            
+            // If no session is available (e.g. during init), show loading or empty
+            if (session == null) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                return@setContent
+            }
+            
+            // Existing state variables
             var currentUrl by remember { mutableStateOf("https://www.google.com") }
             var isLoading by remember { mutableStateOf(false) }
             var canGoBack by remember { mutableStateOf(false) }
             var canGoForward by remember { mutableStateOf(false) }
             var menuExpanded by remember { mutableStateOf(false) }
+            
+            // Update UI state from session
+            LaunchedEffect(session) {
+                // relying on observer for URL updates
+                // currentUrl = session.url  // if available
+            }
             
             // View state - browser or scanner
             var showScanner by remember { mutableStateOf(false) }
@@ -87,7 +163,6 @@ class BrowserActivity : ComponentActivity() {
             // Video detection state
             var showVideoSheet by remember { mutableStateOf(false) }
             val detectedVideos = VideoDetector.detectedVideos
-            // Read size reactively to trigger recomposition when videos are added
             val videoCount by remember { derivedStateOf { detectedVideos.size } }
             
             // Track if media is actively playing on TV
@@ -96,10 +171,50 @@ class BrowserActivity : ComponentActivity() {
             // Track previous URL to avoid clearing on hash changes
             var previousUrl by remember { mutableStateOf("") }
             
+            // Context menu state for "Open in new tab"
+            var contextMenuUrl by remember { mutableStateOf<String?>(null) }
+            
+            if (contextMenuUrl != null) {
+                AlertDialog(
+                    onDismissRequest = { contextMenuUrl = null },
+                    title = { Text("Link Options") },
+                    text = { Text(contextMenuUrl!!) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val newTabId = UUID.randomUUID().toString()
+                            store.dispatch(TabListAction.AddTabAction(
+                                tab = TabSessionState(
+                                    id = newTabId,
+                                    content = ContentState(url = contextMenuUrl!!),
+                                    parentId = null
+                                )
+                            ))
+                            Toast.makeText(this@BrowserActivity, "Opened in new tab", Toast.LENGTH_SHORT).show()
+                            contextMenuUrl = null
+                        }) {
+                            Text("Open in new tab")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { contextMenuUrl = null }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+            
             // Register navigation observer with download interception
             DisposableEffect(session) {
                 val observer = object : EngineSession.Observer {
                     override fun onLocationChange(url: String, hasUserGesture: Boolean) {
+                         // Update store state too to keep it in sync
+                        if (selectedTab != null) {
+                            store.dispatch(ContentAction.UpdateUrlAction(
+                                sessionId = selectedTab.id,
+                                url = url
+                            ))
+                        }
+
                         // Get base URL without hash/fragment
                         val baseUrl = url.substringBefore("#")
                         val previousBaseUrl = previousUrl.substringBefore("#")
@@ -142,6 +257,12 @@ class BrowserActivity : ComponentActivity() {
                     }
                     override fun onLoadingStateChange(loading: Boolean) {
                         isLoading = loading
+                        if (selectedTab != null) {
+                            // store.dispatch(ContentAction.UpdateLoading(
+                            //    sessionId = selectedTab.id,
+                            //    loading = loading
+                            // ))
+                        }
                     }
                     override fun onNavigationStateChange(canGoBackNow: Boolean?, canGoForwardNow: Boolean?) {
                         canGoBackNow?.let { canGoBack = it }
@@ -151,6 +272,12 @@ class BrowserActivity : ComponentActivity() {
                     // Detect video count from page title [PlayBridge:X] marker
                     override fun onTitleChange(title: String) {
                         Log.d(TAG, "Title changed: $title")
+                        if (selectedTab != null) {
+                            store.dispatch(ContentAction.UpdateTitleAction(
+                                sessionId = selectedTab.id,
+                                title = title
+                            ))
+                        }
                         val match = Regex("\\[PlayBridge:(\\d+)\\]").find(title)
                         if (match != null) {
                             val count = match.groupValues[1].toIntOrNull() ?: 0
@@ -221,7 +348,7 @@ class BrowserActivity : ComponentActivity() {
                     }
                 }
                 session.register(observer)
-                session.loadUrl("https://www.google.com")
+                // session.loadUrl("https://www.google.com") // REMOVED: This was causing reloads on tab switch
                 
                 onDispose {
                     session.unregister(observer)
@@ -489,17 +616,35 @@ class BrowserActivity : ComponentActivity() {
                                     }
                                 }
                                 
+            // BrowserView call site
                                 Box(modifier = Modifier.fillMaxSize()) {
-                                    BrowserView(session = session)
-                                    
-
+                                    BrowserView(
+                                        session = session,
+                                        onLongPressLink = { url -> contextMenuUrl = url }
+                                    )
                                 }
                             }
                             Screen.Tabs -> {
                                 BackHandler { currentScreen = Screen.Browser }
                                 TabsScreen(
-                                    onTabSelected = { currentScreen = Screen.Browser },
-                                    onTabClosed = { /* TODO */ }
+                                    onTabSelected = { tabId ->
+                                        store.dispatch(TabListAction.SelectTabAction(tabId))
+                                        currentScreen = Screen.Browser
+                                    },
+                                    onTabClosed = { tabId ->
+                                        store.dispatch(TabListAction.RemoveTabAction(tabId))
+                                    },
+                                    onNewTab = {
+                                        val newId = UUID.randomUUID().toString()
+                                        store.dispatch(TabListAction.AddTabAction(
+                                            tab = TabSessionState(
+                                                id = newId,
+                                                content = ContentState(url = "https://www.google.com"),
+                                                parentId = null
+                                            )
+                                        ))
+                                        currentScreen = Screen.Browser
+                                    }
                                 )
                             }
                             Screen.Extensions -> {
@@ -633,8 +778,9 @@ class BrowserActivity : ComponentActivity() {
         super.onDestroy()
     }
     
+
     @Composable
-    fun BrowserView(session: EngineSession) {
+    fun BrowserView(session: EngineSession, onLongPressLink: (String) -> Unit) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
@@ -646,6 +792,22 @@ class BrowserActivity : ComponentActivity() {
                 view.render(session)
             }
         )
+        
+        // Context menu handling verification
+        // Logic removed temporarily as GeckoEngineSession.geckoSession is internal
+        // TODO: Implement context menu using proper EngineSession API or custom GeckoView integration
+        /*
+        val geckoSession = (session as? GeckoEngineSession)?.geckoSession
+        if (geckoSession != null) {
+            DisposableEffect(session) {
+                val delegate = object : org.mozilla.geckoview.GeckoSession.ContentDelegate {
+                     // ...
+                }
+                geckoSession.contentDelegate = delegate
+                onDispose { geckoSession.contentDelegate = null }
+            }
+        }
+        */
     }
 }
 

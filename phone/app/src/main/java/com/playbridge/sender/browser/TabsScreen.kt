@@ -24,7 +24,8 @@ import mozilla.components.browser.state.state.TabSessionState
 @Composable
 fun TabsScreen(
     onTabSelected: (String) -> Unit,
-    onTabClosed: (String) -> Unit
+    onTabClosed: (String) -> Unit,
+    onNewTab: () -> Unit
 ) {
     // Observe tabs from BrowserStore
     val state = Components.store.state
@@ -47,7 +48,7 @@ fun TabsScreen(
             )
             
             FilledTonalButton(
-                onClick = { /* TODO: Create new tab */ }
+                onClick = onNewTab
             ) {
                 Icon(Icons.Default.Add, "New Tab", modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
