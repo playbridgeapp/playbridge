@@ -1,5 +1,6 @@
 // PlayBridge Video Detector - Background Script
 // Detects video URLs and sends them to content script for storage
+// Refactored to use Store & Forward mechanism
 
 const VIDEO_CONTENT_TYPES = [
     'video/',
@@ -9,45 +10,75 @@ const VIDEO_CONTENT_TYPES = [
     'application/vnd.apple.mpegurl'
 ];
 
-const VIDEO_URL_PATTERNS = [
-    /\.m3u8(\?|$)/i,
-    /\.m3u(\?|$)/i,
-    /\.mpd(\?|$)/i,
-    /\.mp4(\?|$)/i,
-    /\.webm(\?|$)/i,
-    /\.mkv(\?|$)/i,
-    /googlevideo\.com\/videoplayback/i
-];
-
 console.log('[VideoDetector BG] Starting...');
 
-// Store detected videos 
+// Store detected videos to avoid duplicates
 let detectedVideos = [];
 let seenUrls = new Set();
+let urlHeadersCaptured = new Set();
 
-// Send video to content script for storage in page localStorage
-function notifyContentScript(video, tabId) {
+// Map to store headers temporarily: requestId -> { headers: Object, timestamp: Number }
+const requestHeadersMap = new Map();
+
+// Configuration for cleanup
+const CLEANUP_INTERVAL_MS = 30000; // 30 seconds
+const HEADER_TTL_MS = 60000; // 1 minute
+
+// Periodic cleanup to prevent memory leaks from incomplete requests
+setInterval(() => {
+    const now = Date.now();
+    let cleanedCount = 0;
+    for (const [requestId, data] of requestHeadersMap.entries()) {
+        if (now - data.timestamp > HEADER_TTL_MS) {
+            requestHeadersMap.delete(requestId);
+            cleanedCount++;
+        }
+    }
+    if (cleanedCount > 0) {
+        console.log(`[VideoDetector BG] Cleaned up ${cleanedCount} stale header entries`);
+    }
+}, CLEANUP_INTERVAL_MS);
+
+
+// Send video to content script for storage
+function notifyContentScript(video, tabId, headers = null) {
+    const hasHeaders = headers && Object.keys(headers).length > 0;
+
     if (seenUrls.has(video.url)) {
-        return;
+        // If we already saw this URL, check if we're improving it with headers
+        if (urlHeadersCaptured.has(video.url) || !hasHeaders) {
+            return;
+        }
     }
 
     seenUrls.add(video.url);
-    detectedVideos.push(video);
+    if (hasHeaders) {
+        urlHeadersCaptured.add(video.url);
+        video.headers = headers;
+    }
+
+    // Update if exists or push new
+    const existingIndex = detectedVideos.findIndex(v => v.url === video.url);
+    if (existingIndex !== -1) {
+        detectedVideos[existingIndex] = { ...detectedVideos[existingIndex], ...video };
+    } else {
+        detectedVideos.push(video);
+    }
 
     const count = detectedVideos.length;
-    console.log('[VideoDetector BG] VIDEO #' + count + ': ' + video.url.substring(0, 80));
+    console.log('[VideoDetector BG] VIDEO DETECTED #' + count + ' (Headers: ' + hasHeaders + '): ' + video.url.substring(0, 80));
 
-    // Send to content script in the tab
+    // Send to content script in the specific tab
     if (tabId && tabId > 0) {
         browser.tabs.sendMessage(tabId, {
             type: 'video_detected',
             ...video
         }).catch(e => {
-            console.log('[VideoDetector BG] Tab message failed:', e.message);
+            // Ignore tab closed errors
         });
     }
 
-    // Also send to all tabs (in case the video is for an iframe)
+    // Also broadcast to all tabs (useful for iframes)
     browser.tabs.query({}).then(tabs => {
         tabs.forEach(tab => {
             browser.tabs.sendMessage(tab.id, {
@@ -65,50 +96,71 @@ function notifyContentScript(video, tabId) {
     });
 }
 
-// Listen for video URL patterns in network requests
-browser.webRequest.onBeforeRequest.addListener(
+
+// 1. Capture Headers (Store)
+// We capture headers for ALL requests because we don't know the Content-Type yet.
+// We store them keyed by requestId.
+browser.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
-        const url = details.url.toLowerCase();
-        const isVideoUrl = VIDEO_URL_PATTERNS.some(pattern => pattern.test(url));
+        const headers = {};
+        if (details.requestHeaders) {
+            details.requestHeaders.forEach(h => {
+                const name = h.name.toLowerCase();
+                if (['cookie', 'user-agent', 'referer', 'origin', 'authorization'].includes(name)) {
+                    headers[h.name] = h.value;
+                }
+            });
+        }
 
-        if (isVideoUrl || details.type === 'media') {
-            console.log('[VideoDetector BG] MATCH (URL): ' + details.url.substring(0, 80));
-
-            notifyContentScript({
-                url: details.url,
-                tabId: details.tabId,
-                detectedBy: 'url_pattern',
-                requestType: details.type,
+        if (Object.keys(headers).length > 0) {
+            requestHeadersMap.set(details.requestId, {
+                headers: headers,
                 timestamp: Date.now()
-            }, details.tabId);
+            });
         }
     },
-    { urls: ["<all_urls>"] }
+    { urls: ["<all_urls>"] },
+    ["requestHeaders"]
 );
 
-// Listen for video content-types in HTTP responses
+
+// 2. Confirm Video & Merge Headers (Forward)
+// We check the response Content-Type. If it's a video, we retrieve the stored headers.
 browser.webRequest.onHeadersReceived.addListener(
     (details) => {
         const contentTypeHeader = details.responseHeaders?.find(
             h => h.name.toLowerCase() === 'content-type'
         );
 
-        if (!contentTypeHeader) return;
+        // Always check map for cleanup, but first use it if video
+        const storedData = requestHeadersMap.get(details.requestId);
 
-        const contentType = contentTypeHeader.value.toLowerCase();
-        const isVideo = VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
+        if (contentTypeHeader) {
+            const contentType = contentTypeHeader.value.toLowerCase();
+            const isVideoContentType = VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
+            const isM3u8Url = details.url.toLowerCase().includes('m3u8');
+            const isVideo = isVideoContentType || isM3u8Url;
 
-        if (isVideo) {
-            console.log('[VideoDetector BG] MATCH (type): ' + contentType);
+            if (isVideo) {
+                console.log(`[VideoDetector BG] CONFIRMED VIDEO (Type: ${contentType}, URL match: ${isM3u8Url}): ${details.url.substring(0, 50)}...`);
 
-            notifyContentScript({
-                url: details.url,
-                tabId: details.tabId,
-                contentType: contentType,
-                detectedBy: 'content_type',
-                originUrl: details.originUrl || '',
-                timestamp: Date.now()
-            }, details.tabId);
+                const headers = storedData ? storedData.headers : null;
+
+                notifyContentScript({
+                    url: details.url,
+                    tabId: details.tabId,
+                    contentType: contentType,
+                    detectedBy: isVideoContentType ? 'content_type' : (isM3u8Url ? 'url_pattern' : 'unknown'),
+                    originUrl: details.originUrl || '',
+                    timestamp: Date.now()
+                }, details.tabId, headers);
+            }
+        }
+
+        // Cleanup: Once headers are received, we don't need to store the request headers anymore
+        // for this specific request ID.
+        if (storedData) {
+            requestHeadersMap.delete(details.requestId);
         }
     },
     { urls: ["<all_urls>"] },
@@ -124,6 +176,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'clearVideos') {
         detectedVideos = [];
         seenUrls.clear();
+        urlHeadersCaptured.clear();
+        requestHeadersMap.clear(); // Also clear the map just in case
         browser.storage.local.set({ detectedVideos: [], lastUpdate: Date.now(), count: 0 });
         sendResponse({ cleared: true });
         return true;
@@ -131,4 +185,4 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
 });
 
-console.log('[VideoDetector BG] Loaded');
+console.log('[VideoDetector BG] Loaded (Store & Forward Mode)');

@@ -14,6 +14,7 @@ datastore = "1.1.1"
 kotlinxSerialization = "1.7.3"
 coroutines = "1.9.0"
 media3 = "1.5.1"
+okhttp = "4.12.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -58,6 +59,8 @@ media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasourc
 media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
 media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-urlconnection = { group = "com.squareup.okhttp3", name = "okhttp-urlconnection", version.ref = "okhttp" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

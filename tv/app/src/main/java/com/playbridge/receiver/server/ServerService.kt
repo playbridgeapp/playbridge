@@ -100,7 +100,11 @@ class ServerService : Service() {
                     val intent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
                         putExtra(EXTRA_URL, command.url)
                         putExtra(EXTRA_TITLE, command.title)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        putExtra(EXTRA_CONTENT_TYPE, command.contentType)
+                        if (command.headers != null) {
+                            putExtra(EXTRA_HEADERS, HashMap(command.headers))
+                        }
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     }
                     Log.i(TAG, "Launching PlayerActivity...")
                     startActivity(intent)
@@ -215,6 +219,8 @@ class ServerService : Service() {
         const val ACTION_CONTROL = "com.playbridge.receiver.ACTION_CONTROL"
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_CONTENT_TYPE = "content_type"
+        const val EXTRA_HEADERS = "headers"
         const val EXTRA_COMMAND = "command"
         
         // Static flow for UI to observe connection state

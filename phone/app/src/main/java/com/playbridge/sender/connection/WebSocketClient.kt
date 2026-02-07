@@ -33,17 +33,33 @@ class WebSocketClient {
     private val _messages = MutableSharedFlow<String>(replay = 0)
     val messages = _messages.asSharedFlow()
     
+    private var retryCount = 0
+    private val MAX_RETRIES = 5
+    private val RETRY_DELAY_MS = 10000L
+    private var targetConnection: TvConnectionInfo? = null
+    private var isUserDisconnect = false
+
+    private data class TvConnectionInfo(val ip: String, val port: Int, val token: String, val serverName: String)
+
     sealed class ConnectionState {
         data object Disconnected : ConnectionState()
         data object Connecting : ConnectionState()
         data class Connected(val serverName: String) : ConnectionState()
+        data class Retrying(val attempt: Int, val maxAttempts: Int, val nextRetrySeconds: Int) : ConnectionState()
         data class Error(val message: String) : ConnectionState()
     }
     
     fun connect(ip: String, port: Int, token: String, serverName: String) {
+        retryCount = 0
+        isUserDisconnect = false
+        targetConnection = TvConnectionInfo(ip, port, token, serverName)
+        attemptConnection(ip, port, serverName)
+    }
+
+    private fun attemptConnection(ip: String, port: Int, serverName: String) {
         if (webSocket != null) {
-            Log.w(TAG, "Already connected or connecting")
-            return
+            try { webSocket?.close(1000, "Reconnecting") } catch(e: Exception) {}
+            webSocket = null
         }
         
         _connectionState.value = ConnectionState.Connecting
@@ -59,6 +75,7 @@ class WebSocketClient {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "Connected to $serverName")
                 _connectionState.value = ConnectionState.Connected(serverName)
+                retryCount = 0
                 
                 // Send initial ping to verify connection
                 scope.launch {
@@ -88,7 +105,23 @@ class WebSocketClient {
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "Connection failed", t)
                 this@WebSocketClient.webSocket = null
-                _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
+                
+                if (!isUserDisconnect && retryCount < MAX_RETRIES) {
+                    retryCount++
+                    Log.i(TAG, "Retrying connection ($retryCount/$MAX_RETRIES) in ${RETRY_DELAY_MS}ms")
+                    _connectionState.value = ConnectionState.Retrying(retryCount, MAX_RETRIES, (RETRY_DELAY_MS/1000).toInt())
+                    
+                    scope.launch {
+                        delay(RETRY_DELAY_MS)
+                        targetConnection?.let {
+                            if (!isUserDisconnect) {
+                                attemptConnection(it.ip, it.port, it.serverName)
+                            }
+                        }
+                    }
+                } else {
+                    _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
+                }
             }
         })
     }
@@ -104,6 +137,7 @@ class WebSocketClient {
     }
     
     fun disconnect() {
+        isUserDisconnect = true
         webSocket?.close(1000, "User disconnect")
         webSocket = null
         _connectionState.value = ConnectionState.Disconnected

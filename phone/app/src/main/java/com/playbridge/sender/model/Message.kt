@@ -42,7 +42,8 @@ data class PlayCommand(
 data class PlayPayload(
     val url: String,
     val title: String? = null,
-    val headers: Map<String, String>? = null
+    val headers: Map<String, String>? = null,
+    val contentType: String? = null
 )
 
 /**
@@ -96,10 +97,10 @@ data class StatusMessage(
 
 // ==================== Helper Functions ====================
 
-fun createPlayCommandJson(url: String, title: String? = null, headers: Map<String, String>? = null): String {
+fun createPlayCommandJson(url: String, title: String? = null, headers: Map<String, String>? = null, contentType: String? = null): String {
     return protocolJson.encodeToString(
         PlayCommand.serializer(),
-        PlayCommand(payload = PlayPayload(url = url, title = title, headers = headers))
+        PlayCommand(payload = PlayPayload(url = url, title = title, headers = headers, contentType = contentType))
     )
 }
 

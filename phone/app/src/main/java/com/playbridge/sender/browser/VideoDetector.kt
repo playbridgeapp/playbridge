@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.net.HttpURLConnection
@@ -22,6 +23,7 @@ data class DetectedVideo(
     val contentType: String? = null,
     val detectedBy: String = "unknown",
     val originUrl: String? = null,
+    val headers: Map<String, String>? = null,
     val timestamp: Long = System.currentTimeMillis(),
     var fileSize: Long? = null,  // Will be fetched asynchronously
     var fileSizeChecked: Boolean = false
@@ -53,10 +55,24 @@ object VideoDetector {
             "video_detected" -> {
                 val url = message["url"]?.jsonPrimitive?.content ?: return
                 
-                // Skip duplicates
-                if (seenUrls.contains(url)) {
-                    Log.d(TAG, "Skipping duplicate video: $url")
-                    return
+                val headersJson = try { message["headers"]?.jsonObject } catch(e: Exception) { null }
+                val headers = headersJson?.mapValues { it.value.jsonPrimitive.content }
+                
+                 // Check if already exists to update
+                val existingIndex = detectedVideos.indexOfFirst { it.url == url }
+                
+                if (existingIndex != -1) {
+                     val existing = detectedVideos[existingIndex]
+                     // If we have new headers, update them
+                     if (headers != null && headers.isNotEmpty()) {
+                         Log.i(TAG, "Updating headers for video: $url")
+                         detectedVideos[existingIndex] = existing.copy(
+                             headers = headers,
+                             originUrl = message["originUrl"]?.jsonPrimitive?.content ?: existing.originUrl,
+                             contentType = message["contentType"]?.jsonPrimitive?.content ?: existing.contentType
+                         )
+                     }
+                     return
                 }
                 
                 val video = DetectedVideo(
@@ -65,13 +81,13 @@ object VideoDetector {
                     contentType = message["contentType"]?.jsonPrimitive?.content,
                     detectedBy = message["detectedBy"]?.jsonPrimitive?.content ?: "unknown",
                     originUrl = message["originUrl"]?.jsonPrimitive?.content,
+                    headers = headers,
                     timestamp = message["timestamp"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
                 )
                 
                 Log.i(TAG, "VIDEO DETECTED: ${video.url}")
                 Log.i(TAG, "  Type: ${video.contentType ?: "N/A"}")
-                Log.i(TAG, "  Detected by: ${video.detectedBy}")
-                Log.i(TAG, "  Origin: ${video.originUrl ?: "N/A"}")
+                Log.i(TAG, "  Header Count: ${video.headers?.size ?: 0}")
                 
                 seenUrls.add(url)
                 detectedVideos.add(video)

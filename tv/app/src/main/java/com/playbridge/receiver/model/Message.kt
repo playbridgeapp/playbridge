@@ -40,7 +40,8 @@ data class MessageEnvelope(
 data class PlayPayload(
     val url: String,
     val title: String? = null,
-    val headers: Map<String, String>? = null
+    val headers: Map<String, String>? = null,
+    val contentType: String? = null
 )
 
 /**
@@ -84,7 +85,7 @@ data class PongMessage(val type: String = "pong")
 // ==================== Sealed class for parsed commands ====================
 
 sealed class Command {
-    data class Play(val url: String, val title: String?, val headers: Map<String, String>?) : Command()
+    data class Play(val url: String, val title: String?, val headers: Map<String, String>?, val contentType: String?) : Command()
     data class Browser(val url: String) : Command()
     data class Control(val command: String) : Command()
     data object Ping : Command()
@@ -109,7 +110,8 @@ fun parseCommand(jsonString: String): Command {
                         Command.Play(
                             url = payload?.url ?: "",
                             title = payload?.title,
-                            headers = payload?.headers
+                            headers = payload?.headers,
+                            contentType = payload?.contentType
                         )
                     }
                     "browser" -> {

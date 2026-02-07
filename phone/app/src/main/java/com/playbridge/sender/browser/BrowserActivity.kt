@@ -129,6 +129,8 @@ class BrowserActivity : ComponentActivity() {
                                         "url" to (json["url"] ?: kotlinx.serialization.json.JsonPrimitive("")),
                                         "contentType" to (json["contentType"] ?: kotlinx.serialization.json.JsonNull),
                                         "detectedBy" to (json["detectedBy"] ?: kotlinx.serialization.json.JsonPrimitive("unknown")),
+                                        "originUrl" to (json["originUrl"] ?: kotlinx.serialization.json.JsonNull),
+                                        "headers" to (json["headers"] ?: kotlinx.serialization.json.JsonNull),
                                         "timestamp" to (json["timestamp"] ?: kotlinx.serialization.json.JsonPrimitive(System.currentTimeMillis()))
                                     )))
                                     Log.d(TAG, "Video added to VideoDetector from hash signal")
@@ -565,9 +567,26 @@ class BrowserActivity : ComponentActivity() {
                             when (val state = connectionState) {
                                 is WebSocketClient.ConnectionState.Connected -> {
                                     Log.d(TAG, "Connected to: ${state.serverName}")
+                                    
+                                    val headers = mutableMapOf<String, String>()
+                                    // Default UA
+                                    headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                    
+                                    // Default Referer from originUrl
+                                    if (!video.originUrl.isNullOrEmpty()) {
+                                        headers["Referer"] = video.originUrl
+                                    }
+                                    
+                                    // Apply captured headers (these take precedence and include Cookies)
+                                    video.headers?.forEach { (k, v) -> 
+                                        headers[k] = v 
+                                    }
+                                    
                                     val commandJson = com.playbridge.sender.model.createPlayCommandJson(
                                         url = video.url,
-                                        title = "Video from browser"
+                                        title = "Video from browser",
+                                        headers = headers,
+                                        contentType = video.contentType
                                     )
                                     Log.d(TAG, "Sending play command: $commandJson")
                                     val sent = webSocketClient.send(commandJson)
@@ -580,40 +599,25 @@ class BrowserActivity : ComponentActivity() {
                                             "Playing on ${state.serverName}",
                                             Toast.LENGTH_SHORT
                                         ).show()
-                                    } else {
-                                        Log.e(TAG, "Failed to send command")
-                                        Toast.makeText(
-                                            this@BrowserActivity,
-                                            "Failed to send to TV",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
                                     }
                                 }
-                                is WebSocketClient.ConnectionState.Disconnected -> {
-                                    Log.e(TAG, "Not connected to TV")
-                                    Toast.makeText(
-                                        this@BrowserActivity,
-                                        "Not connected to TV. Please connect from home screen.",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                                is WebSocketClient.ConnectionState.Connecting -> {
-                                    Log.w(TAG, "Still connecting to TV")
+                                is WebSocketClient.ConnectionState.Connecting,
+                                is WebSocketClient.ConnectionState.Retrying -> {
                                     Toast.makeText(
                                         this@BrowserActivity,
                                         "Connecting to TV...",
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
-                                is WebSocketClient.ConnectionState.Error -> {
-                                    Log.e(TAG, "Connection error: ${state.message}")
+                                else -> {
                                     Toast.makeText(
                                         this@BrowserActivity,
-                                        "Connection error: ${state.message}",
-                                        Toast.LENGTH_LONG
+                                        "Not connected to TV",
+                                        Toast.LENGTH_SHORT
                                     ).show()
                                 }
                             }
+
                         },
                         onClear = {
                             VideoDetector.clear()

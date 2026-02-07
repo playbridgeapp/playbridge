@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:use_controller="false" />
+
+    <!-- Controls Overlay -->
+    <RelativeLayout
+        android:id="@+id/controls_root"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="32dp"
+        android:visibility="gone">
+
+        <!-- Seekbar at bottom -->
+        <SeekBar
+            android:id="@+id/player_seekbar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:layout_marginBottom="8dp"
+            android:max="1000"
+            android:progressTint="@android:color/white"
+            android:progressBackgroundTint="#40FFFFFF"
+            android:thumbTint="@android:color/transparent"
+            android:splitTrack="false"
+            android:background="@android:color/transparent"
+            android:focusable="false"
+            android:clickable="false" />
+
+        <!-- Controls Container (Bottom Left, above seekbar) -->
+        <LinearLayout
+            android:id="@+id/controls_panel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_above="@id/player_seekbar"
+            android:layout_alignParentStart="true"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
+
+            <ImageButton
+                android:id="@+id/btn_play_pause"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_media_play"
+                android:contentDescription="Play/Pause" 
+                android:scaleType="fitCenter"
+                android:focusable="false"
+                android:clickable="false" />
+
+            <TextView
+                android:id="@+id/tv_duration"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:textColor="@android:color/white"
+                android:textSize="18sp"
+                android:text="00:00 / 00:00" 
+                android:shadowColor="@android:color/black"
+                android:shadowDx="2"
+                android:shadowDy="2"
+                android:shadowRadius="2" />
+        </LinearLayout>
+
+    </RelativeLayout>
+</FrameLayout>

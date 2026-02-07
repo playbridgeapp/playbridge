@@ -57,7 +57,8 @@ fun HomeScreen(
                         .background(
                             when (connectionState) {
                                 is WebSocketClient.ConnectionState.Connected -> Color(0xFF00FF88)
-                                is WebSocketClient.ConnectionState.Connecting -> Color(0xFFFFAA00)
+                                is WebSocketClient.ConnectionState.Connecting,
+                                is WebSocketClient.ConnectionState.Retrying -> Color(0xFFFFAA00)
                                 is WebSocketClient.ConnectionState.Error -> Color(0xFFFF4444)
                                 is WebSocketClient.ConnectionState.Disconnected -> Color(0xFF666666)
                             }
@@ -68,6 +69,7 @@ fun HomeScreen(
                     text = when (connectionState) {
                         is WebSocketClient.ConnectionState.Connected -> "Connected to ${connectionState.serverName}"
                         is WebSocketClient.ConnectionState.Connecting -> "Connecting..."
+                        is WebSocketClient.ConnectionState.Retrying -> "Retrying in ${connectionState.nextRetrySeconds}s..."
                         is WebSocketClient.ConnectionState.Error -> "Connection Failed"
                         is WebSocketClient.ConnectionState.Disconnected -> "Disconnected"
                     },
@@ -108,7 +110,7 @@ fun HomeScreen(
                         Text(
                             text = "${tvDevice.ip}:${tvDevice.port}",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = if (connectionState is WebSocketClient.ConnectionState.Error) {
+                            color = if (connectionState is WebSocketClient.ConnectionState.Error || connectionState is WebSocketClient.ConnectionState.Retrying) {
                                 MaterialTheme.colorScheme.onErrorContainer
                             } else {
                                 MaterialTheme.colorScheme.primary
@@ -202,6 +204,20 @@ fun HomeScreen(
                         modifier = Modifier.size(48.dp)
                     )
                 }
+                is WebSocketClient.ConnectionState.Retrying -> {
+                    Button(
+                        onClick = onRetry,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Retry Now")
+                    }
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Cancel")
+                    }
+                }
             }
             
             Spacer(modifier = Modifier.weight(1f))
@@ -211,7 +227,8 @@ fun HomeScreen(
                 text = when (connectionState) {
                     is WebSocketClient.ConnectionState.Connected -> 
                         "Ready to send videos to your TV!\nBrowse and detect video links."
-                    is WebSocketClient.ConnectionState.Connecting ->
+                    is WebSocketClient.ConnectionState.Connecting,
+                    is WebSocketClient.ConnectionState.Retrying ->
                         "Establishing connection..."
                     is WebSocketClient.ConnectionState.Error ->
                         "Check that:\n• TV app is running\n• Both devices are on same network\n• IP address is correct"
