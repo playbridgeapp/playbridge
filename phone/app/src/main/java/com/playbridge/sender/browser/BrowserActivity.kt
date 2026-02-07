@@ -23,7 +23,11 @@ import androidx.core.view.WindowCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import mozilla.components.browser.engine.gecko.GeckoEngine
 import mozilla.components.browser.engine.gecko.GeckoEngineView
+import mozilla.components.browser.engine.gecko.GeckoEngineSession
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoSession
 // import mozilla.components.browser.engine.gecko.GeckoEngineSession // Internal, do not use
 import mozilla.components.concept.engine.EngineSession
 import mozilla.components.concept.fetch.Response
@@ -348,10 +352,126 @@ class BrowserActivity : ComponentActivity() {
                     }
                 }
                 session.register(observer)
-                // session.loadUrl("https://www.google.com") // REMOVED: This was causing reloads on tab switch
+                
+                // Set up GeckoSession delegates using reflection (since geckoSession is internal)
+                val geckoEngineSession = session as? GeckoEngineSession
+                
+                // Variables to hold original dlegates for restoration
+                var originalNavDelegate: GeckoSession.NavigationDelegate? = null
+                var originalContentDelegate: GeckoSession.ContentDelegate? = null
+                var geckoSessionInstance: GeckoSession? = null
+
+                if (geckoEngineSession != null) {
+                    try {
+                        val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
+                        field.isAccessible = true
+                        val internalSession = field.get(geckoEngineSession) as? GeckoSession
+                        geckoSessionInstance = internalSession
+                        
+                        internalSession?.let { gs ->
+                            // Wrap NavigationDelegate using Proxy
+                            val existingNav = gs.navigationDelegate
+                            originalNavDelegate = existingNav
+                            
+                            if (existingNav != null) {
+                                val navProxy = java.lang.reflect.Proxy.newProxyInstance(
+                                    GeckoSession.NavigationDelegate::class.java.classLoader,
+                                    arrayOf(GeckoSession.NavigationDelegate::class.java)
+                                ) { _, method, args ->
+                                    if (method.name == "onNewSession" && args != null && args.size >= 2) {
+                                        val uri = args[1] as? String
+                                        if (uri != null) {
+                                            val newTabId = UUID.randomUUID().toString()
+                                            store.dispatch(TabListAction.AddTabAction(
+                                                tab = TabSessionState(
+                                                    id = newTabId,
+                                                    content = ContentState(url = uri),
+                                                    parentId = selectedTab?.id
+                                                ),
+                                                select = true
+                                            ))
+                                            // dispatch UpdateUrl to set the actual URI if needed, or rely on Engine
+                                            // Actually, AddTabAction content url should be the uri.
+                                            // But let's stick to what we had: content = ContentState(url = uri)
+                                            // Re-correcting the inner logic below to match previous step
+                                        }
+                                         // If we handled it, strict return null or handle appropriately?
+                                        return@newProxyInstance GeckoResult.fromValue(null)
+                                    }
+                                    
+                                    // Forward to original
+                                    try {
+                                        if (args != null) method.invoke(existingNav, *args)
+                                        else method.invoke(existingNav)
+                                    } catch (e: java.lang.reflect.InvocationTargetException) {
+                                        throw e.targetException
+                                    }
+                                } as GeckoSession.NavigationDelegate
+                                gs.navigationDelegate = navProxy
+                            }
+                            
+                            // Wrap ContentDelegate using Proxy
+                            val existingContent = gs.contentDelegate
+                            originalContentDelegate = existingContent
+                            
+                            if (existingContent != null) {
+                                val contentProxy = java.lang.reflect.Proxy.newProxyInstance(
+                                    GeckoSession.ContentDelegate::class.java.classLoader,
+                                    arrayOf(GeckoSession.ContentDelegate::class.java)
+                                ) { _, method, args ->
+                                    if (method.name == "onContextMenuItemSelected" && args != null && args.size >= 2) {
+                                        val item = args[1]
+                                        if (item != null) {
+                                            try {
+                                                 val idField = item.javaClass.getField("id")
+                                                 val id = idField.getInt(item)
+                                                 val idOpenInNewTabField = item.javaClass.getField("ID_OPEN_IN_NEW_TAB")
+                                                 val idOpenInNewTab = idOpenInNewTabField.getInt(null)
+                                                 
+                                                 if (id == idOpenInNewTab) {
+                                                     return@newProxyInstance true
+                                                 }
+                                            } catch (e: Exception) {
+                                                // Ignore reflection errors
+                                            }
+                                        }
+                                    }
+                                    if (method.name == "onContextMenu" && args != null && args.size >= 4) {
+                                        val element = args[3]
+                                        if (element != null) {
+                                            try {
+                                                val linkUriField = element.javaClass.getField("linkUri")
+                                                val linkUri = linkUriField.get(element) as? String
+                                                if (linkUri != null) {
+                                                    contextMenuUrl = linkUri
+                                                }
+                                            } catch (e: Exception) {
+                                                // Ignore reflection errors
+                                            }
+                                        }
+                                    }
+                                    try {
+                                        if (args != null) method.invoke(existingContent, *args)
+                                        else method.invoke(existingContent)
+                                    } catch (e: java.lang.reflect.InvocationTargetException) {
+                                        throw e.targetException
+                                    }
+                                } as GeckoSession.ContentDelegate
+                                gs.contentDelegate = contentProxy
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to setup GeckoSession delegates", e)
+                    }
+                }
                 
                 onDispose {
                     session.unregister(observer)
+                    // Restore original delegates
+                    geckoSessionInstance?.let { gs ->
+                        if (originalNavDelegate != null) gs.navigationDelegate = originalNavDelegate
+                        if (originalContentDelegate != null) gs.contentDelegate = originalContentDelegate
+                    }
                 }
             }
 
@@ -641,7 +761,8 @@ class BrowserActivity : ComponentActivity() {
                                                 id = newId,
                                                 content = ContentState(url = "https://www.google.com"),
                                                 parentId = null
-                                            )
+                                            ),
+                                            select = true
                                         ))
                                         currentScreen = Screen.Browser
                                     }
