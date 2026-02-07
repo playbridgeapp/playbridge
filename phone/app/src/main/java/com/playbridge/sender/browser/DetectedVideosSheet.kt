@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -15,6 +16,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -110,7 +113,13 @@ fun DetectedVideosSheet(
                     items(videos) { video ->
                         VideoItemDetailed(
                             video = video,
-                            onPlayClick = { onVideoClick(video) },
+                            onPlayClick = { specificUrl -> 
+                                if (specificUrl != null) {
+                                    onVideoClick(video.copy(url = specificUrl))
+                                } else {
+                                    onVideoClick(video)
+                                }
+                            },
                             onCopyClick = {
                                 copyToClipboard(context, video.url)
                                 Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
@@ -126,7 +135,7 @@ fun DetectedVideosSheet(
 @Composable
 private fun VideoItemDetailed(
     video: DetectedVideo,
-    onPlayClick: () -> Unit,
+    onPlayClick: (String?) -> Unit,
     onCopyClick: () -> Unit
 ) {
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
@@ -136,12 +145,24 @@ private fun VideoItemDetailed(
     // File size state - fetch asynchronously
     var fileSize by remember { mutableStateOf(video.fileSize) }
     var isLoadingSize by remember { mutableStateOf(!video.fileSizeChecked) }
+    var showRaw by remember { mutableStateOf(false) }
+
+    // HLS Qualities state
+    val isHls = remember(videoType) { videoType == "HLS" }
+    var qualities by remember { mutableStateOf(video.qualities) }
+    var isLoadingQualities by remember { mutableStateOf(isHls && !video.qualitiesChecked) }
     
     LaunchedEffect(video.url) {
         if (!video.fileSizeChecked) {
             isLoadingSize = true
             fileSize = VideoDetector.fetchFileSize(video)
             isLoadingSize = false
+        }
+        
+        if (isHls && !video.qualitiesChecked) {
+            isLoadingQualities = true
+            qualities = VideoDetector.fetchHlsQualities(video)
+            isLoadingQualities = false
         }
     }
     
@@ -266,6 +287,90 @@ private fun VideoItemDetailed(
                 }
             }
             
+            // Raw JSON viewer
+            AnimatedVisibility(visible = showRaw && video.originalMessage != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                ) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Raw Message:",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    SelectionContainer {
+                        Text(
+                            text = video.originalMessage ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Qualities List
+            if (isHls) {
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "Qualities:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                
+                if (isLoadingQualities) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Parsing HLS playlist...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else if (qualities.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(qualities) { quality ->
+                            AssistChip(
+                                onClick = { onPlayClick(quality.url) },
+                                label = { 
+                                    Text(
+                                        text = quality.resolution,
+                                        style = MaterialTheme.typography.labelMedium
+                                    ) 
+                                },
+                                leadingIcon = {
+                                     Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(12.dp))
+                                }
+                            )
+                        }
+                    }
+                } else {
+                     Spacer(modifier = Modifier.height(4.dp))
+                     Text(
+                        text = "No variants found",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
             // Action buttons
             Spacer(modifier = Modifier.height(12.dp))
             Row(
@@ -288,7 +393,7 @@ private fun VideoItemDetailed(
                 
                 // Play/Send button
                 Button(
-                    onClick = onPlayClick,
+                    onClick = { onPlayClick(null) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
@@ -298,6 +403,18 @@ private fun VideoItemDetailed(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text("Play on TV")
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // Show Raw button
+            if (video.originalMessage != null) {
+                TextButton(
+                    onClick = { showRaw = !showRaw },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (showRaw) "Hide Raw Data" else "Show Raw Data")
                 }
             }
         }

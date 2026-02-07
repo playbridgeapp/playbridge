@@ -26,7 +26,10 @@ data class DetectedVideo(
     val headers: Map<String, String>? = null,
     val timestamp: Long = System.currentTimeMillis(),
     var fileSize: Long? = null,  // Will be fetched asynchronously
-    var fileSizeChecked: Boolean = false
+    var fileSizeChecked: Boolean = false,
+    val originalMessage: String? = null,
+    var qualities: List<VideoQuality> = emptyList(),
+    var qualitiesChecked: Boolean = false
 )
 
 /**
@@ -42,6 +45,9 @@ object VideoDetector {
     
     // Track videos by URL to avoid duplicates
     private val seenUrls = mutableSetOf<String>()
+
+    // Track ignored URLs (e.g., HLS variants)
+    private val ignoredUrls = mutableSetOf<String>()
     
     /**
      * Process a message received from the video detector extension
@@ -54,6 +60,12 @@ object VideoDetector {
         when (type) {
             "video_detected" -> {
                 val url = message["url"]?.jsonPrimitive?.content ?: return
+                
+                // Check if URL is ignored
+                if (ignoredUrls.contains(url)) {
+                    Log.d(TAG, "Ignoring video URL: $url")
+                    return
+                }
                 
                 val headersJson = try { message["headers"]?.jsonObject } catch(e: Exception) { null }
                 val headers = headersJson?.mapValues { it.value.jsonPrimitive.content }
@@ -69,7 +81,8 @@ object VideoDetector {
                          detectedVideos[existingIndex] = existing.copy(
                              headers = headers,
                              originUrl = message["originUrl"]?.jsonPrimitive?.content ?: existing.originUrl,
-                             contentType = message["contentType"]?.jsonPrimitive?.content ?: existing.contentType
+                             contentType = message["contentType"]?.jsonPrimitive?.content ?: existing.contentType,
+                             originalMessage = message.toString()
                          )
                      }
                      return
@@ -82,7 +95,8 @@ object VideoDetector {
                     detectedBy = message["detectedBy"]?.jsonPrimitive?.content ?: "unknown",
                     originUrl = message["originUrl"]?.jsonPrimitive?.content,
                     headers = headers,
-                    timestamp = message["timestamp"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
+                    timestamp = message["timestamp"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
+                    originalMessage = message.toString()
                 )
                 
                 Log.i(TAG, "VIDEO DETECTED: ${video.url}")
@@ -138,12 +152,63 @@ object VideoDetector {
     }
     
     /**
+     * Fetch HLS variant qualities if the video is an m3u8 playlist
+     */
+    suspend fun fetchHlsQualities(video: DetectedVideo): List<VideoQuality> {
+        if (video.qualitiesChecked) {
+            return video.qualities
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                // simple check if it looks like an m3u8 url
+                if (video.url.contains(".m3u8", ignoreCase = true) || 
+                    video.contentType?.contains("mpegurl", ignoreCase = true) == true) {
+                    
+                    val qualities = HlsParser.parse(video.url)
+                    video.qualities = qualities
+                    video.qualitiesChecked = true
+                    
+                    if (qualities.isNotEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            // Add variants to ignore list
+                            qualities.forEach { quality ->
+                                ignoredUrls.add(quality.url)
+                            }
+                            
+                            // Remove any already detected videos that are actually variants
+                            val removed = detectedVideos.removeAll { detected ->
+                                ignoredUrls.contains(detected.url)
+                            }
+                            
+                            if (removed) {
+                                Log.d(TAG, "Removed detected videos that were actually variants")
+                            }
+                        }
+                    }
+                    
+                    Log.d(TAG, "Fetched ${qualities.size} qualities for ${video.url}")
+                    qualities
+                } else {
+                    video.qualitiesChecked = true
+                    emptyList()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching HLS qualities: ${e.message}")
+                video.qualitiesChecked = true
+                emptyList()
+            }
+        }
+    }
+
+    /**
      * Clear all detected videos
      */
     fun clear() {
         Log.d(TAG, "Clearing ${detectedVideos.size} detected videos")
         detectedVideos.clear()
         seenUrls.clear()
+        ignoredUrls.clear()
     }
     
     /**
