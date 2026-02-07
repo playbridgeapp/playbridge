@@ -15,6 +15,7 @@ import com.playbridge.receiver.MainActivity
 import com.playbridge.receiver.R
 import com.playbridge.receiver.model.Command
 import com.playbridge.receiver.pairing.PairingStore
+import com.playbridge.receiver.model.PairedDevice
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +71,15 @@ class ServerService : Service() {
                     server.connectionState.collect { state ->
                         updateNotification(state)
                         _connectionState.value = state
+                        
+                        // Persist paired device on connection
+                        if (state is WebSocketServer.ConnectionState.Connected) {
+                            val device = PairedDevice(
+                                id = state.clientId,
+                                name = "Phone (${state.clientId.take(4)})"
+                            )
+                            pairingStore.addPairedDevice(device)
+                        }
                     }
                 }
                 

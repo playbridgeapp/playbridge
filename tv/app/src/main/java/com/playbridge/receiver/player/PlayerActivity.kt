@@ -17,6 +17,13 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.playbridge.receiver.server.ServerService
+import com.playbridge.receiver.data.HistoryStore
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Dispatchers
 
 private const val TAG = "PlayerActivity"
 
@@ -29,6 +36,12 @@ class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
     private lateinit var playerView: PlayerView
     private var audioDiscontinuityRetryCount = 0
+
+    private lateinit var historyStore: HistoryStore
+    private var currentUrl: String? = null
+    private var currentTitle: String? = null
+    private var currentContentType: String? = null
+    private var currentHeaders: Map<String, String>? = null
     
     // UI Components
     private lateinit var controlsRoot: android.view.View
@@ -52,7 +65,7 @@ class PlayerActivity : ComponentActivity() {
                 updateProgress()
             }
             if (controlsRoot.visibility == android.view.View.VISIBLE) {
-                hideControlsHandler.postDelayed(this, 500)
+                hideControlsHandler.postDelayed(this, 1000)
             }
         }
     }
@@ -117,6 +130,8 @@ class PlayerActivity : ComponentActivity() {
         
         // Initialize View Bindings
         setContentView(com.playbridge.receiver.R.layout.activity_player)
+        
+        historyStore = HistoryStore(applicationContext)
         
         playerView = findViewById(com.playbridge.receiver.R.id.player_view)
         controlsRoot = findViewById(com.playbridge.receiver.R.id.controls_root)
@@ -229,6 +244,11 @@ class PlayerActivity : ComponentActivity() {
         Log.i(TAG, "Content Type: $contentType")
         Log.i(TAG, "===========================================")
 
+        currentUrl = url
+        currentTitle = title
+        currentContentType = contentType
+        currentHeaders = intentHeaders
+
         releasePlayer()
 
         // 1. Prepare Headers (Merge Intent headers with defaults)
@@ -326,6 +346,22 @@ class PlayerActivity : ComponentActivity() {
 
         player?.setMediaItem(mediaItem)
         player?.prepare()
+        
+        // Check for history and resume
+        lifecycleScope.launch {
+            try {
+                val history = historyStore.history.first()
+                val item = history.find { it.url == url }
+                if (item != null && item.position > 5000 && item.position < (item.duration - 5000)) {
+                    Log.i(TAG, "Resuming from history: ${item.position}ms")
+                    player?.seekTo(item.position)
+                    android.widget.Toast.makeText(this@PlayerActivity, "Resuming playback", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to restore history", e)
+            }
+        }
+        
         player?.play()
         
         // Reset retry count on new video
@@ -456,7 +492,35 @@ class PlayerActivity : ComponentActivity() {
     
     override fun onStop() {
         super.onStop()
+        saveProgress()
         releasePlayer()
+    }
+    
+    private fun saveProgress() {
+        val player = this.player ?: return
+        val url = currentUrl
+        Log.d(TAG, "Attempting to save progress for $url")
+        if (url != null && player.duration > 0 && player.currentPosition > 0) {
+            val position = player.currentPosition
+            val duration = player.duration
+            val title = currentTitle
+            val contentType = currentContentType
+            val headers = currentHeaders
+            
+            Log.d(TAG, "Saving progress: $position / $duration")
+            lifecycleScope.launch {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    try {
+                        historyStore.saveProgress(url, title, position, duration, contentType, headers)
+                        Log.d(TAG, "Progress saved successfully")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to save progress", e)
+                    }
+                }
+            }
+        } else {
+            Log.d(TAG, "Not saving: URL=$url, Duration=${player.duration}, Pos=${player.currentPosition}")
+        }
     }
     
     override fun onDestroy() {
@@ -484,7 +548,7 @@ class PlayerActivity : ComponentActivity() {
             override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
                     val duration = player?.duration ?: 0
-                    val newPosition = (duration * progress) / 1000
+                    val newPosition = (duration * progress) / 500
                     timeText.text = formatTime(newPosition, duration)
                 }
             }
@@ -493,7 +557,7 @@ class PlayerActivity : ComponentActivity() {
             }
             override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {
                 val duration = player?.duration ?: 0
-                val newPosition = (duration * seekBar!!.progress) / 1000
+                val newPosition = (duration * seekBar!!.progress) / 500
                 player?.seekTo(newPosition)
                 showSeekUI() // Show just seekbar after seeking
             }

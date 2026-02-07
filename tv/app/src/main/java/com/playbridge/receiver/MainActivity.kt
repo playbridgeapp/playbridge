@@ -18,14 +18,18 @@ import com.playbridge.receiver.pairing.PairingStore
 import com.playbridge.receiver.server.ServerService
 import com.playbridge.receiver.server.WebSocketServer
 import com.playbridge.receiver.ui.HomeScreen
+import com.playbridge.receiver.ui.HistoryScreen
 import com.playbridge.receiver.ui.PairingScreen
+import com.playbridge.receiver.ui.SettingsScreen
 import com.playbridge.receiver.ui.theme.PlayBridgeTVTheme
+import com.playbridge.receiver.data.HistoryStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
     
     private lateinit var pairingStore: PairingStore
+    private lateinit var historyStore: HistoryStore
     
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -39,6 +43,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         pairingStore = PairingStore(applicationContext)
+        historyStore = HistoryStore(applicationContext)
         
         // Request notification permission on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -61,7 +66,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     shape = RectangleShape
                 ) {
-                    MainContent(pairingStore = pairingStore)
+                    MainContent(pairingStore = pairingStore, historyStore = historyStore)
                 }
             }
         }
@@ -70,13 +75,31 @@ class MainActivity : ComponentActivity() {
 
 enum class Screen {
     Home,
-    Pairing
+    Pairing,
+    History,
+    Settings
 }
 
 @Composable
-fun MainContent(pairingStore: PairingStore) {
-    var currentScreen by remember { mutableStateOf(Screen.Pairing) }
+fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
+    // Initial State determination
+    var currentScreen by remember { mutableStateOf(Screen.Home) }
+    var isInitialCheckDone by remember { mutableStateOf(false) }
+    
     val connectionState by ServerService.connectionState.collectAsState()
+    val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
+    
+    // Check initial state once
+    LaunchedEffect(pairedDevices) {
+        if (!isInitialCheckDone && pairedDevices.isNotEmpty()) {
+            currentScreen = Screen.History
+            isInitialCheckDone = true
+        } else if (!isInitialCheckDone && pairedDevices.isEmpty()) {
+            // Keep default Home
+             isInitialCheckDone = true
+        }
+    }
+
     var serverIp by remember { mutableStateOf<String?>(null) }
     var serverPort by remember { mutableStateOf<Int?>(null) }
     var authToken by remember { mutableStateOf("") }
@@ -92,12 +115,17 @@ fun MainContent(pairingStore: PairingStore) {
         }
     }
     
-    // Auto-navigate to Home when a phone connects
+    // Auto-navigate to History when a phone connects (if not already there)
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketServer.ConnectionState.Connected) {
-            currentScreen = Screen.Home
+             // If we are on Home (Pairing status page), go to History
+             if (currentScreen == Screen.Home) {
+                 currentScreen = Screen.History
+             }
         }
     }
+    
+    val context = androidx.compose.ui.platform.LocalContext.current
     
     when (currentScreen) {
         Screen.Home -> {
@@ -106,6 +134,25 @@ fun MainContent(pairingStore: PairingStore) {
                 serverIp = serverIp,
                 serverPort = serverPort,
                 onShowPairing = { currentScreen = Screen.Pairing }
+            )
+        }
+        Screen.History -> {
+            HistoryScreen(
+                historyStore = historyStore,
+                deviceName = deviceName,
+                onNavigateToPairing = { currentScreen = Screen.Pairing },
+                onNavigateToSettings = { currentScreen = Screen.Settings },
+                onPlayItem = { item ->
+                    val intent = android.content.Intent(context, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                        putExtra(ServerService.EXTRA_URL, item.url)
+                        putExtra(ServerService.EXTRA_TITLE, item.title)
+                        putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)
+                        if (item.headers != null) {
+                             putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(item.headers))
+                        }
+                    }
+                    context.startActivity(intent)
+                }
             )
         }
         Screen.Pairing -> {
@@ -117,10 +164,23 @@ fun MainContent(pairingStore: PairingStore) {
                 connectionState = connectionState
             )
         }
+        Screen.Settings -> {
+            SettingsScreen(
+                onBack = { currentScreen = Screen.History }
+            )
+        }
     }
     
     // Handle back button for navigation
-    androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Pairing) {
+    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.History && pairedDevices.isNotEmpty()) {
+        currentScreen = Screen.History
+    }
+    // Handle back from Settings to History
+    androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Settings) {
+        currentScreen = Screen.History
+    }
+    // Also handle back from Pairing to Home if no history
+    androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Pairing && pairedDevices.isEmpty()) {
         currentScreen = Screen.Home
     }
 }
