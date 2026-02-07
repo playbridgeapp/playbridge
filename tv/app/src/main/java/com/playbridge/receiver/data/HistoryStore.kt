@@ -23,7 +23,8 @@ data class PlaybackHistoryItem(
     val duration: Long,
     val timestamp: Long = System.currentTimeMillis(),
     val contentType: String? = null,
-    val headers: Map<String, String>? = null
+    val headers: Map<String, String>? = null,
+    val thumbnailPath: String? = null
 )
 
 class HistoryStore(private val context: Context) {
@@ -48,7 +49,8 @@ class HistoryStore(private val context: Context) {
         position: Long,
         duration: Long,
         contentType: String?,
-        headers: Map<String, String>?
+        headers: Map<String, String>?,
+        thumbnailPath: String? = null
     ) {
         if (url.isBlank()) return
         
@@ -56,17 +58,7 @@ class HistoryStore(private val context: Context) {
         // We'll filter "completed" items in UI or logic if needed, but saving everything is safer.
         
         val id = url // Use URL as ID for simplicity
-        val newItem = PlaybackHistoryItem(
-            id = id,
-            url = url,
-            title = title,
-            position = position,
-            duration = duration,
-            timestamp = System.currentTimeMillis(),
-            contentType = contentType,
-            headers = headers
-        )
-
+        
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
             val currentList = try {
@@ -74,6 +66,22 @@ class HistoryStore(private val context: Context) {
             } catch (e: Exception) {
                 mutableListOf()
             }
+
+            // check for existing item to preserve thumbnail if new one is not provided
+            val existingItem = currentList.find { it.id == id }
+            val finalThumbnailPath = thumbnailPath ?: existingItem?.thumbnailPath
+
+            val newItem = PlaybackHistoryItem(
+                id = id,
+                url = url,
+                title = title,
+                position = position,
+                duration = duration,
+                timestamp = System.currentTimeMillis(),
+                contentType = contentType,
+                headers = headers,
+                thumbnailPath = finalThumbnailPath
+            )
 
             // Remove existing item with same ID to update it (move to top)
             currentList.removeAll { it.id == id }

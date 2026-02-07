@@ -22,6 +22,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 
@@ -490,13 +491,24 @@ class PlayerActivity : ComponentActivity() {
         }
     }
     
-    override fun onStop() {
-        super.onStop()
-        saveProgress()
-        releasePlayer()
+    private var cachedBitmap: android.graphics.Bitmap? = null
+
+    override fun onPause() {
+        super.onPause()
+        // Capture bitmap in onPause when the view is definitely still visible
+        cachedBitmap = captureBitmap()
     }
     
-    private fun saveProgress() {
+    override fun onStop() {
+        // Use the bitmap captured in onPause
+        val bitmap = cachedBitmap
+        super.onStop()
+        saveProgress(bitmap)
+        releasePlayer()
+        cachedBitmap = null
+    }
+    
+    private fun saveProgress(thumbnailBitmap: android.graphics.Bitmap? = null) {
         val player = this.player ?: return
         val url = currentUrl
         Log.d(TAG, "Attempting to save progress for $url")
@@ -507,19 +519,66 @@ class PlayerActivity : ComponentActivity() {
             val contentType = currentContentType
             val headers = currentHeaders
             
-            Log.d(TAG, "Saving progress: $position / $duration")
             lifecycleScope.launch {
-                withContext(NonCancellable + Dispatchers.IO) {
-                    try {
-                        historyStore.saveProgress(url, title, position, duration, contentType, headers)
-                        Log.d(TAG, "Progress saved successfully")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to save progress", e)
+                withContext(NonCancellable) {
+                    var thumbnailPath: String? = null
+                    
+                    if (thumbnailBitmap != null) {
+                        thumbnailPath = saveBitmapToStorage(thumbnailBitmap)
+                        Log.d(TAG, "Saved thumbnail to: $thumbnailPath")
+                    }
+
+                    Log.d(TAG, "Saving progress: $position / $duration")
+
+                    withContext(Dispatchers.IO) {
+                        try {
+                            historyStore.saveProgress(url, title, position, duration, contentType, headers, thumbnailPath)
+                            Log.d(TAG, "Progress saved successfully")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to save progress", e)
+                        }
                     }
                 }
             }
         } else {
             Log.d(TAG, "Not saving: URL=$url, Duration=${player.duration}, Pos=${player.currentPosition}")
+        }
+    }
+    
+    private fun captureBitmap(): android.graphics.Bitmap? {
+        try {
+            val textureView = playerView.videoSurfaceView as? android.view.TextureView
+            if (textureView != null) {
+                Log.d(TAG, "Capturing bitmap from TextureView")
+                return textureView.bitmap
+            }
+        } catch (e: Exception) {
+           Log.e(TAG, "Failed to capture screenshot", e)
+        }
+        return null
+    }
+
+    private suspend fun saveBitmapToStorage(bitmap: android.graphics.Bitmap): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val thumbnailsDir = java.io.File(filesDir, "thumbnails")
+                if (!thumbnailsDir.exists()) thumbnailsDir.mkdirs()
+                
+                // Use URL hash as filename
+                val filename = "${currentUrl?.hashCode() ?: System.currentTimeMillis()}.jpg"
+                val file = java.io.File(thumbnailsDir, filename)
+                
+                java.io.FileOutputStream(file).use { out ->
+                    // Compress nicely
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out)
+                }
+                
+                Log.d(TAG, "Saved bitmap size: ${file.length()} bytes")
+                file.absolutePath
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save bitmap", e)
+                null
+            }
         }
     }
     

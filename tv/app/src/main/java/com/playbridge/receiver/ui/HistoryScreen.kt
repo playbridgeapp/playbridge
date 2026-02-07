@@ -18,6 +18,7 @@ import com.playbridge.receiver.data.PlaybackHistoryItem
 import com.playbridge.receiver.model.Command
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import coil3.request.crossfade
 import com.playbridge.receiver.server.ServerService
 import kotlinx.coroutines.launch
 
@@ -130,7 +131,7 @@ fun HistoryItemCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Placeholder Icon / Thumbnail area
+            // Thumbnail area
              Box(
                 modifier = Modifier
                     .size(80.dp)
@@ -138,8 +139,22 @@ fun HistoryItemCard(
                      .aspectRatio(16f/9f),
                 contentAlignment = Alignment.Center
             ) {
-                 // Placeholder
-                 Text("▶", color = Color.White)
+                 if (item.thumbnailPath != null) {
+                     coil3.compose.AsyncImage(
+                         model = coil3.request.ImageRequest.Builder(LocalContext.current)
+                             .data(item.thumbnailPath)
+                             .memoryCacheKey("${item.thumbnailPath}_${item.timestamp}")
+                             .diskCacheKey("${item.thumbnailPath}_${item.timestamp}")
+                             .crossfade(true)
+                             .build(),
+                         contentDescription = null,
+                         modifier = Modifier.fillMaxSize(),
+                         contentScale = ContentScale.Crop
+                     )
+                 } else {
+                     // Placeholder
+                     Text("▶", color = Color.White)
+                 }
             }
 
             Column(
