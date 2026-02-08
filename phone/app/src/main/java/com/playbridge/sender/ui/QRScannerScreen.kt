@@ -30,6 +30,13 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.playbridge.sender.model.QRCodeData
 import com.playbridge.sender.model.parseQRCode
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import com.playbridge.sender.model.TvDevice
 import java.util.concurrent.Executors
 
 private const val TAG = "QRScannerScreen"
@@ -37,6 +44,7 @@ private const val TAG = "QRScannerScreen"
 @Composable
 fun QRScannerScreen(
     onQRCodeScanned: (QRCodeData) -> Unit,
+    history: List<TvDevice>,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -55,6 +63,9 @@ fun QRScannerScreen(
     var camera by remember { mutableStateOf<Camera?>(null) }
     var zoomLevel by remember { mutableFloatStateOf(0f) }
     
+    // History dialog
+    var showHistoryDialog by remember { mutableStateOf(false) }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -142,6 +153,26 @@ fun QRScannerScreen(
                 modifier = Modifier.fillMaxSize()
             )
             
+            // Top right History Icon
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                contentAlignment = Alignment.TopEnd
+            ) {
+                IconButton(
+                    onClick = { showHistoryDialog = true },
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.History,
+                        contentDescription = "History",
+                        tint = Color.White
+                    )
+                }
+            }
+
             // Overlay
             Column(
                 modifier = Modifier
@@ -286,6 +317,25 @@ fun QRScannerScreen(
             }
         )
     }
+
+    // History Dialog
+    if (showHistoryDialog) {
+        HistoryDialog(
+            history = history,
+            onDismiss = { showHistoryDialog = false },
+            onSelect = { device ->
+                showHistoryDialog = false
+                isScanning = false
+                val qrData = QRCodeData(
+                    ip = device.ip,
+                    port = device.port,
+                    token = device.token,
+                    name = device.name
+                )
+                onQRCodeScanned(qrData)
+            }
+        )
+    }
 }
 
 @Composable
@@ -355,6 +405,56 @@ fun ManualConnectionDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun HistoryDialog(
+    history: List<TvDevice>,
+    onDismiss: () -> Unit,
+    onSelect: (TvDevice) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Connection History") },
+        text = {
+            if (history.isEmpty()) {
+                Text("No recent connections")
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.heightIn(max = 300.dp)
+                ) {
+                    items(history) { device ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(device) },
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = device.name,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    text = "${device.ip}:${device.port}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
             }
         }
     )

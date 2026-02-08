@@ -34,8 +34,8 @@ class WebSocketClient {
     val messages = _messages.asSharedFlow()
     
     private var retryCount = 0
-    private val MAX_RETRIES = 5
-    private val RETRY_DELAY_MS = 10000L
+    private val MAX_RETRIES = 60 // 5 minutes
+    private val RETRY_DELAY_MS = 5000L
     private var targetConnection: TvConnectionInfo? = null
     private var isUserDisconnect = false
 
@@ -112,11 +112,15 @@ class WebSocketClient {
                     _connectionState.value = ConnectionState.Retrying(retryCount, MAX_RETRIES, (RETRY_DELAY_MS/1000).toInt())
                     
                     scope.launch {
-                        delay(RETRY_DELAY_MS)
-                        targetConnection?.let {
-                            if (!isUserDisconnect) {
-                                attemptConnection(it.ip, it.port, it.serverName)
+                        try {
+                            delay(RETRY_DELAY_MS)
+                            targetConnection?.let {
+                                if (!isUserDisconnect) {
+                                    attemptConnection(it.ip, it.port, it.serverName)
+                                }
                             }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error during retry attempt", e)
                         }
                     }
                 } else {

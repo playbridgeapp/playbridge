@@ -77,6 +77,7 @@ fun MainContent(
     var currentScreen by remember { mutableStateOf(Screen.Scanner) }
     var tvDevice by remember { mutableStateOf<TvDevice?>(null) }
     val connectionState by webSocketClient.connectionState.collectAsState()
+    val history by connectionStore.deviceHistory.collectAsState(initial = emptyList())
     
     // Camera permission
     var hasCameraPermission by remember {
@@ -138,10 +139,12 @@ fun MainContent(
                     // Save and connect
                     scope.launch {
                         connectionStore.saveTvDevice(device)
+                        connectionStore.addToHistory(device)
                     }
                     webSocketClient.connect(qrData.ip, qrData.port, qrData.token, qrData.name)
                     currentScreen = Screen.Home
                 },
+                history = history,
                 modifier = modifier
             )
         }
