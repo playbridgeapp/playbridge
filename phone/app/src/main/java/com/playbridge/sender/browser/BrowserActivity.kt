@@ -73,6 +73,7 @@ class BrowserActivity : ComponentActivity() {
         setContent {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Browser) }
             val connectionState by webSocketClient.connectionState.collectAsState()
+            val history by connectionStore.deviceHistory.collectAsState(initial = emptyList())
             val scope = rememberCoroutineScope()
             
             // Auto-connect to stored TV device
@@ -778,6 +779,7 @@ class BrowserActivity : ComponentActivity() {
                             Screen.Scanner -> {
                                 BackHandler { currentScreen = Screen.Browser }
                                 QRScannerScreen(
+                                    history = history,
                                     onQRCodeScanned = { qrData ->
                                         scope.launch {
                                             Log.d(TAG, "QR Code scanned: ${qrData.name} at ${qrData.ip}:${qrData.port}")
@@ -790,6 +792,7 @@ class BrowserActivity : ComponentActivity() {
                                                 name = qrData.name
                                             )
                                             connectionStore.saveTvDevice(tvDevice)
+                                            connectionStore.addToHistory(tvDevice)
                                             Log.d(TAG, "TV device saved")
                                             
                                             // Connect
