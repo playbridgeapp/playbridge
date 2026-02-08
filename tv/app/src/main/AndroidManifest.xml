@@ -53,6 +53,17 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".browser.BrowserActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+             <intent-filter>
+                <action android:name="com.playbridge.receiver.ACTION_BROWSER" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".server.ServerService"
             android:exported="false"

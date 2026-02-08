@@ -599,6 +599,21 @@ class BrowserActivity : ComponentActivity() {
                                                     },
                                                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                 )
+
+                                                // Open on TV (only when connected)
+                                                if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("Open on TV", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.primary) },
+                                                        onClick = {
+                                                            menuExpanded = false
+                                                            val cmd = com.playbridge.sender.model.createBrowserCommandJson(currentUrl)
+                                                            webSocketClient.send(cmd)
+                                                            Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
                                                 
                                                 // Media controls (only show when connected AND media is playing)
                                                 if (connectionState is WebSocketClient.ConnectionState.Connected && isMediaPlaying) {

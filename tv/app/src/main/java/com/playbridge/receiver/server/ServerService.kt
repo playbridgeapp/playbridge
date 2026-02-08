@@ -102,35 +102,40 @@ class ServerService : Service() {
         when (command) {
             is Command.Play -> {
                 Log.i(TAG, "=== PLAY COMMAND ===")
-                Log.i(TAG, "URL: ${command.url}")
-                Log.i(TAG, "Title: ${command.title}")
                 
-                // Launch PlayerActivity with URL
-                try {
-                    val intent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
-                        putExtra(EXTRA_URL, command.url)
-                        putExtra(EXTRA_TITLE, command.title)
-                        putExtra(EXTRA_CONTENT_TYPE, command.contentType)
-                        if (command.headers != null) {
-                            putExtra(EXTRA_HEADERS, HashMap(command.headers))
-                        }
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    }
-                    Log.i(TAG, "Launching PlayerActivity...")
-                    startActivity(intent)
-                    Log.i(TAG, "PlayerActivity launched successfully")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to launch PlayerActivity", e)
+                // Clear stack to MainActivity first
+                val homeIntent = Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }
+                startActivity(homeIntent)
+
+                // Launch PlayerActivity
+                val intent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                    putExtra(EXTRA_URL, command.url)
+                    putExtra(EXTRA_TITLE, command.title)
+                    putExtra(EXTRA_CONTENT_TYPE, command.contentType)
+                    if (command.headers != null) {
+                        putExtra(EXTRA_HEADERS, HashMap(command.headers))
+                    }
+                    // No CLEAR_TASK, just NEW_TASK to add to the stack we just cleared
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) 
+                }
+                startActivity(intent)
             }
             is Command.Browser -> {
                 Log.i(TAG, "Browser command: ${command.url}")
-                // TODO: Launch browser activity with URL
-                val intent = Intent(ACTION_BROWSER).apply {
-                    putExtra(EXTRA_URL, command.url)
-                    setPackage(packageName)
+                
+                 // Clear stack to MainActivity first
+                val homeIntent = Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }
-                sendBroadcast(intent)
+                startActivity(homeIntent)
+
+                val intent = Intent(this, com.playbridge.receiver.browser.BrowserActivity::class.java).apply {
+                    putExtra(com.playbridge.receiver.browser.BrowserActivity.EXTRA_URL, command.url)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
             }
             is Command.Control -> {
                 Log.i(TAG, "Control command: ${command.command}")
