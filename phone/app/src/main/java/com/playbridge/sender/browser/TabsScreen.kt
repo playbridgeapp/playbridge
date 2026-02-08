@@ -18,6 +18,19 @@ import androidx.compose.ui.unit.dp
 import mozilla.components.browser.state.selector.normalTabs
 import mozilla.components.browser.state.state.TabSessionState
 
+import mozilla.components.browser.state.store.BrowserStore
+import mozilla.components.browser.state.state.BrowserState
+import mozilla.components.lib.state.ext.flow
+
+
+/**
+ * Extension to observe BrowserStore state as Compose State.
+ */
+@Composable
+fun BrowserStore.observeAsState(): State<BrowserState> {
+    return this.flow().collectAsState(initial = this.state)
+}
+
 /**
  * Tab management screen showing open tabs from BrowserStore.
  */
@@ -28,7 +41,7 @@ fun TabsScreen(
     onNewTab: () -> Unit
 ) {
     // Observe tabs from BrowserStore
-    val state = Components.store.state
+    val state by Components.store.observeAsState()
     val tabs = state.normalTabs
     
     Column(
@@ -86,7 +99,8 @@ fun TabsScreen(
                     TabCard(
                         tab = tab,
                         onSelect = { onTabSelected(tab.id) },
-                        onClose = { onTabClosed(tab.id) }
+                        onClose = { onTabClosed(tab.id) },
+                        isSelected = tab.id == state.selectedTabId
                     )
                 }
             }
@@ -98,14 +112,15 @@ fun TabsScreen(
 private fun TabCard(
     tab: TabSessionState,
     onSelect: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    isSelected: Boolean
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onSelect() },
         colors = CardDefaults.cardColors(
-            containerColor = if (tab.id == Components.store.state.selectedTabId)
+            containerColor = if (isSelected)
                 MaterialTheme.colorScheme.primaryContainer
             else
                 MaterialTheme.colorScheme.surfaceVariant
