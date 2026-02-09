@@ -147,6 +147,30 @@ fun RemoteControlSheet(
                 }
             }
             
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // Maximize Video button (toggles between maximize and restore)
+            var isVideoMaximized by remember { mutableStateOf(false) }
+            
+            FilledTonalButton(
+                onClick = {
+                    if (isVideoMaximized) {
+                        onBrowserControl("restore_video")
+                    } else {
+                        onBrowserControl("maximize_video")
+                    }
+                    isVideoMaximized = !isVideoMaximized
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    if (isVideoMaximized) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                    contentDescription = null
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (isVideoMaximized) "Restore Video" else "Maximize Video")
+            }
+            
             Spacer(modifier = Modifier.height(32.dp))
         }
     }

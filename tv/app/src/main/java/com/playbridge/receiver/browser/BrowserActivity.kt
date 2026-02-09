@@ -52,6 +52,12 @@ class BrowserActivity : ComponentActivity() {
     private var cursorY = 540f  // Start at center of 1080 screen
     private var cursorView: CursorView? = null
     
+    // Fullscreen video support
+    private var fullscreenView: View? = null
+    private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
+    private var fullscreenContainer: FrameLayout? = null
+    private var contentContainer: FrameLayout? = null
+    
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -84,8 +90,16 @@ class BrowserActivity : ComponentActivity() {
             Log.d(TAG, adBlocker.getStats())
         }
 
-        // Create container layout
-        val container = FrameLayout(this)
+        // Create root container layout
+        val rootContainer = FrameLayout(this)
+        
+        // Create content container (for WebView and cursor)
+        contentContainer = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
         
         // Create the WebView
         webView = WebView(this).apply {
@@ -118,7 +132,7 @@ class BrowserActivity : ComponentActivity() {
             // Set WebViewClient with ad blocking
             webViewClient = AdBlockingWebViewClient()
             
-            // Set WebChromeClient to block popups
+            // Set WebChromeClient for popups and fullscreen
             webChromeClient = object : WebChromeClient() {
                 // Block window.open() popups
                 override fun onCreateWindow(
@@ -130,9 +144,56 @@ class BrowserActivity : ComponentActivity() {
                     Log.d(TAG, "Blocked popup window creation (isUserGesture=$isUserGesture)")
                     return false
                 }
+                
+                // Handle fullscreen video requests
+                override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                    Log.d(TAG, "onShowCustomView - entering fullscreen")
+                    if (fullscreenView != null) {
+                        callback?.onCustomViewHidden()
+                        return
+                    }
+                    
+                    fullscreenView = view
+                    fullscreenCallback = callback
+                    
+                    // Hide the WebView and show fullscreen content
+                    contentContainer?.visibility = View.GONE
+                    fullscreenContainer?.visibility = View.VISIBLE
+                    fullscreenContainer?.addView(view, FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    ))
+                    
+                    // Make fullscreen immersive
+                    window.decorView.systemUiVisibility = (
+                        View.SYSTEM_UI_FLAG_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    )
+                }
+                
+                override fun onHideCustomView() {
+                    Log.d(TAG, "onHideCustomView - exiting fullscreen")
+                    if (fullscreenView == null) return
+                    
+                    // Remove fullscreen view
+                    fullscreenContainer?.removeView(fullscreenView)
+                    fullscreenView = null
+                    
+                    // Notify callback
+                    fullscreenCallback?.onCustomViewHidden()
+                    fullscreenCallback = null
+                    
+                    // Show WebView again
+                    fullscreenContainer?.visibility = View.GONE
+                    contentContainer?.visibility = View.VISIBLE
+                    
+                    // Restore system UI
+                    window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                }
             }
         }
-        container.addView(webView)
+        contentContainer?.addView(webView)
         
         // Create cursor overlay
         cursorView = CursorView(this).apply {
@@ -143,9 +204,22 @@ class BrowserActivity : ComponentActivity() {
             // Initially hidden until user starts using touchpad
             visibility = View.GONE
         }
-        container.addView(cursorView)
+        contentContainer?.addView(cursorView)
         
-        setContentView(container)
+        rootContainer.addView(contentContainer)
+        
+        // Create fullscreen container (initially hidden)
+        fullscreenContainer = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(android.graphics.Color.BLACK)
+            visibility = View.GONE
+        }
+        rootContainer.addView(fullscreenContainer)
+        
+        setContentView(rootContainer)
         webView?.requestFocus()
 
         // Load the URL from intent
@@ -345,23 +419,92 @@ class BrowserActivity : ComponentActivity() {
     private fun handleRemoteCommand(key: String?) {
         Log.d(TAG, "Remote command: $key")
         
-        val keyCode = when (key) {
-            "dpad_up" -> KeyEvent.KEYCODE_DPAD_UP
-            "dpad_down" -> KeyEvent.KEYCODE_DPAD_DOWN
-            "dpad_left" -> KeyEvent.KEYCODE_DPAD_LEFT
-            "dpad_right" -> KeyEvent.KEYCODE_DPAD_RIGHT
-            "dpad_center" -> KeyEvent.KEYCODE_DPAD_CENTER
-            "back" -> KeyEvent.KEYCODE_BACK
-            else -> null
+        // If in native fullscreen, let the video player handle it
+        if (fullscreenView != null) {
+            val keyCode = when (key) {
+                "dpad_up" -> KeyEvent.KEYCODE_DPAD_UP
+                "dpad_down" -> KeyEvent.KEYCODE_DPAD_DOWN
+                "dpad_left" -> KeyEvent.KEYCODE_DPAD_LEFT
+                "dpad_right" -> KeyEvent.KEYCODE_DPAD_RIGHT
+                "dpad_center" -> KeyEvent.KEYCODE_DPAD_CENTER
+                "back" -> {
+                    // Exit fullscreen
+                    (webView?.webChromeClient as? WebChromeClient)?.onHideCustomView()
+                    return
+                }
+                else -> null
+            }
+            if (keyCode != null) {
+                val downEvent = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
+                val upEvent = KeyEvent(KeyEvent.ACTION_UP, keyCode)
+                runOnUiThread {
+                    fullscreenView?.dispatchKeyEvent(downEvent)
+                    fullscreenView?.dispatchKeyEvent(upEvent)
+                }
+            }
+            return
         }
         
-        if (keyCode != null) {
-            val downEvent = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
-            val upEvent = KeyEvent(KeyEvent.ACTION_UP, keyCode)
-            
-            runOnUiThread {
-                dispatchKeyEvent(downEvent)
-                dispatchKeyEvent(upEvent)
+        // D-pad moves cursor with edge scrolling
+        val cursorStep = 30f  // Pixels to move cursor per D-pad press
+        val scrollStep = 100  // Pixels to scroll when at edge
+        
+        when (key) {
+            "dpad_up" -> {
+                cursorView?.visibility = View.VISIBLE
+                if (cursorY <= cursorStep) {
+                    // At top edge, scroll up
+                    webView?.scrollBy(0, -scrollStep)
+                } else {
+                    cursorY -= cursorStep
+                    cursorView?.updatePosition(cursorX, cursorY)
+                }
+            }
+            "dpad_down" -> {
+                cursorView?.visibility = View.VISIBLE
+                val screenHeight = resources.displayMetrics.heightPixels.toFloat()
+                if (cursorY >= screenHeight - cursorStep) {
+                    // At bottom edge, scroll down
+                    webView?.scrollBy(0, scrollStep)
+                } else {
+                    cursorY += cursorStep
+                    cursorView?.updatePosition(cursorX, cursorY)
+                }
+            }
+            "dpad_left" -> {
+                cursorView?.visibility = View.VISIBLE
+                if (cursorX <= cursorStep) {
+                    // At left edge, scroll left
+                    webView?.scrollBy(-scrollStep, 0)
+                } else {
+                    cursorX -= cursorStep
+                    cursorView?.updatePosition(cursorX, cursorY)
+                }
+            }
+            "dpad_right" -> {
+                cursorView?.visibility = View.VISIBLE
+                val screenWidth = resources.displayMetrics.widthPixels.toFloat()
+                if (cursorX >= screenWidth - cursorStep) {
+                    // At right edge, scroll right
+                    webView?.scrollBy(scrollStep, 0)
+                } else {
+                    cursorX += cursorStep
+                    cursorView?.updatePosition(cursorX, cursorY)
+                }
+            }
+            "dpad_center" -> {
+                // Click at cursor position
+                cursorView?.visibility = View.VISIBLE
+                Log.d(TAG, "D-pad center click at ($cursorX, $cursorY)")
+                simulateClick(cursorX, cursorY)
+                cursorView?.animateClick()
+            }
+            "back" -> {
+                if (canGoBack) {
+                    webView?.goBack()
+                } else {
+                    finish()
+                }
             }
         }
     }
@@ -377,6 +520,80 @@ class BrowserActivity : ComponentActivity() {
                 // Ad blocking is built-in and always enabled with EasyList-style rules
                 Log.d(TAG, "Ad blocking is built-in: ${adBlocker.getStats()}")
             }
+            "maximize_video" -> {
+                maximizeVideo()
+            }
+            "restore_video" -> {
+                restoreVideo()
+            }
+        }
+    }
+    
+    private fun maximizeVideo() {
+        // Use native fullscreen only - triggers onShowCustomView callback
+        val js = """
+            (function() {
+                // Find video in main document
+                var video = document.querySelector('video');
+                
+                // If not found, search in same-origin iframes
+                if (!video) {
+                    var iframes = document.querySelectorAll('iframe');
+                    for (var i = 0; i < iframes.length; i++) {
+                        try {
+                            var iframeDoc = iframes[i].contentDocument || iframes[i].contentWindow.document;
+                            video = iframeDoc.querySelector('video');
+                            if (video) {
+                                console.log('PlayBridge: Found video in iframe');
+                                break;
+                            }
+                        } catch(e) {
+                            console.log('PlayBridge: Cannot access iframe (cross-origin)');
+                        }
+                    }
+                }
+                
+                if (!video) {
+                    // Try to find an iframe with fullscreen support
+                    var iframe = document.querySelector('iframe[allowfullscreen]');
+                    if (iframe) {
+                        console.log('PlayBridge: Requesting fullscreen on iframe');
+                        iframe.requestFullscreen().catch(function(e) {
+                            console.log('PlayBridge: Iframe fullscreen failed: ' + e.message);
+                        });
+                        return true;
+                    }
+                    console.log('PlayBridge: No video found');
+                    return false;
+                }
+                
+                // Request native fullscreen
+                console.log('PlayBridge: Requesting native fullscreen');
+                video.requestFullscreen().catch(function(e) {
+                    console.log('PlayBridge: Fullscreen failed: ' + e.message);
+                });
+                return true;
+            })();
+        """.trimIndent()
+        
+        webView?.evaluateJavascript(js) { result ->
+            Log.d(TAG, "Maximize video result: $result")
+        }
+    }
+    
+    private fun restoreVideo() {
+        // Exit native fullscreen
+        val js = """
+            (function() {
+                if (document.fullscreenElement) {
+                    document.exitFullscreen();
+                }
+                return true;
+            })();
+        """.trimIndent()
+        
+        webView?.evaluateJavascript(js) { result ->
+            Log.d(TAG, "Restore video result: $result")
         }
     }
 
