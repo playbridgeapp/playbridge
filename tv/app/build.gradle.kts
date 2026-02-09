@@ -103,26 +103,4 @@ dependencies {
     // Utils
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
-    
-    // Mozilla Android Components
-    implementation(libs.moz.concept.engine)
-    implementation(libs.moz.concept.fetch)
-    implementation(libs.moz.browser.engine.gecko)
-    implementation(libs.moz.browser.state)
-    implementation(libs.moz.browser.tabstray)
-    implementation(libs.moz.browser.toolbar)
-    implementation(libs.moz.feature.tabs)
-    implementation(libs.moz.feature.session)
-    implementation(libs.moz.feature.toolbar)
-    implementation(libs.moz.feature.addons)
-    implementation(libs.moz.feature.prompts)
-    implementation(libs.moz.support.webextensions)
-    implementation(libs.moz.support.ktx)
-    implementation(libs.moz.lib.fetch.okhttp)
-    implementation(libs.moz.browser.menu)
-    implementation(libs.moz.ui.widgets)
-    implementation(libs.moz.ui.icons)
-
-    // GeckoView
-    implementation(libs.geckoview.omni)
 }

@@ -1,5 +1,6 @@
 package com.playbridge.receiver.browser
 
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -13,11 +14,13 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
-import mozilla.components.browser.engine.gecko.GeckoEngineView
-import mozilla.components.concept.engine.EngineSession
 import com.playbridge.receiver.server.ServerService
 
 class BrowserActivity : ComponentActivity() {
@@ -27,8 +30,7 @@ class BrowserActivity : ComponentActivity() {
         const val EXTRA_URL = "extra_url"
     }
 
-    private var session: EngineSession? = null
-    private var engineView: GeckoEngineView? = null
+    private var webView: WebView? = null
     private var canGoBack = false
     
     // Cursor state
@@ -57,25 +59,49 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Initialize components if needed
-        Components.initialize(applicationContext)
 
         // Create container layout
         val container = FrameLayout(this)
         
-        // Create the engine view
-        engineView = GeckoEngineView(this).apply {
+        // Create the WebView
+        webView = WebView(this).apply {
             isFocusable = true
             isFocusableInTouchMode = true
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
+            
+            // Configure WebView settings
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                loadWithOverviewMode = true
+                useWideViewPort = true
+                builtInZoomControls = true
+                displayZoomControls = false
+                setSupportZoom(true)
+                mediaPlaybackRequiresUserGesture = false
+                allowFileAccess = true
+                allowContentAccess = true
+                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            }
+            
+            // Set WebViewClient to handle navigation
+            webViewClient = object : WebViewClient() {
+                override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                    super.doUpdateVisitedHistory(view, url, isReload)
+                    canGoBack = view?.canGoBack() ?: false
+                }
+            }
+            
+            // Set WebChromeClient for JavaScript dialogs and progress
+            webChromeClient = WebChromeClient()
         }
-        container.addView(engineView)
+        container.addView(webView)
         
         // Create cursor overlay
         cursorView = CursorView(this).apply {
@@ -89,40 +115,22 @@ class BrowserActivity : ComponentActivity() {
         container.addView(cursorView)
         
         setContentView(container)
-        engineView?.requestFocus()
-
-        // Create a session
-        val geckoSession = Components.engine.createSession()
-        session = geckoSession
-
-        // Register observer to track navigation state
-        geckoSession.register(object : EngineSession.Observer {
-            override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
-                super.onNavigationStateChange(canGoBack, canGoForward)
-                this@BrowserActivity.canGoBack = canGoBack ?: false
-            }
-        })
-
-        // Render the session in the view
-        engineView?.render(geckoSession)
-        
-        // Initialize extension manager (ensures uBlock is loaded)
-        Components.extensionManager
+        webView?.requestFocus()
 
         // Load the URL from intent
         val url = intent.getStringExtra(EXTRA_URL)
         if (!url.isNullOrEmpty()) {
             Log.d(TAG, "Loading URL: $url")
-            session?.loadUrl(url)
+            webView?.loadUrl(url)
         } else {
             Log.d(TAG, "No URL provided, loading default")
-            session?.loadUrl("https://www.google.com")
+            webView?.loadUrl("https://www.google.com")
         }
 
         // Handle back press
         onBackPressedDispatcher.addCallback(this) {
             if (canGoBack) {
-                session?.goBack()
+                webView?.goBack()
             } else {
                 finish()
             }
@@ -171,7 +179,7 @@ class BrowserActivity : ComponentActivity() {
             }
             "scroll" -> {
                 // Scroll the view
-                engineView?.scrollBy(dx.toInt(), dy.toInt())
+                webView?.scrollBy(dx.toInt(), dy.toInt())
             }
         }
     }
@@ -187,8 +195,8 @@ class BrowserActivity : ComponentActivity() {
             downTime, eventTime + 100, MotionEvent.ACTION_UP, x, y, 0
         )
         
-        engineView?.dispatchTouchEvent(downEvent)
-        engineView?.dispatchTouchEvent(upEvent)
+        webView?.dispatchTouchEvent(downEvent)
+        webView?.dispatchTouchEvent(upEvent)
         
         downEvent.recycle()
         upEvent.recycle()
@@ -223,13 +231,11 @@ class BrowserActivity : ComponentActivity() {
         
         when (action) {
             "refresh" -> {
-                session?.reload()
+                webView?.reload()
             }
             "toggle_ublock" -> {
-                val newState = Components.extensionManager.toggleUblock()
-                Log.d(TAG, "uBlock toggled: enabled=$newState")
-                // Refresh to apply the change
-                session?.reload()
+                // uBlock is not supported with WebView
+                Log.d(TAG, "uBlock toggle not supported with WebView")
             }
         }
     }
@@ -241,18 +247,15 @@ class BrowserActivity : ComponentActivity() {
         val url = intent.getStringExtra(EXTRA_URL)
         if (!url.isNullOrEmpty()) {
             Log.d(TAG, "Loading new URL: $url")
-            session?.loadUrl(url)
+            webView?.loadUrl(url)
         }
     }
 
     override fun onDestroy() {
         unregisterReceiver(commandReceiver)
         super.onDestroy()
-        session?.let {
-            engineView?.release()
-        }
-        engineView = null
-        session = null
+        webView?.destroy()
+        webView = null
     }
     
     /**
@@ -310,4 +313,3 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 }
-
