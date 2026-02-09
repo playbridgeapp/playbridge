@@ -83,6 +83,13 @@ class BrowserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Enable hardware acceleration for video playback
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+        )
+        // Keep screen on during video playback
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Initialize ad blocker - built-in rules load immediately, filter list loads async
         adBlocker = AdBlocker(applicationContext)
         scope.launch {
@@ -124,9 +131,24 @@ class BrowserActivity : ComponentActivity() {
                 allowContentAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 
+                // Optimize for media streaming
+                cacheMode = WebSettings.LOAD_DEFAULT
+                databaseEnabled = true
+                
+                // Enable off-screen rendering for smoother video
+                offscreenPreRaster = true
+                
                 // Disable popups
                 javaScriptCanOpenWindowsAutomatically = false
                 setSupportMultipleWindows(false)
+            }
+            
+            // Enable hardware acceleration for video
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            
+            // Set high renderer priority for better video performance
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
             }
             
             // Set WebViewClient with ad blocking
@@ -640,6 +662,51 @@ class BrowserActivity : ComponentActivity() {
             currentUrl = url
             webView?.loadUrl(url)
         }
+    }
+    
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Intercept D-pad events BEFORE WebView gets them
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            Log.d(TAG, "TV Remote key: ${event.keyCode}")
+            
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    handleRemoteCommand("dpad_up")
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    handleRemoteCommand("dpad_down")
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    handleRemoteCommand("dpad_left")
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    handleRemoteCommand("dpad_right")
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    handleRemoteCommand("dpad_center")
+                    return true
+                }
+                KeyEvent.KEYCODE_BACK -> {
+                    handleRemoteCommand("back")
+                    return true
+                }
+            }
+        }
+        // Also consume ACTION_UP for the same keys to prevent double handling
+        if (event.action == KeyEvent.ACTION_UP) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_BACK -> return true
+            }
+        }
+        
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onDestroy() {
