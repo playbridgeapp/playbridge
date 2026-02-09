@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -15,6 +16,8 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -22,6 +25,12 @@ import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import com.playbridge.receiver.server.ServerService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.io.ByteArrayInputStream
 
 class BrowserActivity : ComponentActivity() {
 
@@ -32,6 +41,11 @@ class BrowserActivity : ComponentActivity() {
 
     private var webView: WebView? = null
     private var canGoBack = false
+    private var currentUrl: String? = null
+    
+    // Ad blocker
+    private lateinit var adBlocker: AdBlocker
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     
     // Cursor state
     private var cursorX = 960f  // Start at center of 1920 screen
@@ -62,6 +76,13 @@ class BrowserActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Initialize ad blocker - built-in rules load immediately, filter list loads async
+        adBlocker = AdBlocker(applicationContext)
+        scope.launch {
+            adBlocker.loadFilterLists()
+            Log.d(TAG, adBlocker.getStats())
+        }
 
         // Create container layout
         val container = FrameLayout(this)
@@ -88,18 +109,28 @@ class BrowserActivity : ComponentActivity() {
                 allowFileAccess = true
                 allowContentAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                
+                // Disable popups
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
             }
             
-            // Set WebViewClient to handle navigation
-            webViewClient = object : WebViewClient() {
-                override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
-                    super.doUpdateVisitedHistory(view, url, isReload)
-                    canGoBack = view?.canGoBack() ?: false
+            // Set WebViewClient with ad blocking
+            webViewClient = AdBlockingWebViewClient()
+            
+            // Set WebChromeClient to block popups
+            webChromeClient = object : WebChromeClient() {
+                // Block window.open() popups
+                override fun onCreateWindow(
+                    view: WebView?,
+                    isDialog: Boolean,
+                    isUserGesture: Boolean,
+                    resultMsg: android.os.Message?
+                ): Boolean {
+                    Log.d(TAG, "Blocked popup window creation (isUserGesture=$isUserGesture)")
+                    return false
                 }
             }
-            
-            // Set WebChromeClient for JavaScript dialogs and progress
-            webChromeClient = WebChromeClient()
         }
         container.addView(webView)
         
@@ -121,9 +152,11 @@ class BrowserActivity : ComponentActivity() {
         val url = intent.getStringExtra(EXTRA_URL)
         if (!url.isNullOrEmpty()) {
             Log.d(TAG, "Loading URL: $url")
+            currentUrl = url
             webView?.loadUrl(url)
         } else {
             Log.d(TAG, "No URL provided, loading default")
+            currentUrl = "https://www.google.com"
             webView?.loadUrl("https://www.google.com")
         }
 
@@ -146,6 +179,113 @@ class BrowserActivity : ComponentActivity() {
             registerReceiver(commandReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(commandReceiver, filter)
+        }
+    }
+    
+    /**
+     * Custom WebViewClient that uses AdBlocker to block ads and prevent redirects
+     */
+    private inner class AdBlockingWebViewClient : WebViewClient() {
+        
+        // Track the last navigation time to detect rapid redirects
+        private var lastNavigationTime = 0L
+        private var navigationCount = 0
+        
+        override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+            super.doUpdateVisitedHistory(view, url, isReload)
+            canGoBack = view?.canGoBack() ?: false
+            if (!isReload && url != null) {
+                currentUrl = url
+            }
+        }
+        
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+            val url = request?.url?.toString() ?: return false
+            val host = request.url?.host ?: ""
+            
+            // Block non-HTTP schemes (intent://, market://, etc.)
+            val scheme = request.url?.scheme
+            if (scheme != "http" && scheme != "https") {
+                Log.d(TAG, "Blocked non-HTTP scheme: $scheme")
+                return true
+            }
+            
+            // Use AdBlocker to check if this navigation should be blocked
+            if (adBlocker.shouldBlock(url, currentUrl, AdBlocker.TYPE_SUBDOCUMENT)) {
+                Log.d(TAG, "Blocked navigation: $url")
+                return true
+            }
+            
+            // Detect rapid redirects (potential ad/scam behavior)
+            val now = System.currentTimeMillis()
+            if (now - lastNavigationTime < 500) {
+                navigationCount++
+                if (navigationCount > 3) {
+                    Log.d(TAG, "Blocked rapid redirect chain: $url")
+                    navigationCount = 0
+                    return true
+                }
+            } else {
+                navigationCount = 0
+            }
+            lastNavigationTime = now
+            
+            // Block cross-domain popups/redirects that look suspicious
+            val currentHost = Uri.parse(currentUrl)?.host
+            if (currentHost != null && host != currentHost) {
+                // Check for suspicious redirect patterns
+                if (url.contains("redirect=") || 
+                    url.contains("goto=") || 
+                    url.contains("out.php") ||
+                    url.contains("click.php") ||
+                    url.contains("/cgi-bin/")) {
+                    Log.d(TAG, "Blocked suspicious redirect: $url")
+                    return true
+                }
+            }
+            
+            return false
+        }
+        
+        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+            val url = request?.url?.toString() ?: return null
+            
+            // Determine resource type for more accurate blocking
+            val resourceType = getResourceType(request)
+            
+            // Use AdBlocker to check if this resource should be blocked
+            if (adBlocker.shouldBlock(url, currentUrl, resourceType)) {
+                return createEmptyResponse()
+            }
+            
+            return null
+        }
+        
+        private fun getResourceType(request: WebResourceRequest): Int {
+            // Try to determine resource type from Accept header or URL
+            val acceptHeader = request.requestHeaders["Accept"] ?: ""
+            val url = request.url?.toString()?.lowercase() ?: ""
+            
+            return when {
+                acceptHeader.contains("text/html") -> AdBlocker.TYPE_SUBDOCUMENT
+                acceptHeader.contains("text/css") -> AdBlocker.TYPE_STYLESHEET
+                acceptHeader.contains("image/") -> AdBlocker.TYPE_IMAGE
+                acceptHeader.contains("javascript") || url.endsWith(".js") -> AdBlocker.TYPE_SCRIPT
+                acceptHeader.contains("application/json") || 
+                    acceptHeader.contains("application/xml") -> AdBlocker.TYPE_XMLHTTPREQUEST
+                url.endsWith(".css") -> AdBlocker.TYPE_STYLESHEET
+                url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".gif") || 
+                    url.endsWith(".webp") || url.endsWith(".svg") -> AdBlocker.TYPE_IMAGE
+                else -> AdBlocker.TYPE_OTHER
+            }
+        }
+        
+        private fun createEmptyResponse(): WebResourceResponse {
+            return WebResourceResponse(
+                "text/plain",
+                "UTF-8",
+                ByteArrayInputStream(ByteArray(0))
+            )
         }
     }
     
@@ -234,8 +374,8 @@ class BrowserActivity : ComponentActivity() {
                 webView?.reload()
             }
             "toggle_ublock" -> {
-                // uBlock is not supported with WebView
-                Log.d(TAG, "uBlock toggle not supported with WebView")
+                // Ad blocking is built-in and always enabled with EasyList-style rules
+                Log.d(TAG, "Ad blocking is built-in: ${adBlocker.getStats()}")
             }
         }
     }
@@ -247,12 +387,14 @@ class BrowserActivity : ComponentActivity() {
         val url = intent.getStringExtra(EXTRA_URL)
         if (!url.isNullOrEmpty()) {
             Log.d(TAG, "Loading new URL: $url")
+            currentUrl = url
             webView?.loadUrl(url)
         }
     }
 
     override fun onDestroy() {
         unregisterReceiver(commandReceiver)
+        scope.cancel()
         super.onDestroy()
         webView?.destroy()
         webView = null
