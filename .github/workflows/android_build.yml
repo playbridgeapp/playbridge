@@ -8,7 +8,38 @@ on:
   workflow_dispatch:
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      tag_exists: ${{ steps.check_tag.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for tags
+      
+      - name: Read Version
+        id: get_version
+        run: |
+          VERSION=$(grep 'VERSION_NAME' version.properties | cut -d'=' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Check if Tag Exists
+        id: check_tag
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v$VERSION already exists."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag v$VERSION does not exist. Will release."
+          fi
+
   build-phone:
+    needs: check-version
+    if: needs.check-version.outputs.tag_exists == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -41,6 +72,15 @@ jobs:
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
       run: ./gradlew assembleRelease
 
+    - name: Rename APKs
+      env:
+        VERSION: ${{ needs.check-version.outputs.version }}
+      run: |
+        cd phone/app/build/outputs/apk/release
+        for f in *.apk; do
+          mv "$f" "playbridge-phone-${VERSION}-${f}"
+        done
+
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
@@ -48,6 +88,8 @@ jobs:
         path: phone/app/build/outputs/apk/release/*.apk
 
   build-tv:
+    needs: check-version
+    if: needs.check-version.outputs.tag_exists == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -80,8 +122,46 @@ jobs:
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
       run: ./gradlew assembleRelease
 
+    - name: Rename APKs
+      env:
+        VERSION: ${{ needs.check-version.outputs.version }}
+      run: |
+        cd tv/app/build/outputs/apk/release
+        for f in *.apk; do
+          mv "$f" "playbridge-tv-${VERSION}-${f}"
+        done
+
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: tv-release-apk
         path: tv/app/build/outputs/apk/release/*.apk
+
+  release:
+    needs: [check-version, build-phone, build-tv]
+    if: needs.check-version.outputs.tag_exists == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Phone APK
+        uses: actions/download-artifact@v4
+        with:
+          name: phone-release-apk
+          path: output/phone
+
+      - name: Download TV APK
+        uses: actions/download-artifact@v4
+        with:
+          name: tv-release-apk
+          path: output/tv
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: Release v${{ needs.check-version.outputs.version }}
+          files: |
+            output/phone/*.apk
+            output/tv/*.apk
+          generate_release_notes: true
