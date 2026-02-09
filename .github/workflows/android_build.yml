@@ -76,7 +76,7 @@ jobs:
       env:
         VERSION: ${{ needs.check-version.outputs.version }}
       run: |
-        find phone/app/build/outputs/apk/release -type f -name "*.apk" | while read f; do
+        find phone/app/build/outputs/apk -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-phone-${VERSION}-$(basename "$f")"
         done
 
@@ -84,7 +84,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: phone-release-apk
-        path: phone/app/build/outputs/apk/release/**/*.apk
+        path: phone/app/build/outputs/apk/**/*.apk
 
   build-tv:
     needs: check-version
@@ -125,7 +125,11 @@ jobs:
       env:
         VERSION: ${{ needs.check-version.outputs.version }}
       run: |
-        find tv/app/build/outputs/apk/release -type f -name "*.apk" | while read f; do
+    - name: Rename APKs
+      env:
+        VERSION: ${{ needs.check-version.outputs.version }}
+      run: |
+        find tv/app/build/outputs/apk -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-tv-${VERSION}-$(basename "$f")"
         done
 
@@ -133,7 +137,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: tv-release-apk
-        path: tv/app/build/outputs/apk/release/**/*.apk
+        path: tv/app/build/outputs/apk/**/*.apk
 
   release:
     needs: [check-version, build-phone, build-tv]
