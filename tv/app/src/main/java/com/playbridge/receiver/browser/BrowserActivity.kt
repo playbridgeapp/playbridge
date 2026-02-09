@@ -419,28 +419,61 @@ class BrowserActivity : ComponentActivity() {
     private fun handleRemoteCommand(key: String?) {
         Log.d(TAG, "Remote command: $key")
         
-        // If in native fullscreen, let the video player handle it
+        // If in native fullscreen, control video via JavaScript
         if (fullscreenView != null) {
-            val keyCode = when (key) {
-                "dpad_up" -> KeyEvent.KEYCODE_DPAD_UP
-                "dpad_down" -> KeyEvent.KEYCODE_DPAD_DOWN
-                "dpad_left" -> KeyEvent.KEYCODE_DPAD_LEFT
-                "dpad_right" -> KeyEvent.KEYCODE_DPAD_RIGHT
-                "dpad_center" -> KeyEvent.KEYCODE_DPAD_CENTER
+            val js = when (key) {
+                "dpad_left" -> """
+                    (function() {
+                        var v = document.fullscreenElement?.querySelector('video') || document.querySelector('video');
+                        if (v) v.currentTime = Math.max(0, v.currentTime - 10);
+                    })();
+                """.trimIndent()
+                "dpad_right" -> """
+                    (function() {
+                        var v = document.fullscreenElement?.querySelector('video') || document.querySelector('video');
+                        if (v) v.currentTime = Math.min(v.duration || 0, v.currentTime + 10);
+                    })();
+                """.trimIndent()
+                "dpad_up" -> """
+                    (function() {
+                        var v = document.fullscreenElement?.querySelector('video') || document.querySelector('video');
+                        if (v) v.volume = Math.min(1, v.volume + 0.1);
+                    })();
+                """.trimIndent()
+                "dpad_down" -> """
+                    (function() {
+                        var v = document.fullscreenElement?.querySelector('video') || document.querySelector('video');
+                        if (v) v.volume = Math.max(0, v.volume - 0.1);
+                    })();
+                """.trimIndent()
+                "dpad_center" -> """
+                    (function() {
+                        var v = document.fullscreenElement?.querySelector('video') || document.querySelector('video');
+                        if (v) {
+                            if (v.paused) v.play();
+                            else v.pause();
+                        }
+                    })();
+                """.trimIndent()
                 "back" -> {
-                    // Exit fullscreen
-                    (webView?.webChromeClient as? WebChromeClient)?.onHideCustomView()
+                    // Exit fullscreen via the WebChromeClient callback
+                    runOnUiThread {
+                        fullscreenCallback?.onCustomViewHidden()
+                        fullscreenContainer?.removeView(fullscreenView)
+                        fullscreenView = null
+                        fullscreenCallback = null
+                        fullscreenContainer?.visibility = View.GONE
+                        contentContainer?.visibility = View.VISIBLE
+                        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                    }
+                    // Also exit JS fullscreen
+                    webView?.evaluateJavascript("document.exitFullscreen && document.exitFullscreen();", null)
                     return
                 }
                 else -> null
             }
-            if (keyCode != null) {
-                val downEvent = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
-                val upEvent = KeyEvent(KeyEvent.ACTION_UP, keyCode)
-                runOnUiThread {
-                    fullscreenView?.dispatchKeyEvent(downEvent)
-                    fullscreenView?.dispatchKeyEvent(upEvent)
-                }
+            if (js != null) {
+                webView?.evaluateJavascript(js, null)
             }
             return
         }

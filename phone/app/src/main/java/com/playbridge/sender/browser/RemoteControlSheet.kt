@@ -255,6 +255,8 @@ private fun TouchpadControls(
     onMouseClick: () -> Unit,
     onMouseScroll: (dx: Float, dy: Float) -> Unit
 ) {
+    var isScrolling by remember { mutableStateOf(false) }
+    
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -267,10 +269,32 @@ private fun TouchpadControls(
                 .clip(RoundedCornerShape(16.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        // Send mouse movement with sensitivity scaling
-                        onMouseMove(dragAmount.x * 1.5f, dragAmount.y * 1.5f)
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pointerCount = event.changes.count { it.pressed }
+                            
+                            if (pointerCount >= 2) {
+                                // Two or more fingers - scroll mode
+                                isScrolling = true
+                                val change = event.changes.firstOrNull { it.pressed }
+                                if (change != null && change.previousPressed) {
+                                    val delta = change.position - change.previousPosition
+                                    onMouseScroll(delta.x, delta.y * 2f)  // Multiply for better scrolling
+                                    change.consume()
+                                }
+                            } else if (pointerCount == 1 && !isScrolling) {
+                                // Single finger - move cursor
+                                val change = event.changes.first()
+                                if (change.pressed && change.previousPressed) {
+                                    val delta = change.position - change.previousPosition
+                                    onMouseMove(delta.x * 1.5f, delta.y * 1.5f)
+                                    change.consume()
+                                }
+                            } else if (pointerCount == 0) {
+                                isScrolling = false
+                            }
+                        }
                     }
                 }
                 .pointerInput(Unit) {
@@ -292,7 +316,7 @@ private fun TouchpadControls(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Drag to move cursor\nTap to click",
+                    text = "1 finger: move cursor\n2 fingers: scroll\nTap: click",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     textAlign = TextAlign.Center
