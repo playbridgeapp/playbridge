@@ -76,7 +76,7 @@ jobs:
       env:
         VERSION: ${{ needs.check-version.outputs.version }}
       run: |
-        find phone/app/build/outputs/apk -name "*.apk" -type f | while read f; do
+        find app/build/outputs/apk -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-phone-${VERSION}-$(basename "$f")"
         done
 
@@ -125,11 +125,7 @@ jobs:
       env:
         VERSION: ${{ needs.check-version.outputs.version }}
       run: |
-    - name: Rename APKs
-      env:
-        VERSION: ${{ needs.check-version.outputs.version }}
-      run: |
-        find tv/app/build/outputs/apk -name "*.apk" -type f | while read f; do
+        find app/build/outputs/apk -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-tv-${VERSION}-$(basename "$f")"
         done
 
