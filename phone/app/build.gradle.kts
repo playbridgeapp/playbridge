@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -14,7 +17,7 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        val versionProps = java.util.Properties()
+        val versionProps = Properties()
         versionProps.load(file("../../version.properties").inputStream())
         
         versionCode = versionProps.getProperty("VERSION_CODE").toInt()
