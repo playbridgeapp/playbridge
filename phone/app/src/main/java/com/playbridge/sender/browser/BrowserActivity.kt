@@ -154,9 +154,10 @@ class BrowserActivity : ComponentActivity() {
             var menuExpanded by remember { mutableStateOf(false) }
             
             // Update UI state from session
-            LaunchedEffect(session) {
-                // relying on observer for URL updates
-                // currentUrl = session.url  // if available
+            LaunchedEffect(session, selectedTab) {
+                if (selectedTab != null) {
+                    currentUrl = selectedTab.content.url
+                }
             }
             
             // View state - browser or scanner
@@ -493,6 +494,7 @@ class BrowserActivity : ComponentActivity() {
                                         canGoBack = canGoBack,
                                         canGoForward = canGoForward,
                                         videoCount = videoCount,
+                                        tabCount = browserState.tabs.size,
                                         onUrlChange = { },
                                         onNavigate = { url -> session.loadUrl(url) },
                                         onBack = { session.goBack() },
@@ -501,6 +503,7 @@ class BrowserActivity : ComponentActivity() {
                                         onStop = { session.stopLoading() },
                                         onMenuClick = { menuExpanded = true },
                                         onVideoClick = { showVideoSheet = true },
+                                        onTabsClick = { currentScreen = Screen.Tabs },
                                         menuContent = {
                                             // Dropdown menu
                                             DropdownMenu(
@@ -557,16 +560,9 @@ class BrowserActivity : ComponentActivity() {
                                                         )
                                                     }
                                                 }
+                                                
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                                DropdownMenuItem(
-                                                    text = { Text("Tabs", style = MaterialTheme.typography.bodyLarge) },
-                                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null, tint = MaterialTheme.colorScheme.primary) },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        currentScreen = Screen.Tabs
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                )
+                                                
                                                 DropdownMenuItem(
                                                     text = { Text("Extensions", style = MaterialTheme.typography.bodyLarge) },
                                                     leadingIcon = { Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.primary) },

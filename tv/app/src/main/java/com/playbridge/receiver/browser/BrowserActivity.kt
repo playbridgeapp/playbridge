@@ -213,6 +213,12 @@ class BrowserActivity : ComponentActivity() {
                     // Restore system UI
                     window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
                 }
+
+                // Explicitly deny permission requests to prevent crashes on some TV devices
+                override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                    Log.d(TAG, "onPermissionRequest: ${request?.resources?.joinToString()}")
+                    request?.deny()
+                }
             }
         }
         contentContainer?.addView(webView)

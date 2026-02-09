@@ -30,6 +30,7 @@ fun BrowserToolbar(
     canGoBack: Boolean,
     canGoForward: Boolean,
     videoCount: Int = 0,
+    tabCount: Int = 1,
     onUrlChange: (String) -> Unit,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
@@ -38,6 +39,7 @@ fun BrowserToolbar(
     onStop: () -> Unit,
     onMenuClick: () -> Unit,
     onVideoClick: () -> Unit = {},
+    onTabsClick: () -> Unit = {},
     menuContent: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -61,7 +63,7 @@ fun BrowserToolbar(
     }
     
     Surface(
-        shadowElevation = 8.dp,
+        shadowElevation = 4.dp,
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainer, // distinct from background
         contentColor = MaterialTheme.colorScheme.onSurface
@@ -72,13 +74,14 @@ fun BrowserToolbar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Spacer(modifier = Modifier.width(4.dp))
-
                 // Video count badge - clickable to show detected videos
-                IconButton(onClick = onVideoClick) {
+                IconButton(
+                    onClick = onVideoClick,
+                    modifier = Modifier.size(40.dp)
+                ) {
                     BadgedBox(
                         badge = {
                             Badge(
@@ -92,10 +95,12 @@ fun BrowserToolbar(
                         Icon(
                             Icons.Default.PlayArrow,
                             contentDescription = "$videoCount videos detected",
-                            tint = if (videoCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = if (videoCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
+                
                 Spacer(modifier = Modifier.width(4.dp))
                 
                 // URL Bar
@@ -107,6 +112,7 @@ fun BrowserToolbar(
                     },
                     modifier = Modifier
                         .weight(1f)
+                        .height(48.dp)
                         .onFocusChanged { focusState ->
                             if (focusState.isFocused) {
                                 isEditing = true
@@ -125,19 +131,24 @@ fun BrowserToolbar(
                         Text(
                             "Search or enter URL",
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall
                         ) 
                     },
                     trailingIcon = {
                         if (editUrl.isNotEmpty() && isEditing) {
-                            IconButton(onClick = { 
-                                editUrl = ""
-                                onUrlChange("") // Establish empty state
-                            }) {
+                            IconButton(
+                                onClick = { 
+                                    editUrl = ""
+                                    onUrlChange("") // Establish empty state
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Clear URL",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
@@ -158,18 +169,46 @@ fun BrowserToolbar(
                         unfocusedIndicatorColor = Color.Transparent,
                         cursorColor = MaterialTheme.colorScheme.primary
                     ),
-                    textStyle = MaterialTheme.typography.bodyMedium,
+                    textStyle = MaterialTheme.typography.bodySmall,
                     shape = MaterialTheme.shapes.extraLarge // Pill shape
                 )
                 
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                
+                // Tabs button with badge
+                IconButton(
+                    onClick = onTabsClick,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    BadgedBox(
+                        badge = {
+                            Badge(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ) {
+                                Text(tabCount.toString())
+                            }
+                        }
+                    ) {
+                        Icon(
+                            Icons.Default.WebAsset,
+                            contentDescription = "$tabCount tabs",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
                 
                 // Menu button
                 Box {
-                    IconButton(onClick = onMenuClick) {
+                    IconButton(
+                        onClick = onMenuClick,
+                        modifier = Modifier.size(40.dp)
+                    ) {
                         Icon(
                             Icons.Default.MoreVert,
-                            contentDescription = "Menu"
+                            contentDescription = "Menu",
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                     menuContent()
