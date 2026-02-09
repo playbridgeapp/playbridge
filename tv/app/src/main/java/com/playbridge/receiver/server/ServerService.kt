@@ -145,6 +145,32 @@ class ServerService : Service() {
                 }
                 sendBroadcast(intent)
             }
+            is Command.Remote -> {
+                Log.i(TAG, "Remote command: ${command.key}")
+                val intent = Intent(ACTION_REMOTE).apply {
+                    putExtra(EXTRA_REMOTE_KEY, command.key)
+                    setPackage(packageName)
+                }
+                sendBroadcast(intent)
+            }
+            is Command.Mouse -> {
+                Log.i(TAG, "Mouse command: ${command.event} (${command.dx}, ${command.dy})")
+                val intent = Intent(ACTION_MOUSE).apply {
+                    putExtra(EXTRA_MOUSE_EVENT, command.event)
+                    putExtra(EXTRA_MOUSE_DX, command.dx)
+                    putExtra(EXTRA_MOUSE_DY, command.dy)
+                    setPackage(packageName)
+                }
+                sendBroadcast(intent)
+            }
+            is Command.BrowserControl -> {
+                Log.i(TAG, "Browser control: ${command.action}")
+                val intent = Intent(ACTION_BROWSER_CONTROL).apply {
+                    putExtra(EXTRA_BROWSER_ACTION, command.action)
+                    setPackage(packageName)
+                }
+                sendBroadcast(intent)
+            }
             is Command.Ping -> {
                 // Handled by WebSocketServer
             }
@@ -232,11 +258,19 @@ class ServerService : Service() {
         const val ACTION_PLAY = "com.playbridge.receiver.ACTION_PLAY"
         const val ACTION_BROWSER = "com.playbridge.receiver.ACTION_BROWSER"
         const val ACTION_CONTROL = "com.playbridge.receiver.ACTION_CONTROL"
+        const val ACTION_REMOTE = "com.playbridge.receiver.ACTION_REMOTE"
+        const val ACTION_MOUSE = "com.playbridge.receiver.ACTION_MOUSE"
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
         const val EXTRA_CONTENT_TYPE = "content_type"
         const val EXTRA_HEADERS = "headers"
         const val EXTRA_COMMAND = "command"
+        const val EXTRA_REMOTE_KEY = "remote_key"
+        const val EXTRA_MOUSE_EVENT = "mouse_event"
+        const val EXTRA_MOUSE_DX = "mouse_dx"
+        const val EXTRA_MOUSE_DY = "mouse_dy"
+        const val ACTION_BROWSER_CONTROL = "com.playbridge.receiver.ACTION_BROWSER_CONTROL"
+        const val EXTRA_BROWSER_ACTION = "browser_action"
         
         // Static flow for UI to observe connection state
         private val _connectionState = MutableStateFlow<WebSocketServer.ConnectionState>(WebSocketServer.ConnectionState.Stopped)

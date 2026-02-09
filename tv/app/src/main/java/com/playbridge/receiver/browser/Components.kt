@@ -35,6 +35,12 @@ object Components {
         BrowserStore()
     }
     
+    val extensionManager: ExtensionManager by lazy {
+        ExtensionManager(appContext, runtime).also {
+            it.initialize()
+        }
+    }
+    
     fun initialize(context: Context) {
         if (isInitialized.compareAndSet(false, true)) {
             appContext = context.applicationContext
@@ -42,3 +48,4 @@ object Components {
         }
     }
 }
+

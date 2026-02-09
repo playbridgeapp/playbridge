@@ -80,6 +80,10 @@ class PlayerActivity : ComponentActivity() {
                     val command = intent.getStringExtra(ServerService.EXTRA_COMMAND)
                     handleControlCommand(command)
                 }
+                ServerService.ACTION_REMOTE -> {
+                    val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
+                    handleRemoteCommand(key)
+                }
                 ServerService.ACTION_PLAY -> {
                     val url = intent.getStringExtra(ServerService.EXTRA_URL)
                     val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
@@ -150,6 +154,7 @@ class PlayerActivity : ComponentActivity() {
         // Register broadcast receiver for control commands
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_CONTROL)
+            addAction(ServerService.ACTION_REMOTE)
             addAction(ServerService.ACTION_PLAY)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -429,6 +434,32 @@ class PlayerActivity : ComponentActivity() {
                 player?.let {
                     if (it.isPlaying) it.pause() else it.play()
                 }
+            }
+        }
+    }
+    
+    private fun handleRemoteCommand(key: String?) {
+        Log.i(TAG, "Remote command: $key")
+        
+        // Simulate key events based on remote command
+        val keyCode = when (key) {
+            "dpad_up" -> KeyEvent.KEYCODE_DPAD_UP
+            "dpad_down" -> KeyEvent.KEYCODE_DPAD_DOWN
+            "dpad_left" -> KeyEvent.KEYCODE_DPAD_LEFT
+            "dpad_right" -> KeyEvent.KEYCODE_DPAD_RIGHT
+            "dpad_center" -> KeyEvent.KEYCODE_DPAD_CENTER
+            "back" -> KeyEvent.KEYCODE_BACK
+            else -> null
+        }
+        
+        if (keyCode != null) {
+            // Dispatch the key event to this activity
+            val downEvent = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
+            val upEvent = KeyEvent(KeyEvent.ACTION_UP, keyCode)
+            
+            runOnUiThread {
+                dispatchKeyEvent(downEvent)
+                dispatchKeyEvent(upEvent)
             }
         }
     }

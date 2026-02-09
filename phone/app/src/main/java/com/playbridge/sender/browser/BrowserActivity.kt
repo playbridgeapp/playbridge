@@ -170,6 +170,10 @@ class BrowserActivity : ComponentActivity() {
             val detectedVideos = VideoDetector.detectedVideos
             val videoCount by remember { derivedStateOf { detectedVideos.size } }
             
+            // Remote control state
+            var showRemoteSheet by remember { mutableStateOf(false) }
+            var tvMode by remember { mutableStateOf(TvMode.Unknown) }
+            
             // Track if media is actively playing on TV
             var isMediaPlaying by remember { mutableStateOf(false) }
             
@@ -613,6 +617,17 @@ class BrowserActivity : ComponentActivity() {
                                                         },
                                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                     )
+                                                    
+                                                    // Remote Control
+                                                    DropdownMenuItem(
+                                                        text = { Text("Remote Control", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.Gamepad, null, tint = MaterialTheme.colorScheme.primary) },
+                                                        onClick = {
+                                                            menuExpanded = false
+                                                            showRemoteSheet = true
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
                                                 }
                                                 
                                                 // Media controls (only show when connected AND media is playing)
@@ -905,6 +920,34 @@ class BrowserActivity : ComponentActivity() {
                         },
                         onClear = {
                             VideoDetector.clear()
+                        }
+                    )
+                }
+                
+                // Remote control bottom sheet
+                if (showRemoteSheet) {
+                    RemoteControlSheet(
+                        tvMode = tvMode,
+                        onDismiss = { showRemoteSheet = false },
+                        onRemoteKey = { key ->
+                            val cmd = com.playbridge.sender.model.createRemoteCommandJson(key)
+                            webSocketClient.send(cmd)
+                        },
+                        onMouseMove = { dx, dy ->
+                            val cmd = com.playbridge.sender.model.createMouseCommandJson("move", dx, dy)
+                            webSocketClient.send(cmd)
+                        },
+                        onMouseClick = {
+                            val cmd = com.playbridge.sender.model.createMouseCommandJson("click")
+                            webSocketClient.send(cmd)
+                        },
+                        onMouseScroll = { dx, dy ->
+                            val cmd = com.playbridge.sender.model.createMouseCommandJson("scroll", dx, dy)
+                            webSocketClient.send(cmd)
+                        },
+                        onBrowserControl = { action ->
+                            val cmd = com.playbridge.sender.model.createBrowserControlCommandJson(action)
+                            webSocketClient.send(cmd)
                         }
                     )
                 }

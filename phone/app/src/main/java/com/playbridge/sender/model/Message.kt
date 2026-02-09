@@ -122,6 +122,78 @@ fun createPingJson(): String {
     return protocolJson.encodeToString(PingMessage.serializer(), PingMessage())
 }
 
+// ==================== Remote Control Commands ====================
+
+/**
+ * Remote D-pad/navigation command
+ */
+@Serializable
+data class RemoteCommand(
+    val type: String = "command",
+    val action: String = "remote",
+    val payload: RemotePayload
+)
+
+@Serializable
+data class RemotePayload(
+    val key: String // dpad_up, dpad_down, dpad_left, dpad_right, dpad_center, back
+)
+
+/**
+ * Mouse/touchpad command for TV browser
+ */
+@Serializable
+data class MouseCommand(
+    val type: String = "command",
+    val action: String = "mouse",
+    val payload: MousePayload
+)
+
+@Serializable
+data class MousePayload(
+    val event: String, // move, click, scroll
+    val dx: Float = 0f,
+    val dy: Float = 0f
+)
+
+fun createRemoteCommandJson(key: String): String {
+    return protocolJson.encodeToString(
+        RemoteCommand.serializer(),
+        RemoteCommand(payload = RemotePayload(key = key))
+    )
+}
+
+fun createMouseCommandJson(event: String, dx: Float = 0f, dy: Float = 0f): String {
+    return protocolJson.encodeToString(
+        MouseCommand.serializer(),
+        MouseCommand(payload = MousePayload(event = event, dx = dx, dy = dy))
+    )
+}
+
+// ==================== Browser Control Commands ====================
+
+/**
+ * Browser control command (refresh, toggle extensions)
+ */
+@Serializable
+data class BrowserControlCommand(
+    val type: String = "command",
+    val action: String = "browser_control",
+    val payload: BrowserControlPayload
+)
+
+@Serializable
+data class BrowserControlPayload(
+    val action: String // refresh, toggle_ublock
+)
+
+fun createBrowserControlCommandJson(action: String): String {
+    return protocolJson.encodeToString(
+        BrowserControlCommand.serializer(),
+        BrowserControlCommand(payload = BrowserControlPayload(action = action))
+    )
+}
+
 fun parseQRCode(jsonString: String): QRCodeData? {
     return try {
         protocolJson.decodeFromString<QRCodeData>(jsonString)
@@ -129,3 +201,4 @@ fun parseQRCode(jsonString: String): QRCodeData? {
         null
     }
 }
+

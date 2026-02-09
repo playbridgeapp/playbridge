@@ -60,6 +60,32 @@ data class ControlPayload(
     val command: String // pause, play, seek, stop
 )
 
+/**
+ * Remote D-pad command payload
+ */
+@Serializable
+data class RemotePayload(
+    val key: String // dpad_up, dpad_down, dpad_left, dpad_right, dpad_center, back
+)
+
+/**
+ * Mouse/touchpad command payload
+ */
+@Serializable
+data class MousePayload(
+    val event: String, // move, click, scroll
+    val dx: Float = 0f,
+    val dy: Float = 0f
+)
+
+/**
+ * Browser control command payload (refresh, toggle extensions)
+ */
+@Serializable
+data class BrowserControlPayload(
+    val action: String // refresh, toggle_ublock
+)
+
 // ==================== Status (TV → Phone) ====================
 
 /**
@@ -88,6 +114,9 @@ sealed class Command {
     data class Play(val url: String, val title: String?, val headers: Map<String, String>?, val contentType: String?) : Command()
     data class Browser(val url: String) : Command()
     data class Control(val command: String) : Command()
+    data class Remote(val key: String) : Command()
+    data class Mouse(val event: String, val dx: Float, val dy: Float) : Command()
+    data class BrowserControl(val action: String) : Command()
     data object Ping : Command()
     data class Unknown(val type: String) : Command()
 }
@@ -125,6 +154,28 @@ fun parseCommand(jsonString: String): Command {
                             protocolJson.decodeFromJsonElement<ControlPayload>(it)
                         }
                         Command.Control(command = payload?.command ?: "")
+                    }
+                    "remote" -> {
+                        val payload = envelope.payload?.let {
+                            protocolJson.decodeFromJsonElement<RemotePayload>(it)
+                        }
+                        Command.Remote(key = payload?.key ?: "")
+                    }
+                    "mouse" -> {
+                        val payload = envelope.payload?.let {
+                            protocolJson.decodeFromJsonElement<MousePayload>(it)
+                        }
+                        Command.Mouse(
+                            event = payload?.event ?: "",
+                            dx = payload?.dx ?: 0f,
+                            dy = payload?.dy ?: 0f
+                        )
+                    }
+                    "browser_control" -> {
+                        val payload = envelope.payload?.let {
+                            protocolJson.decodeFromJsonElement<BrowserControlPayload>(it)
+                        }
+                        Command.BrowserControl(action = payload?.action ?: "")
                     }
                     else -> Command.Unknown(envelope.action ?: "unknown")
                 }

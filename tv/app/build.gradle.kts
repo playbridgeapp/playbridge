@@ -42,6 +42,15 @@ android {
             excludes += "/META-INF/io.netty.versions.properties"
         }
     }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("x86", "x86_64", "armeabi-v7a", "arm64-v8a")
+            isUniversalApk = false
+        }
+    }
 }
 
 dependencies {
@@ -79,7 +88,6 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)           // HLS streaming (.m3u8)
     implementation(libs.media3.exoplayer.dash)          // DASH streaming (.mpd)
     implementation(libs.media3.exoplayer.smoothstreaming) // SmoothStreaming
-    implementation(libs.media3.exoplayer.rtsp)          // RTSP streaming
     implementation(libs.media3.exoplayer.rtsp)          // RTSP streaming
     implementation(libs.media3.datasource.okhttp)       // Better HTTP performance
     implementation(libs.okhttp)                         // OkHttp client
