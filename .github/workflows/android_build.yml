@@ -76,16 +76,15 @@ jobs:
       env:
         VERSION: ${{ needs.check-version.outputs.version }}
       run: |
-        cd phone/app/build/outputs/apk/release
-        for f in *.apk; do
-          mv "$f" "playbridge-phone-${VERSION}-${f}"
+        find phone/app/build/outputs/apk/release -type f -name "*.apk" | while read f; do
+          mv "$f" "$(dirname "$f")/playbridge-phone-${VERSION}-$(basename "$f")"
         done
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: phone-release-apk
-        path: phone/app/build/outputs/apk/release/*.apk
+        path: phone/app/build/outputs/apk/release/**/*.apk
 
   build-tv:
     needs: check-version
@@ -126,16 +125,15 @@ jobs:
       env:
         VERSION: ${{ needs.check-version.outputs.version }}
       run: |
-        cd tv/app/build/outputs/apk/release
-        for f in *.apk; do
-          mv "$f" "playbridge-tv-${VERSION}-${f}"
+        find tv/app/build/outputs/apk/release -type f -name "*.apk" | while read f; do
+          mv "$f" "$(dirname "$f")/playbridge-tv-${VERSION}-$(basename "$f")"
         done
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: tv-release-apk
-        path: tv/app/build/outputs/apk/release/*.apk
+        path: tv/app/build/outputs/apk/release/**/*.apk
 
   release:
     needs: [check-version, build-phone, build-tv]
@@ -162,6 +160,6 @@ jobs:
           tag_name: v${{ needs.check-version.outputs.version }}
           name: Release v${{ needs.check-version.outputs.version }}
           files: |
-            output/phone/*.apk
-            output/tv/*.apk
+            output/phone/**/*.apk
+            output/tv/**/*.apk
           generate_release_notes: true
