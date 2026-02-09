@@ -97,6 +97,17 @@ function notifyContentScript(video, tabId, headers = null) {
 }
 
 
+
+const DEBUG = false; // Set to false to disable verbose logging
+
+// 0. Log all requests (Debug)
+browser.webRequest.onBeforeRequest.addListener(
+    (details) => {
+        if (DEBUG) console.log(`[VideoDetector BG] Request: ${details.url} (Type: ${details.type})`);
+    },
+    { urls: ["<all_urls>"] }
+);
+
 // 1. Capture Headers (Store)
 // We capture headers for ALL requests because we don't know the Content-Type yet.
 // We store them keyed by requestId.
@@ -132,25 +143,49 @@ browser.webRequest.onHeadersReceived.addListener(
             h => h.name.toLowerCase() === 'content-type'
         );
 
+        const contentType = contentTypeHeader ? contentTypeHeader.value.toLowerCase() : 'unknown';
+        if (DEBUG) console.log(`[VideoDetector BG] Response: ${details.url} | Content-Type: ${contentType}`);
+
         // Always check map for cleanup, but first use it if video
         const storedData = requestHeadersMap.get(details.requestId);
 
         if (contentTypeHeader) {
-            const contentType = contentTypeHeader.value.toLowerCase();
             const isVideoContentType = VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
             const isM3u8Url = details.url.toLowerCase().includes('m3u8');
-            const isVideo = isVideoContentType || isM3u8Url;
+            
+            // Check for common video extensions if content type involves 'octet-stream' or 'binary'
+            // or if it's just a generic check on the URL end
+            const videoExtensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv'];
+            const urlLower = details.url.toLowerCase().split('?')[0]; // Ignore query params
+            const hasVideoExtension = videoExtensions.some(ext => urlLower.endsWith(ext));
+            
+            // If it's octet-stream, we MUST rely on extension.
+            // But we can also be more aggressive: if it ends in .mp4, it's a video, period.
+            const isVideoExtensionMatch = hasVideoExtension && (
+                contentType.includes('octet-stream') || 
+                contentType.includes('application/x-google-chrome-pdf') || // sometimes misidentified?
+                contentType.includes('binary') ||
+                !contentType // or no content type?
+            );
+
+            const isVideo = isVideoContentType || isM3u8Url || isVideoExtensionMatch || hasVideoExtension; 
+            // hasVideoExtension covers cases where server sends wrong type (e.g. text/plain for .mp4)
 
             if (isVideo) {
-                console.log(`[VideoDetector BG] CONFIRMED VIDEO (Type: ${contentType}, URL match: ${isM3u8Url}): ${details.url.substring(0, 50)}...`);
+                if (DEBUG) console.log(`[VideoDetector BG] CONFIRMED VIDEO (Type: ${contentType}, URL match: ${isM3u8Url || hasVideoExtension}): ${details.url.substring(0, 50)}...`);
 
                 const headers = storedData ? storedData.headers : null;
+                
+                let detectedBy = 'unknown';
+                if (isVideoContentType) detectedBy = 'content_type';
+                else if (isM3u8Url) detectedBy = 'url_pattern_m3u8';
+                else if (hasVideoExtension) detectedBy = 'url_extension';
 
                 notifyContentScript({
                     url: details.url,
                     tabId: details.tabId,
                     contentType: contentType,
-                    detectedBy: isVideoContentType ? 'content_type' : (isM3u8Url ? 'url_pattern' : 'unknown'),
+                    detectedBy: detectedBy,
                     originUrl: details.originUrl || '',
                     timestamp: Date.now()
                 }, details.tabId, headers);
