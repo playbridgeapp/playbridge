@@ -59,6 +59,10 @@ fun HistoryScreen(
                 )
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Button(onClick = onNavigateToPairing) {
+                        Text("Pair New Device")
+                    }
+
                     Button(onClick = {
                         scope.launch {
                             historyStore.clearHistory()
@@ -67,10 +71,6 @@ fun HistoryScreen(
                         Text("Clear History")
                     }
                     
-                    Button(onClick = onNavigateToPairing) {
-                        Text("Pair New Device")
-                    }
-
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }

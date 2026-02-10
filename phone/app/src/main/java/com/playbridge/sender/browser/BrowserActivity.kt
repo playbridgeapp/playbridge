@@ -821,7 +821,7 @@ class BrowserActivity : ComponentActivity() {
                                     
                                     val commandJson = com.playbridge.sender.model.createPlayCommandJson(
                                         url = video.url,
-                                        title = "Video from browser",
+                                        title = selectedTab?.content?.title ?: "Video from browser",
                                         headers = headers,
                                         contentType = video.contentType
                                     )
