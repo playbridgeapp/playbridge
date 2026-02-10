@@ -11,6 +11,8 @@ import android.graphics.Paint
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -51,6 +53,13 @@ class BrowserActivity : ComponentActivity() {
     private var cursorX = 960f  // Start at center of 1920 screen
     private var cursorY = 540f  // Start at center of 1080 screen
     private var cursorView: CursorView? = null
+    
+    // Cursor auto-hide
+    private val cursorHideHandler = Handler(Looper.getMainLooper())
+    private val cursorHideRunnable = Runnable {
+        cursorView?.visibility = View.GONE
+    }
+    private val cursorHideDelayMs = 3000L  // Hide after 3 seconds of inactivity
     
     // Fullscreen video support
     private var fullscreenView: View? = null
@@ -397,7 +406,7 @@ class BrowserActivity : ComponentActivity() {
         when (event) {
             "move" -> {
                 // Show cursor if hidden
-                cursorView?.visibility = View.VISIBLE
+                showCursorAndResetTimer()
                 
                 // Update cursor position with bounds checking
                 val displayMetrics = resources.displayMetrics
@@ -409,7 +418,7 @@ class BrowserActivity : ComponentActivity() {
             }
             "click" -> {
                 // Show cursor if hidden
-                cursorView?.visibility = View.VISIBLE
+                showCursorAndResetTimer()
                 
                 Log.d(TAG, "Simulating click at ($cursorX, $cursorY)")
                 
@@ -512,7 +521,7 @@ class BrowserActivity : ComponentActivity() {
         
         when (key) {
             "dpad_up" -> {
-                cursorView?.visibility = View.VISIBLE
+                showCursorAndResetTimer()
                 if (cursorY <= cursorStep) {
                     // At top edge, scroll up
                     webView?.scrollBy(0, -scrollStep)
@@ -522,7 +531,7 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             "dpad_down" -> {
-                cursorView?.visibility = View.VISIBLE
+                showCursorAndResetTimer()
                 val screenHeight = resources.displayMetrics.heightPixels.toFloat()
                 if (cursorY >= screenHeight - cursorStep) {
                     // At bottom edge, scroll down
@@ -533,7 +542,7 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             "dpad_left" -> {
-                cursorView?.visibility = View.VISIBLE
+                showCursorAndResetTimer()
                 if (cursorX <= cursorStep) {
                     // At left edge, scroll left
                     webView?.scrollBy(-scrollStep, 0)
@@ -543,7 +552,7 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             "dpad_right" -> {
-                cursorView?.visibility = View.VISIBLE
+                showCursorAndResetTimer()
                 val screenWidth = resources.displayMetrics.widthPixels.toFloat()
                 if (cursorX >= screenWidth - cursorStep) {
                     // At right edge, scroll right
@@ -555,7 +564,7 @@ class BrowserActivity : ComponentActivity() {
             }
             "dpad_center" -> {
                 // Click at cursor position
-                cursorView?.visibility = View.VISIBLE
+                showCursorAndResetTimer()
                 Log.d(TAG, "D-pad center click at ($cursorX, $cursorY)")
                 simulateClick(cursorX, cursorY)
                 cursorView?.animateClick()
@@ -715,7 +724,14 @@ class BrowserActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    private fun showCursorAndResetTimer() {
+        cursorView?.visibility = View.VISIBLE
+        cursorHideHandler.removeCallbacks(cursorHideRunnable)
+        cursorHideHandler.postDelayed(cursorHideRunnable, cursorHideDelayMs)
+    }
+    
     override fun onDestroy() {
+        cursorHideHandler.removeCallbacks(cursorHideRunnable)
         unregisterReceiver(commandReceiver)
         scope.cancel()
         super.onDestroy()

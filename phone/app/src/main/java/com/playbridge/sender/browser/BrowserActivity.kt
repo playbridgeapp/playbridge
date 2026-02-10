@@ -173,10 +173,21 @@ class BrowserActivity : ComponentActivity() {
             
             // Remote control state
             var showRemoteSheet by remember { mutableStateOf(false) }
-            var tvMode by remember { mutableStateOf(TvMode.Unknown) }
             
-            // Track if media is actively playing on TV
-            var isMediaPlaying by remember { mutableStateOf(false) }
+            // TV active context - updated via WebSocket messages from TV
+            var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
+            
+            // Listen for context messages from TV
+            LaunchedEffect(Unit) {
+                webSocketClient.messages.collect { message ->
+                    try {
+                        val json = org.json.JSONObject(message)
+                        if (json.optString("type") == "context") {
+                            tvActiveContext = json.optString("active", "idle")
+                        }
+                    } catch (_: Exception) { }
+                }
+            }
             
             // Track previous URL to avoid clearing on hash changes
             var previousUrl by remember { mutableStateOf("") }
@@ -621,83 +632,14 @@ class BrowserActivity : ComponentActivity() {
                                                         onClick = {
                                                             menuExpanded = false
                                                             showRemoteSheet = true
+                                                            // Query TV for current context
+                                                            webSocketClient.send(com.playbridge.sender.model.createContextQueryJson())
                                                         },
                                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                     )
                                                 }
                                                 
-                                                // Media controls (only show when connected AND media is playing)
-                                                if (connectionState is WebSocketClient.ConnectionState.Connected && isMediaPlaying) {
-                                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                                    
-                                                    // Media controls header
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Icon(
-                                                            Icons.Default.Tv,
-                                                            contentDescription = null,
-                                                            modifier = Modifier.size(20.dp),
-                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                        Spacer(modifier = Modifier.width(12.dp))
-                                                        Text(
-                                                            "Media Controls",
-                                                            style = MaterialTheme.typography.labelLarge,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                    }
-                                                    
-                                                    // Control buttons row
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                                                        horizontalArrangement = Arrangement.SpaceEvenly
-                                                    ) {
-                                                        // Track play/pause state
-                                                        var isPlaying by remember { mutableStateOf(false) }
-                                                        
-                                                        // Play/Pause toggle button
-                                                        IconButton(
-                                                            onClick = {
-                                                                val cmd = if (isPlaying) {
-                                                                    com.playbridge.sender.model.createControlCommandJson("pause")
-                                                                } else {
-                                                                    com.playbridge.sender.model.createControlCommandJson("play")
-                                                                }
-                                                                webSocketClient.send(cmd)
-                                                                isPlaying = !isPlaying
-                                                                Toast.makeText(
-                                                                    this@BrowserActivity, 
-                                                                    if (isPlaying) "▶ Playing" else "⏸ Paused", 
-                                                                    Toast.LENGTH_SHORT
-                                                                ).show()
-                                                            }
-                                                        ) {
-                                                            Icon(
-                                                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                                                if (isPlaying) "Pause" else "Play",
-                                                                tint = MaterialTheme.colorScheme.primary
-                                                            )
-                                                        }
-                                                        
-                                                        // Stop button
-                                                        IconButton(
-                                                            onClick = {
-                                                                val cmd = com.playbridge.sender.model.createControlCommandJson("stop")
-                                                                webSocketClient.send(cmd)
-                                                                isMediaPlaying = false
-                                                                Toast.makeText(this@BrowserActivity, "⏹ Stop", Toast.LENGTH_SHORT).show()
-                                                            }
-                                                        ) {
-                                                            Icon(Icons.Default.Stop, "Stop", tint = MaterialTheme.colorScheme.error)
-                                                        }
-                                                    }
-                                                }
+
                                                 
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                             }
@@ -888,7 +830,7 @@ class BrowserActivity : ComponentActivity() {
                                     Log.d(TAG, "Command sent: $sent")
                                     
                                     if (sent) {
-                                        isMediaPlaying = true
+                                        tvActiveContext = "player"
                                         Toast.makeText(
                                             this@BrowserActivity,
                                             "Playing on ${state.serverName}",
@@ -923,7 +865,7 @@ class BrowserActivity : ComponentActivity() {
                 // Remote control bottom sheet
                 if (showRemoteSheet) {
                     RemoteControlSheet(
-                        tvMode = tvMode,
+                        isMediaPlaying = tvActiveContext == "player",
                         onDismiss = { showRemoteSheet = false },
                         onRemoteKey = { key ->
                             val cmd = com.playbridge.sender.model.createRemoteCommandJson(key)
@@ -944,6 +886,13 @@ class BrowserActivity : ComponentActivity() {
                         onBrowserControl = { action ->
                             val cmd = com.playbridge.sender.model.createBrowserControlCommandJson(action)
                             webSocketClient.send(cmd)
+                        },
+                        onPlayerControl = { command ->
+                            val cmd = com.playbridge.sender.model.createControlCommandJson(command)
+                            webSocketClient.send(cmd)
+                            if (command == "stop") {
+                                tvActiveContext = "idle"
+                            }
                         }
                     )
                 }

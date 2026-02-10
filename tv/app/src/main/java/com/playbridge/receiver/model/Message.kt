@@ -117,6 +117,7 @@ sealed class Command {
     data class Remote(val key: String) : Command()
     data class Mouse(val event: String, val dx: Float, val dy: Float) : Command()
     data class BrowserControl(val action: String) : Command()
+    data object ContextQuery : Command()
     data object Ping : Command()
     data class Unknown(val type: String) : Command()
 }
@@ -177,6 +178,7 @@ fun parseCommand(jsonString: String): Command {
                         }
                         Command.BrowserControl(action = payload?.action ?: "")
                     }
+                    "context_query" -> Command.ContextQuery
                     else -> Command.Unknown(envelope.action ?: "unknown")
                 }
             }
@@ -202,4 +204,12 @@ fun createStatusJson(state: String, position: Long, duration: Long, title: Strin
  */
 fun createPongJson(): String {
     return protocolJson.encodeToString(PongMessage.serializer(), PongMessage())
+}
+
+/**
+ * Create JSON string for context response
+ * @param active "player", "browser", or "idle"
+ */
+fun createContextJson(active: String): String {
+    return """{"type":"context","active":"$active"}"""
 }

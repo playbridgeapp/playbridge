@@ -194,6 +194,30 @@ fun createBrowserControlCommandJson(action: String): String {
     )
 }
 
+// ==================== Context Query ====================
+
+/**
+ * Query TV for its active context (player, browser, or idle)
+ */
+@Serializable
+data class ContextQueryCommand(
+    val type: String = "command",
+    val action: String = "context_query"
+)
+
+/**
+ * Context response from TV
+ */
+@Serializable
+data class ContextMessage(
+    val type: String = "context",
+    val active: String = "idle" // "player", "browser", or "idle"
+)
+
+fun createContextQueryJson(): String {
+    return protocolJson.encodeToString(ContextQueryCommand.serializer(), ContextQueryCommand())
+}
+
 fun parseQRCode(jsonString: String): QRCodeData? {
     return try {
         protocolJson.decodeFromString<QRCodeData>(jsonString)

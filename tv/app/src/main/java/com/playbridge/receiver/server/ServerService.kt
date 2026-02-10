@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import com.playbridge.receiver.MainActivity
 import com.playbridge.receiver.R
 import com.playbridge.receiver.model.Command
+import com.playbridge.receiver.model.createContextJson
 import com.playbridge.receiver.pairing.PairingStore
 import com.playbridge.receiver.model.PairedDevice
 import kotlinx.coroutines.*
@@ -33,6 +34,9 @@ class ServerService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocketServer: WebSocketServer? = null
     private lateinit var pairingStore: PairingStore
+    
+    // Track what is currently active on the TV
+    private var activeContext: String = "idle" // "player", "browser", or "idle"
     
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
     val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
@@ -102,6 +106,8 @@ class ServerService : Service() {
         when (command) {
             is Command.Play -> {
                 Log.i(TAG, "=== PLAY COMMAND ===")
+                activeContext = "player"
+                broadcastContext()
                 
                 // Clear stack to MainActivity first
                 val homeIntent = Intent(this, MainActivity::class.java).apply {
@@ -124,6 +130,8 @@ class ServerService : Service() {
             }
             is Command.Browser -> {
                 Log.i(TAG, "Browser command: ${command.url}")
+                activeContext = "browser"
+                broadcastContext()
                 
                  // Clear stack to MainActivity first
                 val homeIntent = Intent(this, MainActivity::class.java).apply {
@@ -139,6 +147,10 @@ class ServerService : Service() {
             }
             is Command.Control -> {
                 Log.i(TAG, "Control command: ${command.command}")
+                if (command.command == "stop") {
+                    activeContext = "idle"
+                    broadcastContext()
+                }
                 val intent = Intent(ACTION_CONTROL).apply {
                     putExtra(EXTRA_COMMAND, command.command)
                     setPackage(packageName)
@@ -171,12 +183,24 @@ class ServerService : Service() {
                 }
                 sendBroadcast(intent)
             }
+            is Command.ContextQuery -> {
+                Log.i(TAG, "Context query - responding with: $activeContext")
+                scope.launch {
+                    webSocketServer?.broadcastStatus(createContextJson(activeContext))
+                }
+            }
             is Command.Ping -> {
                 // Handled by WebSocketServer
             }
             is Command.Unknown -> {
                 Log.w(TAG, "Unknown command: ${command.type}")
             }
+        }
+    }
+    
+    private fun broadcastContext() {
+        scope.launch {
+            webSocketServer?.broadcastStatus(createContextJson(activeContext))
         }
     }
     

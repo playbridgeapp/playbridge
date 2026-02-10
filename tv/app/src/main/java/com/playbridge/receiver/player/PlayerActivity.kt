@@ -435,6 +435,21 @@ class PlayerActivity : ComponentActivity() {
                     if (it.isPlaying) it.pause() else it.play()
                 }
             }
+            "seek_back" -> {
+                player?.let {
+                    val newPos = maxOf(0L, it.currentPosition - 10_000L)
+                    it.seekTo(newPos)
+                    showSeekUI()
+                }
+            }
+            "seek_forward" -> {
+                player?.let {
+                    val dur = it.duration
+                    val newPos = if (dur > 0) minOf(dur, it.currentPosition + 10_000L) else it.currentPosition + 10_000L
+                    it.seekTo(newPos)
+                    showSeekUI()
+                }
+            }
         }
     }
     
