@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -684,122 +685,142 @@ class BrowserActivity : ComponentActivity() {
                     }
                 ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
-                        when (currentScreen) {
-                            Screen.Browser -> {
-                                // Browser: first back goes to browser history, second back exits
-                                BackHandler {
-                                    if (canGoBack) {
-                                        session.goBack()
+                            // content
+                            AnimatedContent(
+                                targetState = currentScreen,
+                                transitionSpec = {
+                                    if (targetState == Screen.Tabs && initialState == Screen.Browser) {
+                                        slideInVertically { height -> height } + fadeIn() togetherWith
+                                                slideOutVertically { height -> -height } + fadeOut()
+                                    } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
+                                        slideInVertically { height -> -height } + fadeIn() togetherWith
+                                                slideOutVertically { height -> height } + fadeOut()
                                     } else {
-                                        val currentTime = System.currentTimeMillis()
-                                        if (currentTime - backPressedTime > 2000) {
-                                            backPressedTime = currentTime
-                                            Toast.makeText(
-                                                this@BrowserActivity,
-                                                "Press back again to exit",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        } else {
-                                            finish()
-                                        }
+                                        // Default fade for other transitions (e.g. settings)
+                                        fadeIn() togetherWith fadeOut()
                                     }
-                                }
-                                
-            // BrowserView call site
+                                },
+                                label = "ScreenTransition"
+                            ) { targetScreen ->
                                 Box(modifier = Modifier.fillMaxSize()) {
-                                    BrowserView(
-                                        session = session,
-                                        onLongPressLink = { url -> contextMenuUrl = url }
-                                    )
-                                }
-                            }
-                            Screen.Tabs -> {
-                                BackHandler { currentScreen = Screen.Browser }
-                                TabsScreen(
-                                    onTabSelected = { tabId ->
-                                        store.dispatch(TabListAction.SelectTabAction(tabId))
-                                        currentScreen = Screen.Browser
-                                    },
-                                    onTabClosed = { tabId ->
-                                        store.dispatch(TabListAction.RemoveTabAction(tabId))
-                                    },
-                                    onNewTab = {
-                                        val newId = UUID.randomUUID().toString()
-                                        store.dispatch(TabListAction.AddTabAction(
-                                            tab = TabSessionState(
-                                                id = newId,
-                                                content = ContentState(url = "https://www.google.com"),
-                                                parentId = null
-                                            ),
-                                            select = true
-                                        ))
-                                        currentScreen = Screen.Browser
-                                    }
-                                )
-                            }
-                            Screen.Extensions -> {
-                                BackHandler { currentScreen = Screen.Browser }
-                                ExtensionsScreen(
-                                    session = session,
-                                    onBack = { currentScreen = Screen.Browser },
-                                    onAddExtension = {
-                                        val newId = UUID.randomUUID().toString()
-                                        store.dispatch(TabListAction.AddTabAction(
-                                            tab = TabSessionState(
-                                                id = newId,
-                                                content = ContentState(url = "https://addons.mozilla.org/android/"),
-                                                parentId = null
-                                            ),
-                                            select = true
-                                        ))
-                                        currentScreen = Screen.Browser
-                                    }
-                                )
-                            }
-                            Screen.Scanner -> {
-                                BackHandler { currentScreen = Screen.Browser }
-                                QRScannerScreen(
-                                    history = history,
-                                    onQRCodeScanned = { qrData ->
-                                        scope.launch {
-                                            Log.d(TAG, "QR Code scanned: ${qrData.name} at ${qrData.ip}:${qrData.port}")
-                                            
-                                            // Save TV device
-                                            val tvDevice = TvDevice(
-                                                ip = qrData.ip,
-                                                port = qrData.port,
-                                                token = qrData.token,
-                                                name = qrData.name
-                                            )
-                                            connectionStore.saveTvDevice(tvDevice)
-                                            connectionStore.addToHistory(tvDevice)
-                                            Log.d(TAG, "TV device saved")
-                                            
-                                            // Connect
-                                            webSocketClient.connect(
-                                                qrData.ip,
-                                                qrData.port,
-                                                qrData.token,
-                                                qrData.name
-                                            )
-                                            Log.d(TAG, "Connecting to TV...")
-                                            
-                                            // Show toast
-                                            runOnUiThread {
-                                                Toast.makeText(
-                                                    this@BrowserActivity,
-                                                    "Connecting to ${qrData.name}...",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                    when (targetScreen) {
+                                        Screen.Browser -> {
+                                            // Browser: first back goes to browser history, second back exits
+                                            BackHandler {
+                                                if (canGoBack) {
+                                                    session.goBack()
+                                                } else {
+                                                    val currentTime = System.currentTimeMillis()
+                                                    if (currentTime - backPressedTime > 2000) {
+                                                        backPressedTime = currentTime
+                                                        Toast.makeText(
+                                                            this@BrowserActivity,
+                                                            "Press back again to exit",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    } else {
+                                                        finish()
+                                                    }
+                                                }
                                             }
                                             
-                                            // Return to browser
-                                            currentScreen = Screen.Browser
+                                            // BrowserView call site
+                                            Box(modifier = Modifier.fillMaxSize()) {
+                                                BrowserView(
+                                                    session = session,
+                                                    onLongPressLink = { url -> contextMenuUrl = url }
+                                                )
+                                            }
+                                        }
+                                        Screen.Tabs -> {
+                                            BackHandler { currentScreen = Screen.Browser }
+                                            TabsScreen(
+                                                onTabSelected = { tabId ->
+                                                    store.dispatch(TabListAction.SelectTabAction(tabId))
+                                                    currentScreen = Screen.Browser
+                                                },
+                                                onTabClosed = { tabId ->
+                                                    store.dispatch(TabListAction.RemoveTabAction(tabId))
+                                                },
+                                                onNewTab = {
+                                                    val newId = UUID.randomUUID().toString()
+                                                    store.dispatch(TabListAction.AddTabAction(
+                                                        tab = TabSessionState(
+                                                            id = newId,
+                                                            content = ContentState(url = "https://www.google.com"),
+                                                            parentId = null
+                                                        ),
+                                                        select = true
+                                                    ))
+                                                    currentScreen = Screen.Browser
+                                                }
+                                            )
+                                        }
+                                        Screen.Extensions -> {
+                                            BackHandler { currentScreen = Screen.Browser }
+                                            ExtensionsScreen(
+                                                session = session,
+                                                onBack = { currentScreen = Screen.Browser },
+                                                onAddExtension = {
+                                                    val newId = UUID.randomUUID().toString()
+                                                    store.dispatch(TabListAction.AddTabAction(
+                                                        tab = TabSessionState(
+                                                            id = newId,
+                                                            content = ContentState(url = "https://addons.mozilla.org/android/"),
+                                                            parentId = null
+                                                        ),
+                                                        select = true
+                                                    ))
+                                                    currentScreen = Screen.Browser
+                                                }
+                                            )
+                                        }
+                                        Screen.Scanner -> {
+                                            BackHandler { currentScreen = Screen.Browser }
+                                            QRScannerScreen(
+                                                history = history,
+                                                onQRCodeScanned = { qrData ->
+                                                    scope.launch {
+                                                        Log.d(TAG, "QR Code scanned: ${qrData.name} at ${qrData.ip}:${qrData.port}")
+                                                        
+                                                        // Save TV device
+                                                        val tvDevice = TvDevice(
+                                                            ip = qrData.ip,
+                                                            port = qrData.port,
+                                                            token = qrData.token,
+                                                            name = qrData.name
+                                                        )
+                                                        connectionStore.saveTvDevice(tvDevice)
+                                                        connectionStore.addToHistory(tvDevice)
+                                                        Log.d(TAG, "TV device saved")
+                                                        
+                                                        // Connect
+                                                        webSocketClient.connect(
+                                                            qrData.ip,
+                                                            qrData.port,
+                                                            qrData.token,
+                                                            qrData.name
+                                                        )
+                                                        Log.d(TAG, "Connecting to TV...")
+                                                        
+                                                        // Show toast
+                                                        runOnUiThread {
+                                                            Toast.makeText(
+                                                                this@BrowserActivity,
+                                                                "Connecting to ${qrData.name}...",
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        }
+                                                        
+                                                        // Return to browser
+                                                        currentScreen = Screen.Browser
+                                                    }
+                                                }
+                                            )
                                         }
                                     }
-                                )
+                                }
                             }
-                        }
                     }
                 }
                 

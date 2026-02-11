@@ -16,6 +16,7 @@ kotlinxSerialization = "1.7.3"
 coroutines = "1.9.0"
 moz-android-components = "147.0"
 geckoview = "147.0.20260105210555"
+coil = "2.7.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -74,6 +75,9 @@ moz-lib-fetch-okhttp = { group = "org.mozilla.components", name = "lib-fetch-okh
 moz-browser-menu = { group = "org.mozilla.components", name = "browser-menu", version.ref = "moz-android-components" }
 moz-ui-widgets = { group = "org.mozilla.components", name = "ui-widgets", version.ref = "moz-android-components" }
 moz-ui-icons = { group = "org.mozilla.components", name = "ui-icons", version.ref = "moz-android-components" }
+
+# Coil
+coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
