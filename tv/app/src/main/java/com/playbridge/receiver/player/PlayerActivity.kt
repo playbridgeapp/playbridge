@@ -311,6 +311,7 @@ class PlayerActivity : ComponentActivity() {
 
         // Determine if content is HLS
         val isHls = (contentType == "application/vnd.apple.mpegurl") || 
+                    (contentType == "application/x-mpegurl") ||
                     (contentType.isNullOrEmpty() || (url.contains(".m3u8") || url.contains(".jpg")))
 
         // 4. Build Player

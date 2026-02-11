@@ -741,7 +741,19 @@ class BrowserActivity : ComponentActivity() {
                                 BackHandler { currentScreen = Screen.Browser }
                                 ExtensionsScreen(
                                     session = session,
-                                    onBack = { currentScreen = Screen.Browser }
+                                    onBack = { currentScreen = Screen.Browser },
+                                    onAddExtension = {
+                                        val newId = UUID.randomUUID().toString()
+                                        store.dispatch(TabListAction.AddTabAction(
+                                            tab = TabSessionState(
+                                                id = newId,
+                                                content = ContentState(url = "https://addons.mozilla.org/android/"),
+                                                parentId = null
+                                            ),
+                                            select = true
+                                        ))
+                                        currentScreen = Screen.Browser
+                                    }
                                 )
                             }
                             Screen.Scanner -> {

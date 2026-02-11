@@ -29,7 +29,8 @@ data class DetectedVideo(
     var fileSizeChecked: Boolean = false,
     val originalMessage: String? = null,
     var qualities: List<VideoQuality> = emptyList(),
-    var qualitiesChecked: Boolean = false
+    var qualitiesChecked: Boolean = false,
+    var hlsPlaylist: HlsPlaylist? = null
 )
 
 /**
@@ -165,14 +166,15 @@ object VideoDetector {
                 if (video.url.contains(".m3u8", ignoreCase = true) || 
                     video.contentType?.contains("mpegurl", ignoreCase = true) == true) {
                     
-                    val qualities = HlsParser.parse(video.url)
-                    video.qualities = qualities
+                    val playlist = HlsParser.parsePlaylist(video.url)
+                    video.hlsPlaylist = playlist
+                    video.qualities = playlist.videoQualities
                     video.qualitiesChecked = true
                     
-                    if (qualities.isNotEmpty()) {
+                    if (playlist.videoQualities.isNotEmpty()) {
                         withContext(Dispatchers.Main) {
                             // Add variants to ignore list
-                            qualities.forEach { quality ->
+                            playlist.videoQualities.forEach { quality ->
                                 ignoredUrls.add(quality.url)
                             }
                             
@@ -187,8 +189,9 @@ object VideoDetector {
                         }
                     }
                     
-                    Log.d(TAG, "Fetched ${qualities.size} qualities for ${video.url}")
-                    qualities
+                    Log.d(TAG, "Fetched ${playlist.videoQualities.size} qualities for ${video.url}")
+                    playlist.videoQualities
+
                 } else {
                     video.qualitiesChecked = true
                     emptyList()

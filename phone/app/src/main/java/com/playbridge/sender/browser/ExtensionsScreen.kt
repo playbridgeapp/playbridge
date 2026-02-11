@@ -31,7 +31,8 @@ private const val TAG = "ExtensionsScreen"
 @Composable
 fun ExtensionsScreen(
     session: mozilla.components.concept.engine.EngineSession,
-    onBack: () -> Unit = {}
+    onBack: () -> Unit = {},
+    onAddExtension: () -> Unit = {}
 ) {
     // Use GeckoView's WebExtension directly for installed extensions
     var installedExtensions by remember { mutableStateOf<List<WebExtension>>(emptyList()) }
@@ -93,9 +94,7 @@ fun ExtensionsScreen(
             
             FilledTonalButton(
                 onClick = {
-                    // Navigate to Firefox addons page
-                    session.loadUrl("https://addons.mozilla.org/android/")
-                    onBack()  // Go back to browser to see the page
+                    onAddExtension()
                 }
             ) {
                 Icon(Icons.Default.Add, "Add", modifier = Modifier.size(18.dp))

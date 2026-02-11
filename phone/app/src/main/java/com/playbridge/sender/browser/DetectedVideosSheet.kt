@@ -115,7 +115,27 @@ fun DetectedVideosSheet(
                             video = video,
                             onPlayClick = { specificUrl -> 
                                 if (specificUrl != null) {
-                                    onVideoClick(video.copy(url = specificUrl))
+                                    // If we have a playlist and this is one of the qualities, try to generate a filtered playlist
+                                    // We need to find the specific quality object first
+                                    val selectedQuality = video.qualities.find { it.url == specificUrl }
+                                    val playlist = video.hlsPlaylist
+                                    
+                                    if (playlist != null && selectedQuality != null) {
+                                        // Generate filtered playlist
+                                        val filteredContent = HlsParser.generateFilteredPlaylist(playlist, selectedQuality)
+                                        
+                                        // Encode as Data URI
+                                        val base64Content = android.util.Base64.encodeToString(filteredContent.toByteArray(), android.util.Base64.NO_WRAP)
+                                        val dataUri = "data:application/x-mpegurl;base64,$base64Content"
+                                        
+                                        // Send Data URI with a title hint of the resolution
+                                        onVideoClick(video.copy(
+                                            url = dataUri,
+                                            contentType = "application/x-mpegurl" // Force MIME type
+                                        ))
+                                    } else {
+                                        onVideoClick(video.copy(url = specificUrl))
+                                    }
                                 } else {
                                     onVideoClick(video)
                                 }
