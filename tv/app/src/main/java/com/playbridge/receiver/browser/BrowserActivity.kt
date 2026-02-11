@@ -401,7 +401,7 @@ class BrowserActivity : ComponentActivity() {
     }
     
     private fun handleMouseCommand(event: String?, dx: Float, dy: Float) {
-        Log.d(TAG, "Mouse command: $event ($dx, $dy)")
+        // Log.d(TAG, "Mouse command: $event ($dx, $dy)") // Commented out to improve performance
         
         when (event) {
             "move" -> {

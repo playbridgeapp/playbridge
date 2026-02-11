@@ -100,8 +100,10 @@ class ServerService : Service() {
     }
     
     private fun handleCommand(command: Command) {
-        Log.i(TAG, "=== COMMAND RECEIVED ===")
-        Log.i(TAG, "Command type: ${command.javaClass.simpleName}")
+        if (command !is Command.Mouse) {
+            Log.i(TAG, "=== COMMAND RECEIVED ===")
+            Log.i(TAG, "Command type: ${command.javaClass.simpleName}")
+        }
         
         when (command) {
             is Command.Play -> {
@@ -166,7 +168,7 @@ class ServerService : Service() {
                 sendBroadcast(intent)
             }
             is Command.Mouse -> {
-                Log.i(TAG, "Mouse command: ${command.event} (${command.dx}, ${command.dy})")
+                // Log.i(TAG, "Mouse command: ${command.event} (${command.dx}, ${command.dy})")
                 val intent = Intent(ACTION_MOUSE).apply {
                     putExtra(EXTRA_MOUSE_EVENT, command.event)
                     putExtra(EXTRA_MOUSE_DX, command.dx)

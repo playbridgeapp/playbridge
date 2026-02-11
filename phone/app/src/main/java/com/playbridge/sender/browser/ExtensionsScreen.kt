@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -272,19 +273,53 @@ private fun ExtensionCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Extension icon placeholder
+            // Extension icon
+            var iconBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+            
+            LaunchedEffect(extension) {
+                extension.metaData?.let { meta ->
+                    // Load icon with desired size (e.g., 128px)
+                    // The icon field is of type org.mozilla.geckoview.Image
+                    try {
+                        // Reflectively check if icon field exists to avoid build errors if I'm wrong about exact field name
+                        // Based on javap output: public final org.mozilla.geckoview.Image icon;
+                        val iconField = meta.javaClass.getField("icon")
+                        val image = iconField.get(meta) as? org.mozilla.geckoview.Image
+                        
+                        image?.getBitmap(128)?.then({ bitmap ->
+                            iconBitmap = bitmap
+                            org.mozilla.geckoview.GeckoResult.fromValue(null)
+                        }, { error ->
+                            Log.e("ExtensionsScreen", "Failed to load icon", error)
+                            org.mozilla.geckoview.GeckoResult.fromValue(null)
+                        })
+                    } catch (e: Exception) {
+                        Log.e("ExtensionsScreen", "Error access icon field", e)
+                    }
+                }
+            }
+            
             Surface(
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(CircleShape),
-                color = MaterialTheme.colorScheme.primary
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
+                color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Default.Settings,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary
-                    )
+                    if (iconBitmap != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = iconBitmap!!.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Extension,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             
