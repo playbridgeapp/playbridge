@@ -10,7 +10,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +43,7 @@ fun DetectedVideosSheet(
     videos: List<DetectedVideo>,
     onDismiss: () -> Unit,
     onVideoClick: (DetectedVideo) -> Unit,
+    onDownload: (DetectedVideo) -> Unit,
     onClear: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -140,6 +150,7 @@ fun DetectedVideosSheet(
                                     onVideoClick(video)
                                 }
                             },
+                            onDownloadClick = { onDownload(video) },
                             onCopyClick = {
                                 copyToClipboard(context, video.url)
                                 Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
@@ -156,6 +167,7 @@ fun DetectedVideosSheet(
 private fun VideoItemDetailed(
     video: DetectedVideo,
     onPlayClick: (String?) -> Unit,
+    onDownloadClick: () -> Unit,
     onCopyClick: () -> Unit
 ) {
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
@@ -392,25 +404,25 @@ private fun VideoItemDetailed(
             }
 
             // Action buttons
-            Spacer(modifier = Modifier.height(12.dp))
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Copy URL button
+                // Download button
                 OutlinedButton(
-                    onClick = onCopyClick,
+                    onClick = onDownloadClick,
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
-                        Icons.Default.Share,
-                        contentDescription = "Copy URL",
+                        Icons.Default.Download,
+                        contentDescription = "Download",
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text("Copy URL")
+                    Text("Download")
                 }
-                
+
                 // Play/Send button
                 Button(
                     onClick = { onPlayClick(null) },
@@ -424,6 +436,22 @@ private fun VideoItemDetailed(
                     Spacer(Modifier.width(4.dp))
                     Text("Play on TV")
                 }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // Copy URL button (Secondary)
+            OutlinedButton(
+                onClick = onCopyClick,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                 Icon(
+                    Icons.Default.Share,
+                    contentDescription = "Copy URL",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("Copy URL")
             }
             
             Spacer(modifier = Modifier.height(8.dp))

@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">PlayBridge</string>
+    <string name="download_channel_name">Downloads</string>
+    <string name="download_channel_description">Active downloads</string>
 </resources>

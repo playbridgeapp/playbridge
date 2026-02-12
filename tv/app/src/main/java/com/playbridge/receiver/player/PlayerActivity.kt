@@ -250,12 +250,75 @@ class PlayerActivity : ComponentActivity() {
         Log.i(TAG, "Content Type: $contentType")
         Log.i(TAG, "===========================================")
 
+        releasePlayer()
+        
+        lifecycleScope.launch(Dispatchers.Main) {
+            var finalContentType = contentType
+            
+            // Pre-flight Sniffing: Always check content signature to be safe
+            Log.d(TAG, "Attempting pre-flight sniff...")
+            val sniffedType = sniffContent(url, intentHeaders)
+            if (sniffedType != null) {
+                Log.i(TAG, "Pre-flight sniff detected: $sniffedType")
+                finalContentType = sniffedType
+                android.widget.Toast.makeText(this@PlayerActivity, "Detected: $finalContentType", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                Log.d(TAG, "Pre-flight sniff returned null")
+            }
+            
+            startPlayback(url, title, finalContentType, intentHeaders)
+        }
+    }
+
+    private suspend fun sniffContent(url: String, headers: Map<String, String>?): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Use our unsafe client to handle potential SSL issues on local network/custom severs
+                val client = getUnsafeOkHttpClient()
+                val requestBuilder = okhttp3.Request.Builder()
+                    .url(url)
+                    // Fetch only the first 50 bytes to check the header signature
+                    .header("Range", "bytes=0-50")
+                
+                headers?.forEach { (k, v) -> 
+                     // Don't overwrite Range if it was somehow passed (unlikely)
+                     if (!k.equals("Range", ignoreCase = true)) {
+                         requestBuilder.header(k, v)
+                     }
+                }
+                
+                val request = requestBuilder.build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use null
+                    
+                    val source = response.body?.source() ?: return@use null
+                    
+                    // Peek or read the first few bytes
+                    // #EXTM3U is 7 bytes
+                    val headerBytes = try {
+                        source.readByteString(7)
+                    } catch (e: Exception) {
+                        return@use null
+                    }
+                    
+                    if (headerBytes.utf8().startsWith("#EXTM3U")) {
+                        return@use androidx.media3.common.MimeTypes.APPLICATION_M3U8
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Sniffing failed: ${e.message}")
+            }
+            return@withContext null
+        }
+    }
+
+    private fun startPlayback(url: String, title: String?, contentType: String?, intentHeaders: Map<String, String>?) {
+        Log.i(TAG, "Starting playback with Final Content Type: $contentType")
+
         currentUrl = url
         currentTitle = title
         currentContentType = contentType
         currentHeaders = intentHeaders
-
-        releasePlayer()
 
         // 1. Prepare Headers (Merge Intent headers with defaults)
         val requestProperties = HashMap<String, String>()
@@ -308,11 +371,20 @@ class PlayerActivity : ComponentActivity() {
             .setBufferDurationsMs(15000, 50000, 2500, 5000)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
+            
+        // Configure Track Selector to allow exceeding capabilities (for 4K on emulator/weak devices)
+        val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(this).apply {
+            setParameters(buildUponParameters()
+                .setExceedVideoConstraintsIfNecessary(true)
+                .setExceedRendererCapabilitiesIfNecessary(true)
+            )
+        }
 
         // Determine if content is HLS
         val isHls = (contentType == "application/vnd.apple.mpegurl") || 
                     (contentType == "application/x-mpegurl") ||
-                    (contentType.isNullOrEmpty() || (url.contains(".m3u8") || url.contains(".jpg")))
+                    (contentType == androidx.media3.common.MimeTypes.APPLICATION_M3U8) ||
+                    (contentType.isNullOrEmpty() && (url.contains(".m3u8") || url.contains(".jpg")))
 
         // 4. Build Player
         val mediaSourceFactory = if (isHls) {
@@ -328,6 +400,7 @@ class PlayerActivity : ComponentActivity() {
 
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
+            .setTrackSelector(trackSelector)
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
             .also { exoPlayer ->
