@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.util.Log
 import android.view.ViewGroup
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts as BaseActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -25,9 +27,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.common.InputImage
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.MultiFormatReader
+import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.NotFoundException
 import com.playbridge.sender.model.QRCodeData
 import com.playbridge.sender.model.parseQRCode
 import androidx.compose.material.icons.Icons
@@ -55,6 +59,19 @@ fun QRScannerScreen(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == 
                 PackageManager.PERMISSION_GRANTED
         )
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        contract = BaseActivityResultContracts.RequestPermission(),
+        onResult = { granted ->
+            hasCameraPermission = granted
+        }
+    )
+
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) {
+            launcher.launch(Manifest.permission.CAMERA)
+        }
     }
     
     var scannedData by remember { mutableStateOf<QRCodeData?>(null) }
@@ -95,40 +112,53 @@ fun QRScannerScreen(
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                             .build()
                             .also { analysis ->
+                                val reader = MultiFormatReader()
                                 analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
                                     if (!isScanning) {
                                         imageProxy.close()
                                         return@setAnalyzer
                                     }
                                     
-                                    @androidx.camera.core.ExperimentalGetImage
                                     val mediaImage = imageProxy.image
                                     if (mediaImage != null) {
-                                        val image = InputImage.fromMediaImage(
-                                            mediaImage,
-                                            imageProxy.imageInfo.rotationDegrees
+                                        // ImageProxy is typically YUV_420_888
+                                        // ZXing needs luminance data (Y plane)
+                                        val buffer = imageProxy.planes[0].buffer
+                                        val data = ByteArray(buffer.remaining())
+                                        buffer.get(data)
+                                        
+                                        val source = PlanarYUVLuminanceSource(
+                                            data,
+                                            imageProxy.width,
+                                            imageProxy.height,
+                                            0,
+                                            0,
+                                            imageProxy.width,
+                                            imageProxy.height,
+                                            false
                                         )
                                         
-                                        val scanner = BarcodeScanning.getClient()
-                                        scanner.process(image)
-                                            .addOnSuccessListener { barcodes ->
-                                                for (barcode in barcodes) {
-                                                    if (barcode.valueType == Barcode.TYPE_TEXT) {
-                                                        barcode.rawValue?.let { rawValue ->
-                                                            val qrData = parseQRCode(rawValue)
-                                                            if (qrData != null && isScanning) {
-                                                                isScanning = false
-                                                                scannedData = qrData
-                                                                Log.i(TAG, "Scanned: ${qrData.name} at ${qrData.ip}:${qrData.port}")
-                                                                onQRCodeScanned(qrData)
-                                                            }
-                                                        }
-                                                    }
+                                        val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
+                                        
+                                        try {
+                                            val result = reader.decodeWithState(binaryBitmap)
+                                            result.text?.let { rawValue ->
+                                                val qrData = parseQRCode(rawValue)
+                                                if (qrData != null && isScanning) {
+                                                    isScanning = false
+                                                    scannedData = qrData
+                                                    Log.i(TAG, "Scanned: ${qrData.name} at ${qrData.ip}:${qrData.port}")
+                                                    onQRCodeScanned(qrData)
                                                 }
                                             }
-                                            .addOnCompleteListener {
-                                                imageProxy.close()
-                                            }
+                                        } catch (e: NotFoundException) {
+                                            // No QR code found, expected
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Error scanning QR code", e)
+                                        } finally {
+                                            reader.reset()
+                                            imageProxy.close()
+                                        }
                                     } else {
                                         imageProxy.close()
                                     }
@@ -289,6 +319,17 @@ fun QRScannerScreen(
                 )
                 
                 Spacer(modifier = Modifier.height(24.dp))
+                
+                Button(
+                    onClick = { launcher.launch(Manifest.permission.CAMERA) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Text("Grant Permission")
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
                 
                 // Manual connect option when no camera permission
                 Button(

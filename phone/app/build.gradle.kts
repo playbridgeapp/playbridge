@@ -83,8 +83,8 @@ dependencies {
     // OkHttp WebSocket
     implementation(libs.okhttp)
     
-    // ML Kit Barcode Scanning
-    implementation(libs.mlkit.barcode)
+    // ZXing (Open Source Barcode Scanning)
+    implementation(libs.zxing.core)
     
     // CameraX
     implementation(libs.camerax.camera2)
