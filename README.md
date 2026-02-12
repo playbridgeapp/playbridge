@@ -1,13 +1,12 @@
 # PlayBridge
 
-PlayBridge is an open-source Android application suite that bridges the gap between your phone and Android TV.
+PlayBridge is an open-source Android application suite that bridges the gap between your phone and Android TV. Use PlayBridge to play what you want without the troubles of a clunky TV browser. Find your content on your phone, and seamlessly bridge it to your big screen.
 
 ## Features
 
 - **Send to TV**: Push URLs and content from your phone to your TV.
 - **TV Controls**: Use your phone as a remote control for the TV browser and player.
 - **Browser**: A fully functional web browser on your phone that syncs with your TV.
-- **Video Management**: Download and manage videos for offline viewing or casting.
 - **Open Source**: Built with privacy and transparency in mind.
 
 ## Components
