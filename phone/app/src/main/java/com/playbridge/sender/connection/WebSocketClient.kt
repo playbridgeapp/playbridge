@@ -2,6 +2,9 @@ package com.playbridge.sender.connection
 
 import android.util.Log
 import com.playbridge.sender.model.createPingJson
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,12 +76,22 @@ class WebSocketClient {
         
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.i(TAG, "Connected to $serverName")
-                _connectionState.value = ConnectionState.Connected(serverName)
+                Log.i(TAG, "Socket opened to $serverName")
+                // _connectionState.value = ConnectionState.Connected(serverName) // Wait for auth
                 retryCount = 0
                 
-                // Send initial ping to verify connection
+                // Send auth message immediately
                 scope.launch {
+                    try {
+                        val authJson = com.playbridge.sender.model.createAuthJson(targetConnection?.token ?: "")
+                        Log.d(TAG, "Sending auth: $authJson")
+                        webSocket.send(authJson)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to send auth", e)
+                        webSocket.close(1000, "Auth failed")
+                    }
+                    
+                    // Send initial ping to verify connection (or keep alive)
                     delay(500)
                     sendPing()
                 }
@@ -86,6 +99,35 @@ class WebSocketClient {
             
             override fun onMessage(webSocket: WebSocket, text: String) {
                 Log.d(TAG, "Received: $text")
+                
+                // Check for auth response
+                if (text.contains("auth_response")) {
+                    try {
+                        val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
+                        if (json is kotlinx.serialization.json.JsonObject) {
+                            val type = json["type"].toString().replace("\"", "")
+                            if (type == "auth_response") {
+                                val success = json["success"].toString() == "true"
+                                if (success) {
+                                    Log.i(TAG, "Authentication successful")
+                                    _connectionState.value = ConnectionState.Connected(serverName)
+                                    // Helper to update token if returned? 
+                                    // The token might be updated (e.g. exchanged PIN for token).
+                                    // We should expose a way to update the stored token.
+                                    // For now, let's just connect.
+                                } else {
+                                    Log.e(TAG, "Authentication failed")
+                                    _connectionState.value = ConnectionState.Error("Authentication failed")
+                                    webSocket.close(1000, "Auth failed")
+                                }
+                                return
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parsing auth response", e)
+                    }
+                }
+
                 scope.launch {
                     _messages.emit(text)
                 }

@@ -95,6 +95,22 @@ data class StatusMessage(
     val title: String? = null
 )
 
+// ==================== Authentication ====================
+
+@Serializable
+data class AuthMessage(
+    val type: String = "auth",
+    val token: String? = null,
+    val pin: String? = null
+)
+
+@Serializable
+data class AuthResponse(
+    val type: String = "auth_response",
+    val success: Boolean,
+    val token: String? = null
+)
+
 // ==================== Helper Functions ====================
 
 fun createPlayCommandJson(url: String, title: String? = null, headers: Map<String, String>? = null, contentType: String? = null): String {
@@ -216,6 +232,15 @@ data class ContextMessage(
 
 fun createContextQueryJson(): String {
     return protocolJson.encodeToString(ContextQueryCommand.serializer(), ContextQueryCommand())
+}
+
+fun createAuthJson(token: String): String {
+    // Determine if it's a PIN (4 chars) or full token
+    return if (token.length <= 4) {
+        protocolJson.encodeToString(AuthMessage.serializer(), AuthMessage(pin = token))
+    } else {
+        protocolJson.encodeToString(AuthMessage.serializer(), AuthMessage(token = token))
+    }
 }
 
 fun parseQRCode(jsonString: String): QRCodeData? {

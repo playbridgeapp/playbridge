@@ -123,4 +123,6 @@ dependencies {
     // Utils
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    
+    implementation(project(":protocol"))
 }

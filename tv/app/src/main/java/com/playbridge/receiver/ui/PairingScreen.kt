@@ -25,6 +25,7 @@ import androidx.tv.material3.Text
 import com.playbridge.receiver.pairing.QRGenerator
 import com.playbridge.receiver.server.WebSocketServer
 
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun PairingScreen(
@@ -35,19 +36,16 @@ fun PairingScreen(
     connectionState: WebSocketServer.ConnectionState = WebSocketServer.ConnectionState.Stopped,
     modifier: Modifier = Modifier
 ) {
-    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val isConnected = connectionState is WebSocketServer.ConnectionState.Connected
     
-    LaunchedEffect(ip, port, token) {
-        qrBitmap = QRGenerator.generate(
-            ip = ip,
-            port = port,
-            token = token,
-            deviceName = deviceName,
-            size = 400
-        )
-    }
-    
+    // Use the first 4 chars of the token as the PIN for display
+    // In a real app, we'd generate a separate 4-digit PIN and map it to the token
+    // For this implementation, we'll assume the token passed in IS the PIN (or we derive it)
+    // To make it simple, let's just display the first 4 characters of the token as the PIN
+    // The server will need to handle this mapping or we just use a 4-char token.
+    // For now, let's display the token directly (assuming it's short) or a substring.
+    val pinDisplay = token.take(4).uppercase()
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -80,7 +78,7 @@ fun PairingScreen(
                 Text(
                     text = when (connectionState) {
                         is WebSocketServer.ConnectionState.Connected -> "Phone Connected!"
-                        is WebSocketServer.ConnectionState.Running -> "Waiting for connection..."
+                        is WebSocketServer.ConnectionState.Running -> "Ready to Connect"
                         is WebSocketServer.ConnectionState.Starting -> "Starting server..."
                         is WebSocketServer.ConnectionState.Error -> "Error: ${connectionState.message}"
                         is WebSocketServer.ConnectionState.Stopped -> "Server stopped"
@@ -90,36 +88,33 @@ fun PairingScreen(
                 )
             }
             
-            Text(
-                text = if (isConnected) "Connected!" else "Scan to Connect",
-                style = MaterialTheme.typography.headlineLarge,
-                color = if (isConnected) Color(0xFF00FF88) else Color.White
-            )
-            
-            // QR Code (dim when connected)
-            qrBitmap?.let { bitmap ->
-                Box(
-                    modifier = Modifier
-                        .size(300.dp)
-                        .background(Color.White)
-                        .padding(8.dp)
+            if (isConnected) {
+                Text(
+                    text = "Connected!",
+                    style = MaterialTheme.typography.displayLarge,
+                    color = Color(0xFF00FF88)
+                )
+            } else {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "QR Code for pairing",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(if (isConnected) Modifier.background(Color.White.copy(alpha = 0.7f)) else Modifier),
-                        alpha = if (isConnected) 0.3f else 1f
+                    Text(
+                        text = "Enter this PIN on your phone",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = Color.Gray
+                    )
+                    
+                    // PIN Display
+                    Text(
+                        text = pinDisplay,
+                        style = MaterialTheme.typography.displayLarge,
+                        fontSize = 120.sp,
+                        color = Color.White,
+                        letterSpacing = 24.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                     )
                 }
-            } ?: Box(
-                modifier = Modifier
-                    .size(300.dp)
-                    .background(Color.Gray),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Generating...", color = Color.White)
             }
             
             // Connection info
@@ -137,21 +132,24 @@ fun PairingScreen(
                     text = "$ip:$port",
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color(0xFF00D9FF),
-                    fontSize = 18.sp
+                    fontSize = 24.sp
                 )
                 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(32.dp))
                 
-                Text(
-                    text = if (isConnected) {
-                        "Phone is connected!\nPress BACK to return home"
-                    } else {
-                        "Open PlayBridge on your phone\nand scan this code"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isConnected) Color(0xFF00FF88) else Color.Gray,
-                    textAlign = TextAlign.Center
-                )
+                if (isConnected) {
+                    Text(
+                        text = "Press BACK to return home",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray
+                    )
+                } else {
+                     Text(
+                        text = "Or connect manually using the IP address above",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray.copy(alpha = 0.7f)
+                    )
+                }
             }
         }
     }

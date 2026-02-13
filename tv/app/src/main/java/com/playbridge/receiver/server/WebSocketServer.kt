@@ -87,22 +87,65 @@ class WebSocketServer(
     
     private suspend fun handleConnection(session: WebSocketServerSession) {
         val clientId = java.util.UUID.randomUUID().toString()
-        
-        // TODO: Implement token validation from first message
-        // For now, accept all connections
-        
-        clients[clientId] = session
-        _connectionState.value = ConnectionState.Connected(clientId)
-        Log.i(TAG, "Client connected: $clientId")
+        Log.i(TAG, "New connection attempt: $clientId")
         
         try {
+            // Authentication phase
+            // Loop until we get an auth message, handling pings in the meantime
+            var isAuthenticated = false
+            
+            // Log the expected PIN for debugging
+            val pin = authToken.take(4).uppercase()
+            Log.i(TAG, "Expecting PIN: $pin for client: $clientId")
+
+            while (!isAuthenticated) {
+                val frame = session.incoming.receive()
+                if (frame is Frame.Text) {
+                    val text = frame.readText()
+                    Log.d(TAG, "Message received during auth: $text")
+                    
+                    if (text.contains("\"type\":\"ping\"") || text.contains("\"type\": \"ping\"")) {
+                        Log.d(TAG, "Received ping during auth, sending pong")
+                        session.send(Frame.Text(createPongJson()))
+                        continue
+                    }
+                    
+                    // Simple JSON parsing for auth message
+                    // Format: {"type": "auth", "pin": "1234"} OR {"type": "auth", "token": "uuid..."}
+                    if (text.contains("\"token\":\"$authToken\"")) {
+                        // Re-connection with valid token
+                        isAuthenticated = true
+                        Log.i(TAG, "Client authenticated with token")
+                        session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true}"))
+                    } else if (text.contains("\"pin\":\"$pin\"")) {
+                        isAuthenticated = true
+                        Log.i(TAG, "Client authenticated with PIN")
+                        // Send back the full token for future use
+                        session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true, \"token\": \"$authToken\"}"))
+                    } else {
+                         Log.w(TAG, "Authentication failed for message: $text")
+                         session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": false}"))
+                         session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid credentials"))
+                         return
+                    }
+                } else {
+                    // Ignore non-text frames or close if necessary
+                    if (frame is Frame.Close) {
+                        Log.i(TAG, "Client closed connection during auth")
+                        return
+                    }
+                }
+            }
+            
+            // Authentication successful, register client
+            clients[clientId] = session
+            _connectionState.value = ConnectionState.Connected(clientId)
+            Log.i(TAG, "Client registered: $clientId")
+
             for (frame in session.incoming) {
                 when (frame) {
                     is Frame.Text -> {
                         val text = frame.readText()
-                        // Log.d(TAG, "=== MESSAGE RECEIVED ===")
-                        // Log.d(TAG, "Raw message: $text")
-                        
                         val command = parseCommand(text)
                         
                         // Only log non-mouse commands to avoid spam
@@ -112,7 +155,6 @@ class WebSocketServer(
                         
                         when (command) {
                             is Command.Ping -> {
-                                // Log.d(TAG, "Ping received, sending pong")
                                 session.send(Frame.Text(createPongJson()))
                             }
                             is Command.Play -> {
@@ -120,7 +162,6 @@ class WebSocketServer(
                                 _commands.emit(command)
                             }
                             else -> {
-                                // Log.d(TAG, "Emitting command to flow")
                                 _commands.emit(command)
                             }
                         }
@@ -131,6 +172,8 @@ class WebSocketServer(
                     else -> {}
                 }
             }
+        } catch (e: kotlinx.coroutines.channels.ClosedReceiveChannelException) {
+            Log.i(TAG, "Channel closed by client: $clientId")
         } catch (e: Exception) {
             Log.e(TAG, "Connection error for client $clientId", e)
         } finally {

@@ -1,4 +1,34 @@
-deploymentTargetSelector.xml
+# Android/IntelliJ
+*.iml
 .idea
-keystore
+.gradle
+build/
+app/build/
+.cxx/
+
+# Local configuration file (sdk.dir, ndk.dir, etc.)
+local.properties
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+
+# Keystore
+*.jks
+*.keystore
+keystore/
+
+# Google Services
+google-services.json
+
+# Captures
+captures/
+
+# OS Specific
+.DS_Store
+Thumbs.db
+
+# Project Specific
+deploymentTargetSelector.xml
 tv/app/release

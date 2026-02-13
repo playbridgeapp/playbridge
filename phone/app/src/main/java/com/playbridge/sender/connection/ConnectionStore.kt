@@ -61,6 +61,9 @@ class ConnectionStore(private val context: Context) {
     /**
      * Add to history
      */
+    /**
+     * Add to history
+     */
     suspend fun addToHistory(device: TvDevice) {
         context.dataStore.edit { prefs ->
             val historyJson = prefs[DEVICE_HISTORY]
@@ -80,7 +83,31 @@ class ConnectionStore(private val context: Context) {
             // Add to front
             val newHistory = (listOf(device) + filtered).take(10)
             
-            prefs[DEVICE_HISTORY] = protocolJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()), newHistory)
+            prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()), 
+                newHistory
+            )
+        }
+    }
+
+    /**
+     * Remove from history
+     */
+    suspend fun removeFromHistory(device: TvDevice) {
+        context.dataStore.edit { prefs ->
+            val historyJson = prefs[DEVICE_HISTORY] ?: return@edit
+            val currentHistory = try {
+                protocolJson.decodeFromString<List<TvDevice>>(historyJson)
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+            val newHistory = currentHistory.filterNot { it.ip == device.ip && it.port == device.port }
+            
+            prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()), 
+                newHistory
+            )
         }
     }
     

@@ -47,9 +47,13 @@ class ServerService : Service() {
         val token: String
     )
     
+    private lateinit var nsdManager: android.net.nsd.NsdManager
+    private var registrationListener: android.net.nsd.NsdManager.RegistrationListener? = null
+    
     override fun onCreate() {
         super.onCreate()
         pairingStore = PairingStore(applicationContext)
+        nsdManager = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
         createNotificationChannel()
     }
     
@@ -57,6 +61,40 @@ class ServerService : Service() {
         startForeground(NOTIFICATION_ID, createNotification())
         startServer()
         return START_STICKY
+    }
+    
+    private fun registerNsdService(port: Int) {
+        if (registrationListener != null) return // Already registered
+        
+        val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
+            serviceName = "PlayBridge TV"
+            serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
+            setPort(port)
+        }
+        
+        registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
+            override fun onServiceRegistered(NsdServiceInfo: android.net.nsd.NsdServiceInfo) {
+                Log.d(TAG, "Service registered: ${NsdServiceInfo.serviceName}")
+            }
+            
+            override fun onRegistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                Log.e(TAG, "Registration failed: $errorCode")
+            }
+            
+            override fun onServiceUnregistered(arg0: android.net.nsd.NsdServiceInfo) {
+                Log.d(TAG, "Service unregistered")
+            }
+            
+            override fun onUnregistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                Log.e(TAG, "Unregistration failed: $errorCode")
+            }
+        }
+        
+        nsdManager.registerService(
+            serviceInfo,
+            android.net.nsd.NsdManager.PROTOCOL_DNS_SD,
+            registrationListener
+        )
     }
     
     private fun startServer() {
@@ -67,6 +105,9 @@ class ServerService : Service() {
             
             webSocketServer = WebSocketServer(port = port, authToken = token).also { server ->
                 server.start()
+                
+                // Register NSD service
+                registerNsdService(port)
                 
                 _serverInfo.value = ServerInfo(ip = ip, port = port, token = token)
                 
@@ -275,6 +316,14 @@ class ServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     
     override fun onDestroy() {
+        if (registrationListener != null) {
+            try {
+                nsdManager.unregisterService(registrationListener)
+            } catch (e: IllegalArgumentException) {
+                // Ignore if service is not registered
+            }
+            registrationListener = null
+        }
         webSocketServer?.stop()
         scope.cancel()
         super.onDestroy()

@@ -22,4 +22,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "PlayBridge"
 include(":app")
+include(":protocol")
+project(":protocol").projectDir = file("../protocol")
  

@@ -46,9 +46,10 @@ import mozilla.components.lib.state.Store
 
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.connection.NsdHelper
 import com.playbridge.sender.model.QRCodeData
 import com.playbridge.sender.model.TvDevice
-import com.playbridge.sender.ui.QRScannerScreen
+import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import mozilla.components.lib.state.ext.flow
 
@@ -60,12 +61,14 @@ class BrowserActivity : ComponentActivity() {
     
     private val webSocketClient = WebSocketClient()
     private lateinit var connectionStore: ConnectionStore
+    private lateinit var nsdHelper: NsdHelper
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         connectionStore = ConnectionStore(applicationContext)
+        nsdHelper = NsdHelper(applicationContext)
         
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
@@ -788,7 +791,7 @@ class BrowserActivity : ComponentActivity() {
                                                     leadingIcon = { Icon(connectIcon, null, tint = connectColor) },
                                                     onClick = {
                                                         menuExpanded = false
-                                                        currentScreen = Screen.Scanner
+                                                        currentScreen = Screen.Connection
                                                     },
                                                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                 )
@@ -823,7 +826,7 @@ class BrowserActivity : ComponentActivity() {
                                     }
                                 )
                             }
-                            Screen.Scanner -> {
+                            Screen.Connection -> {
                                 @OptIn(ExperimentalMaterial3Api::class)
                                 TopAppBar(
                                     title = { Text("Connect to TV") },
@@ -931,31 +934,26 @@ class BrowserActivity : ComponentActivity() {
                                                 }
                                             )
                                         }
-                                        Screen.Scanner -> {
+                                        Screen.Connection -> {
                                             BackHandler { currentScreen = Screen.Browser }
-                                            QRScannerScreen(
+                                            ConnectionScreen(
+                                                nsdHelper = nsdHelper,
                                                 history = history,
-                                                onQRCodeScanned = { qrData ->
+                                                onConnect = { device ->
                                                     scope.launch {
-                                                        Log.d(TAG, "QR Code scanned: ${qrData.name} at ${qrData.ip}:${qrData.port}")
+                                                        Log.d(TAG, "Connecting to: ${device.name} at ${device.ip}:${device.port}")
                                                         
                                                         // Save TV device
-                                                        val tvDevice = TvDevice(
-                                                            ip = qrData.ip,
-                                                            port = qrData.port,
-                                                            token = qrData.token,
-                                                            name = qrData.name
-                                                        )
-                                                        connectionStore.saveTvDevice(tvDevice)
-                                                        connectionStore.addToHistory(tvDevice)
+                                                        connectionStore.saveTvDevice(device)
+                                                        connectionStore.addToHistory(device)
                                                         Log.d(TAG, "TV device saved")
                                                         
                                                         // Connect
                                                         webSocketClient.connect(
-                                                            qrData.ip,
-                                                            qrData.port,
-                                                            qrData.token,
-                                                            qrData.name
+                                                            device.ip,
+                                                            device.port,
+                                                            device.token,
+                                                            device.name
                                                         )
                                                         Log.d(TAG, "Connecting to TV...")
                                                         
@@ -963,13 +961,18 @@ class BrowserActivity : ComponentActivity() {
                                                         runOnUiThread {
                                                             Toast.makeText(
                                                                 this@BrowserActivity,
-                                                                "Connecting to ${qrData.name}...",
+                                                                "Connecting to ${device.name}...",
                                                                 Toast.LENGTH_SHORT
                                                             ).show()
                                                         }
                                                         
                                                         // Return to browser
                                                         currentScreen = Screen.Browser
+                                                    }
+                                                },
+                                                onRemove = { device ->
+                                                    scope.launch {
+                                                        connectionStore.removeFromHistory(device)
                                                     }
                                                 }
                                             )
@@ -1161,6 +1164,6 @@ sealed class Screen {
     object Browser : Screen()
     object Tabs : Screen()
     object Extensions : Screen()
-    object Scanner : Screen()
+    object Connection : Screen()
     object Downloads : Screen()
 }
