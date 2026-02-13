@@ -85,6 +85,7 @@ jobs:
       with:
         name: phone-release-apk
         path: phone/app/build/outputs/apk/**/*.apk
+        retention-days: 1
 
   build-tv:
     needs: check-version
@@ -134,6 +135,7 @@ jobs:
       with:
         name: tv-release-apk
         path: tv/app/build/outputs/apk/**/*.apk
+        retention-days: 1
 
   release:
     needs: [check-version, build-phone, build-tv]
