@@ -324,7 +324,10 @@ class ServerService : Service() {
             }
             registrationListener = null
         }
+        // Stop server synchronously
         webSocketServer?.stop()
+        webSocketServer = null
+        // Cancel scope after stopping server
         scope.cancel()
         super.onDestroy()
     }

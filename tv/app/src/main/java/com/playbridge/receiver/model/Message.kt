@@ -100,6 +100,15 @@ data class StatusMessage(
     val title: String? = null
 )
 
+// ==================== Authentication ====================
+
+@Serializable
+data class AuthMessage(
+    val type: String = "auth",
+    val token: String? = null,
+    val pin: String? = null
+)
+
 // ==================== Heartbeat ====================
 
 @Serializable

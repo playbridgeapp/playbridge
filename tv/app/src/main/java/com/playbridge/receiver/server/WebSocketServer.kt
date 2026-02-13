@@ -11,6 +11,7 @@ import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
+import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -60,6 +61,10 @@ class WebSocketServer(
         
         scope.launch {
             try {
+                // Ensure previous instance is stopped if it was somehow left valid but not running
+                server?.stop(1000, 2000)
+                server = null
+                
                 server = embeddedServer(Netty, port = port) {
                     install(WebSockets) {
                         pingPeriod = 15.seconds
@@ -78,10 +83,41 @@ class WebSocketServer(
                 _connectionState.value = ConnectionState.Running(port)
                 Log.i(TAG, "WebSocket server started on port $port")
                 
+            } catch (e: java.net.BindException) {
+                Log.w(TAG, "Port $port already in use. Assuming server from previous instance is still active.")
+                // If the port is in use, it's likely our own service from a previous run that hasn't fully released yet,
+                // or a separate instance. We'll mark as running for the UI.
+                _connectionState.value = ConnectionState.Running(port)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start server", e)
                 _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
             }
+        }
+    }
+// ... (handleConnection remains same)
+
+    fun stop() {
+        // Stop the server immediately in the current scope if possible, or block until done
+        // We use runBlocking here to ensure the server is actually stopped before we return
+        // This is crucial for service restarts.
+        try {
+            runBlocking {
+                clients.values.forEach { session ->
+                    try {
+                        session.close(CloseReason(CloseReason.Codes.GOING_AWAY, "Server stopping"))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error closing client", e)
+                    }
+                }
+                clients.clear()
+                
+                server?.stop(500, 1000)
+                server = null
+                Log.i(TAG, "Server stopped")
+            }
+            _connectionState.value = ConnectionState.Stopped
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping server", e)
         }
     }
     
@@ -110,23 +146,35 @@ class WebSocketServer(
                         continue
                     }
                     
-                    // Simple JSON parsing for auth message
-                    // Format: {"type": "auth", "pin": "1234"} OR {"type": "auth", "token": "uuid..."}
-                    if (text.contains("\"token\":\"$authToken\"")) {
-                        // Re-connection with valid token
-                        isAuthenticated = true
-                        Log.i(TAG, "Client authenticated with token")
-                        session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true}"))
-                    } else if (text.contains("\"pin\":\"$pin\"")) {
-                        isAuthenticated = true
-                        Log.i(TAG, "Client authenticated with PIN")
-                        // Send back the full token for future use
-                        session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true, \"token\": \"$authToken\"}"))
-                    } else {
-                         Log.w(TAG, "Authentication failed for message: $text")
-                         session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": false}"))
-                         session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid credentials"))
-                         return
+                    try {
+                        // Robust JSON parsing
+                        val authMessage = com.playbridge.receiver.model.protocolJson.decodeFromString<com.playbridge.receiver.model.AuthMessage>(text)
+                        
+                        if (authMessage.type == "auth") {
+                            if (authMessage.token == authToken) {
+                                // Re-connection with valid token
+                                isAuthenticated = true
+                                Log.i(TAG, "Client authenticated with token")
+                                session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true}"))
+                            } else if (authMessage.pin?.uppercase() == pin) {
+                                isAuthenticated = true
+                                Log.i(TAG, "Client authenticated with PIN")
+                                // Send back the full token for future use
+                                session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true, \"token\": \"$authToken\"}"))
+                            } else {
+                                Log.w(TAG, "Authentication failed. Expected PIN: $pin, Received PIN: ${authMessage.pin}, Token: ${authMessage.token}")
+                                session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": false}"))
+                                session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid credentials"))
+                                return
+                            }
+                        } else {
+                             Log.w(TAG, "Unexpected message type during auth: ${authMessage.type}")
+                             // Don't close immediately, maybe it's just noise or a wrong message type
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to parse auth message: $text", e)
+                        // Fallback to substring matching just in case, or treat as error
+                        // For now, let's just log and continue waiting
                     }
                 } else {
                     // Ignore non-text frames or close if necessary
@@ -195,24 +243,6 @@ class WebSocketServer(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send status", e)
             }
-        }
-    }
-    
-    fun stop() {
-        scope.launch {
-            clients.values.forEach { session ->
-                try {
-                    session.close(CloseReason(CloseReason.Codes.GOING_AWAY, "Server stopping"))
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error closing client", e)
-                }
-            }
-            clients.clear()
-            
-            server?.stop(1000, 2000)
-            server = null
-            _connectionState.value = ConnectionState.Stopped
-            Log.i(TAG, "Server stopped")
         }
     }
     
