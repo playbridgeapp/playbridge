@@ -66,8 +66,10 @@ class ServerService : Service() {
     private fun registerNsdService(port: Int) {
         if (registrationListener != null) return // Already registered
         
+        val deviceName = android.provider.Settings.Global.getString(contentResolver, android.provider.Settings.Global.DEVICE_NAME) ?: Build.MODEL
+        
         val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
-            serviceName = "PlayBridge TV"
+            serviceName = deviceName
             serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
             setPort(port)
         }
