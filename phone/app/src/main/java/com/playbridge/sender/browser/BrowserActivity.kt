@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -52,6 +53,7 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import mozilla.components.lib.state.ext.flow
+import kotlinx.coroutines.flow.first
 
 class BrowserActivity : ComponentActivity() {
     
@@ -161,8 +163,8 @@ class BrowserActivity : ComponentActivity() {
             // Existing state variables
             var currentUrl by remember { mutableStateOf("https://www.google.com") }
             var isLoading by remember { mutableStateOf(false) }
-            var canGoBack by remember { mutableStateOf(false) }
-            var canGoForward by remember { mutableStateOf(false) }
+            var browserCanGoBack by remember { mutableStateOf(false) }
+            var browserCanGoForward by remember { mutableStateOf(false) }
             var menuExpanded by remember { mutableStateOf(false) }
             
             // Update UI state from session
@@ -191,13 +193,28 @@ class BrowserActivity : ComponentActivity() {
             
             // Listen for context messages from TV
             LaunchedEffect(Unit) {
-                webSocketClient.messages.collect { message ->
-                    try {
-                        val json = org.json.JSONObject(message)
-                        if (json.optString("type") == "context") {
-                            tvActiveContext = json.optString("active", "idle")
+                launch {
+                    webSocketClient.messages.collect { message ->
+                        try {
+                            val json = org.json.JSONObject(message)
+                            if (json.optString("type") == "context") {
+                                tvActiveContext = json.optString("active", "idle")
+                            }
+                        } catch (_: Exception) { }
+                    }
+                }
+                
+                // Listen for new auth tokens (e.g. after PIN exchange)
+                launch {
+                    webSocketClient.newToken.collect { token ->
+                        val currentDevice = connectionStore.tvDevice.first()
+                        if (currentDevice != null) {
+                            Log.i(TAG, "Updating stored token for ${currentDevice.ip}")
+                            val updatedDevice = currentDevice.copy(token = token)
+                            connectionStore.saveTvDevice(updatedDevice)
+                            connectionStore.addToHistory(updatedDevice)
                         }
-                    } catch (_: Exception) { }
+                    }
                 }
             }
             
@@ -264,7 +281,7 @@ class BrowserActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(Icons.Default.OpenInNew, null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.AutoMirrored.Filled.OpenInNew, null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text("Open in new tab")
                             }
@@ -359,9 +376,9 @@ class BrowserActivity : ComponentActivity() {
                             // ))
                         }
                     }
-                    override fun onNavigationStateChange(canGoBackNow: Boolean?, canGoForwardNow: Boolean?) {
-                        canGoBackNow?.let { canGoBack = it }
-                        canGoForwardNow?.let { canGoForward = it }
+                    override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
+                        canGoBack?.let { browserCanGoBack = it }
+                        canGoForward?.let { browserCanGoForward = it }
                     }
                     
                     // Detect video count from page title [PlayBridge:X] marker
@@ -643,8 +660,8 @@ class BrowserActivity : ComponentActivity() {
                                     BrowserToolbar(
                                         currentUrl = currentUrl,
                                         isLoading = isLoading,
-                                        canGoBack = canGoBack,
-                                        canGoForward = canGoForward,
+                                        canGoBack = browserCanGoBack,
+                                        canGoForward = browserCanGoForward,
                                         videoCount = videoCount,
                                         tabCount = browserState.tabs.size,
                                         onUrlChange = { },
@@ -678,12 +695,12 @@ class BrowserActivity : ComponentActivity() {
                                                             session.goBack()
                                                             menuExpanded = false
                                                         },
-                                                        enabled = canGoBack
+                                                        enabled = browserCanGoBack
                                                     ) {
                                                         Icon(
                                                             Icons.AutoMirrored.Filled.ArrowBack,
                                                             "Back",
-                                                            tint = if (canGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                            tint = if (browserCanGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                                         )
                                                     }
                                                     IconButton(
@@ -691,12 +708,12 @@ class BrowserActivity : ComponentActivity() {
                                                             session.goForward()
                                                             menuExpanded = false
                                                         },
-                                                        enabled = canGoForward
+                                                        enabled = browserCanGoForward
                                                     ) {
                                                         Icon(
                                                             Icons.AutoMirrored.Filled.ArrowForward,
                                                             "Forward",
-                                                            tint = if (canGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                            tint = if (browserCanGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                                         )
                                                     }
                                                     IconButton(
@@ -866,7 +883,7 @@ class BrowserActivity : ComponentActivity() {
                                         Screen.Browser -> {
                                             // Browser: first back goes to browser history, second back exits
                                             BackHandler {
-                                                if (canGoBack) {
+                                                if (browserCanGoBack) {
                                                     session.goBack()
                                                 } else {
                                                     val currentTime = System.currentTimeMillis()

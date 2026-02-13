@@ -35,6 +35,9 @@ class WebSocketClient {
     
     private val _messages = MutableSharedFlow<String>(replay = 0)
     val messages = _messages.asSharedFlow()
+
+    private val _newToken = MutableSharedFlow<String>(replay = 0)
+    val newToken = _newToken.asSharedFlow()
     
     private var retryCount = 0
     private val MAX_RETRIES = 60 // 5 minutes
@@ -111,10 +114,13 @@ class WebSocketClient {
                                 if (success) {
                                     Log.i(TAG, "Authentication successful")
                                     _connectionState.value = ConnectionState.Connected(serverName)
-                                    // Helper to update token if returned? 
-                                    // The token might be updated (e.g. exchanged PIN for token).
-                                    // We should expose a way to update the stored token.
-                                    // For now, let's just connect.
+                                    // Helper to update token if returned
+                                    val token = json["token"]?.toString()?.replace("\"", "")
+                                    if (!token.isNullOrEmpty() && token != "null") {
+                                        scope.launch {
+                                            _newToken.emit(token)
+                                        }
+                                    }
                                 } else {
                                     Log.e(TAG, "Authentication failed")
                                     _connectionState.value = ConnectionState.Error("Authentication failed")
