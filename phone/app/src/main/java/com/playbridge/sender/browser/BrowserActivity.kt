@@ -141,7 +141,32 @@ class BrowserActivity : ComponentActivity() {
                 }
                 // Cleanup sessions for closed tabs
                 val activeTabIds = browserState.tabs.map { it.id }.toSet()
-                sessions.keys.retainAll(activeTabIds) 
+                // Find sessions that need to be removed
+                val removedSessionIds = sessions.keys.filter { !activeTabIds.contains(it) }
+                
+                removedSessionIds.forEach { id ->
+                    val session = sessions[id]
+                    if (session != null) {
+                        try {
+                            // Stop loading first
+                            session.stopLoading()
+                            
+                            // Use reflection to close the internal GeckoSession
+                            // This ensures media playback stops immediately
+                            val geckoEngineSession = session as? GeckoEngineSession
+                            if (geckoEngineSession != null) {
+                                val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
+                                field.isAccessible = true
+                                val internalSession = field.get(geckoEngineSession) as? GeckoSession
+                                internalSession?.close()
+                                Log.d(TAG, "Closed GeckoSession for tab $id")
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error closing session for tab $id", e)
+                        }
+                    }
+                    sessions.remove(id)
+                }
             }
             
             val selectedTabId = browserState.selectedTabId
