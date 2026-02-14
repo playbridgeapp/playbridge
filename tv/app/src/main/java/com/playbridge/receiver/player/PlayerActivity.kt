@@ -25,6 +25,10 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
+import com.playbridge.receiver.ui.theme.PlayBridgeTVTheme
+import com.playbridge.receiver.player.TrackSelectionDialog
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 
 private const val TAG = "PlayerActivity"
 
@@ -49,6 +53,7 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var controlsPanel: android.view.View
     private lateinit var seekBar: android.widget.SeekBar
     private lateinit var playPauseButton: android.widget.ImageButton
+    private lateinit var tracksButton: android.widget.ImageButton
     private lateinit var timeText: android.widget.TextView
     
     private val hideControlsHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -143,6 +148,7 @@ class PlayerActivity : ComponentActivity() {
         controlsPanel = findViewById(com.playbridge.receiver.R.id.controls_panel)
         seekBar = findViewById(com.playbridge.receiver.R.id.player_seekbar)
         playPauseButton = findViewById(com.playbridge.receiver.R.id.btn_play_pause)
+        tracksButton = findViewById(com.playbridge.receiver.R.id.btn_tracks)
         timeText = findViewById(com.playbridge.receiver.R.id.tv_duration)
         
         // Setup UI handlers
@@ -190,6 +196,9 @@ class PlayerActivity : ComponentActivity() {
     }
     
     private fun initializePlayer() {
+        // Release any existing player to prevent leaks/double playback
+        releasePlayer()
+
         // Configure load control for better live streaming performance
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
@@ -392,11 +401,15 @@ class PlayerActivity : ComponentActivity() {
             androidx.media3.exoplayer.hls.HlsMediaSource.Factory(dataSourceFactory)
                 .setAllowChunklessPreparation(true)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
+                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         } else {
             Log.i(TAG, "Using DefaultMediaSourceFactory")
              androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dataSourceFactory)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         }
+
+        // Release any existing player to prevent leaks/double playback
+        releasePlayer()
 
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
@@ -554,6 +567,27 @@ class PlayerActivity : ComponentActivity() {
     }
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // If controls are visible and we are focused on a navigable element,
+        // let the system handle navigation (DPAD directions and CENTER/ENTER)
+        if (controlsRoot.visibility == android.view.View.VISIBLE && currentFocus != null) {
+            val focusedId = currentFocus?.id
+            val isNavigable = focusedId == com.playbridge.receiver.R.id.btn_play_pause || 
+                              focusedId == com.playbridge.receiver.R.id.btn_tracks ||
+                              focusedId == com.playbridge.receiver.R.id.player_seekbar
+            
+            if (isNavigable) {
+                // Let system handle navigation between buttons and click events
+                if (focusedId == com.playbridge.receiver.R.id.player_seekbar && 
+                    (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                    // Fallthrough to custom scrubbing logic below
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+                           keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                           keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                    return super.onKeyDown(keyCode, event)
+                }
+            }
+        }
+
         // Handle TV remote D-pad controls
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
@@ -596,7 +630,7 @@ class PlayerActivity : ComponentActivity() {
                 return true
             }
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                 // Show full controls on up/down
+                 // Show full controls on up/down if not already navigating
                  if (!isScrubbing) showControlsUI()
                  return true
             }
@@ -723,11 +757,15 @@ class PlayerActivity : ComponentActivity() {
             showControlsUI() // Keep UI visible on interaction
         }
         
+        tracksButton.setOnClickListener {
+            showTrackSelectionDialog()
+        }
+        
         seekBar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
                     val duration = player?.duration ?: 0
-                    val newPosition = (duration * progress) / 500
+                    val newPosition = (duration * progress) / 1000
                     timeText.text = formatTime(newPosition, duration)
                 }
             }
@@ -736,11 +774,35 @@ class PlayerActivity : ComponentActivity() {
             }
             override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {
                 val duration = player?.duration ?: 0
-                val newPosition = (duration * seekBar!!.progress) / 500
+                val newPosition = (duration * seekBar!!.progress) / 1000
                 player?.seekTo(newPosition)
                 showSeekUI() // Show just seekbar after seeking
             }
         })
+        
+        // Handle D-pad events on SeekBar to use our custom scrubbing logic (acceleration + delay)
+        // instead of the default SeekBar behavior which is too slow/simple for TV.
+        seekBar.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        val repeatCount = event.repeatCount
+                        val multiplier = if (repeatCount > 10) 5 else 1
+                        handleScrubbing(-10000L * multiplier)
+                        showSeekUI()
+                        return@setOnKeyListener true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        val repeatCount = event.repeatCount
+                        val multiplier = if (repeatCount > 10) 5 else 1
+                        handleScrubbing(10000L * multiplier)
+                        showSeekUI()
+                        return@setOnKeyListener true
+                    }
+                }
+            }
+            false
+        }
     }
     
     private fun formatTime(currentMs: Long, durationMs: Long): String {
@@ -774,6 +836,11 @@ class PlayerActivity : ComponentActivity() {
         updatePlayPauseIcon()
         if (!isScrubbing) updateProgress()
         startUpdateProgress()
+        
+        // Request focus on Play/Pause button if nothing is focused to enable D-pad navigation
+        if (currentFocus == null || currentFocus == playerView) {
+             playPauseButton.requestFocus()
+        }
         
         hideControlsHandler.removeCallbacks(hideControlsRunnable)
         hideControlsHandler.postDelayed(hideControlsRunnable, 3000)
@@ -861,6 +928,122 @@ class PlayerActivity : ComponentActivity() {
      * Custom error handling policy to retry on ParserException.
      * Use with caution: infinite retries can cause loops if the stream is truly broken.
      */
+    private fun showTrackSelectionDialog() {
+        val player = this.player ?: return
+        val currentTracks = player.currentTracks
+        
+        // Pause playback while selecting tracks
+        val wasPlaying = player.isPlaying
+        if (wasPlaying) player.pause()
+        
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val composeView = androidx.compose.ui.platform.ComposeView(this)
+        
+        // Required for Compose to work inside a Dialog backed by a View
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+        
+        composeView.setContent {
+            PlayBridgeTVTheme {
+                TrackSelectionDialog(
+                    tracks = currentTracks,
+                    trackSelectionParameters = player.trackSelectionParameters,
+                    onDismiss = {
+                        dialog.dismiss()
+                        if (wasPlaying) player.play()
+                        showControlsUI()
+                    },
+                    onTrackSelected = { trackType, format ->
+                        applyTrackSelection(trackType, format)
+                        android.widget.Toast.makeText(this, "Track selected", android.widget.Toast.LENGTH_SHORT).show()
+                        dialog.dismiss()
+                        if (wasPlaying) player.play()
+                        showControlsUI()
+                    }
+                )
+            }
+        }
+        
+        dialog.setContentView(composeView)
+        dialog.show()
+    }
+    
+    private fun applyTrackSelection(trackType: Int, format: androidx.media3.common.Format?) {
+        val player = this.player ?: return
+        
+        val parametersBuilder = player.trackSelectionParameters.buildUpon()
+        
+        if (format == null) {
+            // Auto / Default / Off
+            when (trackType) {
+                 androidx.media3.common.C.TRACK_TYPE_VIDEO -> {
+                     parametersBuilder
+                         .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_VIDEO)
+                         .setMaxVideoSizeSd() // reset to default constraints if any
+                         .setMaxVideoBitrate(Int.MAX_VALUE)
+                 }
+                 androidx.media3.common.C.TRACK_TYPE_AUDIO -> {
+                     parametersBuilder
+                         .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
+                         .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
+                 }
+                 androidx.media3.common.C.TRACK_TYPE_TEXT -> {
+                     parametersBuilder
+                         .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_TEXT)
+                         .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true) // Off
+                 }
+            }
+        } else {
+            // Specific track selection using TrackSelectionOverride
+            // We need to find the specific TrackGroup that contains this format
+            val tracks = player.currentTracks
+            val groups = tracks.groups.filter { it.type == trackType }
+            
+            var foundGroup: androidx.media3.common.TrackGroup? = null
+            var trackIndex = -1
+            
+            for (group in groups) {
+                for (i in 0 until group.length) {
+                    if (group.getTrackFormat(i) == format) {
+                        foundGroup = group.mediaTrackGroup
+                        trackIndex = i
+                        break
+                    }
+                }
+                if (foundGroup != null) break
+            }
+            
+            if (foundGroup != null) {
+                parametersBuilder.setOverrideForType(
+                    androidx.media3.common.TrackSelectionOverride(foundGroup, trackIndex)
+                )
+                 parametersBuilder.setTrackTypeDisabled(trackType, false)
+            }
+        }
+        
+        Log.i(TAG, "Applied track selection parameters for type $trackType")
+        
+        player.trackSelectionParameters = parametersBuilder.build()
+        
+        // Force a hard reset of the player to ensure decoders are flushed and surface is reset.
+        // This fixes issues on some TV devices where switching tracks causes artifacts 
+        // (looping old video) or scaling issues (new video in top-left corner).
+        val currentPos = player.currentPosition
+        val currentWindowIndex = player.currentMediaItemIndex
+        val playWhenReady = player.playWhenReady
+        
+        // Stop the player (releases decoders)
+        player.stop()
+        
+        // Re-prepare at the same position
+        // Note: We don't need to setMediaItem again as stop(false) retains the playlist.
+        // However, some devices might need a full reload if the surface state is corrupted.
+        // For now, try simple re-prepare. If that fails, we might need setMediaItem again.
+        player.seekTo(currentWindowIndex, currentPos)
+        player.prepare()
+        player.playWhenReady = playWhenReady
+    }
+
     private class CustomLoadErrorHandlingPolicy : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
         override fun getRetryDelayMsFor(loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
             val exception = loadErrorInfo.exception

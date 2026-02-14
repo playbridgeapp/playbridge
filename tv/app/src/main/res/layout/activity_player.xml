@@ -9,7 +9,6 @@
         android:id="@+id/player_view"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        app:surface_type="texture_view"
         app:resize_mode="fit"
         app:use_controller="false" />
 
@@ -34,7 +33,7 @@
             android:thumbTint="@android:color/transparent"
             android:splitTrack="false"
             android:background="@android:color/transparent"
-            android:focusable="false"
+            android:focusable="true"
             android:clickable="false" />
 
         <!-- Controls Container (Bottom Left, above seekbar) -->
@@ -56,8 +55,21 @@
                 android:src="@android:drawable/ic_media_play"
                 android:contentDescription="Play/Pause" 
                 android:scaleType="fitCenter"
-                android:focusable="false"
-                android:clickable="false" />
+                android:focusable="true"
+                android:clickable="true" />
+            
+            <ImageButton
+                android:id="@+id/btn_tracks"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="24dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_preferences"
+                android:contentDescription="Tracks / Settings"
+                android:scaleType="fitCenter"
+                android:focusable="true"
+                android:clickable="true"
+                android:nextFocusLeft="@id/btn_play_pause" />
 
             <TextView
                 android:id="@+id/tv_duration"
