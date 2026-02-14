@@ -93,6 +93,8 @@ com.playbridge.sender/
 | WebSocket | [WebSocketClient.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/connection/WebSocketClient.kt) | OkHttp-based client with auto-retry (60 attempts, 5s intervals) |
 | Video Detection | [background.js](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/background.js) | Browser extension detecting video content types |
 | Content Script | [content.js](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/content.js) | Content script for in-page video detection |
+| Find on Page | [FindOnPageBar.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/FindOnPageBar.kt) | UI for finding text within web pages |
+| Service Discovery | [NsdHelper.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/connection/NsdHelper.kt) | Network Service Discovery to find TV services |
 
 ### Dependencies
 - **GeckoView** (Mozilla) v147 - Full Firefox engine
@@ -211,31 +213,16 @@ Commands flow bidirectionally between Phone ↔ TV via WebSocket JSON messages:
 ### 🔴 Critical Issues
 
 #### 1. Duplicated Protocol Code
-- **Problem**: `Message.kt` is duplicated between phone and TV with different structures — phone uses individual command classes with helper functions, TV uses a `MessageEnvelope` + sealed `Command` class pattern
+- **Problem**: `Message.kt` is duplicated between phone and TV. A `protocol` module exists but currently only contains `NsdConstants.kt`.
 - **Impact**: Protocol changes require updating both files, risk of desync
-- **Recommendation**: Extract a shared `protocol` module
-```
-PlayBridge/
-├── protocol/          # NEW: Shared Kotlin multiplatform module
-│   └── src/commonMain/kotlin/
-│       └── com/playbridge/protocol/
-│           ├── Command.kt
-│           ├── Message.kt
-│           └── Status.kt
-├── phone/
-└── tv/
-```
+- **Recommendation**: Migrate `Message.kt` and `Command` classes to the existing `protocol` shared module.
+
 
 #### 2. Large File: BrowserActivity.kt (~946 lines)
-- **Problem**: Single file handles tabs, extensions, video detection, context menus, downloads, toolbar integration
+- **Problem**: Single file handles tabs, extensions, video detection, context menus, downloading, finds on page, toolbar integration
 - **Impact**: Hard to test, maintain, and extend
-- **Note**: Some extraction has already been done (BrowserToolbar.kt, TabsScreen.kt, ExtensionsScreen.kt, RemoteControlSheet.kt are separate files), but BrowserActivity.kt is still large
+- **Note**: Some extraction has been done (`FindOnPageBar.kt`, `BrowserToolbar.kt`, etc.), but `BrowserActivity.kt` remains large
 - **Recommendation**: Further extract tab lifecycle and extension handling logic into manager classes
-
-#### 3. Missing Authentication
-- **Problem**: [WebSocketServer.kt:91](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/server/WebSocketServer.kt#L91) has `// TODO: Implement token validation from first message`
-- **Impact**: Any device on the network can send commands to the TV
-- **Recommendation**: Implement token validation on first message, using `authToken` already passed to `WebSocketServer` constructor
 
 ### 🟡 Moderate Issues
 
@@ -274,36 +261,24 @@ PlayBridge/
 - [x] Well-documented protocol messages with KDoc
 - [x] Sealed class pattern for type-safe command handling (TV side)
 - [x] Context-aware remote control (phone queries TV for active screen)
+- [x] Authentication implemented (Token/PIN validation)
+- [x] README.md created
+- [x] LICENSE file added
 
 ### ❌ Missing for Open-Source
 
-#### 1. README.md
-Create a comprehensive README with:
-- Project description and screenshots
-- Architecture overview diagram
-- Build instructions for both apps
-- How pairing works (QR code flow)
-- License information
-
-#### 2. LICENSE File
-Choose an appropriate license:
-- **MIT** - Most permissive
-- **Apache 2.0** - Includes patent grant
-- **GPL-3.0** - Copyleft, requires derivative works to be open-source
-
-#### 3. CONTRIBUTING.md
+#### 1. CONTRIBUTING.md
 Guidelines for:
 - Code style
 - Pull request process
 - Issue templates
 
-#### 4. Security Considerations Documentation
+#### 2. Security Considerations Documentation
 Document:
-- The token authentication gap
-- SSL bypass option and when to use it
 - Local network assumption
+- SSL bypass option and when to use it
 
-#### 5. Remove/Review Sensitive Data
+#### 3. Remove/Review Sensitive Data
 - Check `local.properties` is gitignored ✅
 - Remove any hardcoded API keys or tokens
 - Review commit history for accidentally committed secrets
@@ -390,13 +365,10 @@ PlayBridge/
 
 | Priority | Task | Effort |
 |----------|------|--------|
-| 🔴 High | Add README.md with build instructions | 1-2 hours |
-| 🔴 High | Add LICENSE file | 5 minutes |
-| 🔴 High | Implement WebSocket token validation | 2-4 hours |
-| 🟡 Medium | Expand .gitignore | 10 minutes |
-| 🟡 Medium | Extract shared protocol module | 4-8 hours |
+| 🔴 High | Add CONTRIBUTING.md | 30 minutes |
+| 🟡 Medium | Migrate messages to shared protocol module | 4-8 hours |
 | 🟡 Medium | Further slim BrowserActivity.kt | 2-4 hours |
-| 🟢 Low | Add CONTRIBUTING.md | 30 minutes |
+| 🟡 Medium | Expand .gitignore | 10 minutes |
 | 🟢 Low | Enable ProGuard for release | 2-4 hours |
 
 ---
