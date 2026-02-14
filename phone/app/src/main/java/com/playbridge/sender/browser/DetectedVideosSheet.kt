@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.net.URI
+import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -43,12 +44,16 @@ import java.util.*
 fun DetectedVideosSheet(
     videos: List<DetectedVideo>,
     onDismiss: () -> Unit,
-    onVideoClick: (DetectedVideo) -> Unit,
+    onVideoClick: (DetectedVideo, List<String>?) -> Unit,
     onDownload: (DetectedVideo) -> Unit,
     onClear: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
+    
+    // Separate distinct videos and subtitles
+    val playableVideos = remember(videos) { videos.filter { !it.isSubtitle } }
+    val allSubtitles = remember(videos) { videos.filter { it.isSubtitle } }
     
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -68,7 +73,7 @@ fun DetectedVideosSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Detected Videos (${videos.size})",
+                    text = "Detected Videos (${playableVideos.size})",
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -88,7 +93,7 @@ fun DetectedVideosSheet(
             
             Spacer(modifier = Modifier.height(16.dp))
             
-            if (videos.isEmpty()) {
+            if (playableVideos.isEmpty()) {
                 // Empty state
                 Column(
                     modifier = Modifier
@@ -121,10 +126,16 @@ fun DetectedVideosSheet(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(videos) { video ->
+                    items(playableVideos) { video ->
+                        // Find subtitles from the same tab
+                        val relevantSubtitles = remember(allSubtitles, video.tabId) {
+                            allSubtitles.filter { it.tabId == video.tabId }
+                        }
+                        
                         VideoItemDetailed(
                             video = video,
-                            onPlayClick = { specificUrl -> 
+                            availableSubtitles = relevantSubtitles,
+                            onPlayClick = { specificUrl, subtitles -> 
                                 if (specificUrl != null) {
                                     // If we have a playlist and this is one of the qualities, try to generate a filtered playlist
                                     // We need to find the specific quality object first
@@ -143,12 +154,12 @@ fun DetectedVideosSheet(
                                         onVideoClick(video.copy(
                                             url = dataUri,
                                             contentType = "application/x-mpegurl" // Force MIME type
-                                        ))
+                                        ), subtitles)
                                     } else {
-                                        onVideoClick(video.copy(url = specificUrl))
+                                        onVideoClick(video.copy(url = specificUrl), subtitles)
                                     }
                                 } else {
-                                    onVideoClick(video)
+                                    onVideoClick(video, subtitles)
                                 }
                             },
                             onDownloadClick = { onDownload(video) },
@@ -170,7 +181,8 @@ fun DetectedVideosSheet(
 @Composable
 private fun VideoItemDetailed(
     video: DetectedVideo,
-    onPlayClick: (String?) -> Unit,
+    availableSubtitles: List<DetectedVideo>,
+    onPlayClick: (String?, List<String>?) -> Unit,
     onDownloadClick: () -> Unit,
     onCopyClick: () -> Unit,
     onOpenWithClick: () -> Unit
@@ -189,6 +201,11 @@ private fun VideoItemDetailed(
     var qualities by remember { mutableStateOf(video.qualities) }
     var isLoadingQualities by remember { mutableStateOf(isHls && !video.qualitiesChecked) }
     
+    // Subtitle selection state
+    var showSubtitleDialog by remember { mutableStateOf(false) }
+    var pendingPlayUrl by remember { mutableStateOf<String?>(null) }
+    var selectedSubtitles by remember { mutableStateOf(setOf<String>()) }
+    
     LaunchedEffect(video.url) {
         if (!video.fileSizeChecked) {
             isLoadingSize = true
@@ -200,6 +217,17 @@ private fun VideoItemDetailed(
             isLoadingQualities = true
             qualities = VideoDetector.fetchHlsQualities(video)
             isLoadingQualities = false
+        }
+    }
+    
+    // Helper to start play (either directly or via dialog)
+    fun initiatePlay(url: String?) {
+        if (availableSubtitles.isNotEmpty()) {
+            pendingPlayUrl = url
+            selectedSubtitles = emptySet() // Reset selection when dialog opens
+            showSubtitleDialog = true
+        } else {
+            onPlayClick(url, null)
         }
     }
     
@@ -385,7 +413,7 @@ private fun VideoItemDetailed(
                     ) {
                         items(qualities) { quality ->
                             AssistChip(
-                                onClick = { onPlayClick(quality.url) },
+                                onClick = { initiatePlay(quality.url) },
                                 label = { 
                                     Text(
                                         text = quality.resolution,
@@ -409,6 +437,9 @@ private fun VideoItemDetailed(
             }
 
             // Action buttons
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -430,7 +461,7 @@ private fun VideoItemDetailed(
 
                 // Play/Send button
                 Button(
-                    onClick = { onPlayClick(null) },
+                    onClick = { initiatePlay(null) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
@@ -487,6 +518,129 @@ private fun VideoItemDetailed(
             }
         }
     }
+    
+    // Subtitle Selection Dialog
+    if (showSubtitleDialog) {
+        val allSelected = selectedSubtitles.size == availableSubtitles.size && availableSubtitles.isNotEmpty()
+        
+        AlertDialog(
+            onDismissRequest = { showSubtitleDialog = false },
+            title = { Text("Select Subtitles") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Found ${availableSubtitles.size} subtitle tracks. Select the ones you want to send to TV.")
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    // Select All Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedSubtitles = if (allSelected) emptySet() else availableSubtitles.map { it.url }.toSet()
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = allSelected,
+                            onCheckedChange = { checked ->
+                                selectedSubtitles = if (checked) availableSubtitles.map { it.url }.toSet() else emptySet()
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Select All",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    
+                    // List of subtitles
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 200.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(availableSubtitles) { subtitle ->
+                            val subInfo = parseUrlInfo(subtitle.url)
+                            val isSelected = selectedSubtitles.contains(subtitle.url)
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selectedSubtitles = if (isSelected) {
+                                            selectedSubtitles - subtitle.url
+                                        } else {
+                                            selectedSubtitles + subtitle.url
+                                        }
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { checked ->
+                                        selectedSubtitles = if (checked) {
+                                            selectedSubtitles + subtitle.url
+                                        } else {
+                                            selectedSubtitles - subtitle.url
+                                        }
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = subInfo.extension?.uppercase() ?: "SUB",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = subInfo.filename ?: (subInfo.host + subInfo.path),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (subInfo.filename != null) {
+                                         Text(
+                                            text = subInfo.host + subInfo.path,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(start = 48.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showSubtitleDialog = false
+                        onPlayClick(pendingPlayUrl, selectedSubtitles.toList())
+                    }
+                ) {
+                    val countText = if (selectedSubtitles.isNotEmpty()) " (${selectedSubtitles.size})" else ""
+                    Text("Play$countText")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSubtitleDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -517,7 +671,8 @@ private fun InfoChip(
 private data class UrlInfo(
     val host: String,
     val path: String,
-    val extension: String?
+    val extension: String?,
+    val filename: String?
 )
 
 private fun parseUrlInfo(url: String): UrlInfo {
@@ -528,9 +683,15 @@ private fun parseUrlInfo(url: String): UrlInfo {
         val extension = path.substringAfterLast('.', "").takeIf { 
             it.isNotEmpty() && it.length <= 5 && !it.contains('/') 
         }
-        UrlInfo(host, path, extension)
+        val filename = try {
+            val name = path.substringAfterLast('/')
+            if (name.isNotEmpty()) URLDecoder.decode(name, "UTF-8") else null
+        } catch (e: Exception) {
+            path.substringAfterLast('/').takeIf { it.isNotEmpty() }
+        }
+        UrlInfo(host, path, extension, filename)
     } catch (e: Exception) {
-        UrlInfo("Unknown", "", null)
+        UrlInfo("Unknown", "", null, null)
     }
 }
 

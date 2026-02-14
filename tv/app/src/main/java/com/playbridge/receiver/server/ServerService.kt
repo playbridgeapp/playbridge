@@ -165,6 +165,9 @@ class ServerService : Service() {
                     putExtra(EXTRA_URL, command.url)
                     putExtra(EXTRA_TITLE, command.title)
                     putExtra(EXTRA_CONTENT_TYPE, command.contentType)
+                    if (command.subtitles != null) {
+                        putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(command.subtitles))
+                    }
                     if (command.headers != null) {
                         putExtra(EXTRA_HEADERS, HashMap(command.headers))
                     }
@@ -343,6 +346,7 @@ class ServerService : Service() {
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
         const val EXTRA_CONTENT_TYPE = "content_type"
+        const val EXTRA_SUBTITLES = "subtitles"
         const val EXTRA_HEADERS = "headers"
         const val EXTRA_COMMAND = "command"
         const val EXTRA_REMOTE_KEY = "remote_key"

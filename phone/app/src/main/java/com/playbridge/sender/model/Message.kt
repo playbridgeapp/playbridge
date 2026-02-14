@@ -43,7 +43,8 @@ data class PlayPayload(
     val url: String,
     val title: String? = null,
     val headers: Map<String, String>? = null,
-    val contentType: String? = null
+    val contentType: String? = null,
+    val subtitles: List<String>? = null
 )
 
 /**
@@ -113,10 +114,16 @@ data class AuthResponse(
 
 // ==================== Helper Functions ====================
 
-fun createPlayCommandJson(url: String, title: String? = null, headers: Map<String, String>? = null, contentType: String? = null): String {
+fun createPlayCommandJson(
+    url: String,
+    title: String? = null,
+    headers: Map<String, String>? = null,
+    contentType: String? = null,
+    subtitles: List<String>? = null
+): String {
     return protocolJson.encodeToString(
         PlayCommand.serializer(),
-        PlayCommand(payload = PlayPayload(url = url, title = title, headers = headers, contentType = contentType))
+        PlayCommand(payload = PlayPayload(url, title, headers, contentType, subtitles))
     )
 }
 

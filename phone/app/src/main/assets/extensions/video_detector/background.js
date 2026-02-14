@@ -7,7 +7,11 @@ const VIDEO_CONTENT_TYPES = [
     'mpegurl',
     'application/dash',
     'application/x-mpegurl',
-    'application/vnd.apple.mpegurl'
+    'application/vnd.apple.mpegurl',
+    'text/vtt',
+    'application/x-subrip',
+    '.vtt',
+    '.srt'
 ];
 
 console.log('[VideoDetector BG] Starting...');
@@ -153,11 +157,14 @@ browser.webRequest.onHeadersReceived.addListener(
             const isVideoContentType = VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
             const isM3u8Url = details.url.toLowerCase().includes('m3u8');
             
-            // Check for common video extensions if content type involves 'octet-stream' or 'binary'
-            // or if it's just a generic check on the URL end
+            // Check for common video extensions
             const videoExtensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv'];
             const urlLower = details.url.toLowerCase().split('?')[0]; // Ignore query params
             const hasVideoExtension = videoExtensions.some(ext => urlLower.endsWith(ext));
+            
+            // Check for subtitle extensions
+            const subtitleExtensions = ['.vtt', '.srt'];
+            const hasSubtitleExtension = subtitleExtensions.some(ext => urlLower.endsWith(ext));
             
             // If it's octet-stream, we MUST rely on extension.
             // But we can also be more aggressive: if it ends in .mp4, it's a video, period.
@@ -168,7 +175,7 @@ browser.webRequest.onHeadersReceived.addListener(
                 !contentType // or no content type?
             );
 
-            const isVideo = isVideoContentType || isM3u8Url || isVideoExtensionMatch || hasVideoExtension; 
+            const isVideo = isVideoContentType || isM3u8Url || isVideoExtensionMatch || hasVideoExtension || hasSubtitleExtension; 
             // hasVideoExtension covers cases where server sends wrong type (e.g. text/plain for .mp4)
 
             if (isVideo) {
@@ -180,6 +187,7 @@ browser.webRequest.onHeadersReceived.addListener(
                 if (isVideoContentType) detectedBy = 'content_type';
                 else if (isM3u8Url) detectedBy = 'url_pattern_m3u8';
                 else if (hasVideoExtension) detectedBy = 'url_extension';
+                else if (hasSubtitleExtension) detectedBy = 'subtitle_extension';
 
                 notifyContentScript({
                     url: details.url,

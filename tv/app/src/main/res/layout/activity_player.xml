@@ -12,6 +12,25 @@
         app:resize_mode="fit"
         app:use_controller="false" />
 
+    <!-- Custom Subtitle View -->
+    <TextView
+        android:id="@+id/subtitle_view"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="48dp"
+        android:background="#80000000"
+        android:padding="8dp"
+        android:gravity="center"
+        android:textColor="@android:color/white"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:shadowColor="@android:color/black"
+        android:shadowDx="2"
+        android:shadowDy="2"
+        android:shadowRadius="2"
+        android:visibility="gone" />
+
     <!-- Controls Overlay -->
     <RelativeLayout
         android:id="@+id/controls_root"

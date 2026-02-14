@@ -1177,7 +1177,7 @@ class BrowserActivity : ComponentActivity() {
                                             DownloadsScreen(
                                                 onBack = { currentScreen = Screen.Browser },
                                                 onPlayOnTv = { url, type ->
-                                                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                                    if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
                                                         val cmd = com.playbridge.sender.model.createPlayCommandJson(
                                                             url = url,
                                                             title = "From Downloads",
@@ -1208,9 +1208,10 @@ class BrowserActivity : ComponentActivity() {
                     DetectedVideosSheet(
                         videos = detectedVideos.toList(),
                         onDismiss = { showVideoSheet = false },
-                        onVideoClick = { video ->
+                        onVideoClick = { video, subtitles ->
                             Log.d(TAG, "=== PLAY ON TV CLICKED ===")
                             Log.d(TAG, "Video URL: ${video.url}")
+                            Log.d(TAG, "Subtitles: $subtitles")
                             Log.d(TAG, "Connection state: $connectionState")
                             
                             when (val state = connectionState) {
@@ -1235,7 +1236,8 @@ class BrowserActivity : ComponentActivity() {
                                         url = video.url,
                                         title = selectedTab?.content?.title ?: "Video from browser",
                                         headers = headers,
-                                        contentType = video.contentType
+                                        contentType = video.contentType,
+                                        subtitles = subtitles
                                     )
                                     Log.d(TAG, "Sending play command: $commandJson")
                                     val sent = webSocketClient.send(commandJson)

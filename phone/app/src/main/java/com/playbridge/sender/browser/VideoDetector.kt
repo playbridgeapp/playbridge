@@ -31,7 +31,13 @@ data class DetectedVideo(
     var qualities: List<VideoQuality> = emptyList(),
     var qualitiesChecked: Boolean = false,
     var hlsPlaylist: HlsPlaylist? = null
-)
+) {
+    val isSubtitle: Boolean
+        get() = contentType?.contains("vtt", ignoreCase = true) == true ||
+                contentType?.contains("subrip", ignoreCase = true) == true ||
+                url.endsWith(".vtt", ignoreCase = true) ||
+                url.endsWith(".srt", ignoreCase = true)
+}
 
 /**
  * Singleton that manages video detection from the WebExtension.

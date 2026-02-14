@@ -101,8 +101,11 @@ class PlayerActivity : ComponentActivity() {
                     }
                     
                     
+                    val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+                    
+                    
                     if (url != null) {
-                        playVideo(url, title, contentType, headers)
+                        playVideo(url, title, contentType, headers, subtitles)
                     }
                 }
             }
@@ -110,6 +113,9 @@ class PlayerActivity : ComponentActivity() {
     }
     
     @OptIn(UnstableApi::class)
+    private lateinit var subtitleManager: SubtitleManager
+    private var subtitleUrls: List<String> = emptyList()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -131,12 +137,15 @@ class PlayerActivity : ComponentActivity() {
         }
         
         // Get URL and title from intent
+
         val url = intent?.getStringExtra(ServerService.EXTRA_URL)
         val title = intent?.getStringExtra(ServerService.EXTRA_TITLE)
         val contentType = intent?.getStringExtra(ServerService.EXTRA_CONTENT_TYPE)
+        val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
         
         Log.i(TAG, "URL from intent: $url")
         Log.i(TAG, "Title from intent: $title")
+        Log.i(TAG, "Subtitles from intent: $subtitles")
         
         // Initialize View Bindings
         setContentView(com.playbridge.receiver.R.layout.activity_player)
@@ -150,6 +159,11 @@ class PlayerActivity : ComponentActivity() {
         playPauseButton = findViewById(com.playbridge.receiver.R.id.btn_play_pause)
         tracksButton = findViewById(com.playbridge.receiver.R.id.btn_tracks)
         timeText = findViewById(com.playbridge.receiver.R.id.tv_duration)
+        
+        // Initialize SubtitleManager
+        val subtitleTextView = findViewById<android.widget.TextView>(com.playbridge.receiver.R.id.subtitle_view)
+        subtitleManager = SubtitleManager(subtitleTextView, lifecycleScope)
+        subtitleManager.setPlayer { player?.currentPosition ?: 0L }
         
         // Setup UI handlers
         setupControls()
@@ -189,9 +203,11 @@ class PlayerActivity : ComponentActivity() {
             intent?.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
         }
         
+        val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+        
         if (url != null) {
-            Log.i(TAG, "Playing video: $url (title: $title, type: $contentType)")
-            playVideo(url, title, contentType, headers)
+            Log.i(TAG, "Playing video: $url (title: $title, type: $contentType, subs: $subtitles)")
+            playVideo(url, title, contentType, headers, subtitles)
         }
     }
     
@@ -251,7 +267,7 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    private fun playVideo(url: String, title: String?, contentType: String? = null, intentHeaders: Map<String, String>? = null) {
+    private fun playVideo(url: String, title: String?, contentType: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
         Log.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         Log.i(TAG, "Target URL: $url")
         Log.i(TAG, "Target Title: $title")
@@ -275,7 +291,7 @@ class PlayerActivity : ComponentActivity() {
                 Log.d(TAG, "Pre-flight sniff returned null")
             }
             
-            startPlayback(url, title, finalContentType, intentHeaders)
+            startPlayback(url, title, finalContentType, intentHeaders, subtitles)
         }
     }
 
@@ -321,7 +337,7 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    private fun startPlayback(url: String, title: String?, contentType: String?, intentHeaders: Map<String, String>?) {
+    private fun startPlayback(url: String, title: String?, contentType: String?, intentHeaders: Map<String, String>?, subtitles: ArrayList<String>?) {
         Log.i(TAG, "Starting playback with Final Content Type: $contentType")
 
         currentUrl = url
@@ -401,7 +417,6 @@ class PlayerActivity : ComponentActivity() {
             androidx.media3.exoplayer.hls.HlsMediaSource.Factory(dataSourceFactory)
                 .setAllowChunklessPreparation(true)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
-                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         } else {
             Log.i(TAG, "Using DefaultMediaSourceFactory")
              androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dataSourceFactory)
@@ -427,17 +442,26 @@ class PlayerActivity : ComponentActivity() {
             .setUri(url)
             .apply { title?.let { setMediaId(it) } }
             
-        // specific logic for mime type
-        if (!contentType.isNullOrEmpty()) {
-             builder.setMimeType(contentType)
-        } else if (isHls) {
-             builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+        // Store subtitles for manual selection via SubtitleManager
+        this.subtitleUrls = subtitles ?: emptyList()
+        if (subtitleUrls.isNotEmpty()) {
+             Log.i(TAG, "Subtitles available for manual selection: ${subtitleUrls.size}")
         }
-        // Otherwise leave null, let ExoPlayer infer from extension
+            
+        // specific logic for mime type
+        if (isHls) {
+             // Force standard HLS mime type
+             builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+        } else if (!contentType.isNullOrEmpty()) {
+             builder.setMimeType(contentType)
+        }
         
         val mediaItem = builder.build()
+        
+        // Create source directly from factory
+        val mediaSource = mediaSourceFactory.createMediaSource(mediaItem)
 
-        player?.setMediaItem(mediaItem)
+        player?.setMediaSource(mediaSource)
         player?.prepare()
         
         // Check for history and resume
@@ -928,6 +952,8 @@ class PlayerActivity : ComponentActivity() {
      * Custom error handling policy to retry on ParserException.
      * Use with caution: infinite retries can cause loops if the stream is truly broken.
      */
+    private var currentSubtitleUrl: String? = null
+
     private fun showTrackSelectionDialog() {
         val player = this.player ?: return
         val currentTracks = player.currentTracks
@@ -948,17 +974,48 @@ class PlayerActivity : ComponentActivity() {
                 TrackSelectionDialog(
                     tracks = currentTracks,
                     trackSelectionParameters = player.trackSelectionParameters,
+                    subtitleUrls = subtitleUrls,
+                    currentSubtitleUrl = currentSubtitleUrl,
                     onDismiss = {
                         dialog.dismiss()
                         if (wasPlaying) player.play()
                         showControlsUI()
                     },
                     onTrackSelected = { trackType, format ->
+                        // If selecting an internal text track, clear external subtitle
+                        if (trackType == androidx.media3.common.C.TRACK_TYPE_TEXT) {
+                            currentSubtitleUrl = null
+                            subtitleManager.disable()
+                        }
+                        
                         applyTrackSelection(trackType, format)
                         android.widget.Toast.makeText(this, "Track selected", android.widget.Toast.LENGTH_SHORT).show()
                         dialog.dismiss()
                         if (wasPlaying) player.play()
                         showControlsUI()
+                    },
+                    onExternalSubtitleSelected = { url ->
+                        // Handle manual subtitle selection
+                        currentSubtitleUrl = url
+                        
+                        if (url != null) {
+                            subtitleManager.loadSubtitle(url)
+                            android.widget.Toast.makeText(this, "Subtitle loaded", android.widget.Toast.LENGTH_SHORT).show()
+                            
+                            // Disable internal text tracks to avoid overlap
+                            applyTrackSelection(androidx.media3.common.C.TRACK_TYPE_TEXT, null) 
+                        } else {
+                            subtitleManager.disable()
+                            // Also disable internal text tracks (Off)
+                            applyTrackSelection(androidx.media3.common.C.TRACK_TYPE_TEXT, null)
+                        }
+                        
+                        dialog.dismiss()
+                        if (wasPlaying) player.play()
+                        showControlsUI()
+                    },
+                    onPreviewRequest = { url ->
+                         subtitleManager.getPreview(url)
                     }
                 )
             }
