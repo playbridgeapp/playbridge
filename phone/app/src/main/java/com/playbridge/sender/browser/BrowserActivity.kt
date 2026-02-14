@@ -174,7 +174,15 @@ class BrowserActivity : ComponentActivity() {
             val session = if (selectedTab != null) sessions[selectedTab.id] else null
             
             // State for download dialog
-            var downloadDialogUrl by remember { mutableStateOf<String?>(null) }
+            data class PendingDownload(
+                val url: String,
+                val fileName: String? = null,
+                val contentType: String? = null,
+                val userAgent: String? = null,
+                val cookie: String? = null,
+                val referer: String? = null
+            )
+            var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
             var downloadDialogCallback by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
             
             // If no session is available (e.g. during init), show loading or empty
@@ -537,13 +545,17 @@ class BrowserActivity : ComponentActivity() {
                             // General download interception
                              runOnUiThread {
                                  // Check if we already have a pending dialog for this URL to avoid double triggering
-                                 if (downloadDialogUrl != url) {
-                                     downloadDialogUrl = url
-                                     downloadDialogCallback = { shouldDownload ->
-                                         // For onExternalResource we don't need to cancel navigation usually, 
-                                         // but we might want to manually enqueue if confirmed.
-                                         // Logic moved to Dialog button.
-                                     }
+                                 // Check if we already have a pending dialog for this URL to avoid double triggering
+                                 if (pendingDownload?.url != url) {
+                                     pendingDownload = PendingDownload(
+                                         url = url,
+                                         fileName = fileName,
+                                         contentType = contentType,
+                                         userAgent = userAgent,
+                                         cookie = cookie,
+                                         referer = currentUrl
+                                     )
+                                     downloadDialogCallback = { _ -> }
                                  }
                              }
                         }
@@ -567,19 +579,26 @@ class BrowserActivity : ComponentActivity() {
                         geckoSessionInstance = internalSession
                         
                         internalSession?.let { gs ->
-                            // Wrap NavigationDelegate using Proxy
+                            // NavigationDelegate proxy restored for onNewSession
+                            // We forward other calls (like onLoadRequest) to the original delegate to avoid download issues
                             val existingNav = gs.navigationDelegate
                             originalNavDelegate = existingNav
                             
-                            if (existingNav != null) {
-                                val navProxy = java.lang.reflect.Proxy.newProxyInstance(
-                                    GeckoSession.NavigationDelegate::class.java.classLoader,
-                                    arrayOf(GeckoSession.NavigationDelegate::class.java)
-                                ) { _, method, args ->
-                                    if (method.name == "onNewSession" && args != null && args.size >= 2) {
-                                        val uri = args[1] as? String
-                                        if (uri != null) {
-                                            val newTabId = UUID.randomUUID().toString()
+                            val navProxy = java.lang.reflect.Proxy.newProxyInstance(
+                                GeckoSession.NavigationDelegate::class.java.classLoader,
+                                arrayOf(GeckoSession.NavigationDelegate::class.java)
+                            ) { _, method, args ->
+                                if (method.name == "onNewSession" && args != null && args.size >= 2) {
+                                    val uri = args[1] as? String
+                                    if (uri != null) {
+                                        Log.d(TAG, "Opening new tab for: $uri")
+                                        
+                                        // We cannot return a pre-opened session (which Components.engine.createSession() likely provides).
+                                        // Returning null declines the engine-level new window, but we manually create a new tab in our app state.
+                                        // This achieves the desired "Open in New Tab" behavior without the crash.
+                                        val newTabId = UUID.randomUUID().toString()
+                                        
+                                        runOnUiThread {
                                             store.dispatch(TabListAction.AddTabAction(
                                                 tab = TabSessionState(
                                                     id = newTabId,
@@ -588,79 +607,27 @@ class BrowserActivity : ComponentActivity() {
                                                 ),
                                                 select = true
                                             ))
-                                            // dispatch UpdateUrl to set the actual URI if needed, or rely on Engine
-                                            // Actually, AddTabAction content url should be the uri.
-                                            // But let's stick to what we had: content = ContentState(url = uri)
-                                            // Re-correcting the inner logic below to match previous step
-                                        
-                                             // VIDEO EXTENSION CHECK FOR NEW TABS
-                                            val lowerUri = uri.lowercase()
-                                            val videoExtensions = listOf(".mp4", ".mkv", ".webm", ".avi", ".mov", ".mpg", ".mpeg", ".3gp", ".m3u8")
-                                            if (videoExtensions.any { lowerUri.endsWith(it) }) {
-                                                runOnUiThread {
-                                                    downloadDialogUrl = uri
-                                                    downloadDialogCallback = { _ -> }
-                                                }
-                                                // Cancel new tab creation??
-                                                // We already created the tab above :( 
-                                                // Actually, if we return null, Gecko might not open it? 
-                                                // The proxy implementation for onNewSession is tricky.
-                                                // If we create a tab ourselves, we should probably do the check BEFORE dispatching AddTabAction.
-                                                // Let's rely on the check and NOT create the tab if confirmed?
-                                                // But the dialog is async.
-                                                // Just show the dialog on top of the new tab.
-                                            }
                                         }
-                                         // If we handled it, strict return null or handle appropriately?
                                         return@newProxyInstance GeckoResult.fromValue(null)
                                     }
-                                    
-                                    // Forward to original
-                                    try {
-                                        if (method.name == "onLoadRequest" && args != null && args.size >= 2) {
-                                            val uri = args[1] as? String
-                                            if (uri != null) {
-                                                val lowerUri = uri.lowercase()
-                                                val videoExtensions = listOf(".mp4", ".mkv", ".webm", ".avi", ".mov", ".mpg", ".mpeg", ".3gp", ".m3u8")
-                                                if (videoExtensions.any { lowerUri.endsWith(it) }) {
-                                                    runOnUiThread {
-                                                         downloadDialogUrl = uri
-                                                         downloadDialogCallback = { proceed ->
-                                                             if (proceed) {
-                                                                 // If we decied to proceed (e.g. not download/play but open), we need to call original?
-                                                                 // Complex with async dialog. 
-                                                                 // For now, we just intercept and CANCEL navigation.
-                                                             }
-                                                         }
-                                                    }
-                                                    // Return ALLOW -> proceed, BLOCK -> cancel.
-                                                    // We return BLOCK to stop navigation while dialog is shown.
-                                                    // GeckoResult<AllowOrDeny>
-                                                    // For now, let's assume we allow and let onExternalResource catch it? 
-                                                    // But MP4s play in-browser. 
-                                                    // Returns GeckoResult<GeckoSession.AllowOrDeny>
-                                                    // We can't easily construct that enum via reflection without more work.
-                                                    // Let's skip blocking here and rely on onExternalResource if possible, 
-                                                    // OR just let it load and show dialog (might start playing).
-                                                    // "1DM-style" means preventing load. 
-                                                    // Let's try to return null (might crash or default) or try to find the AllowOrDeny.DENY
-                                                    
-                                                    // For simplicitly, let's NOT block here but rely on the dialog appearing.
-                                                    // If user clicks "Download", we download.
-                                                    // If user clicks "Play", we play.
-                                                    // The browser will show the video in the meantime.
-                                                }
-                                            }
-                                        }
 
+                                }
+                                
+                                // Forward to original delegate for everything else (including onLoadRequest)
+                                if (existingNav != null) {
+                                    try {
                                         if (args != null) method.invoke(existingNav, *args)
                                         else method.invoke(existingNav)
                                     } catch (e: java.lang.reflect.InvocationTargetException) {
                                         throw e.targetException
                                     }
-                                } as GeckoSession.NavigationDelegate
-                                gs.navigationDelegate = navProxy
-                            }
+                                } else {
+                                    // Default return values if no original delegate
+                                    null
+                                }
+                            } as GeckoSession.NavigationDelegate
+                            gs.navigationDelegate = navProxy
+
                             
                             // Wrap ContentDelegate using Proxy
                             val existingContent = gs.contentDelegate
@@ -1231,6 +1198,73 @@ class BrowserActivity : ComponentActivity() {
                             webSocketClient.send(cmd)
                             if (command == "stop") {
                                 tvActiveContext = "idle"
+                            }
+                        }
+                    )
+                }
+
+                // Download Confirmation Dialog
+                if (pendingDownload != null) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            pendingDownload = null
+                            downloadDialogCallback?.invoke(false)
+                            downloadDialogCallback = null
+                        },
+                        title = { Text("Download file?") },
+                        text = { 
+                            Column {
+                                Text("Do you want to download this file?")
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = pendingDownload!!.url,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 3,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                                pendingDownload!!.fileName?.let {
+                                     Spacer(modifier = Modifier.height(4.dp))
+                                     Text("File: $it", style = MaterialTheme.typography.bodySmall)
+                                }
+                                pendingDownload!!.contentType?.let {
+                                     Spacer(modifier = Modifier.height(4.dp))
+                                     Text("Type: $it", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    val download = pendingDownload!!
+                                    DownloadUtils.enqueueDownload(
+                                        this@BrowserActivity,
+                                        download.url,
+                                        download.fileName,
+                                        download.contentType,
+                                        download.userAgent,
+                                        download.cookie,
+                                        download.referer
+                                    )
+                                    Toast.makeText(this@BrowserActivity, "Download started", Toast.LENGTH_SHORT).show()
+                                    
+                                    pendingDownload = null
+                                    downloadDialogCallback?.invoke(true)
+                                    downloadDialogCallback = null
+                                }
+                            ) {
+                                Text("Download")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    pendingDownload = null
+                                    downloadDialogCallback?.invoke(false)
+                                    downloadDialogCallback = null
+                                }
+                            ) {
+                                Text("Cancel")
                             }
                         }
                     )

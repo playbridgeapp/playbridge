@@ -43,7 +43,8 @@ data class DownloadItem(
     val bytesDownloaded: Long,
     val lastModified: Long,
     val isExo: Boolean = false,
-    val exoState: Int = 0
+    val exoState: Int = 0,
+    val errorReason: String? = null
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,6 +73,9 @@ fun DownloadsScreen(
         }
     }
 
+    // Error dialog state
+    var errorToShow by remember { mutableStateOf<String?>(null) }
+    
     if (showDeleteDialog && itemToDelete != null) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
@@ -101,6 +105,19 @@ fun DownloadsScreen(
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (errorToShow != null) {
+        AlertDialog(
+            onDismissRequest = { errorToShow = null },
+            title = { Text("Download Failed") },
+            text = { Text(errorToShow ?: "Unknown error") },
+            confirmButton = {
+                TextButton(onClick = { errorToShow = null }) {
+                    Text("OK")
                 }
             }
         )
@@ -154,6 +171,9 @@ fun DownloadsScreen(
                         onDelete = {
                             itemToDelete = item
                             showDeleteDialog = true
+                        },
+                        onErrorClick = {
+                            errorToShow = item.errorReason
                         }
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -167,7 +187,8 @@ fun DownloadsScreen(
 fun DownloadItemRow(
     item: DownloadItem, 
     onPlayOnTv: (String, String) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onErrorClick: () -> Unit
 ) {
     val progress = if (item.totalSize > 0) item.bytesDownloaded.toFloat() / item.totalSize.toFloat() else 0f
     
@@ -223,7 +244,7 @@ fun DownloadItemRow(
                         }
                     }
                 } else if (item.status == DownloadManager.STATUS_FAILED) {
-                    IconButton(onClick = {}, enabled = false) {
+                    IconButton(onClick = onErrorClick) {
                         Icon(Icons.Default.Error, "Failed", tint = MaterialTheme.colorScheme.error)
                     }
                 }
@@ -258,6 +279,7 @@ fun getSystemDownloads(downloadManager: DownloadManager): List<DownloadItem> {
                 val totalSizeCol = it.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
                 val downloadedCol = it.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
                 val lastModCol = it.getColumnIndex(DownloadManager.COLUMN_LAST_MODIFIED_TIMESTAMP)
+                val reasonCol = it.getColumnIndex(DownloadManager.COLUMN_REASON)
                 
                 do {
                     val id = it.getLong(idCol)
@@ -269,7 +291,12 @@ fun getSystemDownloads(downloadManager: DownloadManager): List<DownloadItem> {
                     val bytesDownloaded = it.getLong(downloadedCol)
                     val lastModified = it.getLong(lastModCol)
                     
-                    downloads.add(DownloadItem(id, title, status, uri, mediaType, totalSize, bytesDownloaded, lastModified))
+                    val errorReason = if (status == DownloadManager.STATUS_FAILED) {
+                        val reason = it.getInt(reasonCol)
+                        DownloadUtils.getDownloadErrorString(reason)
+                    } else null
+                    
+                    downloads.add(DownloadItem(id, title, status, uri, mediaType, totalSize, bytesDownloaded, lastModified, errorReason = errorReason))
                 } while (it.moveToNext())
             }
         }
@@ -303,6 +330,14 @@ fun getExoDownloads(downloadManager: androidx.media3.exoplayer.offline.DownloadM
             val bytesDownloaded = download.bytesDownloaded
             val lastModified = download.updateTimeMs
             
+            val errorReason = if (status == DownloadManager.STATUS_FAILED) {
+                 if (download.failureReason != Download.FAILURE_REASON_NONE) {
+                     "ExoPlayer Error: ${download.failureReason}" 
+                 } else {
+                     "Unknown ExoPlayer Error"
+                 }
+            } else null
+            
             downloads.add(DownloadItem(
                 id = id,
                 title = title.ifEmpty { "HLS Video" },
@@ -313,7 +348,8 @@ fun getExoDownloads(downloadManager: androidx.media3.exoplayer.offline.DownloadM
                 bytesDownloaded = bytesDownloaded,
                 lastModified = lastModified,
                 isExo = true,
-                exoState = download.state
+                exoState = download.state,
+                errorReason = errorReason
             ))
         }
         cursor.close()

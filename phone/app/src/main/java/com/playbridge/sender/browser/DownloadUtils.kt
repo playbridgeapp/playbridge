@@ -99,4 +99,26 @@ object DownloadUtils {
         val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt()
         return String.format("%.1f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
     }
+
+    fun getDownloadErrorString(reason: Int): String {
+        return when (reason) {
+            DownloadManager.ERROR_CANNOT_RESUME -> "Cannot resume"
+            DownloadManager.ERROR_DEVICE_NOT_FOUND -> "External storage device not found"
+            DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "File already exists"
+            DownloadManager.ERROR_FILE_ERROR -> "File error"
+            DownloadManager.ERROR_HTTP_DATA_ERROR -> "HTTP data error"
+            DownloadManager.ERROR_INSUFFICIENT_SPACE -> "Insufficient space"
+            DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "Too many redirects"
+            DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "Unhandled HTTP code"
+            DownloadManager.ERROR_UNKNOWN -> "Unknown error"
+            400 -> "Bad Request"
+            401 -> "Unauthorized"
+            403 -> "Forbidden"
+            404 -> "Not Found"
+            500 -> "Internal Server Error"
+            502 -> "Bad Gateway"
+            503 -> "Service Unavailable"
+            else -> "Error code: $reason"
+        }
+    }
 }

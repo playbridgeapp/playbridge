@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -154,6 +155,9 @@ fun DetectedVideosSheet(
                             onCopyClick = {
                                 copyToClipboard(context, video.url)
                                 Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                            },
+                            onOpenWithClick = {
+                                openInExternalPlayer(context, video.url, video.contentType, video.headers)
                             }
                         )
                     }
@@ -168,7 +172,8 @@ private fun VideoItemDetailed(
     video: DetectedVideo,
     onPlayClick: (String?) -> Unit,
     onDownloadClick: () -> Unit,
-    onCopyClick: () -> Unit
+    onCopyClick: () -> Unit,
+    onOpenWithClick: () -> Unit
 ) {
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
     val videoType = remember(video) { getVideoType(video) }
@@ -453,7 +458,22 @@ private fun VideoItemDetailed(
                 Spacer(Modifier.width(4.dp))
                 Text("Copy URL")
             }
+            Spacer(modifier = Modifier.height(8.dp))
             
+            // Open With button (Secondary)
+            OutlinedButton(
+                onClick = onOpenWithClick,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                 Icon(
+                    Icons.Default.OpenInNew,
+                    contentDescription = "Open With",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("Open With")
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
             
             // Show Raw button
@@ -570,5 +590,41 @@ private fun formatFileSize(bytes: Long): String {
         bytes >= 1_048_576 -> String.format("%.1f MB", bytes / 1_048_576.0)
         bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
         else -> "$bytes B"
+    }
+}
+
+private fun openInExternalPlayer(
+    context: Context, 
+    url: String, 
+    mimeType: String?, 
+    headers: Map<String, String>?
+) {
+    try {
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+        val uri = android.net.Uri.parse(url)
+        
+        // standard call
+        if (mimeType != null) {
+            intent.setDataAndType(uri, mimeType)
+        } else {
+            intent.setDataAndType(uri, "video/*")
+        }
+        
+        // Add headers for players that support it (VLC, MX Player, Just Player, etc.)
+        if (headers != null && headers.isNotEmpty()) {
+            val headersArray = headers.map { "${it.key}: ${it.value}" }.toTypedArray()
+            intent.putExtra("headers", headersArray)
+            
+            // Also add individual standard headers as potentially some apps look for them directly
+            headers["User-Agent"]?.let { intent.putExtra("User-Agent", it); intent.putExtra("user_agent", it) }
+            headers["Cookie"]?.let { intent.putExtra("Cookie", it) }
+        }
+        
+        intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        
+        val chooser = android.content.Intent.createChooser(intent, "Open with")
+        context.startActivity(chooser)
+    } catch (e: Exception) {
+        Toast.makeText(context, "No app found to play this video", Toast.LENGTH_SHORT).show()
     }
 }
