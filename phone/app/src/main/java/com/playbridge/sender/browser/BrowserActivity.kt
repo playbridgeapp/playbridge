@@ -216,6 +216,58 @@ class BrowserActivity : ComponentActivity() {
             // TV active context - updated via WebSocket messages from TV
             var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
             
+            // Find in Page state
+            var showFindBar by remember { mutableStateOf(false) }
+            
+            // Helper to get GeckoSession from EngineSession using reflection
+            fun getGeckoSession(engineSession: EngineSession?): GeckoSession? {
+                 if (engineSession == null) return null
+                 val geckoEngineSession = engineSession as? GeckoEngineSession ?: return null
+                 try {
+                     val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
+                     field.isAccessible = true
+                     return field.get(geckoEngineSession) as? GeckoSession
+                 } catch (e: Exception) {
+                     Log.e(TAG, "Error accessing GeckoSession", e)
+                     return null
+                 }
+            }
+
+            // Find helper
+            fun findInPage(text: String, direction: Int = 0) {
+                 val geckoSession = getGeckoSession(session)
+                 if (geckoSession != null) {
+                     try {
+                         // Use reflection to get constants to avoid unresolved references
+                         val finderClass = Class.forName("org.mozilla.geckoview.GeckoSession\$Finder")
+                         val findDisplayHighlights = finderClass.getField("FIND_DISPLAY_HIGHLIGHTS").getInt(null)
+                         val findBackwards = finderClass.getField("FIND_BACKWARDS").getInt(null)
+                         
+                         val flags = if (direction == 0) {
+                             findDisplayHighlights
+                         } else {
+                             findDisplayHighlights or findBackwards
+                         }
+                         
+                         geckoSession.finder.find(text, flags)
+                     } catch (e: Exception) {
+                         Log.e(TAG, "Error finding in page", e)
+                         // Fallback to finding without flags if reflection fails
+                         try {
+                              geckoSession.finder.find(text, 0)
+                         } catch (e2: Exception) {}
+                     }
+                 }
+            }
+            
+            // Clear finding when bar closes
+            LaunchedEffect(showFindBar) {
+                if (!showFindBar) {
+                     val geckoSession = getGeckoSession(session)
+                     geckoSession?.finder?.clear()
+                }
+            }
+
             // Listen for context messages from TV
             LaunchedEffect(Unit) {
                 launch {
@@ -681,24 +733,26 @@ class BrowserActivity : ComponentActivity() {
                     topBar = {
                         when (currentScreen) {
                             Screen.Browser -> {
-                                Box {
-                                    BrowserToolbar(
-                                        currentUrl = currentUrl,
-                                        isLoading = isLoading,
-                                        canGoBack = browserCanGoBack,
-                                        canGoForward = browserCanGoForward,
-                                        videoCount = videoCount,
-                                        tabCount = browserState.tabs.size,
-                                        onUrlChange = { },
-                                        onNavigate = { url -> session.loadUrl(url) },
-                                        onBack = { session.goBack() },
-                                        onForward = { session.goForward() },
-                                        onRefresh = { session.reload() },
-                                        onStop = { session.stopLoading() },
-                                        onMenuClick = { menuExpanded = true },
-                                        onVideoClick = { showVideoSheet = true },
-                                        onTabsClick = { currentScreen = Screen.Tabs },
-                                        menuContent = {
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        BrowserToolbar(
+                                            currentUrl = currentUrl,
+                                            isLoading = isLoading,
+                                            canGoBack = browserCanGoBack,
+                                            canGoForward = browserCanGoForward,
+                                            videoCount = videoCount,
+                                            tabCount = browserState.tabs.size,
+                                            onUrlChange = { },
+                                            onNavigate = { url -> session.loadUrl(url) },
+                                            onBack = { session.goBack() },
+                                            onForward = { session.goForward() },
+                                            onRefresh = { session.reload() },
+                                            onStop = { session.stopLoading() },
+                                            onMenuClick = { menuExpanded = true },
+                                            onVideoClick = { showVideoSheet = true },
+                                            onTabsClick = { currentScreen = Screen.Tabs },
+                                            menuContent = {
+
                                             // Dropdown menu
                                             DropdownMenu(
                                                 expanded = menuExpanded,
@@ -790,6 +844,16 @@ class BrowserActivity : ComponentActivity() {
 
                                                 
                                                 DropdownMenuItem(
+                                                    text = { Text("Find in Page", style = MaterialTheme.typography.bodyLarge) },
+                                                    leadingIcon = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        showFindBar = true
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                )
+
+                                                DropdownMenuItem(
                                                     text = { Text("Downloads", style = MaterialTheme.typography.bodyLarge) },
                                                     leadingIcon = { Icon(Icons.Default.Download, null, tint = MaterialTheme.colorScheme.primary) },
                                                     onClick = {
@@ -844,8 +908,19 @@ class BrowserActivity : ComponentActivity() {
                                             }
                                         }
                                     )
+                                    
+                                    // Find on Page Bar
+                                    if (showFindBar) {
+                                        FindOnPageBar(
+                                            onFind = { text -> findInPage(text) },
+                                            onNext = { findInPage("", 0) },
+                                            onPrev = { findInPage("", 1) },
+                                            onClose = { showFindBar = false }
+                                        )
+                                    }
                                 }
                             }
+                        }
                             Screen.Tabs -> {
                                 @OptIn(ExperimentalMaterial3Api::class)
                                 TopAppBar(
