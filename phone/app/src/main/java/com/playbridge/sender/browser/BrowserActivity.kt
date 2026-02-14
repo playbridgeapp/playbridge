@@ -7,7 +7,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -54,6 +56,59 @@ import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import mozilla.components.lib.state.ext.flow
 import kotlinx.coroutines.flow.first
+
+@Composable
+fun AnimatedMenuItem(
+    index: Int,
+    onClick: (() -> Unit)? = null,
+    content: @Composable (onClick: () -> Unit) -> Unit
+) {
+    val alpha = remember { Animatable(0f) }
+    val slide = remember { Animatable(50f) } // start 50px down
+    val scale = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        val delay = index * 30L // 30ms stagger
+        kotlinx.coroutines.delay(delay)
+        launch {
+            alpha.animateTo(
+                1f,
+                animationSpec = tween(durationMillis = 300, easing = LinearOutSlowInEasing)
+            )
+        }
+        launch {
+            slide.animateTo(
+                0f,
+                animationSpec = tween(durationMillis = 300, easing = LinearOutSlowInEasing)
+            )
+        }
+    }
+
+    val wrappedOnClick: () -> Unit = {
+        if (onClick != null) {
+            scope.launch {
+                launch {
+                    scale.animateTo(0.95f, tween(100))
+                    scale.animateTo(1f, tween(100))
+                }
+                kotlinx.coroutines.delay(150) // Wait for animation and ripple
+                onClick()
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier.graphicsLayer {
+            this.alpha = alpha.value
+            this.translationY = slide.value
+            this.scaleX = scale.value
+            this.scaleY = scale.value
+        }
+    ) {
+        content(wrappedOnClick)
+    }
+}
 
 class BrowserActivity : ComponentActivity() {
     
@@ -729,50 +784,52 @@ class BrowserActivity : ComponentActivity() {
                                                 shape = MaterialTheme.shapes.large
                                             ) {
                                                 // Navigation buttons row
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(vertical = 8.dp), // Removed horizontal padding to allow full width evenly
-                                                    horizontalArrangement = Arrangement.SpaceEvenly,
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    IconButton(
-                                                        onClick = {
-                                                            session.goBack()
-                                                            menuExpanded = false
-                                                        },
-                                                        enabled = browserCanGoBack
+                                                AnimatedMenuItem(index = 0) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(vertical = 8.dp), 
+                                                        horizontalArrangement = Arrangement.SpaceEvenly,
+                                                        verticalAlignment = Alignment.CenterVertically
                                                     ) {
-                                                        Icon(
-                                                            Icons.AutoMirrored.Filled.ArrowBack,
-                                                            "Back",
-                                                            tint = if (browserCanGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                        )
-                                                    }
-                                                    IconButton(
-                                                        onClick = {
-                                                            session.goForward()
-                                                            menuExpanded = false
-                                                        },
-                                                        enabled = browserCanGoForward
-                                                    ) {
-                                                        Icon(
-                                                            Icons.AutoMirrored.Filled.ArrowForward,
-                                                            "Forward",
-                                                            tint = if (browserCanGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                        )
-                                                    }
-                                                    IconButton(
-                                                        onClick = {
-                                                            if (isLoading) session.stopLoading() else session.reload()
-                                                            menuExpanded = false
+                                                        IconButton(
+                                                            onClick = {
+                                                                session.goBack()
+                                                                menuExpanded = false
+                                                            },
+                                                            enabled = browserCanGoBack
+                                                        ) {
+                                                            Icon(
+                                                                Icons.AutoMirrored.Filled.ArrowBack,
+                                                                "Back",
+                                                                tint = if (browserCanGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                            )
                                                         }
-                                                    ) {
-                                                        Icon(
-                                                            if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
-                                                            if (isLoading) "Stop" else "Refresh",
-                                                            tint = MaterialTheme.colorScheme.onSurface
-                                                        )
+                                                        IconButton(
+                                                            onClick = {
+                                                                session.goForward()
+                                                                menuExpanded = false
+                                                            },
+                                                            enabled = browserCanGoForward
+                                                        ) {
+                                                            Icon(
+                                                                Icons.AutoMirrored.Filled.ArrowForward,
+                                                                "Forward",
+                                                                tint = if (browserCanGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                            )
+                                                        }
+                                                        IconButton(
+                                                            onClick = {
+                                                                if (isLoading) session.stopLoading() else session.reload()
+                                                                menuExpanded = false
+                                                            }
+                                                        ) {
+                                                            Icon(
+                                                                if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
+                                                                if (isLoading) "Stop" else "Refresh",
+                                                                tint = MaterialTheme.colorScheme.onSurface
+                                                            )
+                                                        }
                                                     }
                                                 }
                                                 
@@ -781,64 +838,89 @@ class BrowserActivity : ComponentActivity() {
                                                 // TV Controls (when connected)
                                                 if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                                     // Remote Control
-                                                    DropdownMenuItem(
-                                                        text = { Text("Remote Control", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.Gamepad, null, tint = MaterialTheme.colorScheme.primary) },
+                                                    AnimatedMenuItem(
+                                                        index = 1,
                                                         onClick = {
                                                             menuExpanded = false
                                                             showRemoteSheet = true
                                                             webSocketClient.send(com.playbridge.sender.model.createContextQueryJson())
-                                                        },
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-
+                                                        }
+                                                    ) { onClick ->
+                                                        DropdownMenuItem(
+                                                            text = { Text("Remote Control", style = MaterialTheme.typography.bodyLarge) },
+                                                            leadingIcon = { Icon(Icons.Default.Gamepad, null, tint = MaterialTheme.colorScheme.primary) },
+                                                            onClick = onClick,
+                                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                        )
+                                                    }
+                                                    
                                                     // Open on TV
-                                                    DropdownMenuItem(
-                                                        text = { Text("Open on TV", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.primary) },
+                                                    AnimatedMenuItem(
+                                                        index = 2,
                                                         onClick = {
                                                             menuExpanded = false
                                                             val cmd = com.playbridge.sender.model.createBrowserCommandJson(currentUrl)
                                                             webSocketClient.send(cmd)
                                                             Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
-                                                        },
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
+                                                        }
+                                                    ) { onClick ->
+                                                        DropdownMenuItem(
+                                                            text = { Text("Open on TV", style = MaterialTheme.typography.bodyLarge) },
+                                                            leadingIcon = { Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.primary) },
+                                                            onClick = onClick,
+                                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                        )
+                                                    }
                                                     
                                                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                                 }
                                                 
 
                                                 
-                                                DropdownMenuItem(
-                                                    text = { Text("Find in Page", style = MaterialTheme.typography.bodyLarge) },
-                                                    leadingIcon = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary) },
+                                                AnimatedMenuItem(
+                                                    index = 3,
                                                     onClick = {
                                                         menuExpanded = false
                                                         showFindBar = true
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                )
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("Find in Page", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
 
-                                                DropdownMenuItem(
-                                                    text = { Text("Downloads", style = MaterialTheme.typography.bodyLarge) },
-                                                    leadingIcon = { Icon(Icons.Default.Download, null, tint = MaterialTheme.colorScheme.primary) },
+                                                AnimatedMenuItem(
+                                                    index = 4,
                                                     onClick = {
                                                         menuExpanded = false
                                                         currentScreen = Screen.Downloads
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                )
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("Downloads", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.Download, null, tint = MaterialTheme.colorScheme.primary) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
                                                 
-                                                DropdownMenuItem(
-                                                    text = { Text("Extensions", style = MaterialTheme.typography.bodyLarge) },
-                                                    leadingIcon = { Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.primary) },
+                                                AnimatedMenuItem(
+                                                    index = 5,
                                                     onClick = {
                                                         menuExpanded = false
                                                         currentScreen = Screen.Extensions
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                )
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("Extensions", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.primary) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
                                                 
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -859,15 +941,35 @@ class BrowserActivity : ComponentActivity() {
                                                     }
                                                 }
                                                 
-                                                DropdownMenuItem(
-                                                    text = { Text(connectText, style = MaterialTheme.typography.bodyLarge) },
-                                                    leadingIcon = { Icon(connectIcon, null, tint = connectColor) },
+                                                AnimatedMenuItem(
+                                                    index = 6,
                                                     onClick = {
                                                         menuExpanded = false
                                                         currentScreen = Screen.Connection
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                )
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(connectText, style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(connectIcon, null, tint = connectColor) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
+                                                
+                                                AnimatedMenuItem(
+                                                    index = 7,
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        currentScreen = Screen.Settings
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("Settings", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.onSurface) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
                                                 
 
                                                 
@@ -924,6 +1026,9 @@ class BrowserActivity : ComponentActivity() {
                             Screen.Downloads -> {
                                 // No TopAppBar here as DownloadsScreen has its own
                             }
+                            Screen.Settings -> {
+                                // No TopAppBar here as SettingsScreen has its own
+                            }
                         }
                     }
                 ) { innerPadding ->
@@ -937,6 +1042,12 @@ class BrowserActivity : ComponentActivity() {
                                                 slideOutVertically { height -> -height } + fadeOut()
                                     } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
                                         slideInVertically { height -> -height } + fadeIn() togetherWith
+                                                slideOutVertically { height -> height } + fadeOut()
+                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings) && initialState == Screen.Browser) {
+                                         slideInVertically { height -> height } + fadeIn() togetherWith
+                                                slideOutVertically { height -> -height } + fadeOut()
+                                    } else if (targetState == Screen.Browser && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings)) {
+                                         slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
                                     } else {
                                         // Default fade for other transitions (e.g. settings)
@@ -1078,6 +1189,12 @@ class BrowserActivity : ComponentActivity() {
                                                         Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
                                                     }
                                                 }
+                                            )
+                                        }
+                                        Screen.Settings -> {
+                                            BackHandler { currentScreen = Screen.Browser }
+                                            SettingsScreen(
+                                                onBack = { currentScreen = Screen.Browser }
                                             )
                                         }
                                     }
@@ -1317,4 +1434,5 @@ sealed class Screen {
     object Extensions : Screen()
     object Connection : Screen()
     object Downloads : Screen()
+    object Settings : Screen()
 }

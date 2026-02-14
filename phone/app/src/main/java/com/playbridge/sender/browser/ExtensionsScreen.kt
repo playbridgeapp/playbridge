@@ -50,7 +50,17 @@ fun ExtensionsScreen(
             withContext(Dispatchers.Main) {
                 Components.runtime.webExtensionController.list().then({ extensions ->
                     Log.d(TAG, "Found ${extensions?.size ?: 0} installed extensions")
-                    installedExtensions = extensions?.toList() ?: emptyList()
+                    
+                    val allExtensions = extensions?.toList() ?: emptyList()
+                    val prefs = Components.applicationContext.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE)
+                    val showInbuilt = prefs.getBoolean("show_inbuilt_extensions", false)
+                    
+                    installedExtensions = if (showInbuilt) {
+                        allExtensions
+                    } else {
+                        allExtensions.filter { it.id != "video-detector@playbridge" }
+                    }
+                    
                     isLoading = false
                     org.mozilla.geckoview.GeckoResult.fromValue(null)
                 }, { error ->
