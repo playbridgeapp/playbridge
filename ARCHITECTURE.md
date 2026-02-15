@@ -6,12 +6,13 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 ## Project Overview
 
-**PlayBridge** is a casting solution enabling Android phones to send video URLs and browser control commands to Android TV devices. The project consists of two independent Android applications:
+**PlayBridge** is a casting solution enabling Android phones to send video URLs and browser control commands to Android TV devices. The project consists of two independent Android applications and a shared protocol module:
 
-| App | Package | Purpose |
-|-----|---------|---------|
-| **Phone (Sender)** | `com.playbridge.sender` | GeckoView-based browser with video detection, remote control, sends commands to TV |
+| Module | Package | Purpose |
+|--------|---------|---------|
+| **Phone (Sender)** | `com.playbridge.sender` | GeckoView-based browser with video detection, downloads, remote control, sends commands to TV |
 | **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + ExoPlayer + WebView browser, receives and plays video streams |
+| **Protocol** | `com.playbridge.protocol` | Shared NSD constants used by both apps |
 
 ---
 
@@ -23,29 +24,35 @@ graph TB
         Browser[GeckoView Browser]
         Extension[Video Detector Extension]
         WSClient[WebSocket Client]
-        QRScanner[QR Scanner]
+        Connection[Connection Screen<br/>NSD Discovery + QR + Manual]
         RemoteControl[Remote Control UI]
         HLS[HLS Parser]
+        Downloads[Download Manager]
+        HistoryDB[Room History DB]
     end
     
     subgraph TV App
         WSServer[WebSocket Server]
-        Player[ExoPlayer]
+        Player[ExoPlayer + Subtitles]
         TVBrowser[TV Browser + Ad Blocker]
+        TrackSel[Track Selection Dialog]
         History[History Store]
         ServerSvc[Server Foreground Service]
     end
     
     Extension --> Browser
     Browser --> WSClient
+    Browser --> Downloads
+    Browser --> HistoryDB
     HLS --> Browser
-    QRScanner --> WSClient
+    Connection --> WSClient
     RemoteControl --> WSClient
     WSClient <-->|Play/Control/Remote/Mouse/Browser Commands| WSServer
     ServerSvc --> WSServer
     WSServer --> Player
     WSServer --> TVBrowser
     WSServer --> History
+    Player --> TrackSel
 ```
 
 ---
@@ -55,26 +62,40 @@ graph TB
 ### Package Structure
 ```
 com.playbridge.sender/
-├── browser/           # GeckoView browser, video detection, extensions, remote
-│   ├── AddonInstallDialog.kt   (extension install UI)
-│   ├── BrowserActivity.kt      (~946 lines - LARGE)
-│   ├── BrowserToolbar.kt       (custom toolbar composables)
-│   ├── Components.kt           (DI container for Gecko components)
-│   ├── DetectedVideosSheet.kt  (bottom sheet for detected videos)
-│   ├── ExtensionsScreen.kt     (addon management screen)
-│   ├── HlsParser.kt            (HLS stream quality parsing)
-│   ├── RemoteControlSheet.kt   (TV remote control UI)
-│   ├── TabsScreen.kt           (tab management screen)
-│   └── VideoDetector.kt        (video content type detection)
-├── connection/        # WebSocket client
-│   ├── WebSocketClient.kt
-│   └── ConnectionStore.kt
-├── model/             # Protocol messages
-│   ├── Message.kt     (serializable data classes)
-│   └── TvDevice.kt
-└── ui/                # Compose UI screens
-    ├── HomeScreen.kt
-    ├── QRScannerScreen.kt
+├── browser/                # GeckoView browser, video detection, extensions, downloads
+│   ├── AddonInstallDialog.kt       (extension install confirmation dialog)
+│   ├── BrowserActivity.kt          (~1555 lines - VERY LARGE)
+│   ├── BrowserToolbar.kt           (custom Compose toolbar with URL bar, navigation, menu)
+│   ├── Components.kt               (singleton DI container for GeckoRuntime, BrowserStore)
+│   ├── DetectedVideosSheet.kt      (bottom sheet for detected videos + quality selection)
+│   ├── DownloadManagerSingleton.kt  (Media3 ExoPlayer download manager for HLS)
+│   ├── DownloadsScreen.kt          (downloads list UI with progress tracking)
+│   ├── DownloadUtils.kt            (download helpers: enqueue, file size, error strings)
+│   ├── ExtensionsScreen.kt         (addon management screen)
+│   ├── FindOnPageBar.kt            (UI for in-page text search)
+│   ├── HistoryScreen.kt            (browsing history list UI)
+│   ├── HlsParser.kt               (HLS manifest parsing for quality selection)
+│   ├── MediaDownloadService.kt     (foreground service for HLS/media downloads)
+│   ├── RemoteControlSheet.kt       (TV remote control: D-pad, touchpad, player controls)
+│   ├── SettingsScreen.kt           (browser settings: inbuilt extension visibility)
+│   ├── TabsScreen.kt               (tab management overlay)
+│   └── VideoDetector.kt            (video content type detection via request interception)
+├── connection/             # WebSocket client + service discovery
+│   ├── ConnectionStore.kt          (DataStore persistence for connection history)
+│   ├── NsdHelper.kt                (Network Service Discovery to find TV services)
+│   └── WebSocketClient.kt          (OkHttp-based client with auto-retry)
+├── data/                   # Local data persistence
+│   └── history/
+│       ├── DatabaseProvider.kt      (Room database singleton provider)
+│       ├── HistoryDao.kt            (Room DAO for browsing history CRUD)
+│       ├── HistoryDatabase.kt       (Room database definition)
+│       └── HistoryEntity.kt         (History entry data class: url, title, timestamp)
+├── model/                  # Protocol messages
+│   ├── Message.kt                   (serializable data classes + helper functions)
+│   └── TvDevice.kt                  (TV device connection info)
+└── ui/                     # Compose UI screens
+    ├── ConnectionScreen.kt          (NSD discovery + QR scan + manual IP + PIN auth)
+    ├── HomeScreen.kt                (main home with device connection)
     └── theme/
 ```
 
@@ -83,27 +104,39 @@ com.playbridge.sender/
 | Component | File | Purpose |
 |-----------|------|---------|
 | Browser Engine | [Components.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/Components.kt) | Singleton DI container for GeckoRuntime, BrowserStore, AddonManager |
-| Browser UI | [BrowserActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/BrowserActivity.kt) | Main browser activity with tab management, extensions, context menus |
-| Browser Toolbar | [BrowserToolbar.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/BrowserToolbar.kt) | Custom Compose toolbar with navigation, URL bar, menu |
-| Tab Management | [TabsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/TabsScreen.kt) | Tab list/grid view and management |
+| Browser UI | [BrowserActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/BrowserActivity.kt) | Main browser activity with tabs, extensions, context menus, downloads, history |
+| Browser Toolbar | [BrowserToolbar.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/BrowserToolbar.kt) | Custom Compose toolbar with navigation, URL bar (full-width on edit), menu |
+| Tab Management | [TabsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/TabsScreen.kt) | Tab list/grid overlay with thumbnails |
 | Extension Management | [ExtensionsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/ExtensionsScreen.kt) | Addon installation and management UI |
 | Addon Install | [AddonInstallDialog.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/AddonInstallDialog.kt) | Extension installation confirmation dialog |
-| Remote Control | [RemoteControlSheet.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/RemoteControlSheet.kt) | D-pad, touchpad, and player controls for TV |
-| HLS Parser | [HlsParser.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/HlsParser.kt) | Parses HLS manifests for quality selection |
-| WebSocket | [WebSocketClient.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/connection/WebSocketClient.kt) | OkHttp-based client with auto-retry (60 attempts, 5s intervals) |
-| Video Detection | [background.js](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/background.js) | Browser extension detecting video content types |
-| Content Script | [content.js](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/content.js) | Content script for in-page video detection |
+| Remote Control | [RemoteControlSheet.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/RemoteControlSheet.kt) | Context-aware D-pad, touchpad, and player controls for TV |
+| HLS Parser | [HlsParser.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/HlsParser.kt) | Parses HLS manifests for quality selection with audio track support |
+| Video Detection | [VideoDetector.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/VideoDetector.kt) | Video content type detection via request interception |
+| Downloads | [DownloadsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/DownloadsScreen.kt) | Download list UI (system + HLS/ExoPlayer downloads) |
+| Download Utils | [DownloadUtils.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/DownloadUtils.kt) | Download helper: standard files via DownloadManager, HLS via ExoPlayer DownloadService |
+| HLS Download Manager | [DownloadManagerSingleton.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/DownloadManagerSingleton.kt) | Media3 ExoPlayer download manager singleton for HLS offline downloads |
+| Media Download Service | [MediaDownloadService.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/MediaDownloadService.kt) | Foreground service for HLS media downloads with notifications |
+| Browser Settings | [SettingsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/SettingsScreen.kt) | Browser settings (e.g., toggle inbuilt extension visibility) |
+| Browser History | [HistoryScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/HistoryScreen.kt) | Browsing history list with clear functionality |
+| History Database | [DatabaseProvider.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/data/history/DatabaseProvider.kt) | Room database singleton with HistoryDao for CRUD |
 | Find on Page | [FindOnPageBar.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/FindOnPageBar.kt) | UI for finding text within web pages |
-| Service Discovery | [NsdHelper.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/connection/NsdHelper.kt) | Network Service Discovery to find TV services |
+| WebSocket | [WebSocketClient.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/connection/WebSocketClient.kt) | OkHttp-based client with auto-retry (60 attempts, 5s intervals) |
+| Connection | [ConnectionScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/ui/ConnectionScreen.kt) | NSD auto-discovery, QR scanning, manual IP entry, PIN authentication |
+| Service Discovery | [NsdHelper.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/connection/NsdHelper.kt) | Network Service Discovery to find TV services on local network |
+| Video Detection Extension | [background.js](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/background.js) | Browser extension detecting video content types via webRequest |
+| Content Script | [content.js](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/content.js) | Content script for in-page video element detection |
 
 ### Dependencies
-- **GeckoView** (Mozilla) v147 - Full Firefox engine
-- **Mozilla Android Components** v147 - Tabs, toolbar, extensions, sessions, prompts support
-- **OkHttp** v4.12 - WebSocket client
-- **CameraX** v1.4 + **ML Kit Barcode** v17.3 - QR code scanning
-- **Jetpack Compose** - UI (Material3)
-- **Kotlin Serialization** v1.7 - JSON protocol
-- **DataStore** v1.1 - Preferences persistence
+- **GeckoView** (Mozilla) v147 — Full Firefox engine
+- **Mozilla Android Components** v147 — Tabs, toolbar, extensions, sessions, prompts support
+- **OkHttp** v4.12 — WebSocket client
+- **CameraX** v1.4 + **ML Kit Barcode** v17.3 — QR code scanning
+- **Jetpack Compose** — UI (Material3)
+- **Kotlin Serialization** v1.7 — JSON protocol
+- **DataStore** v1.1 — Preferences persistence
+- **Room** — SQLite persistence for browsing history
+- **Media3 ExoPlayer** — HLS offline download support
+- **Coil** — Image loading
 
 ---
 
@@ -112,24 +145,26 @@ com.playbridge.sender/
 ### Package Structure
 ```
 com.playbridge.receiver/
-├── MainActivity.kt            # Navigation + screen state
-├── browser/                   # TV WebView browser
-│   ├── AdBlocker.kt           (WebView ad blocking with filter lists)
-│   └── BrowserActivity.kt    (WebView-based TV browser)
-├── data/                      # Persistence
-│   └── HistoryStore.kt
-├── model/                     # Protocol messages (duplicated from phone)
-│   ├── Message.kt             (sealed Command class + parsing)
-│   └── PairedDevice.kt
-├── pairing/                   # QR code display, token management
-│   ├── PairingStore.kt
-│   └── QRGenerator.kt         (ZXing QR code bitmap generation)
-├── player/                    # Video playback
-│   └── PlayerActivity.kt      (~810 lines)
-├── server/                    # WebSocket server
-│   ├── ServerService.kt       (foreground service, ~317 lines)
-│   └── WebSocketServer.kt     (Ktor-based)
-└── ui/                        # Compose TV UI screens
+├── MainActivity.kt                # Compose navigation + screen state management (~206 lines)
+├── browser/                       # TV WebView browser
+│   ├── AdBlocker.kt               (WebView ad blocking with filter list parsing)
+│   └── BrowserActivity.kt         (WebView-based TV browser with remote input)
+├── data/                          # Persistence
+│   └── HistoryStore.kt            (DataStore-based playback history)
+├── model/                         # Protocol messages (duplicated from phone)
+│   ├── Message.kt                 (sealed Command class + parsing + response builders)
+│   └── PairedDevice.kt            (paired device info)
+├── pairing/                       # QR code display, token management
+│   ├── PairingStore.kt            (DataStore persistence for auth tokens)
+│   └── QRGenerator.kt             (ZXing QR code bitmap generation)
+├── player/                        # Video playback
+│   ├── PlayerActivity.kt          (~1125 lines, ExoPlayer with HLS/DASH/RTSP)
+│   ├── SubtitleManager.kt         (SRT/VTT subtitle parser + sync engine)
+│   └── TrackSelectionDialog.kt    (Compose TV dialog for audio/video/subtitle track selection)
+├── server/                        # WebSocket server
+│   ├── ServerService.kt           (foreground service + command routing, ~385 lines)
+│   └── WebSocketServer.kt         (Ktor-based WebSocket server)
+└── ui/                            # Compose TV UI screens
     ├── HistoryScreen.kt
     ├── HomeScreen.kt
     ├── PairingScreen.kt
@@ -141,23 +176,27 @@ com.playbridge.receiver/
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| WebSocket Server | [WebSocketServer.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/server/WebSocketServer.kt) | Ktor Netty server on port 8765 |
-| Server Service | [ServerService.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/server/ServerService.kt) | Foreground service managing server lifecycle, command routing, context broadcasting |
-| Video Player | [PlayerActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/PlayerActivity.kt) | ExoPlayer with HLS/DASH/RTSP support, D-pad controls |
-| Command Parser | [Message.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/model/Message.kt) | Sealed class parsing WebSocket JSON messages |
-| Ad Blocker | [AdBlocker.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/browser/AdBlocker.kt) | WebView request interception with filter list parsing |
-| QR Generator | [QRGenerator.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/pairing/QRGenerator.kt) | ZXing-based QR code generation for pairing |
+| WebSocket Server | [WebSocketServer.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/server/WebSocketServer.kt) | Ktor Netty server on port 8765 with auth |
+| Server Service | [ServerService.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/server/ServerService.kt) | Foreground service managing server lifecycle, command routing, NSD registration, context broadcasting |
+| Video Player | [PlayerActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/PlayerActivity.kt) | ExoPlayer with HLS/DASH/RTSP support, custom controls, D-pad navigation, content sniffing, progress saving |
+| Subtitle Manager | [SubtitleManager.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/SubtitleManager.kt) | External subtitle support (SRT/VTT parsing, download, timed sync with player position) |
+| Track Selection | [TrackSelectionDialog.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/TrackSelectionDialog.kt) | Compose TV dialog for selecting audio, video, and subtitle tracks (embedded + external) |
+| Command Parser | [Message.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/model/Message.kt) | Sealed class parsing WebSocket JSON messages into typed commands |
+| Ad Blocker | [AdBlocker.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/browser/AdBlocker.kt) | WebView request interception with domain-aware filter list parsing |
+| QR Generator | [QRGenerator.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/pairing/QRGenerator.kt) | ZXing-based QR code generation for pairing (includes IP, port, token, name) |
 | Settings | [SettingsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/ui/SettingsScreen.kt) | TV app settings UI |
 
 ### Dependencies
-- **Ktor** v3.0 (Netty) - WebSocket server
-- **Media3 ExoPlayer** v1.5 - Full streaming suite (HLS, DASH, RTSP, Smooth Streaming)
-- **ZXing** v3.5 - QR code generation
-- **Jetpack Compose TV** - TV-optimized UI (tv-foundation, tv-material)
-- **Coil** v3.3 - Image loading (with OkHttp network backend)
-- **OkHttp** v4.12 - HTTP client for ExoPlayer data source + URL connections
-- **Kotlin Serialization** v1.7 - JSON protocol
-- **DataStore** v1.1 - Preferences persistence
+- **Ktor** v3.0 (Netty) — WebSocket server
+- **Media3 ExoPlayer** v1.5 — Full streaming suite (HLS, DASH, RTSP, Smooth Streaming)
+- **Media3 Session** — Media session support
+- **Media3 DataSource OkHttp** — HTTP performance with OkHttp backend
+- **ZXing** v3.5 — QR code generation
+- **Jetpack Compose TV** — TV-optimized UI (tv-foundation, tv-material)
+- **Coil** v3.3 — Image loading (with OkHttp network backend)
+- **OkHttp** v4.12 — HTTP client for ExoPlayer data source + URL connections
+- **Kotlin Serialization** v1.7 — JSON protocol
+- **DataStore** v1.1 — Preferences persistence
 
 ---
 
@@ -165,11 +204,26 @@ com.playbridge.receiver/
 
 Commands flow bidirectionally between Phone ↔ TV via WebSocket JSON messages:
 
+### Connection & Authentication Flow
+
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant TV
+    
+    Phone->>TV: WebSocket connect to ws://ip:8765
+    Phone->>TV: {"type": "auth", "pin": "1234"} or {"type": "auth", "token": "..."}
+    TV->>Phone: {"type": "auth_response", "success": true, "token": "..."}
+    Note over Phone,TV: Authenticated session established
+    Phone->>TV: Commands...
+    TV->>Phone: Status updates...
+```
+
 ### Phone → TV Commands
 
 ```json
-// Play video
-{"type": "command", "action": "play", "payload": {"url": "...", "title": "...", "headers": {...}, "contentType": "..."}}
+// Play video (with optional headers, content type, and external subtitles)
+{"type": "command", "action": "play", "payload": {"url": "...", "title": "...", "headers": {...}, "contentType": "...", "subtitles": ["url1.srt", "url2.vtt"]}}
 
 // Open browser on TV
 {"type": "command", "action": "browser", "payload": {"url": "..."}}
@@ -196,6 +250,9 @@ Commands flow bidirectionally between Phone ↔ TV via WebSocket JSON messages:
 ### TV → Phone Responses
 
 ```json
+// Authentication response
+{"type": "auth_response", "success": true, "token": "generated-token"}
+
 // Playback status
 {"type": "status", "state": "playing", "position": 12345, "duration": 60000, "title": "..."}
 
@@ -218,21 +275,25 @@ Commands flow bidirectionally between Phone ↔ TV via WebSocket JSON messages:
 - **Recommendation**: Migrate `Message.kt` and `Command` classes to the existing `protocol` shared module.
 
 
-#### 2. Large File: BrowserActivity.kt (~946 lines)
-- **Problem**: Single file handles tabs, extensions, video detection, context menus, downloading, finds on page, toolbar integration
+#### 2. Very Large File: BrowserActivity.kt (~1555 lines)
+- **Problem**: Single file handles tabs, extensions, video detection, context menus, downloading, find on page, history, settings navigation, toolbar integration, and Compose UI
 - **Impact**: Hard to test, maintain, and extend
-- **Note**: Some extraction has been done (`FindOnPageBar.kt`, `BrowserToolbar.kt`, etc.), but `BrowserActivity.kt` remains large
-- **Recommendation**: Further extract tab lifecycle and extension handling logic into manager classes
+- **Note**: Some extraction has been done (`FindOnPageBar.kt`, `BrowserToolbar.kt`, `DownloadsScreen.kt`, `HistoryScreen.kt`, `SettingsScreen.kt`, etc.), but `BrowserActivity.kt` continues to grow
+- **Recommendation**: Extract tab lifecycle, download handling, and extension management into separate manager classes
+
+#### 3. Large File: PlayerActivity.kt (~1125 lines)
+- **Problem**: Handles player initialization, SSL bypass, content sniffing, playback, controls, D-pad navigation, seek, track selection, subtitle management, progress saving, and bitmap capture
+- **Recommendation**: Extract control handling, content sniffing, and progress management into separate classes
 
 ### 🟡 Moderate Issues
 
 #### 4. Unsafe SSL in PlayerActivity
-- **Problem**: `getUnsafeOkHttpClient()` trusts all certificates (line 216)
+- **Problem**: `getUnsafeOkHttpClient()` trusts all certificates
 - **Impact**: Security vulnerability for MITM attacks
 - **Recommendation**: Make this optional/configurable with clear warnings
 
 #### 5. Hardcoded Values
-- Port `8765` hardcoded in 6 places across both apps
+- Port `8765` hardcoded across both apps
 - Retry counts (60), delays (5s) embedded in code
 - **Recommendation**: Move to a `config` object or DataStore preferences
 
@@ -255,15 +316,17 @@ Commands flow bidirectionally between Phone ↔ TV via WebSocket JSON messages:
 ## Open-Source Preparation Checklist
 
 ### ✅ Already Good
-- [x] `.gitignore` excludes `.idea`, `keystore/`, `tv/app/release`
+- [x] `.gitignore` properly configured (34 entries covering build, IDE, keystore, OS files)
 - [x] GitHub Actions CI exists ([android_build.yml](file:///Users/atulmehla/repos/personal/PlayBridge/.github/workflows/android_build.yml))
 - [x] Clean package structure with clear separation
 - [x] Well-documented protocol messages with KDoc
 - [x] Sealed class pattern for type-safe command handling (TV side)
 - [x] Context-aware remote control (phone queries TV for active screen)
-- [x] Authentication implemented (Token/PIN validation)
+- [x] Authentication implemented (Token/PIN validation via QR code pairing)
 - [x] README.md created
 - [x] LICENSE file added
+- [x] Room database for browsing history (phone)
+- [x] Subtitle support (SRT/VTT) with external URLs
 
 ### ❌ Missing for Open-Source
 
@@ -283,31 +346,7 @@ Document:
 - Remove any hardcoded API keys or tokens
 - Review commit history for accidentally committed secrets
 
-#### 6. Improve .gitignore
-Current `.gitignore` is very minimal (only 4 entries). Add:
-```gitignore
-# Build outputs
-*/build/
-*.apk
-*.aab
-
-# Local config
-local.properties
-*.jks
-*.keystore
-
-# IDE
-.idea/
-*.iml
-.gradle/
-.kotlin/
-
-# OS files
-.DS_Store
-Thumbs.db
-```
-
-#### 7. Build Configuration
+#### 4. Build Configuration
 - Both apps have `isMinifyEnabled = false` for release
 - Consider enabling for production releases with proper ProGuard rules
 
@@ -317,16 +356,19 @@ Thumbs.db
 
 ```
 PlayBridge/
-├── README.md                    # NEW
-├── LICENSE                      # NEW
+├── README.md
+├── LICENSE
 ├── CONTRIBUTING.md              # NEW
 ├── .github/
 │   ├── workflows/
 │   │   └── android_build.yml
 │   └── ISSUE_TEMPLATE/          # NEW
-├── protocol/                    # NEW: Shared module
+├── protocol/                    # Shared module (currently only NsdConstants.kt)
 │   ├── build.gradle.kts
-│   └── src/commonMain/kotlin/
+│   └── src/main/java/com/playbridge/protocol/
+│       ├── NsdConstants.kt
+│       ├── Message.kt           # NEW: Unified protocol messages
+│       └── Command.kt           # NEW: Sealed command classes
 ├── phone/
 │   ├── app/
 │   │   └── src/main/
@@ -337,9 +379,15 @@ PlayBridge/
 │   │       │   │   ├── TabsScreen.kt
 │   │       │   │   ├── ExtensionsScreen.kt
 │   │       │   │   ├── RemoteControlSheet.kt
+│   │       │   │   ├── DownloadsScreen.kt
+│   │       │   │   ├── HistoryScreen.kt
+│   │       │   │   ├── SettingsScreen.kt
 │   │       │   │   ├── HlsParser.kt
 │   │       │   │   └── ...
-│   │       │   └── ...
+│   │       │   ├── connection/
+│   │       │   ├── data/history/
+│   │       │   ├── model/
+│   │       │   └── ui/
 │   │       └── assets/extensions/
 │   └── build.gradle.kts
 └── tv/
@@ -347,15 +395,15 @@ PlayBridge/
     │   └── src/main/
     │       ├── java/com/playbridge/receiver/
     │       │   ├── browser/
-    │       │   │   ├── AdBlocker.kt
-    │       │   │   └── BrowserActivity.kt
     │       │   ├── pairing/
-    │       │   │   ├── PairingStore.kt
-    │       │   │   └── QRGenerator.kt
+    │       │   ├── player/
+    │       │   │   ├── PlayerActivity.kt   (slimmed down)
+    │       │   │   ├── SubtitleManager.kt
+    │       │   │   └── TrackSelectionDialog.kt
+    │       │   ├── server/
     │       │   ├── ui/
-    │       │   │   ├── SettingsScreen.kt
-    │       │   │   └── ...
-    │       │   └── ...
+    │       │   └── model/
+    │       └── res/layout/
     └── build.gradle.kts
 ```
 
@@ -367,8 +415,8 @@ PlayBridge/
 |----------|------|--------|
 | 🔴 High | Add CONTRIBUTING.md | 30 minutes |
 | 🟡 Medium | Migrate messages to shared protocol module | 4-8 hours |
-| 🟡 Medium | Further slim BrowserActivity.kt | 2-4 hours |
-| 🟡 Medium | Expand .gitignore | 10 minutes |
+| 🟡 Medium | Further slim BrowserActivity.kt (~1555 lines) | 2-4 hours |
+| 🟡 Medium | Extract PlayerActivity.kt logic (~1125 lines) | 2-4 hours |
 | 🟢 Low | Enable ProGuard for release | 2-4 hours |
 
 ---
@@ -380,13 +428,15 @@ PlayBridge/
 - Modern tech stack (Compose, Kotlin Serialization, Coroutines, GeckoView v147, Media3 v1.5)
 - Well-designed protocol with extensible command structure (play, browser, control, remote, mouse, browser_control, context_query)
 - Good use of sealed classes for type-safe command handling
-- Feature-rich phone app with remote control, touchpad, HLS quality parsing, extension management, and tab management
-- TV app has ad blocking, context broadcasting, settings, and foreground service architecture
+- Feature-rich phone app with remote control, touchpad, HLS quality parsing, extension management, tab management, download support (standard + HLS), browsing history (Room DB), and settings
+- TV app has ad blocking, subtitle support (SRT/VTT), track selection dialog, context broadcasting, settings, and foreground service architecture
+- Authentication fully implemented with PIN + token flow via QR code pairing
+- NSD auto-discovery for seamless phone-to-TV connection
 
 **Key Actions Before Open-Sourcing:**
-1. Add README.md and LICENSE
-2. Implement token authentication (security-critical — constructor already accepts `authToken`)
-3. Expand .gitignore
-4. Consider extracting shared protocol module for maintainability
+1. Add CONTRIBUTING.md
+2. Expand .gitignore (already done ✅)
+3. Consider extracting shared protocol module for maintainability
+4. Document security considerations (SSL bypass, local network assumptions)
 
-The codebase is in good shape for open-sourcing with relatively minor documentation additions. The authentication TODO should be addressed before public release to prevent unauthorized access on shared networks.
+The codebase is in good shape for open-sourcing with relatively minor documentation additions.
