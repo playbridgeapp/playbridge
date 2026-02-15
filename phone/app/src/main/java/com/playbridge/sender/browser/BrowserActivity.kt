@@ -124,6 +124,7 @@ class BrowserActivity : ComponentActivity() {
     }
     
     private val webSocketClient = WebSocketClient()
+    private val tabManager = TabManager()
     private lateinit var connectionStore: ConnectionStore
     private lateinit var nsdHelper: NsdHelper
 
@@ -182,80 +183,22 @@ class BrowserActivity : ComponentActivity() {
             
             // Ensure we have at least one tab
             LaunchedEffect(browserState.tabs.size) {
-                if (browserState.tabs.isEmpty()) {
-                    val tabId = UUID.randomUUID().toString()
-                    store.dispatch(TabListAction.AddTabAction(
-                        tab = TabSessionState(
-                            id = tabId,
-                            content = ContentState(url = "https://www.google.com"),
-                            parentId = null
-                        )
-                    ))
-                }
+                tabManager.ensureAtLeastOneTab(store)
             }
             
-            // Session management
-            val sessions = remember { mutableStateMapOf<String, EngineSession>() }
-            
-            // Sync sessions with tabs (create sessions for all tabs, not just selected)
-            // This ensures background tabs start loading immediately
+            // Sync sessions with tabs
             LaunchedEffect(browserState.tabs) {
-                browserState.tabs.forEach { tab ->
-                    if (!sessions.containsKey(tab.id)) {
-                        val newSession = Components.engine.createSession()
-                        if (tab.content.url.isNotEmpty() && tab.content.url != "about:blank") {
-                             newSession.loadUrl(tab.content.url)
-                        } else {
-                             newSession.loadUrl("https://www.google.com")
-                        }
-                        sessions[tab.id] = newSession
-                    }
-                }
-                // Cleanup sessions for closed tabs
-                val activeTabIds = browserState.tabs.map { it.id }.toSet()
-                // Find sessions that need to be removed
-                val removedSessionIds = sessions.keys.filter { !activeTabIds.contains(it) }
-                
-                removedSessionIds.forEach { id ->
-                    val session = sessions[id]
-                    if (session != null) {
-                        try {
-                            // Stop loading first
-                            session.stopLoading()
-                            
-                            // Use reflection to close the internal GeckoSession
-                            // This ensures media playback stops immediately
-                            val geckoEngineSession = session as? GeckoEngineSession
-                            if (geckoEngineSession != null) {
-                                val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
-                                field.isAccessible = true
-                                val internalSession = field.get(geckoEngineSession) as? GeckoSession
-                                internalSession?.close()
-                                Log.d(TAG, "Closed GeckoSession for tab $id")
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error closing session for tab $id", e)
-                        }
-                    }
-                    sessions.remove(id)
-                }
+                tabManager.syncSessions(browserState.tabs)
             }
+            
+            val sessions = tabManager.sessions
             
             val selectedTabId = browserState.selectedTabId
             val selectedTab = browserState.tabs.find { it.id == selectedTabId }
             val session = if (selectedTab != null) sessions[selectedTab.id] else null
             
             // State for download dialog
-            data class PendingDownload(
-                val url: String,
-                val fileName: String? = null,
-                val contentType: String? = null,
-                val userAgent: String? = null,
-                val cookie: String? = null,
-                val referer: String? = null
-            )
             var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
-            var downloadDialogCallback by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
             
             // If no session is available (e.g. during init), show loading or empty
             if (session == null) {
@@ -299,52 +242,10 @@ class BrowserActivity : ComponentActivity() {
             // Find in Page state
             var showFindBar by remember { mutableStateOf(false) }
             
-            // Helper to get GeckoSession from EngineSession using reflection
-            fun getGeckoSession(engineSession: EngineSession?): GeckoSession? {
-                 if (engineSession == null) return null
-                 val geckoEngineSession = engineSession as? GeckoEngineSession ?: return null
-                 try {
-                     val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
-                     field.isAccessible = true
-                     return field.get(geckoEngineSession) as? GeckoSession
-                 } catch (e: Exception) {
-                     Log.e(TAG, "Error accessing GeckoSession", e)
-                     return null
-                 }
-            }
-
-            // Find helper
-            fun findInPage(text: String, direction: Int = 0) {
-                 val geckoSession = getGeckoSession(session)
-                 if (geckoSession != null) {
-                     try {
-                         // Use reflection to get constants to avoid unresolved references
-                         val finderClass = Class.forName("org.mozilla.geckoview.GeckoSession\$Finder")
-                         val findDisplayHighlights = finderClass.getField("FIND_DISPLAY_HIGHLIGHTS").getInt(null)
-                         val findBackwards = finderClass.getField("FIND_BACKWARDS").getInt(null)
-                         
-                         val flags = if (direction == 0) {
-                             findDisplayHighlights
-                         } else {
-                             findDisplayHighlights or findBackwards
-                         }
-                         
-                         geckoSession.finder.find(text, flags)
-                     } catch (e: Exception) {
-                         Log.e(TAG, "Error finding in page", e)
-                         // Fallback to finding without flags if reflection fails
-                         try {
-                              geckoSession.finder.find(text, 0)
-                         } catch (e2: Exception) {}
-                     }
-                 }
-            }
-            
             // Clear finding when bar closes
             LaunchedEffect(showFindBar) {
                 if (!showFindBar) {
-                     val geckoSession = getGeckoSession(session)
-                     geckoSession?.finder?.clear()
+                    tabManager.clearFind(session)
                 }
             }
 
@@ -381,399 +282,118 @@ class BrowserActivity : ComponentActivity() {
             // Context menu state for "Open in new tab"
             var contextMenuUrl by remember { mutableStateOf<String?>(null) }
             
-            if (contextMenuUrl != null) {
-                Dialog(onDismissRequest = { contextMenuUrl = null }) {
-                    Card(
-                        shape = MaterialTheme.shapes.medium,
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp).width(IntrinsicSize.Max)) {
-                            Text(
-                                text = "Link Options",
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.padding(bottom = 16.dp)
-                            )
-                            
-                            Text(
-                                text = contextMenuUrl!!,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(bottom = 16.dp),
-                                maxLines = 3,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                            )
-
-                            // Play on TV
-                            if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                FilledTonalButton(
-                                    onClick = {
-                                        val cmd = com.playbridge.protocol.createPlayCommandJson(url = contextMenuUrl!!)
-                                        webSocketClient.send(cmd)
-                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
-                                        contextMenuUrl = null
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Play on TV")
-                                }
-                                Spacer(Modifier.height(8.dp))
-                            }
-
-                            // Open in new tab
-                            OutlinedButton(
-                                onClick = {
-                                    val newTabId = UUID.randomUUID().toString()
-                                    store.dispatch(TabListAction.AddTabAction(
-                                        tab = TabSessionState(
-                                            id = newTabId,
-                                            content = ContentState(url = contextMenuUrl!!),
-                                            parentId = null
-                                        ),
-                                        select = true
-                                    ))
-                                    Toast.makeText(this@BrowserActivity, "Opened in new tab", Toast.LENGTH_SHORT).show()
-                                    contextMenuUrl = null
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.OpenInNew, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Open in new tab")
-                            }
-                            Spacer(Modifier.height(8.dp))
-
-                            // Copy Link
-                            OutlinedButton(
-                                onClick = {
-                                    clipboardManager.setText(AnnotatedString(contextMenuUrl!!))
-                                    Toast.makeText(this@BrowserActivity, "Link copied", Toast.LENGTH_SHORT).show()
-                                    contextMenuUrl = null
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Copy Link")
-                            }
-                            
-                            Spacer(Modifier.height(8.dp))
-                            
-                            // Cancel
-                            TextButton(
-                                onClick = { contextMenuUrl = null },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Cancel")
-                            }
-                        }
-                    }
-                }
-            }
+            // Mutable state wrappers for SessionObserverSetup
+            val currentUrlState = remember { mutableStateOf(currentUrl) }
+            val isLoadingState = remember { mutableStateOf(isLoading) }
+            val canGoBackState = remember { mutableStateOf(browserCanGoBack) }
+            val canGoForwardState = remember { mutableStateOf(browserCanGoForward) }
+            val contextMenuUrlState = remember { mutableStateOf(contextMenuUrl) }
+            val previousUrlState = remember { mutableStateOf(previousUrl) }
+            val pendingDownloadState = remember { mutableStateOf(pendingDownload) }
             
-            // Register navigation observer with download interception
-            DisposableEffect(session) {
-                val observer = object : EngineSession.Observer {
-                    override fun onLocationChange(url: String, hasUserGesture: Boolean) {
-                         // Update store state too to keep it in sync
-                        if (selectedTab != null) {
-                            store.dispatch(ContentAction.UpdateUrlAction(
-                                sessionId = selectedTab.id,
-                                url = url
-                            ))
-                        }
-
-                        // Get base URL without hash/fragment
-                        val baseUrl = url.substringBefore("#")
-                        val previousBaseUrl = previousUrl.substringBefore("#")
-                        
-                        // Record history
-                        // Record history
-                        if (baseUrl != previousBaseUrl && !url.startsWith("about:")) {
-                            scope.launch(Dispatchers.IO) {
-                                val title = selectedTab?.content?.title
-                                historyDao.insert(HistoryEntity(url = url, title = title, timestamp = System.currentTimeMillis()))
-                            }
-                        }
-                        
-                        currentUrl = url
-                        
-                        // Clear detected videos only when navigating to a different page
-                        // (ignore hash/fragment changes on the same page)
-                        if (baseUrl != previousBaseUrl && previousBaseUrl.isNotEmpty()) {
-                            VideoDetector.clear()
-                            Log.d(TAG, "Cleared detected videos - navigated from $previousBaseUrl to $baseUrl")
-                        }
-                        
-                        previousUrl = url
-                        
-                        // Check for playbridge-video hash signal from content script
-                        if (url.contains("#playbridge-video=")) {
-                            try {
-                                val hashData = url.substringAfter("#playbridge-video=")
-                                val decoded = java.net.URLDecoder.decode(hashData, "UTF-8")
-                                Log.d(TAG, "PlayBridge video signal: $decoded")
-                                
-                                val json = kotlinx.serialization.json.Json.parseToJsonElement(decoded)
-                                if (json is kotlinx.serialization.json.JsonObject) {
-                                    VideoDetector.onMessageReceived(kotlinx.serialization.json.JsonObject(mapOf(
-                                        "type" to kotlinx.serialization.json.JsonPrimitive("video_detected"),
-                                        "url" to (json["url"] ?: kotlinx.serialization.json.JsonPrimitive("")),
-                                        "contentType" to (json["contentType"] ?: kotlinx.serialization.json.JsonNull),
-                                        "detectedBy" to (json["detectedBy"] ?: kotlinx.serialization.json.JsonPrimitive("unknown")),
-                                        "originUrl" to (json["originUrl"] ?: kotlinx.serialization.json.JsonNull),
-                                        "headers" to (json["headers"] ?: kotlinx.serialization.json.JsonNull),
-                                        "timestamp" to (json["timestamp"] ?: kotlinx.serialization.json.JsonPrimitive(System.currentTimeMillis()))
-                                    )))
-                                    Log.d(TAG, "Video added to VideoDetector from hash signal")
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error parsing playbridge-video hash", e)
-                            }
-                        }
-                    }
-                    override fun onLoadingStateChange(loading: Boolean) {
-                        isLoading = loading
-                        if (selectedTab != null) {
-                            // store.dispatch(ContentAction.UpdateLoading(
-                            //    sessionId = selectedTab.id,
-                            //    loading = loading
-                            // ))
-                        }
-                    }
-                    override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
-                        canGoBack?.let { browserCanGoBack = it }
-                        canGoForward?.let { browserCanGoForward = it }
-                    }
-                    
-                    // Detect video count from page title [PlayBridge:X] marker
-                    override fun onTitleChange(title: String) {
-                        Log.d(TAG, "Title changed: $title")
-                        if (selectedTab != null) {
-                            store.dispatch(ContentAction.UpdateTitleAction(
-                                sessionId = selectedTab.id,
-                                title = title
-                            ))
-                        }
-                        val match = Regex("\\[PlayBridge:(\\d+)\\]").find(title)
-                        if (match != null) {
-                            val count = match.groupValues[1].toIntOrNull() ?: 0
-                            Log.d(TAG, "PlayBridge video count detected: $count")
-                            // Note: The content script also stores videos in localStorage
-                            // but we can't read it directly. The count marker tells us videos exist.
-                        }
-                    }
-                    
-                    // Intercept downloads - this catches XPI files from AMO
-                    override fun onExternalResource(
-                        url: String,
-                        fileName: String?,
-                        contentLength: Long?,
-                        contentType: String?,
-                        cookie: String?,
-                        userAgent: String?,
-                        isPrivate: Boolean,
-                        skipConfirmation: Boolean,
-                        openInApp: Boolean,
-                        response: Response?
-                    ) {
-                        Log.d(TAG, "Download intercepted: $url, type: $contentType, file: $fileName")
-                        
-                        // Check if this is an XPI file (Firefox extension)
-                        if (url.endsWith(".xpi") || contentType == "application/x-xpinstall") {
-                            Log.d(TAG, "XPI detected, installing addon from: $url")
-                            
-                            runOnUiThread {
-                                Toast.makeText(
-                                    this@BrowserActivity,
-                                    "Installing extension...",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                            
-                            // Install the addon via AddonManager
-                            CoroutineScope(Dispatchers.Main).launch {
-                                try {
-                                    Components.addonManager.installAddon(
-                                        url = url,
-                                        onSuccess = { addon ->
-                                            Log.d(TAG, "Addon installed: ${addon.id}")
-                                            runOnUiThread {
-                                                Toast.makeText(
-                                                    this@BrowserActivity,
-                                                    "Extension installed successfully!",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                            }
-                                        },
-                                        onError = { throwable ->
-                                            Log.e(TAG, "Addon install failed", throwable)
-                                            runOnUiThread {
-                                                Toast.makeText(
-                                                    this@BrowserActivity,
-                                                    "Install failed: ${throwable.message}",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                            }
-                                        }
-                                    )
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Error installing addon", e)
-                                }
-                            }
-                        } else {
-                            // General download interception
-                             runOnUiThread {
-                                 // Check if we already have a pending dialog for this URL to avoid double triggering
-                                 // Check if we already have a pending dialog for this URL to avoid double triggering
-                                 if (pendingDownload?.url != url) {
-                                     pendingDownload = PendingDownload(
-                                         url = url,
-                                         fileName = fileName,
-                                         contentType = contentType,
-                                         userAgent = userAgent,
-                                         cookie = cookie,
-                                         referer = currentUrl
-                                     )
-                                     downloadDialogCallback = { _ -> }
-                                 }
-                             }
-                        }
-                    }
+            // Sync wrapper states back to local vars
+            currentUrl = currentUrlState.value
+            isLoading = isLoadingState.value
+            browserCanGoBack = canGoBackState.value
+            browserCanGoForward = canGoForwardState.value
+            contextMenuUrl = contextMenuUrlState.value
+            previousUrl = previousUrlState.value
+            pendingDownload = pendingDownloadState.value
+            
+            // Link context menu
+            LinkContextMenu(
+                url = contextMenuUrl,
+                isConnected = connectionState is WebSocketClient.ConnectionState.Connected,
+                onPlayOnTv = { linkUrl ->
+                    val cmd = com.playbridge.protocol.createPlayCommandJson(url = linkUrl)
+                    webSocketClient.send(cmd)
+                    Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                    contextMenuUrl = null
+                    contextMenuUrlState.value = null
+                },
+                onOpenInNewTab = { linkUrl ->
+                    tabManager.createTab(linkUrl, store)
+                    Toast.makeText(this@BrowserActivity, "Opened in new tab", Toast.LENGTH_SHORT).show()
+                    contextMenuUrl = null
+                    contextMenuUrlState.value = null
+                },
+                onCopyLink = { linkUrl ->
+                    clipboardManager.setText(AnnotatedString(linkUrl))
+                    Toast.makeText(this@BrowserActivity, "Link copied", Toast.LENGTH_SHORT).show()
+                    contextMenuUrl = null
+                    contextMenuUrlState.value = null
+                },
+                onDismiss = {
+                    contextMenuUrl = null
+                    contextMenuUrlState.value = null
                 }
-                session.register(observer)
-                
-                // Set up GeckoSession delegates using reflection (since geckoSession is internal)
-                val geckoEngineSession = session as? GeckoEngineSession
-                
-                // Variables to hold original dlegates for restoration
-                var originalNavDelegate: GeckoSession.NavigationDelegate? = null
-                var originalContentDelegate: GeckoSession.ContentDelegate? = null
-                var geckoSessionInstance: GeckoSession? = null
-
-                if (geckoEngineSession != null) {
+            )
+            
+            // Register navigation observer & GeckoSession delegates
+            SessionObserverSetup(
+                session = session,
+                selectedTab = selectedTab,
+                store = store,
+                tabManager = tabManager,
+                scope = scope,
+                currentUrl = currentUrlState,
+                isLoading = isLoadingState,
+                browserCanGoBack = canGoBackState,
+                browserCanGoForward = canGoForwardState,
+                contextMenuUrl = contextMenuUrlState,
+                previousUrl = previousUrlState,
+                historyDao = historyDao,
+                pendingDownload = pendingDownloadState,
+                onXpiDetected = { url ->
+                    runOnUiThread {
+                        Toast.makeText(this@BrowserActivity, "Installing extension...", Toast.LENGTH_SHORT).show()
+                    }
+                    CoroutineScope(Dispatchers.Main).launch {
+                        try {
+                            Components.addonManager.installAddon(
+                                url = url,
+                                onSuccess = { addon ->
+                                    Log.d(TAG, "Addon installed: ${addon.id}")
+                                    runOnUiThread {
+                                        Toast.makeText(this@BrowserActivity, "Extension installed successfully!", Toast.LENGTH_LONG).show()
+                                    }
+                                },
+                                onError = { throwable ->
+                                    Log.e(TAG, "Addon install failed", throwable)
+                                    runOnUiThread {
+                                        Toast.makeText(this@BrowserActivity, "Install failed: ${throwable.message}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error installing addon", e)
+                        }
+                    }
+                },
+                onVideoHashDetected = { url ->
                     try {
-                        val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
-                        field.isAccessible = true
-                        val internalSession = field.get(geckoEngineSession) as? GeckoSession
-                        geckoSessionInstance = internalSession
+                        val hashData = url.substringAfter("#playbridge-video=")
+                        val decoded = java.net.URLDecoder.decode(hashData, "UTF-8")
+                        Log.d(TAG, "PlayBridge video signal: $decoded")
                         
-                        internalSession?.let { gs ->
-                            // NavigationDelegate proxy restored for onNewSession
-                            // We forward other calls (like onLoadRequest) to the original delegate to avoid download issues
-                            val existingNav = gs.navigationDelegate
-                            originalNavDelegate = existingNav
-                            
-                            val navProxy = java.lang.reflect.Proxy.newProxyInstance(
-                                GeckoSession.NavigationDelegate::class.java.classLoader,
-                                arrayOf(GeckoSession.NavigationDelegate::class.java)
-                            ) { _, method, args ->
-                                if (method.name == "onNewSession" && args != null && args.size >= 2) {
-                                    val uri = args[1] as? String
-                                    if (uri != null) {
-                                        Log.d(TAG, "Opening new tab for: $uri")
-                                        
-                                        // We cannot return a pre-opened session (which Components.engine.createSession() likely provides).
-                                        // Returning null declines the engine-level new window, but we manually create a new tab in our app state.
-                                        // This achieves the desired "Open in New Tab" behavior without the crash.
-                                        val newTabId = UUID.randomUUID().toString()
-                                        
-                                        runOnUiThread {
-                                            store.dispatch(TabListAction.AddTabAction(
-                                                tab = TabSessionState(
-                                                    id = newTabId,
-                                                    content = ContentState(url = uri),
-                                                    parentId = selectedTab?.id
-                                                ),
-                                                select = true
-                                            ))
-                                        }
-                                        return@newProxyInstance GeckoResult.fromValue(null)
-                                    }
-
-                                }
-                                
-                                // Forward to original delegate for everything else (including onLoadRequest)
-                                if (existingNav != null) {
-                                    try {
-                                        if (args != null) method.invoke(existingNav, *args)
-                                        else method.invoke(existingNav)
-                                    } catch (e: java.lang.reflect.InvocationTargetException) {
-                                        throw e.targetException
-                                    }
-                                } else {
-                                    // Default return values if no original delegate
-                                    null
-                                }
-                            } as GeckoSession.NavigationDelegate
-                            gs.navigationDelegate = navProxy
-
-                            
-                            // Wrap ContentDelegate using Proxy
-                            val existingContent = gs.contentDelegate
-                            originalContentDelegate = existingContent
-                            
-                            if (existingContent != null) {
-                                val contentProxy = java.lang.reflect.Proxy.newProxyInstance(
-                                    GeckoSession.ContentDelegate::class.java.classLoader,
-                                    arrayOf(GeckoSession.ContentDelegate::class.java)
-                                ) { _, method, args ->
-                                    if (method.name == "onContextMenuItemSelected" && args != null && args.size >= 2) {
-                                        val item = args[1]
-                                        if (item != null) {
-                                            try {
-                                                 val idField = item.javaClass.getField("id")
-                                                 val id = idField.getInt(item)
-                                                 val idOpenInNewTabField = item.javaClass.getField("ID_OPEN_IN_NEW_TAB")
-                                                 val idOpenInNewTab = idOpenInNewTabField.getInt(null)
-                                                 
-                                                 if (id == idOpenInNewTab) {
-                                                     return@newProxyInstance true
-                                                 }
-                                            } catch (e: Exception) {
-                                                // Ignore reflection errors
-                                            }
-                                        }
-                                    }
-                                    if (method.name == "onContextMenu" && args != null && args.size >= 4) {
-                                        val element = args[3]
-                                        if (element != null) {
-                                            try {
-                                                val linkUriField = element.javaClass.getField("linkUri")
-                                                val linkUri = linkUriField.get(element) as? String
-                                                if (linkUri != null) {
-                                                    contextMenuUrl = linkUri
-                                                }
-                                            } catch (e: Exception) {
-                                                // Ignore reflection errors
-                                            }
-                                        }
-                                    }
-                                    try {
-                                        if (args != null) method.invoke(existingContent, *args)
-                                        else method.invoke(existingContent)
-                                    } catch (e: java.lang.reflect.InvocationTargetException) {
-                                        throw e.targetException
-                                    }
-                                } as GeckoSession.ContentDelegate
-                                gs.contentDelegate = contentProxy
-                            }
+                        val json = kotlinx.serialization.json.Json.parseToJsonElement(decoded)
+                        if (json is kotlinx.serialization.json.JsonObject) {
+                            VideoDetector.onMessageReceived(kotlinx.serialization.json.JsonObject(mapOf(
+                                "type" to kotlinx.serialization.json.JsonPrimitive("video_detected"),
+                                "url" to (json["url"] ?: kotlinx.serialization.json.JsonPrimitive("")),
+                                "contentType" to (json["contentType"] ?: kotlinx.serialization.json.JsonNull),
+                                "detectedBy" to (json["detectedBy"] ?: kotlinx.serialization.json.JsonPrimitive("unknown")),
+                                "originUrl" to (json["originUrl"] ?: kotlinx.serialization.json.JsonNull),
+                                "headers" to (json["headers"] ?: kotlinx.serialization.json.JsonNull),
+                                "timestamp" to (json["timestamp"] ?: kotlinx.serialization.json.JsonPrimitive(System.currentTimeMillis()))
+                            )))
+                            Log.d(TAG, "Video added to VideoDetector from hash signal")
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to setup GeckoSession delegates", e)
+                        Log.e(TAG, "Error parsing playbridge-video hash", e)
                     }
                 }
-                
-                onDispose {
-                    session.unregister(observer)
-                    // Restore original delegates
-                    geckoSessionInstance?.let { gs ->
-                        if (originalNavDelegate != null) gs.navigationDelegate = originalNavDelegate
-                        if (originalContentDelegate != null) gs.contentDelegate = originalContentDelegate
-                    }
-                }
-            }
+            )
 
 
             PlayBridgeTheme {
@@ -1032,11 +652,11 @@ class BrowserActivity : ComponentActivity() {
 
                                     
                                     // Find on Page Bar
-                                    if (showFindBar) {
+                                     if (showFindBar) {
                                         FindOnPageBar(
-                                            onFind = { text -> findInPage(text) },
-                                            onNext = { findInPage("", 0) },
-                                            onPrev = { findInPage("", 1) },
+                                            onFind = { text -> tabManager.findInPage(session, text) },
+                                            onNext = { tabManager.findInPage(session, "", 0) },
+                                            onPrev = { tabManager.findInPage(session, "", 1) },
                                             onClose = { showFindBar = false }
                                         )
                                     }
@@ -1202,22 +822,14 @@ class BrowserActivity : ComponentActivity() {
                                             BackHandler { currentScreen = Screen.Browser }
                                             TabsScreen(
                                                 onTabSelected = { tabId ->
-                                                    store.dispatch(TabListAction.SelectTabAction(tabId))
+                                                    tabManager.selectTab(tabId, store)
                                                     currentScreen = Screen.Browser
                                                 },
                                                 onTabClosed = { tabId ->
-                                                    store.dispatch(TabListAction.RemoveTabAction(tabId))
+                                                    tabManager.closeTab(tabId, store)
                                                 },
                                                 onNewTab = {
-                                                    val newId = UUID.randomUUID().toString()
-                                                    store.dispatch(TabListAction.AddTabAction(
-                                                        tab = TabSessionState(
-                                                            id = newId,
-                                                            content = ContentState(url = "https://www.google.com"),
-                                                            parentId = null
-                                                        ),
-                                                        select = true
-                                                    ))
+                                                    tabManager.createTab("https://www.google.com", store)
                                                     currentScreen = Screen.Browser
                                                 }
                                             )
@@ -1228,15 +840,7 @@ class BrowserActivity : ComponentActivity() {
                                                 session = session,
                                                 onBack = { currentScreen = Screen.Browser },
                                                 onAddExtension = {
-                                                    val newId = UUID.randomUUID().toString()
-                                                    store.dispatch(TabListAction.AddTabAction(
-                                                        tab = TabSessionState(
-                                                            id = newId,
-                                                            content = ContentState(url = "https://addons.mozilla.org/android/"),
-                                                            parentId = null
-                                                        ),
-                                                        select = true
-                                                    ))
+                                                    tabManager.createTab("https://addons.mozilla.org/android/", store)
                                                     currentScreen = Screen.Browser
                                                 }
                                             )
@@ -1435,71 +1039,27 @@ class BrowserActivity : ComponentActivity() {
                 }
 
                 // Download Confirmation Dialog
-                if (pendingDownload != null) {
-                    AlertDialog(
-                        onDismissRequest = {
-                            pendingDownload = null
-                            downloadDialogCallback?.invoke(false)
-                            downloadDialogCallback = null
-                        },
-                        title = { Text("Download file?") },
-                        text = { 
-                            Column {
-                                Text("Do you want to download this file?")
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = pendingDownload!!.url,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 3,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                )
-                                pendingDownload!!.fileName?.let {
-                                     Spacer(modifier = Modifier.height(4.dp))
-                                     Text("File: $it", style = MaterialTheme.typography.bodySmall)
-                                }
-                                pendingDownload!!.contentType?.let {
-                                     Spacer(modifier = Modifier.height(4.dp))
-                                     Text("Type: $it", style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(
-                                onClick = {
-                                    val download = pendingDownload!!
-                                    DownloadUtils.enqueueDownload(
-                                        this@BrowserActivity,
-                                        download.url,
-                                        download.fileName,
-                                        download.contentType,
-                                        download.userAgent,
-                                        download.cookie,
-                                        download.referer
-                                    )
-                                    Toast.makeText(this@BrowserActivity, "Download started", Toast.LENGTH_SHORT).show()
-                                    
-                                    pendingDownload = null
-                                    downloadDialogCallback?.invoke(true)
-                                    downloadDialogCallback = null
-                                }
-                            ) {
-                                Text("Download")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = {
-                                    pendingDownload = null
-                                    downloadDialogCallback?.invoke(false)
-                                    downloadDialogCallback = null
-                                }
-                            ) {
-                                Text("Cancel")
-                            }
-                        }
-                    )
-                }
+                DownloadConfirmDialog(
+                    pendingDownload = pendingDownload,
+                    onConfirm = { download ->
+                        DownloadUtils.enqueueDownload(
+                            this@BrowserActivity,
+                            download.url,
+                            download.fileName,
+                            download.contentType,
+                            download.userAgent,
+                            download.cookie,
+                            download.referer
+                        )
+                        Toast.makeText(this@BrowserActivity, "Download started", Toast.LENGTH_SHORT).show()
+                        pendingDownload = null
+                        pendingDownloadState.value = null
+                    },
+                    onDismiss = {
+                        pendingDownload = null
+                        pendingDownloadState.value = null
+                    }
+                )
             }
         }
     }

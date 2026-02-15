@@ -64,10 +64,11 @@ graph TB
 com.playbridge.sender/
 ├── browser/                # GeckoView browser, video detection, extensions, downloads
 │   ├── AddonInstallDialog.kt       (extension install confirmation dialog)
-│   ├── BrowserActivity.kt          (~1555 lines - VERY LARGE)
+│   ├── BrowserActivity.kt          (main browser activity, ~1115 lines)
 │   ├── BrowserToolbar.kt           (custom Compose toolbar with URL bar, navigation, menu)
 │   ├── Components.kt               (singleton DI container for GeckoRuntime, BrowserStore)
 │   ├── DetectedVideosSheet.kt      (bottom sheet for detected videos + quality selection)
+│   ├── DownloadConfirmDialog.kt    (download confirmation dialog + PendingDownload model)
 │   ├── DownloadManagerSingleton.kt  (Media3 ExoPlayer download manager for HLS)
 │   ├── DownloadsScreen.kt          (downloads list UI with progress tracking)
 │   ├── DownloadUtils.kt            (download helpers: enqueue, file size, error strings)
@@ -75,9 +76,12 @@ com.playbridge.sender/
 │   ├── FindOnPageBar.kt            (UI for in-page text search)
 │   ├── HistoryScreen.kt            (browsing history list UI)
 │   ├── HlsParser.kt               (HLS manifest parsing for quality selection)
+│   ├── LinkContextMenu.kt          (long-press link context menu dialog)
 │   ├── MediaDownloadService.kt     (foreground service for HLS/media downloads)
 │   ├── RemoteControlSheet.kt       (TV remote control: D-pad, touchpad, player controls)
+│   ├── SessionObserverSetup.kt     (session observer + GeckoSession delegate proxies)
 │   ├── SettingsScreen.kt           (browser settings: inbuilt extension visibility)
+│   ├── TabManager.kt               (tab/session lifecycle, find-in-page helpers)
 │   ├── TabsScreen.kt               (tab management overlay)
 │   └── VideoDetector.kt            (video content type detection via request interception)
 ├── connection/             # WebSocket client + service discovery
@@ -104,9 +108,11 @@ com.playbridge.sender/
 | Component | File | Purpose |
 |-----------|------|---------|
 | Browser Engine | [Components.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/Components.kt) | Singleton DI container for GeckoRuntime, BrowserStore, AddonManager |
-| Browser UI | [BrowserActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/BrowserActivity.kt) | Main browser activity with tabs, extensions, context menus, downloads, history |
+| Browser UI | [BrowserActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/BrowserActivity.kt) | Main browser activity with UI composition, screen routing, toolbar, dropdown menu |
 | Browser Toolbar | [BrowserToolbar.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/BrowserToolbar.kt) | Custom Compose toolbar with navigation, URL bar (full-width on edit), menu |
-| Tab Management | [TabsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/TabsScreen.kt) | Tab list/grid overlay with thumbnails |
+| Tab Management | [TabManager.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/TabManager.kt) | Tab/session lifecycle, session sync, find-in-page helpers |
+| Tab UI | [TabsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/TabsScreen.kt) | Tab list/grid overlay with thumbnails |
+| Session Observer | [SessionObserverSetup.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/SessionObserverSetup.kt) | EngineSession.Observer + GeckoSession delegate proxies |
 | Extension Management | [ExtensionsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/ExtensionsScreen.kt) | Addon installation and management UI |
 | Addon Install | [AddonInstallDialog.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/AddonInstallDialog.kt) | Extension installation confirmation dialog |
 | Remote Control | [RemoteControlSheet.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/RemoteControlSheet.kt) | Context-aware D-pad, touchpad, and player controls for TV |
@@ -286,11 +292,8 @@ sequenceDiagram
 
 ### 🔴 Critical Issues
 
-#### 2. Very Large File: BrowserActivity.kt (~1555 lines)
-- **Problem**: Single file handles tabs, extensions, video detection, context menus, downloading, find on page, history, settings navigation, toolbar integration, and Compose UI
-- **Impact**: Hard to test, maintain, and extend
-- **Note**: Some extraction has been done (`FindOnPageBar.kt`, `BrowserToolbar.kt`, `DownloadsScreen.kt`, `HistoryScreen.kt`, `SettingsScreen.kt`, etc.), but `BrowserActivity.kt` continues to grow
-- **Recommendation**: Extract tab lifecycle, download handling, and extension management into separate manager classes
+#### ~~2. Very Large File: BrowserActivity.kt (~1555 lines)~~
+- ✅ **RESOLVED**: Extracted `TabManager.kt`, `SessionObserverSetup.kt`, `DownloadConfirmDialog.kt`, and `LinkContextMenu.kt`. `BrowserActivity.kt` reduced to ~1115 lines.
 
 #### 3. Large File: PlayerActivity.kt (~1125 lines)
 - **Problem**: Handles player initialization, SSL bypass, content sniffing, playback, controls, D-pad navigation, seek, track selection, subtitle management, progress saving, and bitmap capture
@@ -385,8 +388,12 @@ PlayBridge/
 │   │   └── src/main/
 │   │       ├── java/com/playbridge/sender/
 │   │       │   ├── browser/
-│   │       │   │   ├── BrowserActivity.kt    (slimmed down)
+│   │       │   │   ├── BrowserActivity.kt    (~1115 lines, slimmed down)
 │   │       │   │   ├── BrowserToolbar.kt
+│   │       │   │   ├── TabManager.kt           (tab/session lifecycle)
+│   │       │   │   ├── SessionObserverSetup.kt (observer + delegates)
+│   │       │   │   ├── DownloadConfirmDialog.kt
+│   │       │   │   ├── LinkContextMenu.kt
 │   │       │   │   ├── TabsScreen.kt
 │   │       │   │   ├── ExtensionsScreen.kt
 │   │       │   │   ├── RemoteControlSheet.kt
@@ -426,7 +433,7 @@ PlayBridge/
 |----------|------|--------|
 | 🔴 High | Add CONTRIBUTING.md | 30 minutes |
 | ~~🟡 Medium~~ | ~~Migrate messages to shared protocol module~~ | ✅ Done |
-| 🟡 Medium | Further slim BrowserActivity.kt (~1555 lines) | 2-4 hours |
+| ~~🟡 Medium~~ | ~~Further slim BrowserActivity.kt (~1555 lines)~~ | ✅ Done |
 | 🟡 Medium | Extract PlayerActivity.kt logic (~1125 lines) | 2-4 hours |
 | 🟢 Low | Enable ProGuard for release | 2-4 hours |
 
