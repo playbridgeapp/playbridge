@@ -1,3 +1,4 @@
+
 [versions]
 agp = "9.0.0"
 coreKtx = "1.17.0"
@@ -19,6 +20,8 @@ geckoview = "147.0.20260105210555"
 coil = "2.7.0"
 media3 = "1.2.1"
 zxing = "3.5.2"
+room = "2.8.4"
+ksp = "2.2.10-2.0.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -90,8 +93,14 @@ androidx-media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exop
 androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 
+# Room
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 

@@ -56,6 +56,13 @@ import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import mozilla.components.lib.state.ext.flow
 import kotlinx.coroutines.flow.first
+import com.playbridge.sender.data.history.DatabaseProvider
+import com.playbridge.sender.data.history.HistoryEntity
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.zIndex
 
 @Composable
 fun AnimatedMenuItem(
@@ -140,6 +147,16 @@ class BrowserActivity : ComponentActivity() {
             val connectionState by webSocketClient.connectionState.collectAsState()
             val history by connectionStore.deviceHistory.collectAsState(initial = emptyList())
             val scope = rememberCoroutineScope()
+            
+            // Database and History
+            val database = remember { DatabaseProvider.getDatabase(applicationContext) }
+            val historyDao = remember { database.historyDao() }
+            
+            // Suggestions State
+            var isEditing by remember { mutableStateOf(false) }
+            var editUrl by remember { mutableStateOf("") }
+            val suggestions by historyDao.search(editUrl).collectAsState(initial = emptyList())
+            val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
             
             // Auto-connect to stored TV device
             LaunchedEffect(Unit) {
@@ -471,6 +488,15 @@ class BrowserActivity : ComponentActivity() {
                         val baseUrl = url.substringBefore("#")
                         val previousBaseUrl = previousUrl.substringBefore("#")
                         
+                        // Record history
+                        // Record history
+                        if (baseUrl != previousBaseUrl && !url.startsWith("about:")) {
+                            scope.launch(Dispatchers.IO) {
+                                val title = selectedTab?.content?.title
+                                historyDao.insert(HistoryEntity(url = url, title = title, timestamp = System.currentTimeMillis()))
+                            }
+                        }
+                        
                         currentUrl = url
                         
                         // Clear detected videos only when navigating to a different page
@@ -764,8 +790,18 @@ class BrowserActivity : ComponentActivity() {
                                             canGoForward = browserCanGoForward,
                                             videoCount = videoCount,
                                             tabCount = browserState.tabs.size,
-                                            onUrlChange = { },
-                                            onNavigate = { url -> session.loadUrl(url) },
+                                            isEditing = isEditing,
+                                            onEditingChange = { editing -> 
+                                                isEditing = editing
+                                                if (editing) {
+                                                    editUrl = currentUrl
+                                                }
+                                            },
+                                            onUrlChange = { url -> editUrl = url },
+                                            onNavigate = { url -> 
+                                                session.loadUrl(url)
+                                                isEditing = false
+                                            },
                                             onBack = { session.goBack() },
                                             onForward = { session.goForward() },
                                             onRefresh = { session.reload() },
@@ -881,6 +917,21 @@ class BrowserActivity : ComponentActivity() {
                                                     index = 3,
                                                     onClick = {
                                                         menuExpanded = false
+                                                        currentScreen = Screen.History
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("History", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.History, null, tint = MaterialTheme.colorScheme.onSurface) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
+
+                                                AnimatedMenuItem(
+                                                    index = 4,
+                                                    onClick = {
+                                                        menuExpanded = false
                                                         showFindBar = true
                                                     }
                                                 ) { onClick ->
@@ -975,8 +1026,10 @@ class BrowserActivity : ComponentActivity() {
                                                 
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                             }
-                                        }
-                                    )
+                                            }
+                                        )
+                                        
+
                                     
                                     // Find on Page Bar
                                     if (showFindBar) {
@@ -1022,6 +1075,9 @@ class BrowserActivity : ComponentActivity() {
                                         }
                                     }
                                 )
+                            }
+                            Screen.History -> {
+                                // No TopAppBar here as HistoryScreen has its own
                             }
                             Screen.Downloads -> {
                                 // No TopAppBar here as DownloadsScreen has its own
@@ -1082,9 +1138,65 @@ class BrowserActivity : ComponentActivity() {
                                             Box(modifier = Modifier.fillMaxSize()) {
                                                 BrowserView(
                                                     session = session,
-                                                    onLongPressLink = { url -> contextMenuUrl = url }
+                                                    onLongPressLink = { url: String -> contextMenuUrl = url }
                                                 )
+                                                
+                                                // Suggestions Overlay (Full Screen)
+                                                if (isEditing) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .background(MaterialTheme.colorScheme.background)
+                                                            .zIndex(1f) // Ensure it's on top of BrowserView
+                                                    ) {
+                                                        LazyColumn(
+                                                            modifier = Modifier.fillMaxSize()
+                                                        ) {
+                                                            items(suggestions) { historyItem ->
+                                                                ListItem(
+                                                                    headlineContent = {
+                                                                        Text(
+                                                                            historyItem.title ?: historyItem.url,
+                                                                            maxLines = 1,
+                                                                            style = MaterialTheme.typography.bodyMedium
+                                                                        )
+                                                                    },
+                                                                    supportingContent = {
+                                                                        Text(
+                                                                            historyItem.url,
+                                                                            maxLines = 1,
+                                                                            style = MaterialTheme.typography.bodySmall
+                                                                        )
+                                                                    },
+                                                                    leadingContent = {
+                                                                        Icon(Icons.Default.History, null)
+                                                                    },
+                                                                    modifier = Modifier.clickable {
+                                                                        session.loadUrl(historyItem.url)
+                                                                        isEditing = false
+                                                                    }
+                                                                )
+                                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
+                                        }
+                                        Screen.History -> {
+                                            HistoryScreen(
+                                                historyItems = allHistory,
+                                                onItemClick = { url ->
+                                                    session.loadUrl(url)
+                                                    currentScreen = Screen.Browser
+                                                },
+                                                onClearHistory = {
+                                                    scope.launch(Dispatchers.IO) {
+                                                        historyDao.clear()
+                                                    }
+                                                },
+                                                onBack = { currentScreen = Screen.Browser }
+                                            )
                                         }
                                         Screen.Tabs -> {
                                             BackHandler { currentScreen = Screen.Browser }
@@ -1392,6 +1504,8 @@ class BrowserActivity : ComponentActivity() {
         }
     }
     
+
+
     override fun onDestroy() {
         webSocketClient.destroy()
         super.onDestroy()
@@ -1437,4 +1551,5 @@ sealed class Screen {
     object Connection : Screen()
     object Downloads : Screen()
     object Settings : Screen()
+    object History : Screen()
 }

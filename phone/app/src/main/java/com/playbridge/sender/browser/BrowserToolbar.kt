@@ -15,6 +15,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -40,25 +41,39 @@ fun BrowserToolbar(
     onMenuClick: () -> Unit,
     onVideoClick: () -> Unit = {},
     onTabsClick: () -> Unit = {},
+    isEditing: Boolean = false,
+    onEditingChange: (Boolean) -> Unit = {},
     menuContent: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var isEditing by remember { mutableStateOf(false) }
-    var editUrl by remember(currentUrl) { mutableStateOf(currentUrl) }
+    // Use TextFieldValue for selection control
+    var textFieldValue by remember { mutableStateOf(TextFieldValue(currentUrl)) }
+    
+    // Update text when currentUrl changes (only if not editing)
+    LaunchedEffect(currentUrl) {
+        if (!isEditing) {
+            textFieldValue = TextFieldValue(currentUrl)
+        }
+    }
+
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     var clipboardDetail by remember { mutableStateOf<String?>(null) }
+    var everFocused by remember { mutableStateOf(false) }
 
     // Check clipboard when editing starts
     LaunchedEffect(isEditing) {
         if (isEditing) {
             val clipText = clipboardManager.getText()?.text
-            if (!clipText.isNullOrBlank() && clipText != editUrl) {
+            if (!clipText.isNullOrBlank() && clipText != textFieldValue.text) {
                 clipboardDetail = clipText
             } else {
                 clipboardDetail = null
             }
+        } else {
+             // Reset to current URL when editing stops
+             textFieldValue = TextFieldValue(currentUrl)
         }
     }
     
@@ -77,27 +92,45 @@ fun BrowserToolbar(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Video count badge - clickable to show detected videos
-                IconButton(
-                    onClick = onVideoClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    BadgedBox(
-                        badge = {
-                            Badge(
-                                containerColor = if (videoCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
-                                contentColor = MaterialTheme.colorScheme.onError
-                            ) {
-                                Text(videoCount.toString())
-                            }
-                        }
+                if (isEditing) {
+                    // Back button to cancel editing
+                    IconButton(
+                        onClick = { 
+                            onEditingChange(false) 
+                            keyboardController?.hide()
+                            textFieldValue = TextFieldValue(currentUrl)
+                        },
+                        modifier = Modifier.size(40.dp)
                     ) {
-                        Icon(
-                            Icons.Default.PlayArrow,
-                            contentDescription = "$videoCount videos detected",
-                            tint = if (videoCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
-                        )
+                         Icon(
+                             Icons.AutoMirrored.Filled.ArrowBack,
+                             contentDescription = "Cancel editing",
+                             modifier = Modifier.size(24.dp)
+                         )
+                    }
+                } else {
+                    // Video count badge - clickable to show detected videos
+                    IconButton(
+                        onClick = onVideoClick,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                Badge(
+                                    containerColor = if (videoCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+                                    contentColor = MaterialTheme.colorScheme.onError
+                                ) {
+                                    Text(videoCount.toString())
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = "$videoCount videos detected",
+                                tint = if (videoCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
                 }
                 
@@ -105,23 +138,31 @@ fun BrowserToolbar(
                 
                 // URL Bar
                 TextField(
-                    value = editUrl,
+                    value = textFieldValue,
                     onValueChange = { newValue ->
-                        editUrl = newValue
-                        onUrlChange(newValue)
+                        textFieldValue = newValue
+                        onUrlChange(newValue.text)
                     },
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
                         .onFocusChanged { focusState ->
                             if (focusState.isFocused) {
-                                isEditing = true
+                                onEditingChange(true)
+                                // Select all text on first focus
+                                if (!everFocused) {
+                                     textFieldValue = textFieldValue.copy(
+                                         selection = androidx.compose.ui.text.TextRange(0, textFieldValue.text.length)
+                                     )
+                                     everFocused = true
+                                }
                             } else {
+                                everFocused = false
                                 scope.launch {
                                     delay(200)
                                     if (isEditing) {
-                                        isEditing = false
-                                        editUrl = currentUrl
+                                        onEditingChange(false)
+                                        textFieldValue = TextFieldValue(currentUrl)
                                     }
                                 }
                             }
@@ -136,10 +177,10 @@ fun BrowserToolbar(
                         ) 
                     },
                     trailingIcon = {
-                        if (editUrl.isNotEmpty() && isEditing) {
+                        if (textFieldValue.text.isNotEmpty() && isEditing) {
                             IconButton(
                                 onClick = { 
-                                    editUrl = ""
+                                    textFieldValue = TextFieldValue("")
                                     onUrlChange("") // Establish empty state
                                 },
                                 modifier = Modifier.size(32.dp)
@@ -156,9 +197,9 @@ fun BrowserToolbar(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(
                         onGo = {
-                            val url = normalizeUrl(editUrl)
+                            val url = normalizeUrl(textFieldValue.text)
                             onNavigate(url)
-                            isEditing = false
+                            onEditingChange(false)
                             keyboardController?.hide()
                         }
                     ),
@@ -175,43 +216,47 @@ fun BrowserToolbar(
                 
                 Spacer(modifier = Modifier.width(4.dp))
                 
-                // Tabs button with badge
-                IconButton(
-                    onClick = onTabsClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    BadgedBox(
-                        badge = {
-                            Badge(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ) {
-                                Text(tabCount.toString())
-                            }
-                        }
-                    ) {
-                        Icon(
-                            Icons.Default.WebAsset,
-                            contentDescription = "$tabCount tabs",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-                
-                // Menu button
-                Box {
+                if (!isEditing) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    
+                    // Tabs button with badge
                     IconButton(
-                        onClick = onMenuClick,
+                        onClick = onTabsClick,
                         modifier = Modifier.size(40.dp)
                     ) {
-                        Icon(
-                            Icons.Default.MoreVert,
-                            contentDescription = "Menu",
-                            modifier = Modifier.size(22.dp)
-                        )
+                        BadgedBox(
+                            badge = {
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ) {
+                                    Text(tabCount.toString())
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.WebAsset,
+                                contentDescription = "$tabCount tabs",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
-                    menuContent()
+                    
+                    // Menu button
+                    Box {
+                        IconButton(
+                            onClick = onMenuClick,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = "Menu",
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        menuContent()
+                    }
                 }
             }
 
@@ -225,9 +270,9 @@ fun BrowserToolbar(
                     shape = MaterialTheme.shapes.medium,
                     onClick = {
                         val url = normalizeUrl(clipboardDetail!!)
-                        editUrl = url
+                        textFieldValue = TextFieldValue(url, androidx.compose.ui.text.TextRange(url.length))
                         onNavigate(url)
-                        isEditing = false
+                        onEditingChange(false)
                         keyboardController?.hide()
                     }
                 ) {
