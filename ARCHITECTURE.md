@@ -163,7 +163,11 @@ com.playbridge.receiver/
 │   ├── PairingStore.kt            (DataStore persistence for auth tokens)
 │   └── QRGenerator.kt             (ZXing QR code bitmap generation)
 ├── player/                        # Video playback
-│   ├── PlayerActivity.kt          (~1125 lines, ExoPlayer with HLS/DASH/RTSP)
+│   ├── ContentSniffer.kt          (SSL-bypass OkHttpClient + content type sniffing)
+│   ├── InputHandler.kt            (D-pad, phone remote, control command handling)
+│   ├── PlayerActivity.kt          (~592 lines, ExoPlayer with HLS/DASH/RTSP)
+│   ├── PlayerControlsManager.kt   (custom controls overlay, seekbar, scrubbing)
+│   ├── ProgressManager.kt         (progress save/restore, thumbnail capture)
 │   ├── SubtitleManager.kt         (SRT/VTT subtitle parser + sync engine)
 │   └── TrackSelectionDialog.kt    (Compose TV dialog for audio/video/subtitle track selection)
 ├── server/                        # WebSocket server
@@ -183,7 +187,11 @@ com.playbridge.receiver/
 |-----------|------|---------|
 | WebSocket Server | [WebSocketServer.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/server/WebSocketServer.kt) | Ktor Netty server on port 8765 with auth |
 | Server Service | [ServerService.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/server/ServerService.kt) | Foreground service managing server lifecycle, command routing, NSD registration, context broadcasting |
-| Video Player | [PlayerActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/PlayerActivity.kt) | ExoPlayer with HLS/DASH/RTSP support, custom controls, D-pad navigation, content sniffing, progress saving |
+| Video Player | [PlayerActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/PlayerActivity.kt) | ExoPlayer activity with media source construction, track selection |
+| Player Controls | [PlayerControlsManager.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/PlayerControlsManager.kt) | Custom controls overlay, seekbar, play/pause, scrubbing |
+| Input Handler | [InputHandler.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/InputHandler.kt) | D-pad, phone remote, control commands |
+| Progress Manager | [ProgressManager.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/ProgressManager.kt) | Playback progress save/restore, thumbnail capture |
+| Content Sniffer | [ContentSniffer.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/ContentSniffer.kt) | SSL-bypass OkHttpClient, pre-flight content type detection |
 | Subtitle Manager | [SubtitleManager.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/SubtitleManager.kt) | External subtitle support (SRT/VTT parsing, download, timed sync with player position) |
 | Track Selection | [TrackSelectionDialog.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/TrackSelectionDialog.kt) | Compose TV dialog for selecting audio, video, and subtitle tracks (embedded + external) |
 | Protocol & Commands | [Message.kt](file:///Users/atulmehla/repos/personal/PlayBridge/protocol/src/main/java/com/playbridge/protocol/Message.kt) | Shared protocol: sealed `Command` class, message parsing, JSON helpers (in `protocol` module) |
@@ -295,9 +303,8 @@ sequenceDiagram
 #### ~~2. Very Large File: BrowserActivity.kt (~1555 lines)~~
 - ✅ **RESOLVED**: Extracted `TabManager.kt`, `SessionObserverSetup.kt`, `DownloadConfirmDialog.kt`, and `LinkContextMenu.kt`. `BrowserActivity.kt` reduced to ~1115 lines.
 
-#### 3. Large File: PlayerActivity.kt (~1125 lines)
-- **Problem**: Handles player initialization, SSL bypass, content sniffing, playback, controls, D-pad navigation, seek, track selection, subtitle management, progress saving, and bitmap capture
-- **Recommendation**: Extract control handling, content sniffing, and progress management into separate classes
+#### ~~3. Large File: PlayerActivity.kt (~1125 lines)~~
+- ✅ **RESOLVED**: Extracted `ContentSniffer.kt`, `PlayerControlsManager.kt`, `ProgressManager.kt`, and `InputHandler.kt`. `PlayerActivity.kt` reduced to ~592 lines.
 
 ### 🟡 Moderate Issues
 
@@ -415,7 +422,11 @@ PlayBridge/
     │       │   ├── browser/
     │       │   ├── pairing/
     │       │   ├── player/
-    │       │   │   ├── PlayerActivity.kt   (slimmed down)
+    │       │   │   ├── PlayerActivity.kt   (~592 lines, slimmed down)
+    │       │   │   ├── ContentSniffer.kt
+    │       │   │   ├── PlayerControlsManager.kt
+    │       │   │   ├── ProgressManager.kt
+    │       │   │   ├── InputHandler.kt
     │       │   │   ├── SubtitleManager.kt
     │       │   │   └── TrackSelectionDialog.kt
     │       │   ├── server/
@@ -434,7 +445,7 @@ PlayBridge/
 | 🔴 High | Add CONTRIBUTING.md | 30 minutes |
 | ~~🟡 Medium~~ | ~~Migrate messages to shared protocol module~~ | ✅ Done |
 | ~~🟡 Medium~~ | ~~Further slim BrowserActivity.kt (~1555 lines)~~ | ✅ Done |
-| 🟡 Medium | Extract PlayerActivity.kt logic (~1125 lines) | 2-4 hours |
+| ~~🟡 Medium~~ | ~~Extract PlayerActivity.kt logic (~1125 lines)~~ | ✅ Done |
 | 🟢 Low | Enable ProGuard for release | 2-4 hours |
 
 ---
