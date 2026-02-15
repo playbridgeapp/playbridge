@@ -89,11 +89,14 @@ class InputHandler(
      */
     fun handleKeyDown(keyCode: Int, event: KeyEvent?, controlsRoot: View, currentFocus: View?): Boolean {
         // If controls are visible and a navigable element has focus,
-        // let the system handle D-pad navigation
+        // let the system handle D-pad navigation between buttons
         if (controlsRoot.visibility == View.VISIBLE && currentFocus != null) {
             val focusedId = currentFocus.id
             val isNavigable = focusedId == com.playbridge.receiver.R.id.btn_play_pause ||
                               focusedId == com.playbridge.receiver.R.id.btn_tracks ||
+                              focusedId == com.playbridge.receiver.R.id.btn_skip_back ||
+                              focusedId == com.playbridge.receiver.R.id.btn_skip_forward ||
+                              focusedId == com.playbridge.receiver.R.id.btn_center_play ||
                               focusedId == com.playbridge.receiver.R.id.player_seekbar
 
             if (isNavigable) {
@@ -103,6 +106,8 @@ class InputHandler(
                 } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
                            keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
                            keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                    // Reset hide timer since user is navigating
+                    controls.showControlsUI()
                     return false // Let system handle navigation
                 }
             }
@@ -149,8 +154,9 @@ class InputHandler(
                 return true
             }
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (!controls.isScrubbing) controls.showControlsUI()
-                return true
+                // Show controls; first press shows UI, subsequent presses navigate
+                controls.showControlsUI()
+                return false // Let system handle focus navigation
             }
         }
         return false

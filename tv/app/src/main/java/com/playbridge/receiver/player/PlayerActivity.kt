@@ -115,7 +115,13 @@ class PlayerActivity : ComponentActivity() {
         val seekBar = findViewById<android.widget.SeekBar>(com.playbridge.receiver.R.id.player_seekbar)
         val playPauseButton = findViewById<android.widget.ImageButton>(com.playbridge.receiver.R.id.btn_play_pause)
         val tracksButton = findViewById<android.widget.ImageButton>(com.playbridge.receiver.R.id.btn_tracks)
-        val timeText = findViewById<android.widget.TextView>(com.playbridge.receiver.R.id.tv_duration)
+        val elapsedText = findViewById<android.widget.TextView>(com.playbridge.receiver.R.id.tv_elapsed)
+        val remainingText = findViewById<android.widget.TextView>(com.playbridge.receiver.R.id.tv_remaining)
+        val titleText = findViewById<android.widget.TextView>(com.playbridge.receiver.R.id.title_text)
+        val centerPlayButton = findViewById<android.widget.ImageButton>(com.playbridge.receiver.R.id.btn_center_play)
+        val skipBackButton = findViewById<android.widget.ImageButton>(com.playbridge.receiver.R.id.btn_skip_back)
+        val skipForwardButton = findViewById<android.widget.ImageButton>(com.playbridge.receiver.R.id.btn_skip_forward)
+        val bufferingSpinner = findViewById<android.widget.ProgressBar>(com.playbridge.receiver.R.id.buffering_spinner)
         
         // Initialize SubtitleManager
         val subtitleTextView = findViewById<android.widget.TextView>(com.playbridge.receiver.R.id.subtitle_view)
@@ -129,7 +135,13 @@ class PlayerActivity : ComponentActivity() {
             seekBar = seekBar,
             playPauseButton = playPauseButton,
             tracksButton = tracksButton,
-            timeText = timeText,
+            elapsedText = elapsedText,
+            remainingText = remainingText,
+            titleText = titleText,
+            centerPlayButton = centerPlayButton,
+            skipBackButton = skipBackButton,
+            skipForwardButton = skipForwardButton,
+            bufferingSpinner = bufferingSpinner,
             playerProvider = { player },
             onShowTrackSelection = { showTrackSelectionDialog() }
         )
@@ -241,6 +253,7 @@ class PlayerActivity : ComponentActivity() {
         Log.i(TAG, "Starting playback with Final Content Type: $contentType")
 
         progressManager.setCurrentMedia(url, title, contentType, intentHeaders)
+        controlsManager.setTitle(title)
 
         // 1. Prepare Headers
         val requestProperties = HashMap<String, String>()
@@ -360,13 +373,16 @@ class PlayerActivity : ComponentActivity() {
             when (playbackState) {
                 androidx.media3.common.Player.STATE_BUFFERING -> {
                     Log.d(TAG, "Buffering...")
+                    controlsManager.showBuffering()
                 }
                 androidx.media3.common.Player.STATE_READY -> {
                     Log.i(TAG, "Playback ready")
+                    controlsManager.hideBuffering()
                     audioDiscontinuityRetryCount = 0
                 }
                 androidx.media3.common.Player.STATE_ENDED -> {
                     Log.i(TAG, "Playback ended")
+                    controlsManager.hideBuffering()
                 }
             }
         }

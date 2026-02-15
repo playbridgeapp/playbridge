@@ -18,7 +18,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="48dp"
+        android:layout_marginBottom="80dp"
         android:background="#80000000"
         android:padding="8dp"
         android:gravity="center"
@@ -31,78 +31,183 @@
         android:shadowRadius="2"
         android:visibility="gone" />
 
-    <!-- Controls Overlay -->
+    <!-- Buffering Spinner (centered) -->
+    <ProgressBar
+        android:id="@+id/buffering_spinner"
+        style="?android:attr/progressBarStyle"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center"
+        android:indeterminate="true"
+        android:indeterminateTint="@android:color/white"
+        android:visibility="gone" />
+
+    <!-- Controls Overlay (gradient background) -->
     <RelativeLayout
         android:id="@+id/controls_root"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:padding="32dp"
+        android:background="@drawable/gradient_player_overlay"
         android:visibility="gone">
 
-        <!-- Seekbar at bottom -->
-        <SeekBar
-            android:id="@+id/player_seekbar"
+        <!-- ===== TOP BAR ===== -->
+        <TextView
+            android:id="@+id/title_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:paddingStart="40dp"
+            android:paddingEnd="40dp"
+            android:paddingTop="32dp"
+            android:textColor="@android:color/white"
+            android:textSize="22sp"
+            android:fontFamily="sans-serif-medium"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:shadowColor="@android:color/black"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="3" />
+
+        <!-- ===== CENTER PLAY/PAUSE ===== -->
+        <ImageButton
+            android:id="@+id/btn_center_play"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_centerInParent="true"
+            android:background="@drawable/bg_center_play"
+            android:src="@drawable/ic_play"
+            android:scaleType="centerInside"
+            android:padding="14dp"
+            android:contentDescription="Play/Pause"
+            android:focusable="true"
+            android:clickable="true"
+            android:nextFocusDown="@id/btn_play_pause"
+            android:nextFocusUp="@id/player_seekbar" />
+
+        <!-- ===== BOTTOM SECTION ===== -->
+        <LinearLayout
+            android:id="@+id/bottom_section"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_alignParentBottom="true"
-            android:layout_marginBottom="8dp"
-            android:max="1000"
-            android:progressTint="@android:color/white"
-            android:progressBackgroundTint="#40FFFFFF"
-            android:thumbTint="@android:color/transparent"
-            android:splitTrack="false"
-            android:background="@android:color/transparent"
-            android:focusable="true"
-            android:clickable="false" />
+            android:orientation="vertical"
+            android:paddingStart="40dp"
+            android:paddingEnd="40dp"
+            android:paddingBottom="24dp">
 
-        <!-- Controls Container (Bottom Left, above seekbar) -->
-        <LinearLayout
-            android:id="@+id/controls_panel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_above="@id/player_seekbar"
-            android:layout_alignParentStart="true"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="8dp">
-
-            <ImageButton
-                android:id="@+id/btn_play_pause"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:background="?android:attr/selectableItemBackgroundBorderless"
-                android:src="@android:drawable/ic_media_play"
-                android:contentDescription="Play/Pause" 
-                android:scaleType="fitCenter"
-                android:focusable="true"
-                android:clickable="true" />
-            
-            <ImageButton
-                android:id="@+id/btn_tracks"
-                android:layout_width="32dp"
-                android:layout_height="32dp"
-                android:layout_marginStart="24dp"
-                android:background="?android:attr/selectableItemBackgroundBorderless"
-                android:src="@android:drawable/ic_menu_preferences"
-                android:contentDescription="Tracks / Settings"
-                android:scaleType="fitCenter"
-                android:focusable="true"
-                android:clickable="true"
-                android:nextFocusLeft="@id/btn_play_pause" />
-
-            <TextView
-                android:id="@+id/tv_duration"
-                android:layout_width="wrap_content"
+            <!-- Seekbar Row -->
+            <SeekBar
+                android:id="@+id/player_seekbar"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="16dp"
-                android:textColor="@android:color/white"
-                android:textSize="18sp"
-                android:text="00:00 / 00:00" 
-                android:shadowColor="@android:color/black"
-                android:shadowDx="2"
-                android:shadowDy="2"
-                android:shadowRadius="2" />
-        </LinearLayout>
+                android:max="1000"
+                android:progressTint="#FFFFFF"
+                android:progressBackgroundTint="#40FFFFFF"
+                android:thumbTint="#FFFFFF"
+                android:splitTrack="false"
+                android:background="@android:color/transparent"
+                android:focusable="true"
+                android:clickable="false"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp" />
 
+            <!-- Time Row: elapsed (left) + remaining (right) -->
+            <RelativeLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp">
+
+                <TextView
+                    android:id="@+id/tv_elapsed"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentStart="true"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="13sp"
+                    android:fontFamily="sans-serif"
+                    android:text="00:00" />
+
+                <TextView
+                    android:id="@+id/tv_remaining"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentEnd="true"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="13sp"
+                    android:fontFamily="sans-serif"
+                    android:text="-00:00" />
+            </RelativeLayout>
+
+            <!-- Controls Row: all buttons in one flat LinearLayout for reliable D-pad navigation -->
+            <LinearLayout
+                android:id="@+id/controls_panel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <ImageButton
+                    android:id="@+id/btn_skip_back"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_skip_back_10"
+                    android:scaleType="fitCenter"
+                    android:padding="6dp"
+                    android:contentDescription="Skip back 10s"
+                    android:focusable="true"
+                    android:nextFocusUp="@id/player_seekbar"
+                    android:nextFocusLeft="@id/btn_skip_back" />
+
+                <ImageButton
+                    android:id="@+id/btn_play_pause"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:layout_marginStart="16dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_play"
+                    android:scaleType="fitCenter"
+                    android:padding="6dp"
+                    android:contentDescription="Play/Pause"
+                    android:focusable="true"
+                    android:nextFocusUp="@id/player_seekbar" />
+
+                <ImageButton
+                    android:id="@+id/btn_skip_forward"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="16dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_skip_forward_10"
+                    android:scaleType="fitCenter"
+                    android:padding="6dp"
+                    android:contentDescription="Skip forward 10s"
+                    android:focusable="true"
+                    android:nextFocusUp="@id/player_seekbar" />
+
+                <!-- Weighted spacer pushes tracks button to the right -->
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <ImageButton
+                    android:id="@+id/btn_tracks"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_settings"
+                    android:scaleType="fitCenter"
+                    android:padding="6dp"
+                    android:contentDescription="Tracks / Settings"
+                    android:focusable="true"
+                    android:nextFocusUp="@id/player_seekbar"
+                    android:nextFocusRight="@id/btn_tracks" />
+            </LinearLayout>
+        </LinearLayout>
     </RelativeLayout>
 </FrameLayout>
