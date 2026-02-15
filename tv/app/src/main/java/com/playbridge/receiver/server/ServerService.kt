@@ -13,8 +13,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.playbridge.receiver.MainActivity
 import com.playbridge.receiver.R
-import com.playbridge.receiver.model.Command
-import com.playbridge.receiver.model.createContextJson
+import com.playbridge.protocol.Command
+import com.playbridge.protocol.createContextJson
 import com.playbridge.receiver.pairing.PairingStore
 import com.playbridge.receiver.model.PairedDevice
 import kotlinx.coroutines.*

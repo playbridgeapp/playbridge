@@ -12,7 +12,7 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 |--------|---------|---------|
 | **Phone (Sender)** | `com.playbridge.sender` | GeckoView-based browser with video detection, downloads, remote control, sends commands to TV |
 | **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + ExoPlayer + WebView browser, receives and plays video streams |
-| **Protocol** | `com.playbridge.protocol` | Shared NSD constants used by both apps |
+| **Protocol** | `com.playbridge.protocol` | Shared protocol: NSD constants, message classes, command parser, and helper functions |
 
 ---
 
@@ -90,8 +90,8 @@ com.playbridge.sender/
 │       ├── HistoryDao.kt            (Room DAO for browsing history CRUD)
 │       ├── HistoryDatabase.kt       (Room database definition)
 │       └── HistoryEntity.kt         (History entry data class: url, title, timestamp)
-├── model/                  # Protocol messages
-│   ├── Message.kt                   (serializable data classes + helper functions)
+├── model/                  # App-specific models
+│   ├── Message.kt                   (QRCodeData + parseQRCode — phone-only)
 │   └── TvDevice.kt                  (TV device connection info)
 └── ui/                     # Compose UI screens
     ├── ConnectionScreen.kt          (NSD discovery + QR scan + manual IP + PIN auth)
@@ -151,8 +151,7 @@ com.playbridge.receiver/
 │   └── BrowserActivity.kt         (WebView-based TV browser with remote input)
 ├── data/                          # Persistence
 │   └── HistoryStore.kt            (DataStore-based playback history)
-├── model/                         # Protocol messages (duplicated from phone)
-│   ├── Message.kt                 (sealed Command class + parsing + response builders)
+├── model/                         # App-specific models
 │   └── PairedDevice.kt            (paired device info)
 ├── pairing/                       # QR code display, token management
 │   ├── PairingStore.kt            (DataStore persistence for auth tokens)
@@ -181,7 +180,7 @@ com.playbridge.receiver/
 | Video Player | [PlayerActivity.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/PlayerActivity.kt) | ExoPlayer with HLS/DASH/RTSP support, custom controls, D-pad navigation, content sniffing, progress saving |
 | Subtitle Manager | [SubtitleManager.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/SubtitleManager.kt) | External subtitle support (SRT/VTT parsing, download, timed sync with player position) |
 | Track Selection | [TrackSelectionDialog.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/player/TrackSelectionDialog.kt) | Compose TV dialog for selecting audio, video, and subtitle tracks (embedded + external) |
-| Command Parser | [Message.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/model/Message.kt) | Sealed class parsing WebSocket JSON messages into typed commands |
+| Protocol & Commands | [Message.kt](file:///Users/atulmehla/repos/personal/PlayBridge/protocol/src/main/java/com/playbridge/protocol/Message.kt) | Shared protocol: sealed `Command` class, message parsing, JSON helpers (in `protocol` module) |
 | Ad Blocker | [AdBlocker.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/browser/AdBlocker.kt) | WebView request interception with domain-aware filter list parsing |
 | QR Generator | [QRGenerator.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/pairing/QRGenerator.kt) | ZXing-based QR code generation for pairing (includes IP, port, token, name) |
 | Settings | [SettingsScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/tv/app/src/main/java/com/playbridge/receiver/ui/SettingsScreen.kt) | TV app settings UI |
@@ -197,6 +196,19 @@ com.playbridge.receiver/
 - **OkHttp** v4.12 — HTTP client for ExoPlayer data source + URL connections
 - **Kotlin Serialization** v1.7 — JSON protocol
 - **DataStore** v1.1 — Preferences persistence
+
+---
+
+## Protocol Module
+
+The `protocol` module (`com.playbridge.protocol`) is a shared Kotlin JVM library consumed by both apps via `implementation(project(":protocol"))`. It contains:
+
+| File | Contents |
+|------|----------|
+| [NsdConstants.kt](file:///Users/atulmehla/repos/personal/PlayBridge/protocol/src/main/java/com/playbridge/protocol/NsdConstants.kt) | NSD service type and key constants |
+| [Message.kt](file:///Users/atulmehla/repos/personal/PlayBridge/protocol/src/main/java/com/playbridge/protocol/Message.kt) | All shared protocol classes, sealed `Command` class, `parseCommand()`, and 14 helper functions |
+
+**Dependencies:** Kotlin JVM, `kotlinx-serialization-json:1.7.3`
 
 ---
 
@@ -267,13 +279,12 @@ sequenceDiagram
 
 ## Issues & Refactoring Recommendations
 
+### ✅ Resolved Issues
+
+#### ~~1. Duplicated Protocol Code~~ ✅ RESOLVED
+- **Resolved**: All shared protocol code has been migrated to `protocol/src/main/java/com/playbridge/protocol/Message.kt`. Phone `model/Message.kt` now only contains `QRCodeData`. TV `model/Message.kt` has been deleted.
+
 ### 🔴 Critical Issues
-
-#### 1. Duplicated Protocol Code
-- **Problem**: `Message.kt` is duplicated between phone and TV. A `protocol` module exists but currently only contains `NsdConstants.kt`.
-- **Impact**: Protocol changes require updating both files, risk of desync
-- **Recommendation**: Migrate `Message.kt` and `Command` classes to the existing `protocol` shared module.
-
 
 #### 2. Very Large File: BrowserActivity.kt (~1555 lines)
 - **Problem**: Single file handles tabs, extensions, video detection, context menus, downloading, find on page, history, settings navigation, toolbar integration, and Compose UI
@@ -320,7 +331,8 @@ sequenceDiagram
 - [x] GitHub Actions CI exists ([android_build.yml](file:///Users/atulmehla/repos/personal/PlayBridge/.github/workflows/android_build.yml))
 - [x] Clean package structure with clear separation
 - [x] Well-documented protocol messages with KDoc
-- [x] Sealed class pattern for type-safe command handling (TV side)
+- [x] Sealed class pattern for type-safe command handling (shared protocol module)
+- [x] Unified protocol module — single source of truth for message classes
 - [x] Context-aware remote control (phone queries TV for active screen)
 - [x] Authentication implemented (Token/PIN validation via QR code pairing)
 - [x] README.md created
@@ -363,12 +375,11 @@ PlayBridge/
 │   ├── workflows/
 │   │   └── android_build.yml
 │   └── ISSUE_TEMPLATE/          # NEW
-├── protocol/                    # Shared module (currently only NsdConstants.kt)
+├── protocol/                    # Shared module
 │   ├── build.gradle.kts
 │   └── src/main/java/com/playbridge/protocol/
 │       ├── NsdConstants.kt
-│       ├── Message.kt           # NEW: Unified protocol messages
-│       └── Command.kt           # NEW: Sealed command classes
+│       └── Message.kt           # Unified protocol messages + sealed Command class
 ├── phone/
 │   ├── app/
 │   │   └── src/main/
@@ -414,7 +425,7 @@ PlayBridge/
 | Priority | Task | Effort |
 |----------|------|--------|
 | 🔴 High | Add CONTRIBUTING.md | 30 minutes |
-| 🟡 Medium | Migrate messages to shared protocol module | 4-8 hours |
+| ~~🟡 Medium~~ | ~~Migrate messages to shared protocol module~~ | ✅ Done |
 | 🟡 Medium | Further slim BrowserActivity.kt (~1555 lines) | 2-4 hours |
 | 🟡 Medium | Extract PlayerActivity.kt logic (~1125 lines) | 2-4 hours |
 | 🟢 Low | Enable ProGuard for release | 2-4 hours |
@@ -435,8 +446,8 @@ PlayBridge/
 
 **Key Actions Before Open-Sourcing:**
 1. Add CONTRIBUTING.md
-2. Expand .gitignore (already done ✅)
-3. Consider extracting shared protocol module for maintainability
+2. ~~Expand .gitignore~~ ✅
+3. ~~Extract shared protocol module~~ ✅
 4. Document security considerations (SSL bypass, local network assumptions)
 
 The codebase is in good shape for open-sourcing with relatively minor documentation additions.

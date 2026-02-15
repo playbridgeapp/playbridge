@@ -1,7 +1,7 @@
 package com.playbridge.sender.connection
 
 import android.util.Log
-import com.playbridge.sender.model.createPingJson
+import com.playbridge.protocol.createPingJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -86,7 +86,7 @@ class WebSocketClient {
                 // Send auth message immediately
                 scope.launch {
                     try {
-                        val authJson = com.playbridge.sender.model.createAuthJson(targetConnection?.token ?: "")
+                        val authJson = com.playbridge.protocol.createAuthJson(targetConnection?.token ?: "")
                         Log.d(TAG, "Sending auth: $authJson")
                         webSocket.send(authJson)
                     } catch (e: Exception) {

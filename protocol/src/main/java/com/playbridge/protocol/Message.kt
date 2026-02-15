@@ -1,12 +1,9 @@
-package com.playbridge.receiver.model
+package com.playbridge.protocol
 
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.decodeFromJsonElement
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * JSON parser with lenient settings for protocol messages
@@ -16,6 +13,8 @@ val protocolJson = Json {
     isLenient = true
     encodeDefaults = true
 }
+
+// ==================== Message Envelope ====================
 
 /**
  * Base message envelope for WebSocket protocol
@@ -31,7 +30,7 @@ data class MessageEnvelope(
     val title: String? = null
 )
 
-// ==================== Commands (Phone → TV) ====================
+// ==================== Payload Data Classes ====================
 
 /**
  * Play video command payload
@@ -62,7 +61,7 @@ data class ControlPayload(
 )
 
 /**
- * Remote D-pad command payload
+ * Remote D-pad/navigation command payload
  */
 @Serializable
 data class RemotePayload(
@@ -87,6 +86,77 @@ data class BrowserControlPayload(
     val action: String // refresh, toggle_ublock
 )
 
+// ==================== Command Wrapper Classes (for JSON encoding) ====================
+
+/**
+ * Play video command
+ */
+@Serializable
+data class PlayCommand(
+    val type: String = "command",
+    val action: String = "play",
+    val payload: PlayPayload
+)
+
+/**
+ * Open browser command
+ */
+@Serializable
+data class BrowserCommand(
+    val type: String = "command",
+    val action: String = "browser",
+    val payload: BrowserPayload
+)
+
+/**
+ * Player control command
+ */
+@Serializable
+data class ControlCommand(
+    val type: String = "command",
+    val action: String = "control",
+    val payload: ControlPayload
+)
+
+/**
+ * Remote D-pad/navigation command
+ */
+@Serializable
+data class RemoteCommand(
+    val type: String = "command",
+    val action: String = "remote",
+    val payload: RemotePayload
+)
+
+/**
+ * Mouse/touchpad command for TV browser
+ */
+@Serializable
+data class MouseCommand(
+    val type: String = "command",
+    val action: String = "mouse",
+    val payload: MousePayload
+)
+
+/**
+ * Browser control command (refresh, toggle extensions)
+ */
+@Serializable
+data class BrowserControlCommand(
+    val type: String = "command",
+    val action: String = "browser_control",
+    val payload: BrowserControlPayload
+)
+
+/**
+ * Query TV for its active context (player, browser, or idle)
+ */
+@Serializable
+data class ContextQueryCommand(
+    val type: String = "command",
+    val action: String = "context_query"
+)
+
 // ==================== Status (TV → Phone) ====================
 
 /**
@@ -95,10 +165,19 @@ data class BrowserControlPayload(
 @Serializable
 data class StatusMessage(
     val type: String = "status",
-    val state: String, // playing, paused, stopped, buffering
+    val state: String = "",
     val position: Long = 0,
     val duration: Long = 0,
     val title: String? = null
+)
+
+/**
+ * Context response from TV
+ */
+@Serializable
+data class ContextMessage(
+    val type: String = "context",
+    val active: String = "idle" // "player", "browser", or "idle"
 )
 
 // ==================== Authentication ====================
@@ -110,6 +189,13 @@ data class AuthMessage(
     val pin: String? = null
 )
 
+@Serializable
+data class AuthResponse(
+    val type: String = "auth_response",
+    val success: Boolean,
+    val token: String? = null
+)
+
 // ==================== Heartbeat ====================
 
 @Serializable
@@ -118,7 +204,7 @@ data class PingMessage(val type: String = "ping")
 @Serializable
 data class PongMessage(val type: String = "pong")
 
-// ==================== Sealed class for parsed commands ====================
+// ==================== Sealed Command Class (for parsing) ====================
 
 sealed class Command {
     data class Play(val url: String, val title: String?, val headers: Map<String, String>?, val contentType: String?, val subtitles: List<String>?) : Command()
@@ -131,6 +217,8 @@ sealed class Command {
     data object Ping : Command()
     data class Unknown(val type: String) : Command()
 }
+
+// ==================== Command Parser ====================
 
 /**
  * Parse incoming WebSocket message into a Command
@@ -197,6 +285,73 @@ fun parseCommand(jsonString: String): Command {
         }
     } catch (e: Exception) {
         Command.Unknown("parse_error: ${e.message}")
+    }
+}
+
+// ==================== Helper Functions ====================
+
+fun createPlayCommandJson(
+    url: String,
+    title: String? = null,
+    headers: Map<String, String>? = null,
+    contentType: String? = null,
+    subtitles: List<String>? = null
+): String {
+    return protocolJson.encodeToString(
+        PlayCommand.serializer(),
+        PlayCommand(payload = PlayPayload(url, title, headers, contentType, subtitles))
+    )
+}
+
+fun createBrowserCommandJson(url: String): String {
+    return protocolJson.encodeToString(
+        BrowserCommand.serializer(),
+        BrowserCommand(payload = BrowserPayload(url = url))
+    )
+}
+
+fun createControlCommandJson(command: String): String {
+    return protocolJson.encodeToString(
+        ControlCommand.serializer(),
+        ControlCommand(payload = ControlPayload(command = command))
+    )
+}
+
+fun createPingJson(): String {
+    return protocolJson.encodeToString(PingMessage.serializer(), PingMessage())
+}
+
+fun createRemoteCommandJson(key: String): String {
+    return protocolJson.encodeToString(
+        RemoteCommand.serializer(),
+        RemoteCommand(payload = RemotePayload(key = key))
+    )
+}
+
+fun createMouseCommandJson(event: String, dx: Float = 0f, dy: Float = 0f): String {
+    return protocolJson.encodeToString(
+        MouseCommand.serializer(),
+        MouseCommand(payload = MousePayload(event = event, dx = dx, dy = dy))
+    )
+}
+
+fun createBrowserControlCommandJson(action: String): String {
+    return protocolJson.encodeToString(
+        BrowserControlCommand.serializer(),
+        BrowserControlCommand(payload = BrowserControlPayload(action = action))
+    )
+}
+
+fun createContextQueryJson(): String {
+    return protocolJson.encodeToString(ContextQueryCommand.serializer(), ContextQueryCommand())
+}
+
+fun createAuthJson(token: String): String {
+    // Determine if it's a PIN (4 chars) or full token
+    return if (token.length <= 4) {
+        protocolJson.encodeToString(AuthMessage.serializer(), AuthMessage(pin = token))
+    } else {
+        protocolJson.encodeToString(AuthMessage.serializer(), AuthMessage(token = token))
     }
 }
 

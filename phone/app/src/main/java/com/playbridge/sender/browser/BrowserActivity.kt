@@ -407,7 +407,7 @@ class BrowserActivity : ComponentActivity() {
                             if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                 FilledTonalButton(
                                     onClick = {
-                                        val cmd = com.playbridge.sender.model.createPlayCommandJson(url = contextMenuUrl!!)
+                                        val cmd = com.playbridge.protocol.createPlayCommandJson(url = contextMenuUrl!!)
                                         webSocketClient.send(cmd)
                                         Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                         contextMenuUrl = null
@@ -879,7 +879,7 @@ class BrowserActivity : ComponentActivity() {
                                                         onClick = {
                                                             menuExpanded = false
                                                             showRemoteSheet = true
-                                                            webSocketClient.send(com.playbridge.sender.model.createContextQueryJson())
+                                                            webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
                                                         }
                                                     ) { onClick ->
                                                         DropdownMenuItem(
@@ -895,7 +895,7 @@ class BrowserActivity : ComponentActivity() {
                                                         index = 2,
                                                         onClick = {
                                                             menuExpanded = false
-                                                            val cmd = com.playbridge.sender.model.createBrowserCommandJson(currentUrl)
+                                                            val cmd = com.playbridge.protocol.createBrowserCommandJson(currentUrl)
                                                             webSocketClient.send(cmd)
                                                             Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                         }
@@ -1290,7 +1290,7 @@ class BrowserActivity : ComponentActivity() {
                                                 onBack = { currentScreen = Screen.Browser },
                                                 onPlayOnTv = { url, type ->
                                                     if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
-                                                        val cmd = com.playbridge.sender.model.createPlayCommandJson(
+                                                        val cmd = com.playbridge.protocol.createPlayCommandJson(
                                                             url = url,
                                                             title = "From Downloads",
                                                             contentType = type
@@ -1344,7 +1344,7 @@ class BrowserActivity : ComponentActivity() {
                                         headers[k] = v 
                                     }
                                     
-                                    val commandJson = com.playbridge.sender.model.createPlayCommandJson(
+                                    val commandJson = com.playbridge.protocol.createPlayCommandJson(
                                         url = video.url,
                                         title = selectedTab?.content?.title ?: "Video from browser",
                                         headers = headers,
@@ -1405,27 +1405,27 @@ class BrowserActivity : ComponentActivity() {
                         isMediaPlaying = tvActiveContext == "player",
                         onDismiss = { showRemoteSheet = false },
                         onRemoteKey = { key ->
-                            val cmd = com.playbridge.sender.model.createRemoteCommandJson(key)
+                            val cmd = com.playbridge.protocol.createRemoteCommandJson(key)
                             webSocketClient.send(cmd)
                         },
                         onMouseMove = { dx, dy ->
-                            val cmd = com.playbridge.sender.model.createMouseCommandJson("move", dx, dy)
+                            val cmd = com.playbridge.protocol.createMouseCommandJson("move", dx, dy)
                             webSocketClient.send(cmd)
                         },
                         onMouseClick = {
-                            val cmd = com.playbridge.sender.model.createMouseCommandJson("click")
+                            val cmd = com.playbridge.protocol.createMouseCommandJson("click")
                             webSocketClient.send(cmd)
                         },
                         onMouseScroll = { dx, dy ->
-                            val cmd = com.playbridge.sender.model.createMouseCommandJson("scroll", dx, dy)
+                            val cmd = com.playbridge.protocol.createMouseCommandJson("scroll", dx, dy)
                             webSocketClient.send(cmd)
                         },
                         onBrowserControl = { action ->
-                            val cmd = com.playbridge.sender.model.createBrowserControlCommandJson(action)
+                            val cmd = com.playbridge.protocol.createBrowserControlCommandJson(action)
                             webSocketClient.send(cmd)
                         },
                         onPlayerControl = { command ->
-                            val cmd = com.playbridge.sender.model.createControlCommandJson(command)
+                            val cmd = com.playbridge.protocol.createControlCommandJson(command)
                             webSocketClient.send(cmd)
                             if (command == "stop") {
                                 tvActiveContext = "idle"

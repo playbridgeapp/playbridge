@@ -1,9 +1,9 @@
 package com.playbridge.receiver.server
 
 import android.util.Log
-import com.playbridge.receiver.model.Command
-import com.playbridge.receiver.model.createPongJson
-import com.playbridge.receiver.model.parseCommand
+import com.playbridge.protocol.Command
+import com.playbridge.protocol.createPongJson
+import com.playbridge.protocol.parseCommand
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
@@ -148,7 +148,7 @@ class WebSocketServer(
                     
                     try {
                         // Robust JSON parsing
-                        val authMessage = com.playbridge.receiver.model.protocolJson.decodeFromString<com.playbridge.receiver.model.AuthMessage>(text)
+                        val authMessage = com.playbridge.protocol.protocolJson.decodeFromString<com.playbridge.protocol.AuthMessage>(text)
                         
                         if (authMessage.type == "auth") {
                             if (authMessage.token == authToken) {
