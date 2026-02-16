@@ -62,9 +62,36 @@ class PlayerControlsManager(
     }
 
     /**
+     * Helper to apply scale-up/down animation when a view gets/loses focus.
+     */
+    private fun attachFocusScaleAnimation(view: View) {
+        view.setOnFocusChangeListener { v, hasFocus ->
+            val scale = if (hasFocus) 1.1f else 1.0f
+            v.animate()
+                .scaleX(scale)
+                .scaleY(scale)
+                .setDuration(200)
+                .start()
+                
+            // If it's the center play button, we might want to ensure it's visible
+            if (hasFocus && (v == centerPlayButton || v == skipBackButton || v == playPauseButton || v == skipForwardButton || v == tracksButton)) {
+                showControlsUI()
+            }
+        }
+    }
+
+    /**
      * Wire up click listeners and SeekBar change/key listeners.
      */
     fun setupControls() {
+        // Attach scale animations to all navigable buttons
+        attachFocusScaleAnimation(centerPlayButton)
+        attachFocusScaleAnimation(playPauseButton)
+        attachFocusScaleAnimation(skipBackButton)
+        attachFocusScaleAnimation(skipForwardButton)
+        attachFocusScaleAnimation(tracksButton)
+        attachFocusScaleAnimation(seekBar)
+
         // Center play/pause button
         centerPlayButton.setOnClickListener {
             togglePlayPause()
