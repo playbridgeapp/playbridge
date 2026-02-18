@@ -31,7 +31,7 @@ class TabManager {
     /** Ensure [store] always has at least one tab. */
     fun ensureAtLeastOneTab(store: BrowserStore) {
         if (store.state.tabs.isEmpty()) {
-            createTab("https://www.google.com", store)
+            createTab("about:blank", store)
         }
     }
 
@@ -77,7 +77,7 @@ class TabManager {
         tabs.forEach { tab ->
             if (!sessions.containsKey(tab.id)) {
                 val newSession = Components.engine.createSession()
-                val url = tab.content.url.ifEmpty { "https://www.google.com" }
+                val url = tab.content.url.ifEmpty { "about:blank" }
                 if (url != "about:blank") {
                     newSession.loadUrl(url)
                 }

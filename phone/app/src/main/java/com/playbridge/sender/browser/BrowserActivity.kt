@@ -10,6 +10,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.scale
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -152,6 +153,7 @@ class BrowserActivity : ComponentActivity() {
             // Database and History
             val database = remember { DatabaseProvider.getDatabase(applicationContext) }
             val historyDao = remember { database.historyDao() }
+            val bookmarkDao = remember { database.bookmarkDao() }
             
             // Suggestions State
             var isEditing by remember { mutableStateOf(false) }
@@ -209,11 +211,13 @@ class BrowserActivity : ComponentActivity() {
             }
             
             // Existing state variables
-            var currentUrl by remember { mutableStateOf("https://www.google.com") }
+            var currentUrl by remember { mutableStateOf("about:blank") }
             var isLoading by remember { mutableStateOf(false) }
             var browserCanGoBack by remember { mutableStateOf(false) }
             var browserCanGoForward by remember { mutableStateOf(false) }
             var menuExpanded by remember { mutableStateOf(false) }
+            var isDesktopMode by remember { mutableStateOf(false) }
+            var isSecureConnection by remember { mutableStateOf(false) }
             
             // Update UI state from session
             LaunchedEffect(session, selectedTab) {
@@ -290,6 +294,7 @@ class BrowserActivity : ComponentActivity() {
             val contextMenuUrlState = remember { mutableStateOf(contextMenuUrl) }
             val previousUrlState = remember { mutableStateOf(previousUrl) }
             val pendingDownloadState = remember { mutableStateOf(pendingDownload) }
+            val isSecureConnectionState = remember { mutableStateOf(isSecureConnection) }
             
             // Sync wrapper states back to local vars
             currentUrl = currentUrlState.value
@@ -299,6 +304,10 @@ class BrowserActivity : ComponentActivity() {
             contextMenuUrl = contextMenuUrlState.value
             previousUrl = previousUrlState.value
             pendingDownload = pendingDownloadState.value
+            isSecureConnection = isSecureConnectionState.value
+            // isDesktopMode is controlled by the UI, so we sync downwards to the observer setup
+            // which will react to changes
+
             
             // Link context menu
             LinkContextMenu(
@@ -344,6 +353,8 @@ class BrowserActivity : ComponentActivity() {
                 previousUrl = previousUrlState,
                 historyDao = historyDao,
                 pendingDownload = pendingDownloadState,
+                isDesktopMode = isDesktopMode,
+                isSecureConnection = isSecureConnectionState,
                 onXpiDetected = { url ->
                     runOnUiThread {
                         Toast.makeText(this@BrowserActivity, "Installing extension...", Toast.LENGTH_SHORT).show()
@@ -396,6 +407,26 @@ class BrowserActivity : ComponentActivity() {
             )
 
 
+            
+            val handleBookmarkClick = {
+                scope.launch(Dispatchers.IO) {
+                    val title = selectedTab?.content?.title
+                    val url = currentUrl
+                    if (url != "about:blank") {
+                        bookmarkDao.insert(
+                            com.playbridge.sender.data.history.BookmarkEntity(
+                                url = url,
+                                title = title,
+                                timestamp = System.currentTimeMillis()
+                            )
+                        )
+                        scope.launch(Dispatchers.Main) {
+                            Toast.makeText(this@BrowserActivity, "Bookmark added", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+            
             PlayBridgeTheme {
                 Scaffold(
                     topBar = {
@@ -411,6 +442,10 @@ class BrowserActivity : ComponentActivity() {
                                             videoCount = videoCount,
                                             tabCount = browserState.tabs.size,
                                             isEditing = isEditing,
+                                            isSecure = isSecureConnection,
+                                            isDesktopMode = isDesktopMode,
+                                            onDesktopModeChange = { isDesktopMode = it },
+                                            onBookmarkClick = { handleBookmarkClick() },
                                             onEditingChange = { editing -> 
                                                 isEditing = editing
                                                 if (editing) {
@@ -645,6 +680,69 @@ class BrowserActivity : ComponentActivity() {
 
                                                 
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                                
+                                                // Bookmarks
+                                                AnimatedMenuItem(
+                                                    index = 8,
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        handleBookmarkClick()
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("Add Bookmark", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.StarBorder, null, tint = MaterialTheme.colorScheme.onSurface) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
+
+                                                AnimatedMenuItem(
+                                                    index = 9,
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        currentScreen = Screen.Bookmarks
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("Bookmarks", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { Icon(Icons.Default.Bookmarks, null, tint = MaterialTheme.colorScheme.onSurface) }, // Changed icon to Bookmarks
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
+
+                                                // Desktop Site Toggle
+                                                AnimatedMenuItem(
+                                                    index = 10,
+                                                    onClick = {
+                                                        isDesktopMode = !isDesktopMode
+                                                        // Observer setup will react to this change
+                                                        // menuExpanded = false // Keep open to see toggle switch?
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { 
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Text("Desktop Site", style = MaterialTheme.typography.bodyLarge)
+                                                                Switch(
+                                                                    checked = isDesktopMode,
+                                                                    onCheckedChange = { 
+                                                                        isDesktopMode = it
+                                                                    },
+                                                                    modifier = Modifier.scale(0.8f)
+                                                                )
+                                                            }
+                                                        },
+                                                        leadingIcon = { Icon(Icons.Default.DesktopMac, null, tint = MaterialTheme.colorScheme.onSurface) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
                                             }
                                             }
                                         )
@@ -699,6 +797,9 @@ class BrowserActivity : ComponentActivity() {
                             Screen.History -> {
                                 // No TopAppBar here as HistoryScreen has its own
                             }
+                            Screen.Bookmarks -> {}
+                            Screen.Home -> {}
+
                             Screen.Downloads -> {
                                 // No TopAppBar here as DownloadsScreen has its own
                             }
@@ -719,10 +820,10 @@ class BrowserActivity : ComponentActivity() {
                                     } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
                                         slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
-                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings) && initialState == Screen.Browser) {
+                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks) && initialState == Screen.Browser) {
                                          slideInVertically { height -> height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> -height } + fadeOut()
-                                    } else if (targetState == Screen.Browser && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings)) {
+                                    } else if (targetState == Screen.Browser && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks)) {
                                          slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
                                     } else {
@@ -760,6 +861,17 @@ class BrowserActivity : ComponentActivity() {
                                                     session = session,
                                                     onLongPressLink = { url: String -> contextMenuUrl = url }
                                                 )
+                                                
+                                                // Home Screen Overlay
+                                                if (currentUrl == "about:blank") {
+                                                    HomeScreen(
+                                                        onNavigate = { url -> 
+                                                            session.loadUrl(url) 
+                                                        },
+                                                        historyDao = historyDao,
+                                                        bookmarkDao = bookmarkDao
+                                                    )
+                                                }
                                                 
                                                 // Suggestions Overlay (Full Screen)
                                                 if (isEditing) {
@@ -829,7 +941,7 @@ class BrowserActivity : ComponentActivity() {
                                                     tabManager.closeTab(tabId, store)
                                                 },
                                                 onNewTab = {
-                                                    tabManager.createTab("https://www.google.com", store)
+                                                    tabManager.createTab("about:blank", store)
                                                     currentScreen = Screen.Browser
                                                 }
                                             )
@@ -911,6 +1023,44 @@ class BrowserActivity : ComponentActivity() {
                                             BackHandler { currentScreen = Screen.Browser }
                                             SettingsScreen(
                                                 onBack = { currentScreen = Screen.Browser }
+                                            )
+                                        }
+                                        Screen.Bookmarks -> {
+                                            BackHandler { currentScreen = Screen.Browser }
+                                            BookmarksScreen(
+                                                bookmarkDao = bookmarkDao,
+                                                onNavigate = { url ->
+                                                    session.loadUrl(url)
+                                                    currentScreen = Screen.Browser
+                                                },
+                                                onBack = { currentScreen = Screen.Browser }
+                                            )
+                                        }
+                                        Screen.Home -> {
+                                            // Home is root, but if we came from elsewhere back might exit?
+                                            // Actually Home might be the starting screen.
+                                            // For now, let's say Home -> Browser (if url entered) or back exits app?
+                                            // If Home is "New Tab", then back might close tab?
+                                            // Let's treat Home as a screen that navigates to Browser.
+                                            BackHandler { 
+                                                // If on Home, back exits app or goes to Browser?
+                                                // If we have tabs, maybe go to Browser?
+                                                // For now, mimicking standard behavior:
+                                                if (browserCanGoBack) {
+                                                    session.goBack() 
+                                                    // But Home is not part of session history directly usually.
+                                                    // If URL is "playbridge://home", we show Home.
+                                                } else {
+                                                    finish()
+                                                }
+                                            }
+                                            HomeScreen(
+                                                onNavigate = { url ->
+                                                    session.loadUrl(url)
+                                                    currentScreen = Screen.Browser
+                                                },
+                                                historyDao = historyDao,
+                                                bookmarkDao = bookmarkDao
                                             )
                                         }
                                     }
@@ -1112,4 +1262,6 @@ sealed class Screen {
     object Downloads : Screen()
     object Settings : Screen()
     object History : Screen()
+    object Bookmarks : Screen()
+    object Home : Screen()
 }

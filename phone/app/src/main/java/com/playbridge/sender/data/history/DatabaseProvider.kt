@@ -13,7 +13,9 @@ object DatabaseProvider {
                 context.applicationContext,
                 HistoryDatabase::class.java,
                 "history_database"
-            ).build()
+            )
+            .fallbackToDestructiveMigration()
+            .build()
             INSTANCE = instance
             instance
         }

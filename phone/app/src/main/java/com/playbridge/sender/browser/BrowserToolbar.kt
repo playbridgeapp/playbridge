@@ -42,6 +42,10 @@ fun BrowserToolbar(
     onVideoClick: () -> Unit = {},
     onTabsClick: () -> Unit = {},
     isEditing: Boolean = false,
+    isSecure: Boolean = false,
+    isDesktopMode: Boolean = false,
+    onDesktopModeChange: (Boolean) -> Unit = {},
+    onBookmarkClick: () -> Unit = {},
     onEditingChange: (Boolean) -> Unit = {},
     menuContent: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
@@ -139,6 +143,16 @@ fun BrowserToolbar(
                 // URL Bar
                 TextField(
                     value = textFieldValue,
+                    leadingIcon = if (!isEditing) {
+                        {
+                            Icon(
+                                if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
+                                tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    } else null,
                     onValueChange = { newValue ->
                         textFieldValue = newValue
                         onUrlChange(newValue.text)

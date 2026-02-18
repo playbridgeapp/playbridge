@@ -16,6 +16,7 @@ coroutines = "1.9.0"
 media3 = "1.5.1"
 okhttp = "4.12.0"
 coil = "3.3.0"
+geckoview = "147.0.20260105210555"
 
 [libraries]
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
@@ -64,6 +65,9 @@ media3-common = { group = "androidx.media3", name = "media3-common", version.ref
 media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-urlconnection = { group = "com.squareup.okhttp3", name = "okhttp-urlconnection", version.ref = "okhttp" }
+
+# GeckoView
+geckoview-omni = { group = "org.mozilla.geckoview", name = "geckoview-omni", version.ref = "geckoview" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

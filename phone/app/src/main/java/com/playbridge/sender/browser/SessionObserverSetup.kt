@@ -18,6 +18,8 @@ import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import com.playbridge.sender.data.history.HistoryDao
 import com.playbridge.sender.data.history.HistoryEntity
+import org.mozilla.geckoview.GeckoSessionSettings
+import androidx.compose.runtime.LaunchedEffect
 
 /**
  * Sets up the [EngineSession.Observer] and GeckoSession delegate proxies
@@ -41,9 +43,40 @@ fun SessionObserverSetup(
     previousUrl: MutableState<String>,
     historyDao: HistoryDao,
     pendingDownload: MutableState<PendingDownload?>,
+    isDesktopMode: Boolean,
+    isSecureConnection: MutableState<Boolean>,
     onXpiDetected: (String) -> Unit,
     onVideoHashDetected: (String) -> Unit
 ) {
+    // Desktop Mode User Agent
+    val desktopUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
+    
+    // React to Desktop Mode changes
+    LaunchedEffect(isDesktopMode, session) {
+        val gs = (session as? GeckoEngineSession)?.let { 
+             try {
+                val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
+                field.isAccessible = true
+                field.get(it) as? GeckoSession
+             } catch(e: Exception) { null }
+        }
+        
+        gs?.let { geckoSession ->
+            if (isDesktopMode) {
+                geckoSession.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+                geckoSession.settings.userAgentOverride = desktopUserAgent
+                Log.d(TAG, "Enabled Desktop Mode")
+            } else {
+                geckoSession.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+                geckoSession.settings.userAgentOverride = null // Reset to default
+                Log.d(TAG, "Disabled Desktop Mode")
+            }
+            // Reload to apply changes if content is loaded
+            if (currentUrl.value != "about:blank") {
+                session.reload()
+            }
+        }
+    }
     DisposableEffect(session) {
         val observer = object : EngineSession.Observer {
             override fun onLocationChange(url: String, hasUserGesture: Boolean) {
@@ -247,6 +280,29 @@ fun SessionObserverSetup(
                             }
                         } as GeckoSession.ContentDelegate
                         gs.contentDelegate = contentProxy
+                    }
+                    
+                    // ProgressDelegate for Security/SSL status
+                    gs.progressDelegate = object : GeckoSession.ProgressDelegate {
+                        override fun onPageStart(session: GeckoSession, url: String) {
+                            isLoading.value = true
+                        }
+                        
+                        override fun onPageStop(session: GeckoSession, success: Boolean) {
+                            isLoading.value = false
+                        }
+
+                        override fun onSecurityChange(
+                            session: GeckoSession,
+                            securityInfo: GeckoSession.ProgressDelegate.SecurityInformation
+                        ) {
+                            isSecureConnection.value = securityInfo.isSecure
+                            Log.d(TAG, "Security changed: isSecure=${securityInfo.isSecure}, host=${securityInfo.host}")
+                        }
+                        
+                        override fun onProgressChange(session: GeckoSession, progress: Int) {
+                            // Optional: update progress bar precision
+                        }
                     }
                 }
             } catch (e: Exception) {

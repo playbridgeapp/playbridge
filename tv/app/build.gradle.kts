@@ -125,4 +125,7 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     
     implementation(project(":protocol"))
+
+    // GeckoView
+    implementation(libs.geckoview.omni)
 }

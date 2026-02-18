@@ -32,3 +32,4 @@ Thumbs.db
 # Project Specific
 deploymentTargetSelector.xml
 tv/app/release
+phone/app/release
