@@ -27,6 +27,7 @@ class WebSocketClient {
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
     
+    @Volatile
     private var webSocket: WebSocket? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
@@ -63,12 +64,13 @@ class WebSocketClient {
     }
 
     private fun attemptConnection(ip: String, port: Int, serverName: String) {
+        // Update state first to prevent race where UI thinks we are connected but socket is null
+        _connectionState.value = ConnectionState.Connecting
+        
         if (webSocket != null) {
             try { webSocket?.close(1000, "Reconnecting") } catch(e: Exception) {}
             webSocket = null
         }
-        
-        _connectionState.value = ConnectionState.Connecting
         
         val url = "ws://$ip:$port/"
         Log.i(TAG, "Connecting to $url")
@@ -79,6 +81,10 @@ class WebSocketClient {
         
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (webSocket !== this@WebSocketClient.webSocket) {
+                    Log.d(TAG, "Ignoring onOpen for stale socket")
+                    return
+                }
                 Log.i(TAG, "Socket opened to $serverName")
                 // _connectionState.value = ConnectionState.Connected(serverName) // Wait for auth
                 retryCount = 0
@@ -101,6 +107,10 @@ class WebSocketClient {
             }
             
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (webSocket !== this@WebSocketClient.webSocket) {
+                    Log.d(TAG, "Ignoring onMessage for stale socket")
+                    return
+                }
                 Log.d(TAG, "Received: $text")
                 
                 // Check for auth response
@@ -146,42 +156,54 @@ class WebSocketClient {
             
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "Connection closed: $reason")
-                this@WebSocketClient.webSocket = null
-                _connectionState.value = ConnectionState.Disconnected
+                if (webSocket === this@WebSocketClient.webSocket) {
+                    this@WebSocketClient.webSocket = null
+                    _connectionState.value = ConnectionState.Disconnected
+                } else {
+                     Log.d(TAG, "Ignoring onClosed for stale socket")
+                }
             }
             
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "Connection failed", t)
-                this@WebSocketClient.webSocket = null
                 
-                if (!isUserDisconnect && retryCount < MAX_RETRIES) {
-                    retryCount++
-                    Log.i(TAG, "Retrying connection ($retryCount/$MAX_RETRIES) in ${RETRY_DELAY_MS}ms")
-                    _connectionState.value = ConnectionState.Retrying(retryCount, MAX_RETRIES, (RETRY_DELAY_MS/1000).toInt())
+                if (webSocket === this@WebSocketClient.webSocket) {
+                    this@WebSocketClient.webSocket = null
                     
-                    scope.launch {
-                        try {
-                            delay(RETRY_DELAY_MS)
-                            targetConnection?.let {
-                                if (!isUserDisconnect) {
-                                    attemptConnection(it.ip, it.port, it.serverName)
+                    if (!isUserDisconnect && retryCount < MAX_RETRIES) {
+                        retryCount++
+                        Log.i(TAG, "Retrying connection ($retryCount/$MAX_RETRIES) in ${RETRY_DELAY_MS}ms")
+                        _connectionState.value = ConnectionState.Retrying(retryCount, MAX_RETRIES, (RETRY_DELAY_MS/1000).toInt())
+                        
+                        scope.launch {
+                            try {
+                                delay(RETRY_DELAY_MS)
+                                targetConnection?.let {
+                                    if (!isUserDisconnect) {
+                                        attemptConnection(it.ip, it.port, it.serverName)
+                                    }
                                 }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error during retry attempt", e)
                             }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error during retry attempt", e)
                         }
+                    } else {
+                        _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
                     }
                 } else {
-                    _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
+                    Log.d(TAG, "Ignoring onFailure for stale socket")
                 }
             }
         })
     }
     
     fun send(message: String): Boolean {
-        return webSocket?.send(message) ?: false.also {
-            Log.w(TAG, "Cannot send, not connected")
+        val ws = webSocket
+        if (ws == null) {
+            Log.w(TAG, "Cannot send, webSocket is null. State: ${_connectionState.value}")
+            return false
         }
+        return ws.send(message)
     }
     
     fun sendPing(): Boolean {
