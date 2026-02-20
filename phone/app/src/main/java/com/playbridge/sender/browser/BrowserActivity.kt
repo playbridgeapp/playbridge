@@ -65,6 +65,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.zIndex
 
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.withContext
+import com.playbridge.sender.data.history.TabEntity
+import com.playbridge.sender.data.history.HistoryDatabase
+
 @Composable
 fun AnimatedMenuItem(
     index: Int,
@@ -128,6 +133,31 @@ class BrowserActivity : ComponentActivity() {
     private val tabManager = TabManager()
     private lateinit var connectionStore: ConnectionStore
     private lateinit var nsdHelper: NsdHelper
+    private lateinit var database: HistoryDatabase
+
+    override fun onPause() {
+        super.onPause()
+        saveTabs()
+    }
+
+    private fun saveTabs() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val state = Components.store.state
+            val tabs = state.tabs
+            val selectedId = state.selectedTabId
+            
+            val entities = tabs.map { tab ->
+                TabEntity(
+                    id = tab.id,
+                    url = tab.content.url,
+                    title = tab.content.title,
+                    parentId = tab.parentId,
+                    isSelected = (tab.id == selectedId)
+                )
+            }
+            database.tabDao().updateTabs(entities)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -143,6 +173,28 @@ class BrowserActivity : ComponentActivity() {
         // Install the bundled video detector extension
         Components.installBundledExtension()
 
+        database = DatabaseProvider.getDatabase(applicationContext)
+
+        // Restore tabs
+        lifecycleScope.launch(Dispatchers.IO) {
+            if (Components.store.state.tabs.isEmpty()) {
+                val savedTabs = database.tabDao().getAll()
+                if (savedTabs.isNotEmpty()) {
+                    val sessionTabs = savedTabs.map { entity ->
+                        TabSessionState(
+                            id = entity.id,
+                            content = ContentState(url = entity.url, title = entity.title ?: ""),
+                            parentId = entity.parentId
+                        )
+                    }
+                    val selectedId = savedTabs.find { it.isSelected }?.id
+                    withContext(Dispatchers.Main) {
+                        tabManager.restoreTabs(sessionTabs, selectedId, Components.store)
+                    }
+                }
+            }
+        }
+
         setContent {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Browser) }
             val clipboardManager = LocalClipboardManager.current
@@ -151,7 +203,7 @@ class BrowserActivity : ComponentActivity() {
             val scope = rememberCoroutineScope()
             
             // Database and History
-            val database = remember { DatabaseProvider.getDatabase(applicationContext) }
+            // Uses the activity-scoped database instance
             val historyDao = remember { database.historyDao() }
             val bookmarkDao = remember { database.bookmarkDao() }
             

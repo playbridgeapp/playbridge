@@ -62,18 +62,23 @@ fun SessionObserverSetup(
         }
         
         gs?.let { geckoSession ->
-            if (isDesktopMode) {
-                geckoSession.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
-                geckoSession.settings.userAgentOverride = desktopUserAgent
-                Log.d(TAG, "Enabled Desktop Mode")
-            } else {
-                geckoSession.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_MOBILE
-                geckoSession.settings.userAgentOverride = null // Reset to default
-                Log.d(TAG, "Disabled Desktop Mode")
-            }
-            // Reload to apply changes if content is loaded
-            if (currentUrl.value != "about:blank") {
-                session.reload()
+            val currentMode = geckoSession.settings.userAgentMode
+            val targetMode = if (isDesktopMode) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+            
+            if (currentMode != targetMode) {
+                if (isDesktopMode) {
+                    geckoSession.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+                    geckoSession.settings.userAgentOverride = desktopUserAgent
+                    Log.d(TAG, "Enabled Desktop Mode")
+                } else {
+                    geckoSession.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+                    geckoSession.settings.userAgentOverride = null // Reset to default
+                    Log.d(TAG, "Disabled Desktop Mode")
+                }
+                // Reload to apply changes if content is loaded
+                if (currentUrl.value != "about:blank") {
+                    session.reload()
+                }
             }
         }
     }

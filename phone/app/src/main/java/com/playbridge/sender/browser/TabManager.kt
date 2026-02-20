@@ -66,6 +66,22 @@ class TabManager {
         store.dispatch(TabListAction.SelectTabAction(tabId))
     }
 
+    /** Restore a list of tabs to the store. */
+    fun restoreTabs(tabs: List<TabSessionState>, selectedId: String?, store: BrowserStore) {
+        // We can't easily clear the store, so we just add the restored tabs.
+        // If the store was empty, this populates it.
+        // If there were existing tabs (e.g. from a default session), we might want to remove them,
+        // but for now let's just add.
+        tabs.forEach { tab ->
+            store.dispatch(
+                TabListAction.AddTabAction(
+                    tab = tab,
+                    select = (tab.id == selectedId)
+                )
+            )
+        }
+    }
+
     // ── Session synchronisation ──────────────────────────────────────
 
     /**
