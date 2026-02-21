@@ -41,7 +41,8 @@ data class PlayPayload(
     val title: String? = null,
     val headers: Map<String, String>? = null,
     val contentType: String? = null,
-    val subtitles: List<String>? = null
+    val subtitles: List<String>? = null,
+    val detectedBy: String? = null
 )
 
 /**
@@ -207,7 +208,7 @@ data class PongMessage(val type: String = "pong")
 // ==================== Sealed Command Class (for parsing) ====================
 
 sealed class Command {
-    data class Play(val url: String, val title: String?, val headers: Map<String, String>?, val contentType: String?, val subtitles: List<String>?) : Command()
+    data class Play(val url: String, val title: String?, val headers: Map<String, String>?, val contentType: String?, val subtitles: List<String>?, val detectedBy: String?) : Command()
     data class Browser(val url: String) : Command()
     data class Control(val command: String) : Command()
     data class Remote(val key: String) : Command()
@@ -240,7 +241,8 @@ fun parseCommand(jsonString: String): Command {
                             title = payload?.title,
                             headers = payload?.headers,
                             contentType = payload?.contentType,
-                            subtitles = payload?.subtitles
+                            subtitles = payload?.subtitles,
+                            detectedBy = payload?.detectedBy
                         )
                     }
                     "browser" -> {
@@ -295,11 +297,12 @@ fun createPlayCommandJson(
     title: String? = null,
     headers: Map<String, String>? = null,
     contentType: String? = null,
-    subtitles: List<String>? = null
+    subtitles: List<String>? = null,
+    detectedBy: String? = null
 ): String {
     return protocolJson.encodeToString(
         PlayCommand.serializer(),
-        PlayCommand(payload = PlayPayload(url, title, headers, contentType, subtitles))
+        PlayCommand(payload = PlayPayload(url, title, headers, contentType, subtitles, detectedBy))
     )
 }
 

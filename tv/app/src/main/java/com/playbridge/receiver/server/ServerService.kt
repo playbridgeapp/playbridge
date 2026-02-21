@@ -173,6 +173,9 @@ class ServerService : Service() {
                     putExtra(EXTRA_URL, command.url)
                     putExtra(EXTRA_TITLE, command.title)
                     putExtra(EXTRA_CONTENT_TYPE, command.contentType)
+                    if (command.detectedBy != null) {
+                        putExtra(EXTRA_DETECTED_BY, command.detectedBy)
+                    }
                     if (command.subtitles != null) {
                         putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(command.subtitles))
                     }
@@ -354,6 +357,7 @@ class ServerService : Service() {
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
         const val EXTRA_CONTENT_TYPE = "content_type"
+        const val EXTRA_DETECTED_BY = "detected_by"
         const val EXTRA_SUBTITLES = "subtitles"
         const val EXTRA_HEADERS = "headers"
         const val EXTRA_COMMAND = "command"

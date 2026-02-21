@@ -23,6 +23,7 @@
     "permissions": [
         "<all_urls>",
         "webRequest",
+        "webRequestBlocking",
         "storage",
         "tabs"
     ],

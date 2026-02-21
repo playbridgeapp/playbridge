@@ -117,11 +117,14 @@ browser.webRequest.onBeforeRequest.addListener(
 // We store them keyed by requestId.
 browser.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
+        if (details.method === 'OPTIONS') return;
+        
         const headers = {};
         if (details.requestHeaders) {
             details.requestHeaders.forEach(h => {
                 const name = h.name.toLowerCase();
-                if (['cookie', 'user-agent', 'referer', 'origin', 'authorization'].includes(name)) {
+                const skipHeaders = ['host', 'connection', 'accept-encoding', 'content-length', 'upgrade-insecure-requests'];
+                if (!skipHeaders.includes(name)) {
                     headers[h.name] = h.value;
                 }
             });
@@ -197,6 +200,57 @@ browser.webRequest.onHeadersReceived.addListener(
                     originUrl: details.originUrl || '',
                     timestamp: Date.now()
                 }, details.tabId, headers);
+            } else {
+                // Check if it's a potential hidden M3U8 stream in a generic response type
+                const skipTypes = ['image', 'font', 'stylesheet', 'script'];
+                if (details.statusCode === 200 && !skipTypes.includes(details.type)) {
+                    try {
+                        const filter = browser.webRequest.filterResponseData(details.requestId);
+                        const decoder = new TextDecoder("utf-8");
+                        let checked = false;
+                        let accumulatedData = "";
+
+                        filter.ondata = (event) => {
+                            if (checked) {
+                                filter.write(event.data);
+                                return;
+                            }
+                            
+                            filter.write(event.data); // pass data through unchanged
+                            accumulatedData += decoder.decode(event.data, { stream: true });
+                            
+                            if (accumulatedData.length >= 7) {
+                                checked = true;
+                                const trimmed = accumulatedData.trim();
+                                if (trimmed.startsWith("#EXTM3U")) {
+                                    if (DEBUG) console.log(`[VideoDetector BG] HIDDEN M3U8 DETECTED in body: ${details.url.substring(0, 50)}...`);
+                                    const headers = storedData ? storedData.headers : null;
+                                    notifyContentScript({
+                                        url: details.url,
+                                        tabId: details.tabId,
+                                        contentType: contentType,
+                                        detectedBy: 'body_content_m3u8',
+                                        originUrl: details.originUrl || '',
+                                        timestamp: Date.now()
+                                    }, details.tabId, headers);
+                                }
+                                // Stop intercepting further chunks to save resources
+                                filter.disconnect();
+                            }
+                        };
+
+                        filter.onstop = (event) => {
+                            try { filter.disconnect(); } catch (e) {}
+                        };
+                        
+                        filter.onerror = (event) => {
+                            if (DEBUG) console.log(`[VideoDetector BG] Filter error: ${filter.error}`);
+                        };
+                    } catch (e) {
+                         // filterResponseData might throw if request cannot be filtered
+                         if (DEBUG) console.error(`[VideoDetector BG] filterResponseData error:`, e);
+                    }
+                }
             }
         }
 
@@ -207,7 +261,7 @@ browser.webRequest.onHeadersReceived.addListener(
         }
     },
     { urls: ["<all_urls>"] },
-    ["responseHeaders"]
+    ["responseHeaders", "blocking"]
 );
 
 // Handle messages from content scripts

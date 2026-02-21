@@ -76,10 +76,11 @@ class PlayerActivity : ComponentActivity() {
                         intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
                     }
                     
+                    val detectedBy = intent.getStringExtra(ServerService.EXTRA_DETECTED_BY)
                     val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
                     
                     if (url != null) {
-                        playVideo(url, title, contentType, headers, subtitles)
+                        playVideo(url, title, contentType, detectedBy, headers, subtitles)
                     }
                 }
             }
@@ -94,7 +95,7 @@ class PlayerActivity : ComponentActivity() {
         Log.i(TAG, "Has URL extra: ${intent?.hasExtra(ServerService.EXTRA_URL)}")
         
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Screen will be kept on dynamically based on playback state
 
         val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
         windowInsetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -189,6 +190,7 @@ class PlayerActivity : ComponentActivity() {
         val url = intent?.getStringExtra(ServerService.EXTRA_URL)
         val title = intent?.getStringExtra(ServerService.EXTRA_TITLE)
         val contentType = intent?.getStringExtra(ServerService.EXTRA_CONTENT_TYPE)
+        val detectedBy = intent?.getStringExtra(ServerService.EXTRA_DETECTED_BY)
         val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent?.getSerializableExtra(ServerService.EXTRA_HEADERS, HashMap::class.java) as? Map<String, String>
         } else {
@@ -199,8 +201,8 @@ class PlayerActivity : ComponentActivity() {
         val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
         
         if (url != null) {
-            Log.i(TAG, "Playing video: $url (title: $title, type: $contentType, subs: $subtitles)")
-            playVideo(url, title, contentType, headers, subtitles)
+            Log.i(TAG, "Playing video: $url (title: $title, type: $contentType, subs: $subtitles, detectedBy: $detectedBy)")
+            playVideo(url, title, contentType, detectedBy, headers, subtitles)
         }
     }
     
@@ -222,7 +224,7 @@ class PlayerActivity : ComponentActivity() {
             }
     }
 
-    private fun playVideo(url: String, title: String?, contentType: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
+    private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
         Log.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         Log.i(TAG, "Target URL: $url")
         Log.i(TAG, "Target Title: $title")
@@ -245,11 +247,11 @@ class PlayerActivity : ComponentActivity() {
                 Log.d(TAG, "Pre-flight sniff returned null")
             }
             
-            startPlayback(url, title, finalContentType, intentHeaders, subtitles)
+            startPlayback(url, title, finalContentType, detectedBy, intentHeaders, subtitles)
         }
     }
 
-    private fun startPlayback(url: String, title: String?, contentType: String?, intentHeaders: Map<String, String>?, subtitles: ArrayList<String>?) {
+    private fun startPlayback(url: String, title: String?, contentType: String?, detectedBy: String?, intentHeaders: Map<String, String>?, subtitles: ArrayList<String>?) {
         Log.i(TAG, "Starting playback with Final Content Type: $contentType")
 
         progressManager.setCurrentMedia(url, title, contentType, intentHeaders)
@@ -283,9 +285,18 @@ class PlayerActivity : ComponentActivity() {
         requestProperties["User-Agent"] = userAgent
         
         Log.i(TAG, "Final Request Headers: $requestProperties")
+        
+        // Print cURL command for debugging
+        val curlBuilder = StringBuilder("curl -v '$url'")
+        requestProperties.forEach { (key, value) ->
+            // Escape single quotes in the value to avoid breaking the shell command
+            val escapedValue = value.replace("'", "'\\''")
+            curlBuilder.append(" -H '$key: $escapedValue'")
+        }
+        Log.i(TAG, "CURL COMMAND: $curlBuilder")
 
         // 2. Create OkHttp Data Source Factory
-        val okHttpClient = contentSniffer.getUnsafeOkHttpClient()
+        val okHttpClient = contentSniffer.getUnsafeOkHttpClient(requestProperties)
         val cacheControl = okhttp3.CacheControl.Builder().noCache().noStore().build()
 
         val okHttpDataSourceFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)
@@ -308,7 +319,9 @@ class PlayerActivity : ComponentActivity() {
             )
         }
 
-        val isHls = (contentType == "application/vnd.apple.mpegurl") || 
+        val isHls = (detectedBy == "body_content_m3u8") || 
+                    (detectedBy == "url_pattern_m3u8") ||
+                    (contentType == "application/vnd.apple.mpegurl") || 
                     (contentType == "application/x-mpegurl") ||
                     (contentType == androidx.media3.common.MimeTypes.APPLICATION_M3U8) ||
                     (contentType.isNullOrEmpty() && (url.contains(".m3u8") || url.contains(".jpg")))
@@ -316,12 +329,14 @@ class PlayerActivity : ComponentActivity() {
         // 4. Build Player
         val mediaSourceFactory = if (isHls) {
             Log.i(TAG, "Using HlsMediaSource.Factory")
-            androidx.media3.exoplayer.hls.HlsMediaSource.Factory(dataSourceFactory)
+            // Use okHttpDataSourceFactory directly to ensure headers and SSL bypass 
+            // apply to M3U8 chunk lists and AES-128 key HTTP queries
+            androidx.media3.exoplayer.hls.HlsMediaSource.Factory(okHttpDataSourceFactory)
                 .setAllowChunklessPreparation(true)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         } else {
             Log.i(TAG, "Using DefaultMediaSourceFactory")
-             androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dataSourceFactory)
+             androidx.media3.exoplayer.source.DefaultMediaSourceFactory(okHttpDataSourceFactory)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         }
 
@@ -383,6 +398,7 @@ class PlayerActivity : ComponentActivity() {
                 androidx.media3.common.Player.STATE_ENDED -> {
                     Log.i(TAG, "Playback ended")
                     controlsManager.hideBuffering()
+                    finish()
                 }
             }
         }
@@ -412,7 +428,12 @@ class PlayerActivity : ComponentActivity() {
         }
         
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-             Log.d(TAG, "Is playing: $isPlaying")
+            Log.d(TAG, "Is playing: $isPlaying")
+            if (isPlaying) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
         }
     }
     

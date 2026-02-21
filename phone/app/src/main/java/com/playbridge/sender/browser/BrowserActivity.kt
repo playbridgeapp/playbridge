@@ -1155,7 +1155,8 @@ class BrowserActivity : ComponentActivity() {
                                         title = selectedTab?.content?.title ?: "Video from browser",
                                         headers = headers,
                                         contentType = video.contentType,
-                                        subtitles = subtitles
+                                        subtitles = subtitles,
+                                        detectedBy = video.detectedBy
                                     )
                                     Log.d(TAG, "Sending play command: $commandJson")
                                     val sent = webSocketClient.send(commandJson)

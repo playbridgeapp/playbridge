@@ -94,13 +94,15 @@ class BrowserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Enable hardware acceleration for video playback
-        window.setFlags(
-            android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-        )
-        // Keep screen on during video playback
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Only enable hardware acceleration if we're not running on an emulator
+        // Emulators often lack proper OpenGL ES 3.1 support which crashes the WebView
+        if (!isEmulator()) {
+            window.setFlags(
+                android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+            )
+        }
+        // We manage KEEP_SCREEN_ON dynamically during fullscreen video playback
         
         // Initialize ad blocker
         adBlocker = AdBlocker(applicationContext)
@@ -274,6 +276,7 @@ class BrowserActivity : ComponentActivity() {
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         )
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
     
     private fun exitFullscreen() {
@@ -289,6 +292,7 @@ class BrowserActivity : ComponentActivity() {
         contentContainer?.visibility = View.VISIBLE
         
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun handleMouseCommand(event: String?, dx: Float, dy: Float) {
@@ -506,5 +510,21 @@ class BrowserActivity : ComponentActivity() {
             // Draw border
             canvas.drawCircle(cursorX, cursorY, radius, borderPaint)
         }
+    }
+
+    private fun isEmulator(): Boolean {
+        return (Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for x86")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
+                || "google_sdk" == Build.PRODUCT
+                || Build.PRODUCT.contains("sdk_gphone")
+                || Build.HARDWARE.contains("goldfish")
+                || Build.HARDWARE.contains("ranchu")
+                || Build.HARDWARE.contains("cutf_cvm")
+                || Build.BOARD.lowercase() == "goldfish")
     }
 }
