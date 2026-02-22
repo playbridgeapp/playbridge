@@ -563,10 +563,21 @@ private fun VideoItemDetailed(
                     
                     // List of subtitles
                     LazyColumn(
-                        modifier = Modifier.heightIn(max = 200.dp),
+                        modifier = Modifier.heightIn(max = 300.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         items(availableSubtitles) { subtitle ->
+                            var previewText by remember(subtitle.url) { mutableStateOf(subtitle.subtitlePreview) }
+                            var isLoadingPreview by remember(subtitle.url) { mutableStateOf(!subtitle.subtitlePreviewChecked) }
+                            
+                            LaunchedEffect(subtitle.url) {
+                                if (!subtitle.subtitlePreviewChecked) {
+                                    isLoadingPreview = true
+                                    previewText = VideoDetector.fetchSubtitlePreview(subtitle)
+                                    isLoadingPreview = false
+                                }
+                            }
+                            
                             val subInfo = parseUrlInfo(subtitle.url)
                             val isSelected = selectedSubtitles.contains(subtitle.url)
                             
@@ -614,6 +625,24 @@ private fun VideoItemDetailed(
                                             color = MaterialTheme.colorScheme.outline,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    
+                                    if (isLoadingPreview) {
+                                        Text(
+                                            text = "Loading preview...",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                        )
+                                    } else if (!previewText.isNullOrEmpty()) {
+                                        Text(
+                                            text = previewText!!,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.secondary,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
                                         )
                                     }
                                 }

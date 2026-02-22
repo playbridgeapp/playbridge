@@ -361,6 +361,25 @@ class PlayerActivity : ComponentActivity() {
         this.subtitleUrls = subtitles ?: emptyList()
         if (subtitleUrls.isNotEmpty()) {
              Log.i(TAG, "Subtitles available for manual selection: ${subtitleUrls.size}")
+             
+             // Auto-select if there is exactly one subtitle available
+             if (subtitleUrls.size == 1) {
+                 val url = subtitleUrls[0]
+                 Log.i(TAG, "Auto-selecting the single available subtitle: $url")
+                 currentSubtitleUrl = url
+                 subtitleManager.loadSubtitle(url)
+                 
+                 // Disable internal text tracks since we are showing an external one
+                 val parametersBuilder = trackSelector.parameters.buildUpon()
+                 parametersBuilder.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true)
+                 trackSelector.parameters = parametersBuilder.build()
+             } else {
+                 currentSubtitleUrl = null
+                 subtitleManager.disable()
+             }
+        } else {
+            currentSubtitleUrl = null
+            subtitleManager.disable()
         }
             
         if (isHls) {

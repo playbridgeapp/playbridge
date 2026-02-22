@@ -30,13 +30,24 @@ data class DetectedVideo(
     val originalMessage: String? = null,
     var qualities: List<VideoQuality> = emptyList(),
     var qualitiesChecked: Boolean = false,
-    var hlsPlaylist: HlsPlaylist? = null
+    var hlsPlaylist: HlsPlaylist? = null,
+    var subtitlePreview: String? = null,
+    var subtitlePreviewChecked: Boolean = false
 ) {
     val isSubtitle: Boolean
         get() = contentType?.contains("vtt", ignoreCase = true) == true ||
                 contentType?.contains("subrip", ignoreCase = true) == true ||
                 url.endsWith(".vtt", ignoreCase = true) ||
                 url.endsWith(".srt", ignoreCase = true)
+}
+
+/**
+ * Data class representing an active subtitle period
+ */
+data class Cue(val startTime: Long, val endTime: Long, val text: String) : Comparable<Cue> {
+    override fun compareTo(other: Cue): Int {
+        return this.startTime.compareTo(other.startTime)
+    }
 }
 
 /**
@@ -155,6 +166,165 @@ object VideoDetector {
                 video.fileSizeChecked = true
                 null
             }
+        }
+    }
+    
+    /**
+     * Fetch a small preview of a subtitle file to help identify language
+     */
+    suspend fun fetchSubtitlePreview(video: DetectedVideo): String? {
+        if (video.subtitlePreviewChecked) {
+            return video.subtitlePreview
+        }
+        
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = URL(video.url)
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 5000
+                connection.readTimeout = 5000
+                connection.instanceFollowRedirects = true
+                
+                // Set Range header to fetch only first 4KB to ensure we get a few cues
+                connection.setRequestProperty("Range", "bytes=0-4096")
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
+                
+                connection.connect()
+                
+                // Check if response is partial content (206) or OK (200)
+                if (connection.responseCode in 200..299) {
+                    val content = connection.inputStream.bufferedReader().use { it.readText() }
+                    
+                    if (content.isNotEmpty()) {
+                        val cues = if (video.url.endsWith(".vtt", ignoreCase = true) || 
+                                     video.contentType?.contains("vtt", ignoreCase = true) == true) {
+                            parseVtt(content)
+                        } else {
+                            parseSrt(content)
+                        }
+                        
+                        // Extract first 3 cues
+                        val previewText = cues.take(3).joinToString(" • ") { 
+                            it.text.replace("\n", " ") 
+                        }
+                        
+                        if (previewText.isNotEmpty()) {
+                            video.subtitlePreview = previewText
+                        } else {
+                            // Fallback if parsing failed but we got text
+                            val lines = content.lines()
+                            val fallbackLines = lines.map { it.trim() }.filter { trimmed ->
+                                trimmed.isNotEmpty() &&
+                                !trimmed.contains("WEBVTT", ignoreCase = true) &&
+                                !trimmed.contains("-->") &&
+                                trimmed.toIntOrNull() == null
+                            }.take(2)
+                            video.subtitlePreview = fallbackLines.joinToString(" • ")
+                        }
+                        
+                        video.subtitlePreviewChecked = true
+                        Log.d(TAG, "Subtitle preview for ${video.url.take(30)}: ${video.subtitlePreview}")
+                        video.subtitlePreview
+                    } else {
+                        video.subtitlePreviewChecked = true
+                        null
+                    }
+                } else {
+                    connection.disconnect()
+                    video.subtitlePreviewChecked = true
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching subtitle preview: ${e.message}")
+                video.subtitlePreviewChecked = true
+                null
+            }
+        }
+    }
+    
+    // Subtitle parsing helpers copied from TV's SubtitleManager
+    
+    private fun parseSrt(content: String): List<Cue> {
+        val parsedCues = ArrayList<Cue>()
+        val normalizedContent = content.replace("\r\n", "\n").replace("\r", "\n")
+        val blocks = normalizedContent.split("\n\n")
+        
+        for (block in blocks) {
+            val lines = block.lines().filter { it.isNotBlank() }
+            if (lines.size >= 2) {
+                val timeLineIndex = lines.indexOfFirst { it.contains("-->") }
+                if (timeLineIndex != -1) {
+                     val timeLine = lines[timeLineIndex]
+                     val textLines = lines.subList(timeLineIndex + 1, lines.size)
+                     val text = textLines.joinToString("\n")
+                     
+                     val times = timeLine.split("-->")
+                     if (times.size == 2) {
+                         val start = parseTimestamp(times[0].trim().replace(',', '.'))
+                         val end = parseTimestamp(times[1].trim().replace(',', '.'))
+                         if (start != -1L && end != -1L) {
+                             parsedCues.add(Cue(start, end, text))
+                         }
+                     }
+                }
+            }
+        }
+        return parsedCues
+    }
+
+    private fun parseVtt(content: String): List<Cue> {
+        val parsedCues = ArrayList<Cue>()
+        val lines = content.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i].trim()
+            if (line.contains("-->")) {
+                val times = line.split("-->")
+                if (times.size == 2) {
+                    val start = parseTimestamp(times[0].trim())
+                    val end = parseTimestamp(times[1].trim())
+                    
+                    val textBuilder = StringBuilder()
+                    i++
+                    while (i < lines.size && lines[i].isNotBlank()) {
+                         textBuilder.append(lines[i]).append("\n")
+                         i++
+                    }
+                    val text = textBuilder.toString().trim()
+                    
+                    if (start != -1L && end != -1L && text.isNotEmpty()) {
+                        parsedCues.add(Cue(start, end, text))
+                    }
+                    continue
+                }
+            }
+            i++
+        }
+        return parsedCues
+    }
+
+    private fun parseTimestamp(timestamp: String): Long {
+        return try {
+            val parts = timestamp.split(':')
+            var hours = 0L
+            var minutes = 0L
+            var seconds = 0.0
+            
+            if (parts.size == 3) {
+                hours = parts[0].toLong()
+                minutes = parts[1].toLong()
+                seconds = parts[2].replace(',', '.').toDouble()
+            } else if (parts.size == 2) {
+                minutes = parts[0].toLong()
+                seconds = parts[1].replace(',', '.').toDouble()
+            } else {
+                return -1
+            }
+            
+            (hours * 3600000 + minutes * 60000 + (seconds * 1000)).toLong()
+        } catch (e: Exception) {
+            -1
         }
     }
     
