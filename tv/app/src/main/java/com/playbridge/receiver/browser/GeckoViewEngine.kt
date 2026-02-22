@@ -11,7 +11,8 @@ import org.mozilla.geckoview.ContentBlocking
 
 class GeckoViewEngine(
     private val context: Context,
-    private val adBlocker: AdBlocker // Kept for consistency, though GeckoView has own blocking
+    private val adBlocker: AdBlocker, // Kept for consistency, though GeckoView has own blocking
+    private val onFullscreen: ((Boolean) -> Unit)? = null
 ) : BrowserEngine {
 
     companion object {
@@ -21,6 +22,8 @@ class GeckoViewEngine(
     private val geckoView = GeckoView(context)
     private val session = GeckoSession()
     private val runtime = GeckoRuntime.getDefault(context)
+    
+    private var _canGoBack: Boolean = false
 
     init {
         setupGeckoView()
@@ -41,13 +44,7 @@ class GeckoViewEngine(
     }
 
     override fun canGoBack(): Boolean {
-        // null check for history state?
-        // GeckoSession doesn't expose a simple synchronous canGoBack boolean property easily
-        // without tracking state or checking navigation delegate. 
-        // For simplicity in this wrapper, we might need to track it or just attempt it.
-        // But for the UI state, it's better to track via a delegate.
-        // For now, let's return true if we have history, but we need to implement a NavigationDelegate to track this.
-        return true // Placeholder, needs state tracking
+        return _canGoBack
     }
     
     // We need a way to expose state updates to the Activity, but the interface doesn't have listeners yet.
@@ -108,14 +105,34 @@ class GeckoViewEngine(
             // Strict mode might break some sites.
         }
         
+        // Install uBlock Origin from bundled assets (Must point to an extracted folder, ending in '/')
+        runtime.webExtensionController.ensureBuiltIn(
+            "resource://android/assets/extensions/ublock_origin/",
+            "uBlock0@raymondhill.net"
+        ).accept(
+            { _ -> 
+                Log.i(TAG, "Successfully installed uBlock Origin extension")
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(context, "uBlock Origin Protected", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            },
+            { e -> Log.e(TAG, "Failed to install uBlock Origin extension", e) }
+        )
+        
         // User Agent
         // Use mobile user agent by default (GeckoView usually does this, but we can enforce)
         // session.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_MOBILE
         
+        session.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                onFullscreen?.invoke(fullScreen)
+            }
+        }
+        
         // Add minimal navigation delegate to log
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-               // We would update local state here if we had a listener
+                _canGoBack = canGoBack
             }
             
             override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {

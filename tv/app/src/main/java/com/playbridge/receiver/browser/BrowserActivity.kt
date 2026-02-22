@@ -26,6 +26,9 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
+import androidx.dynamicanimation.animation.DynamicAnimation
+import androidx.dynamicanimation.animation.SpringAnimation
+import androidx.dynamicanimation.animation.SpringForce
 import com.playbridge.receiver.server.ServerService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +69,7 @@ class BrowserActivity : ComponentActivity() {
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
+    private var isGeckoFullscreen = false
     
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -114,7 +118,7 @@ class BrowserActivity : ComponentActivity() {
         // Create root container layout
         rootContainer = FrameLayout(this)
         
-        // Create content container (for Browser Engine and cursor)
+        // Create content container (for Browser Engine)
         contentContainer = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -124,17 +128,6 @@ class BrowserActivity : ComponentActivity() {
         
         // Initialize Engine based on preferences
         initializeEngine()
-        
-        // Create cursor overlay
-        cursorView = CursorView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-            // Initially hidden until user starts using touchpad
-            visibility = View.GONE
-        }
-        contentContainer?.addView(cursorView)
         
         rootContainer.addView(contentContainer)
         
@@ -148,6 +141,18 @@ class BrowserActivity : ComponentActivity() {
             visibility = View.GONE
         }
         rootContainer.addView(fullscreenContainer)
+        
+        // Create cursor overlay (Topmost layer)
+        cursorView = CursorView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            // Initially hidden until user starts using touchpad
+            visibility = View.GONE
+            elevation = 100f
+        }
+        rootContainer.addView(cursorView)
         
         setContentView(rootContainer)
         engine?.getView()?.requestFocus()
@@ -165,7 +170,12 @@ class BrowserActivity : ComponentActivity() {
 
         // Handle back press
         onBackPressedDispatcher.addCallback(this) {
-            if (engine?.canGoBack() == true) {
+            if (fullscreenView != null) {
+                exitFullscreen()
+            } else if (isGeckoFullscreen) {
+                exitGeckoFullscreen()
+                engine?.evaluateJavascript("document.exitFullscreen && document.exitFullscreen();", null)
+            } else if (engine?.canGoBack() == true) {
                 engine?.goBack()
             } else {
                 finish()
@@ -198,7 +208,17 @@ class BrowserActivity : ComponentActivity() {
         
         engine = if (useGecko) {
             Log.d(TAG, "Initializing GeckoView Engine")
-            GeckoViewEngine(this, adBlocker)
+            GeckoViewEngine(
+                this, 
+                adBlocker,
+                onFullscreen = { isFullscreen ->
+                    if (isFullscreen) {
+                        enterGeckoFullscreen()
+                    } else {
+                        exitGeckoFullscreen()
+                    }
+                }
+            )
         } else {
             Log.d(TAG, "Initializing System WebView Engine")
             SystemWebViewEngine(
@@ -279,6 +299,22 @@ class BrowserActivity : ComponentActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
     
+    private fun enterGeckoFullscreen() {
+        isGeckoFullscreen = true
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        )
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+    
+    private fun exitGeckoFullscreen() {
+        isGeckoFullscreen = false
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+    
     private fun exitFullscreen() {
         if (fullscreenView == null) return
         
@@ -320,56 +356,57 @@ class BrowserActivity : ComponentActivity() {
     private fun handleRemoteCommand(key: String?) {
         Log.d(TAG, "Remote command: $key")
         
-        if (fullscreenView != null) {
-            // ... (keep JavaScript injection logic for fullscreen video control if possible, 
-            // implementation depends on engine's evaluateJavascript)
-            // For now, let's just implement back for fullscreen exit
+        if (fullscreenView != null || isGeckoFullscreen) {
             if (key == "back") {
-                 runOnUiThread { exitFullscreen() }
+                 runOnUiThread { 
+                     if (fullscreenView != null) exitFullscreen()
+                     if (isGeckoFullscreen) exitGeckoFullscreen()
+                 }
                  engine?.evaluateJavascript("document.exitFullscreen && document.exitFullscreen();", null)
             }
             return
         }
         
-        val cursorStep = 30f
-        val scrollStep = 100
+        val cursorStepX = 15f // Finer control horizontally
+        val cursorStepY = 15f // Finer control vertically
+        val scrollStep = 50   // Smaller scroll increments
         
         when (key) {
             "dpad_up" -> {
                 showCursorAndResetTimer()
-                if (cursorY <= cursorStep) {
+                if (cursorY <= cursorStepY) {
                     engine?.scrollBy(0, -scrollStep)
                 } else {
-                    cursorY -= cursorStep
+                    cursorY -= cursorStepY
                     cursorView?.updatePosition(cursorX, cursorY)
                 }
             }
             "dpad_down" -> {
                 showCursorAndResetTimer()
                 val screenHeight = resources.displayMetrics.heightPixels.toFloat()
-                if (cursorY >= screenHeight - cursorStep) {
+                if (cursorY >= screenHeight - cursorStepY) {
                     engine?.scrollBy(0, scrollStep)
                 } else {
-                    cursorY += cursorStep
+                    cursorY += cursorStepY
                     cursorView?.updatePosition(cursorX, cursorY)
                 }
             }
             "dpad_left" -> {
                 showCursorAndResetTimer()
-                if (cursorX <= cursorStep) {
+                if (cursorX <= cursorStepX) {
                     engine?.scrollBy(-scrollStep, 0)
                 } else {
-                    cursorX -= cursorStep
+                    cursorX -= cursorStepX
                     cursorView?.updatePosition(cursorX, cursorY)
                 }
             }
             "dpad_right" -> {
                 showCursorAndResetTimer()
                 val screenWidth = resources.displayMetrics.widthPixels.toFloat()
-                if (cursorX >= screenWidth - cursorStep) {
+                if (cursorX >= screenWidth - cursorStepX) {
                     engine?.scrollBy(scrollStep, 0)
                 } else {
-                    cursorX += cursorStep
+                    cursorX += cursorStepX
                     cursorView?.updatePosition(cursorX, cursorY)
                 }
             }
@@ -382,6 +419,10 @@ class BrowserActivity : ComponentActivity() {
                 if (engine?.canGoBack() == true) {
                     engine?.goBack()
                 } else {
+                    val intent = Intent(this, com.playbridge.receiver.MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
+                    startActivity(intent)
                     finish()
                 }
             }
@@ -461,8 +502,22 @@ class BrowserActivity : ComponentActivity() {
      * Custom cursor overlay view
      */
     private class CursorView(context: Context) : View(context) {
-        private var cursorX = 960f
-        private var cursorY = 540f
+        
+        // Physics-based SpringAnimations for ultra-fluid movement
+        private val springX: SpringAnimation = SpringAnimation(this, DynamicAnimation.X).apply {
+            spring = SpringForce().apply {
+                stiffness = SpringForce.STIFFNESS_VERY_LOW // Smoother tracking
+                dampingRatio = SpringForce.DAMPING_RATIO_NO_BOUNCY // No overshoot
+            }
+        }
+        
+        private val springY: SpringAnimation = SpringAnimation(this, DynamicAnimation.Y).apply {
+            spring = SpringForce().apply {
+                stiffness = SpringForce.STIFFNESS_VERY_LOW
+                dampingRatio = SpringForce.DAMPING_RATIO_NO_BOUNCY
+            }
+        }
+
         private var scale = 1f
         
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -480,11 +535,17 @@ class BrowserActivity : ComponentActivity() {
             color = Color.argb(100, 0, 0, 0)
             style = Paint.Style.FILL
         }
+
+        init {
+            // Set initial position out of view
+            x = 960f
+            y = 540f
+        }
         
-        fun updatePosition(x: Float, y: Float) {
-            cursorX = x
-            cursorY = y
-            invalidate()
+        fun updatePosition(targetX: Float, targetY: Float) {
+            // Animate smoothly to the new incoming coordinates instead of teleporting
+            springX.animateToFinalPosition(targetX)
+            springY.animateToFinalPosition(targetY)
         }
         
         fun animateClick() {
@@ -501,14 +562,14 @@ class BrowserActivity : ComponentActivity() {
             
             val radius = 15f * scale
             
-            // Draw shadow
-            canvas.drawCircle(cursorX + 2, cursorY + 2, radius + 3, shadowPaint)
+            // Draw shadow centered (View's X/Y properties handle the actual screen position)
+            canvas.drawCircle(8f, 8f, radius + 3, shadowPaint)
             
-            // Draw cursor
-            canvas.drawCircle(cursorX, cursorY, radius, paint)
+            // Draw cursor centered
+            canvas.drawCircle(0f, 0f, radius, paint)
             
-            // Draw border
-            canvas.drawCircle(cursorX, cursorY, radius, borderPaint)
+            // Draw border centered
+            canvas.drawCircle(0f, 0f, radius, borderPaint)
         }
     }
 

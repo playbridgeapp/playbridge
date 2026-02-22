@@ -84,6 +84,7 @@ dependencies {
     implementation(libs.androidx.tv.material)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
+    implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
     
     // Ktor WebSocket Server
     implementation(libs.ktor.server.core)
