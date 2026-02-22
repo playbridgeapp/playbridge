@@ -18,17 +18,20 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="80dp"
-        android:background="#80000000"
+        android:layout_marginBottom="48dp"
+        android:layout_marginStart="40dp"
+        android:layout_marginEnd="40dp"
         android:padding="8dp"
         android:gravity="center"
         android:textColor="@android:color/white"
         android:textSize="24sp"
         android:textStyle="bold"
+        android:maxLines="3"
+        android:lineSpacingExtra="4dp"
         android:shadowColor="@android:color/black"
         android:shadowDx="2"
         android:shadowDy="2"
-        android:shadowRadius="2"
+        android:shadowRadius="10"
         android:visibility="gone" />
 
     <!-- Buffering Spinner (centered) -->
