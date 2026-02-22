@@ -2,7 +2,9 @@ package com.playbridge.receiver.browser
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
@@ -20,6 +22,7 @@ class AdBlocker(private val context: Context) {
         // EasyList URLs
         private const val EASYLIST_URL = "https://easylist.to/easylist/easylist.txt"
         private const val EASYPRIVACY_URL = "https://easylist.to/easylist/easyprivacy.txt"
+        private const val ADBLOCK_WARNING_URL = "https://easylist-downloads.adblockplus.org/antiadblockfilters.txt"
         
         // Cache file name
         private const val CACHE_FILE = "easylist_cache.txt"
@@ -32,7 +35,31 @@ class AdBlocker(private val context: Context) {
         const val TYPE_SUBDOCUMENT = 8
         const val TYPE_XMLHTTPREQUEST = 16
         const val TYPE_OTHER = 32
-        const val TYPE_ALL = 63
+        const val TYPE_POPUP = 64
+        const val TYPE_DOCUMENT = 128
+        const val TYPE_ALL = 255
+        
+        // Singleton instance
+        @Volatile
+        private var instance: AdBlocker? = null
+        
+        fun getInstance(context: Context): AdBlocker {
+            return instance ?: synchronized(this) {
+                instance ?: AdBlocker(context.applicationContext).also { instance = it }
+            }
+        }
+        
+        /**
+         * Preload the AdBlocker in the background. Call from MainActivity.onCreate()
+         * so filters are ready before the browser is opened.
+         */
+        fun preload(context: Context) {
+            val blocker = getInstance(context)
+            CoroutineScope(Dispatchers.IO).launch {
+                blocker.loadFilterLists()
+                Log.d(TAG, blocker.getStats())
+            }
+        }
     }
     
     // Domain-based blocking (thread-safe for concurrent access)
@@ -44,6 +71,9 @@ class AdBlocker(private val context: Context) {
     // Exception rules (thread-safe for concurrent access)
     private val exceptionDomains: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val exceptionPatterns = CopyOnWriteArrayList<UrlPattern>()
+    
+    // Cosmetic filters (element hiding CSS selectors)
+    private val cosmeticFilters = CopyOnWriteArrayList<String>()
     
     // Stats
     private var totalRulesLoaded = 0
@@ -102,6 +132,11 @@ class AdBlocker(private val context: Context) {
                 downloadAndParse(EASYPRIVACY_URL, null)
                 Log.d(TAG, "EasyPrivacy downloaded and parsed")
                 
+                // Download Adblock Warning Removal List (bypasses anti-adblock on YouTube etc.)
+                Log.d(TAG, "Downloading Adblock Warning Removal List...")
+                downloadAndParse(ADBLOCK_WARNING_URL, null)
+                Log.d(TAG, "Adblock Warning Removal List downloaded and parsed")
+                
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to download filter lists: ${e.message}")
                 // Continue with built-in rules only
@@ -152,8 +187,23 @@ class AdBlocker(private val context: Context) {
             return
         }
         
-        // Skip element hiding rules (we can't apply these in WebView easily)
-        if (line.contains("##") || line.contains("#@#") || line.contains("#?#")) {
+        // Skip exception cosmetic rules and procedural cosmetic rules
+        if (line.contains("#@#") || line.contains("#?#")) {
+            return
+        }
+        
+        // Parse element hiding rules (cosmetic filters)
+        val elementHideIndex = line.indexOf("##")
+        if (elementHideIndex >= 0) {
+            // Only collect generic cosmetic filters (no domain restriction) to keep it manageable
+            if (elementHideIndex == 0 && cosmeticFilters.size < 5000) {
+                val selector = line.substring(2).trim()
+                if (selector.isNotEmpty() && !selector.contains(":")) {
+                    // Only simple CSS selectors (skip procedural/extended ones with ':')
+                    cosmeticFilters.add(selector)
+                }
+            }
+            totalRulesLoaded++
             return
         }
         
@@ -277,7 +327,12 @@ class AdBlocker(private val context: Context) {
                 option == "~xmlhttprequest" -> excludedTypes = excludedTypes or TYPE_XMLHTTPREQUEST
                 option == "~other" -> excludedTypes = excludedTypes or TYPE_OTHER
                 
-                option == "third-party" -> thirdPartyOnly = true
+                // Popup and document types
+                option == "popup" -> resourceTypes = resourceTypes or TYPE_POPUP
+                option == "document" || option == "doc" -> resourceTypes = resourceTypes or TYPE_DOCUMENT
+                option == "all" -> resourceTypes = TYPE_ALL
+                
+                option == "third-party" || option == "3p" -> thirdPartyOnly = true
                 
                 // Parse domain= option
                 option.startsWith("domain=") -> {
@@ -491,6 +546,32 @@ class AdBlocker(private val context: Context) {
         return false
     }
     
+    /**
+     * Check if a top-level navigation should be blocked (popup/redirect)
+     * This checks $popup and $document rules specifically
+     */
+    fun shouldBlockNavigation(url: String, pageUrl: String?): Boolean {
+        return shouldBlock(url, pageUrl, TYPE_POPUP or TYPE_DOCUMENT or TYPE_SUBDOCUMENT)
+    }
+    
+    /**
+     * Get CSS to inject for element hiding (cosmetic filtering)
+     */
+    fun getCosmeticFilterCss(): String {
+        if (cosmeticFilters.isEmpty()) return ""
+        
+        // Build a CSS stylesheet that hides matched elements
+        val sb = StringBuilder()
+        // Process in chunks to avoid overly long CSS strings
+        val filters = cosmeticFilters.take(2000) // Limit to avoid performance issues
+        filters.forEachIndexed { index, selector ->
+            if (index > 0) sb.append(",")
+            sb.append(selector)
+        }
+        sb.append("{display:none!important}")
+        return sb.toString()
+    }
+    
     private fun isException(url: String, host: String, pageHost: String?): Boolean {
         // Check exception domains
         if (exceptionDomains.any { host.endsWith(it) }) {
@@ -561,6 +642,7 @@ class AdBlocker(private val context: Context) {
     
     fun getStats(): String {
         return "AdBlocker: ${blockedDomains.size} domains, ${urlPatterns.size} patterns, " +
+               "${cosmeticFilters.size} cosmetic filters, " +
                "${exceptionDomains.size} exception domains, ${exceptionPatterns.size} exception patterns" +
                if (isFullyInitialized) " (EasyList loaded)" else " (built-in only)"
     }

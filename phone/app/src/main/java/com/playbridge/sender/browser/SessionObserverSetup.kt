@@ -82,7 +82,7 @@ fun SessionObserverSetup(
             }
         }
     }
-    DisposableEffect(session) {
+    DisposableEffect(session, selectedTab?.id) {
         val observer = object : EngineSession.Observer {
             override fun onLocationChange(url: String, hasUserGesture: Boolean) {
                 // Update store state to keep it in sync

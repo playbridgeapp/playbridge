@@ -271,8 +271,8 @@ class BrowserActivity : ComponentActivity() {
             var isDesktopMode by remember { mutableStateOf(false) }
             var isSecureConnection by remember { mutableStateOf(false) }
             
-            // Update UI state from session
-            LaunchedEffect(session, selectedTab) {
+            // Update simple UI state from selected tab
+            LaunchedEffect(selectedTab?.id) {
                 if (selectedTab != null) {
                     currentUrl = selectedTab.content.url
                 }
@@ -357,6 +357,16 @@ class BrowserActivity : ComponentActivity() {
             previousUrl = previousUrlState.value
             pendingDownload = pendingDownloadState.value
             isSecureConnection = isSecureConnectionState.value
+            
+            // Sync wrapper states from BrowserStore when the selected tab changes
+            // This ensures the URL bar shows the correct URL immediately on tab switch
+            LaunchedEffect(selectedTab?.id) {
+                if (selectedTab != null) {
+                    currentUrlState.value = selectedTab.content.url
+                    previousUrlState.value = selectedTab.content.url
+                    isSecureConnectionState.value = false
+                }
+            }
             // isDesktopMode is controlled by the UI, so we sync downwards to the observer setup
             // which will react to changes
 

@@ -87,6 +87,116 @@ class SystemWebViewEngine(
         upEvent.recycle()
     }
 
+    /**
+     * Anti-popup/redirect JavaScript injected on every page load.
+     * Overrides window.open, neutralizes common redirect tricks,
+     * and uses MutationObserver to remove dynamically injected ad iframes.
+     */
+    private val antiPopupScript = """
+        (function() {
+            'use strict';
+            if (window.__pbAdblockInjected) return;
+            window.__pbAdblockInjected = true;
+            
+            // 1. Block window.open() entirely
+            window.open = function() { return null; };
+            
+            // 2. Block popup techniques via addEventListener override
+            var origAddEventListener = EventTarget.prototype.addEventListener;
+            EventTarget.prototype.addEventListener = function(type, fn, opts) {
+                // Block click handlers that try to open new windows
+                if (type === 'click' && this === document) {
+                    var fnStr = fn.toString();
+                    if (fnStr.indexOf('window.open') !== -1 || 
+                        fnStr.indexOf('window.location') !== -1) {
+                        return; // Don't register suspicious click handlers
+                    }
+                }
+                return origAddEventListener.call(this, type, fn, opts);
+            };
+            
+            // 3. Remove target="_blank" from all links (prevents popup navigation)
+            function cleanLinks() {
+                var links = document.querySelectorAll('a[target="_blank"]');
+                for (var i = 0; i < links.length; i++) {
+                    links[i].removeAttribute('target');
+                }
+            }
+            
+            // 4. Block meta-refresh redirects
+            function blockMetaRefresh() {
+                var metas = document.querySelectorAll('meta[http-equiv="refresh"]');
+                for (var i = 0; i < metas.length; i++) {
+                    metas[i].parentNode.removeChild(metas[i]);
+                }
+            }
+            
+            // 5. MutationObserver to catch dynamically injected ad elements
+            var observer = new MutationObserver(function(mutations) {
+                for (var i = 0; i < mutations.length; i++) {
+                    var nodes = mutations[i].addedNodes;
+                    for (var j = 0; j < nodes.length; j++) {
+                        var node = nodes[j];
+                        if (node.nodeType !== 1) continue;
+                        
+                        // Remove suspicious iframes
+                        if (node.tagName === 'IFRAME') {
+                            var src = (node.src || '').toLowerCase();
+                            if (src.indexOf('about:blank') !== -1 ||
+                                src === '' ||
+                                src.indexOf('ad') !== -1 ||
+                                src.indexOf('pop') !== -1 ||
+                                src.indexOf('click') !== -1) {
+                                // Check if it's a zero/tiny size (hidden ad iframe)
+                                var style = node.getAttribute('style') || '';
+                                if (style.indexOf('display:none') !== -1 ||
+                                    style.indexOf('width:0') !== -1 ||
+                                    style.indexOf('height:0') !== -1 ||
+                                    style.indexOf('position:absolute') !== -1 ||
+                                    node.width === '0' || node.height === '0' ||
+                                    node.width === '1' || node.height === '1') {
+                                    node.parentNode.removeChild(node);
+                                }
+                            }
+                        }
+                        
+                        // Remove meta-refresh in dynamically added content
+                        if (node.tagName === 'META') {
+                            var httpEquiv = (node.getAttribute('http-equiv') || '').toLowerCase();
+                            if (httpEquiv === 'refresh') {
+                                node.parentNode.removeChild(node);
+                            }
+                        }
+                        
+                        // Clean links in newly added content
+                        if (node.querySelectorAll) {
+                            var newLinks = node.querySelectorAll('a[target="_blank"]');
+                            for (var k = 0; k < newLinks.length; k++) {
+                                newLinks[k].removeAttribute('target');
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Start observing when DOM is ready
+            function startObserving() {
+                if (document.body) {
+                    observer.observe(document.body, { childList: true, subtree: true });
+                    cleanLinks();
+                    blockMetaRefresh();
+                } else {
+                    document.addEventListener('DOMContentLoaded', function() {
+                        observer.observe(document.body, { childList: true, subtree: true });
+                        cleanLinks();
+                        blockMetaRefresh();
+                    });
+                }
+            }
+            startObserving();
+        })();
+    """.trimIndent()
+
     private fun setupWebView() {
         webView.apply {
             isFocusable = true
@@ -119,9 +229,12 @@ class SystemWebViewEngine(
                 // Enable off-screen rendering for smoother video
                 offscreenPreRaster = true
 
-                // Disable popups
+                // Block JS-initiated popups
                 javaScriptCanOpenWindowsAutomatically = false
-                setSupportMultipleWindows(false)
+                // Use setSupportMultipleWindows(true) for security:
+                // With false, javascript: URLs in iframes can execute in top context.
+                // With true + onCreateWindow returning false, popups are securely blocked.
+                setSupportMultipleWindows(true)
             }
 
             // Enable hardware acceleration for video
@@ -146,6 +259,8 @@ class SystemWebViewEngine(
                     isUserGesture: Boolean,
                     resultMsg: android.os.Message?
                 ): Boolean {
+                    // Block ALL popup window creation - this is the secure approach
+                    // with setSupportMultipleWindows(true)
                     Log.d(TAG, "Blocked popup window creation (isUserGesture=$isUserGesture)")
                     return false
                 }
@@ -180,6 +295,48 @@ class SystemWebViewEngine(
         // Track the last navigation time to detect rapid redirects
         private var lastNavigationTime = 0L
         private var navigationCount = 0
+        
+        // Known popup/ad domain patterns for additional redirect detection
+        private val popupDomainPatterns = listOf(
+            "popads", "popcash", "popunder", "popup",
+            "clickadu", "propeller", "adcash", "exoclick",
+            "trafficjunky", "juicyads", "revcontent", "mgid",
+            "bidvertiser", "zedo", "adf.ly", "sh.st",
+            "bc.vc", "ouo.io", "shorte.st", "linkbucks"
+        )
+
+        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+            super.onPageStarted(view, url, favicon)
+            // Inject anti-popup script as early as possible
+            view?.evaluateJavascript(antiPopupScript, null)
+        }
+        
+        override fun onPageFinished(view: WebView?, url: String?) {
+            super.onPageFinished(view, url)
+            
+            // Re-inject anti-popup script (some sites overwrite window.open after load)
+            view?.evaluateJavascript(antiPopupScript, null)
+            
+            // Inject cosmetic filters (element hiding CSS)
+            val cosmeticCss = adBlocker.getCosmeticFilterCss()
+            if (cosmeticCss.isNotEmpty()) {
+                val escapedCss = cosmeticCss
+                    .replace("\\", "\\\\")
+                    .replace("'", "\\'")
+                    .replace("\n", " ")
+                    .replace("\r", "")
+                val injectCssScript = """
+                    (function() {
+                        if (document.getElementById('pb-cosmetic-filters')) return;
+                        var style = document.createElement('style');
+                        style.id = 'pb-cosmetic-filters';
+                        style.textContent = '$escapedCss';
+                        (document.head || document.documentElement).appendChild(style);
+                    })();
+                """.trimIndent()
+                view?.evaluateJavascript(injectCssScript, null)
+            }
+        }
 
         override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
             super.doUpdateVisitedHistory(view, url, isReload)
@@ -200,17 +357,17 @@ class SystemWebViewEngine(
                 return true
             }
 
-            // Use AdBlocker
-            if (adBlocker.shouldBlock(url, currentUrl, AdBlocker.TYPE_SUBDOCUMENT)) {
-                Log.d(TAG, "Blocked navigation: $url")
+            // Use AdBlocker with popup-aware blocking for navigations
+            if (adBlocker.shouldBlockNavigation(url, currentUrl)) {
+                Log.d(TAG, "Blocked navigation (popup/redirect rule): $url")
                 return true
             }
 
-            // Detect rapid redirects
+            // Detect rapid redirects (more aggressive: 2 within 800ms)
             val now = System.currentTimeMillis()
-            if (now - lastNavigationTime < 500) {
+            if (now - lastNavigationTime < 800) {
                 navigationCount++
-                if (navigationCount > 3) {
+                if (navigationCount > 2) {
                     Log.d(TAG, "Blocked rapid redirect chain: $url")
                     navigationCount = 0
                     return true
@@ -220,14 +377,26 @@ class SystemWebViewEngine(
             }
             lastNavigationTime = now
 
-            // Block cross-domain popups/redirects that look suspicious
+            // Block cross-domain redirects that look suspicious
             val currentHost = Uri.parse(currentUrl)?.host
             if (currentHost != null && host != currentHost) {
+                // Check against known popup/ad domain patterns
+                val hostLower = host.lowercase()
+                if (popupDomainPatterns.any { hostLower.contains(it) }) {
+                    Log.d(TAG, "Blocked known popup domain: $host")
+                    return true
+                }
+                
+                // Check suspicious URL patterns
                 if (url.contains("redirect=") ||
                     url.contains("goto=") ||
                     url.contains("out.php") ||
                     url.contains("click.php") ||
-                    url.contains("/cgi-bin/")) {
+                    url.contains("/cgi-bin/") ||
+                    url.contains("popunder") ||
+                    url.contains("popad") ||
+                    url.contains("/go/") && (url.contains("ad") || url.contains("click")) ||
+                    url.contains("track.php")) {
                     Log.d(TAG, "Blocked suspicious redirect: $url")
                     return true
                 }

@@ -60,6 +60,9 @@ class MainActivity : ComponentActivity() {
             ServerService.start(this)
         }
         
+        // Preload ad blocker filters in background so they're ready when browser opens
+        com.playbridge.receiver.browser.AdBlocker.preload(applicationContext)
+        
         setContent {
             PlayBridgeTVTheme {
                 Surface(
