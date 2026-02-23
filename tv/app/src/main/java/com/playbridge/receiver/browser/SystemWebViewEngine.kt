@@ -65,6 +65,17 @@ class SystemWebViewEngine(
         webView.destroy()
     }
 
+    private fun isEmulator(): Boolean {
+        return (Build.FINGERPRINT.contains("generic") ||
+                Build.FINGERPRINT.contains("emulator") ||
+                Build.MODEL.contains("Emulator") ||
+                Build.MODEL.contains("Android SDK built for") ||
+                Build.MODEL.contains("google_atv") ||
+                Build.MANUFACTURER.contains("Genymotion") ||
+                Build.PRODUCT.contains("sdk") ||
+                Build.PRODUCT.contains("emulator"))
+    }
+
     override fun scrollBy(dx: Int, dy: Int) {
         webView.scrollBy(dx, dy)
     }
@@ -237,8 +248,15 @@ class SystemWebViewEngine(
                 setSupportMultipleWindows(true)
             }
 
-            // Enable hardware acceleration for video
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            // Use software rendering on emulators to avoid OpenGL ES 3.1 crash
+            // (Cloudflare Turnstile/WebGL triggers fatal GPU process crash on emulators)
+            if (isEmulator()) {
+                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                Log.d(TAG, "Emulator detected — using software rendering")
+            } else {
+                // Enable hardware acceleration for video on real devices
+                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            }
 
             // Set high renderer priority for better video performance
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -346,6 +364,19 @@ class SystemWebViewEngine(
             }
         }
 
+        override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+            Log.e(TAG, "WebView render process crashed (didCrash=${detail?.didCrash()}, priority=${detail?.rendererPriorityAtExit()})")
+            // Reload the page to recover instead of letting the app crash
+            val url = currentUrl
+            if (url != null) {
+                view?.post {
+                    Log.d(TAG, "Recovering from render process crash — reloading: $url")
+                    view.loadUrl(url)
+                }
+            }
+            return true // We handled it, don't kill the app
+        }
+
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val url = request?.url?.toString() ?: return false
             val host = request.url?.host ?: ""
@@ -363,23 +394,29 @@ class SystemWebViewEngine(
                 return true
             }
 
-            // Detect rapid redirects (more aggressive: 2 within 800ms)
-            val now = System.currentTimeMillis()
-            if (now - lastNavigationTime < 800) {
-                navigationCount++
-                if (navigationCount > 2) {
-                    Log.d(TAG, "Blocked rapid redirect chain: $url")
+            // Detect rapid redirects — only for CROSS-ORIGIN navigations
+            // Same-origin navigations (SPA routing, hash changes) are always allowed
+            val currentHost = Uri.parse(currentUrl)?.host
+            val isSameOrigin = currentHost != null && host == currentHost
+            val isHashChange = url.substringBefore('#') == (currentUrl ?: "").substringBefore('#')
+            
+            if (!isSameOrigin && !isHashChange) {
+                val now = System.currentTimeMillis()
+                if (now - lastNavigationTime < 1000) {
+                    navigationCount++
+                    if (navigationCount > 3) {
+                        Log.d(TAG, "Blocked rapid cross-origin redirect chain: $url")
+                        navigationCount = 0
+                        return true
+                    }
+                } else {
                     navigationCount = 0
-                    return true
                 }
-            } else {
-                navigationCount = 0
+                lastNavigationTime = now
             }
-            lastNavigationTime = now
 
             // Block cross-domain redirects that look suspicious
-            val currentHost = Uri.parse(currentUrl)?.host
-            if (currentHost != null && host != currentHost) {
+            if (!isSameOrigin && currentHost != null) {
                 // Check against known popup/ad domain patterns
                 val hostLower = host.lowercase()
                 if (popupDomainPatterns.any { hostLower.contains(it) }) {
