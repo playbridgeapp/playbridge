@@ -289,9 +289,6 @@ class BrowserActivity : ComponentActivity() {
             val detectedVideos = VideoDetector.detectedVideos
             val videoCount by remember { derivedStateOf { detectedVideos.size } }
             
-            // Remote control state
-            var showRemoteSheet by remember { mutableStateOf(false) }
-            
             // TV active context - updated via WebSocket messages from TV
             var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
             
@@ -595,8 +592,8 @@ class BrowserActivity : ComponentActivity() {
                                                         index = 1,
                                                         onClick = {
                                                             menuExpanded = false
-                                                            showRemoteSheet = true
                                                             webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
+                                                            currentScreen = Screen.Remote
                                                         }
                                                     ) { onClick ->
                                                         DropdownMenuItem(
@@ -861,6 +858,9 @@ class BrowserActivity : ComponentActivity() {
                             }
                             Screen.Bookmarks -> {}
                             Screen.Home -> {}
+                            Screen.Remote -> {
+                                // No TopAppBar here as RemoteControlScreen has its own
+                            }
 
                             Screen.Downloads -> {
                                 // No TopAppBar here as DownloadsScreen has its own
@@ -882,10 +882,10 @@ class BrowserActivity : ComponentActivity() {
                                     } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
                                         slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
-                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks) && initialState == Screen.Browser) {
+                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote) && initialState == Screen.Browser) {
                                          slideInVertically { height -> height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> -height } + fadeOut()
-                                    } else if (targetState == Screen.Browser && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks)) {
+                                    } else if (targetState == Screen.Browser && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote)) {
                                          slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
                                     } else {
@@ -1098,6 +1098,40 @@ class BrowserActivity : ComponentActivity() {
                                                 onBack = { currentScreen = Screen.Browser }
                                             )
                                         }
+                                        Screen.Remote -> {
+                                            BackHandler { currentScreen = Screen.Browser }
+                                            RemoteControlScreen(
+                                                isMediaPlaying = tvActiveContext == "player",
+                                                onBack = { currentScreen = Screen.Browser },
+                                                onRemoteKey = { key ->
+                                                    val cmd = com.playbridge.protocol.createRemoteCommandJson(key)
+                                                    webSocketClient.send(cmd)
+                                                },
+                                                onMouseMove = { dx, dy ->
+                                                    val cmd = com.playbridge.protocol.createMouseCommandJson("move", dx, dy)
+                                                    webSocketClient.send(cmd)
+                                                },
+                                                onMouseClick = {
+                                                    val cmd = com.playbridge.protocol.createMouseCommandJson("click")
+                                                    webSocketClient.send(cmd)
+                                                },
+                                                onMouseScroll = { dx, dy ->
+                                                    val cmd = com.playbridge.protocol.createMouseCommandJson("scroll", dx, dy)
+                                                    webSocketClient.send(cmd)
+                                                },
+                                                onBrowserControl = { action ->
+                                                    val cmd = com.playbridge.protocol.createBrowserControlCommandJson(action)
+                                                    webSocketClient.send(cmd)
+                                                },
+                                                onPlayerControl = { command ->
+                                                    val cmd = com.playbridge.protocol.createControlCommandJson(command)
+                                                    webSocketClient.send(cmd)
+                                                    if (command == "stop") {
+                                                        tvActiveContext = "idle"
+                                                    }
+                                                }
+                                            )
+                                        }
                                         Screen.Home -> {
                                             // Home is root, but if we came from elsewhere back might exit?
                                             // Actually Home might be the starting screen.
@@ -1216,40 +1250,7 @@ class BrowserActivity : ComponentActivity() {
                     )
                 }
                 
-                // Remote control bottom sheet
-                if (showRemoteSheet) {
-                    RemoteControlSheet(
-                        isMediaPlaying = tvActiveContext == "player",
-                        onDismiss = { showRemoteSheet = false },
-                        onRemoteKey = { key ->
-                            val cmd = com.playbridge.protocol.createRemoteCommandJson(key)
-                            webSocketClient.send(cmd)
-                        },
-                        onMouseMove = { dx, dy ->
-                            val cmd = com.playbridge.protocol.createMouseCommandJson("move", dx, dy)
-                            webSocketClient.send(cmd)
-                        },
-                        onMouseClick = {
-                            val cmd = com.playbridge.protocol.createMouseCommandJson("click")
-                            webSocketClient.send(cmd)
-                        },
-                        onMouseScroll = { dx, dy ->
-                            val cmd = com.playbridge.protocol.createMouseCommandJson("scroll", dx, dy)
-                            webSocketClient.send(cmd)
-                        },
-                        onBrowserControl = { action ->
-                            val cmd = com.playbridge.protocol.createBrowserControlCommandJson(action)
-                            webSocketClient.send(cmd)
-                        },
-                        onPlayerControl = { command ->
-                            val cmd = com.playbridge.protocol.createControlCommandJson(command)
-                            webSocketClient.send(cmd)
-                            if (command == "stop") {
-                                tvActiveContext = "idle"
-                            }
-                        }
-                    )
-                }
+
 
                 // Download Confirmation Dialog
                 DownloadConfirmDialog(
@@ -1327,4 +1328,5 @@ sealed class Screen {
     object History : Screen()
     object Bookmarks : Screen()
     object Home : Screen()
+    object Remote : Screen()
 }

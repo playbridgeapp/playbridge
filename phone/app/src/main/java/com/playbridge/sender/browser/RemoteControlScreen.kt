@@ -5,10 +5,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -18,20 +22,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
- * Compact remote control bottom sheet.
+ * Full-screen remote control.
  * Hero area for Touchpad/D-Pad with toggle pill, compact action + context rows.
  *
  * @param isMediaPlaying Whether video/media is currently playing on the TV
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RemoteControlSheet(
+fun RemoteControlScreen(
     isMediaPlaying: Boolean,
-    onDismiss: () -> Unit,
+    onBack: () -> Unit,
     onRemoteKey: (String) -> Unit,
     onMouseMove: (dx: Float, dy: Float) -> Unit,
     onMouseClick: () -> Unit,
@@ -42,19 +48,29 @@ fun RemoteControlSheet(
     // Default to touchpad when no media playing (browser mode), D-Pad when playing (player mode)
     var isTouchpad by remember { mutableStateOf(!isMediaPlaying) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surface,
-        dragHandle = { BottomSheetDefaults.DragHandle() }
-    ) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Remote Control") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent
+                )
+            )
+        }
+    ) { innerPadding ->
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 24.dp),
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // ── Toggle Pill ──
             TogglePill(
@@ -62,27 +78,26 @@ fun RemoteControlSheet(
                 onToggle = { isTouchpad = it }
             )
 
-            // ── Hero Area ──
-            if (isTouchpad) {
-                TouchpadArea(
-                    onMouseMove = onMouseMove,
-                    onMouseClick = onMouseClick,
-                    onMouseScroll = onMouseScroll
-                )
-            } else {
-                DpadArea(onRemoteKey = onRemoteKey)
+            // ── Hero Area (fills available space) ──
+            Box(modifier = Modifier.weight(1f)) {
+                if (isTouchpad) {
+                    TouchpadArea(
+                        onMouseMove = onMouseMove,
+                        onMouseClick = onMouseClick,
+                        onMouseScroll = onMouseScroll
+                    )
+                } else {
+                    DpadArea(onRemoteKey = onRemoteKey)
+                }
             }
 
-            // ── Navigation Row (Back) ──
+            // ── Navigation Row ──
             NavigationRow(onRemoteKey = onRemoteKey)
 
-            // ── Media Controls (only when media is playing) ──
+            // ── Context Controls ──
             if (isMediaPlaying) {
                 MediaControlRow(onPlayerControl = onPlayerControl)
-            }
-
-            // ── Browser Controls (only when no media is playing) ──
-            if (!isMediaPlaying) {
+            } else {
                 BrowserContextRow(onBrowserControl = onBrowserControl)
             }
         }
@@ -141,15 +156,15 @@ private fun PillOption(
         shape = RoundedCornerShape(50),
         color = bg,
         contentColor = fg,
-        modifier = Modifier.height(36.dp)
+        modifier = Modifier.height(40.dp)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp),
+            modifier = Modifier.padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(label, style = MaterialTheme.typography.labelMedium)
+            Text(label, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -168,14 +183,13 @@ private fun TouchpadArea(
 
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(250.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .fillMaxSize()
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant,
-                shape = RoundedCornerShape(16.dp)
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(20.dp)
             )
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -216,14 +230,14 @@ private fun TouchpadArea(
             Icon(
                 Icons.Default.TouchApp,
                 contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                modifier = Modifier.size(48.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
             )
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 "1 finger: move  •  2 fingers: scroll  •  Tap: click",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                 textAlign = TextAlign.Center
             )
         }
@@ -237,39 +251,37 @@ private fun TouchpadArea(
 @Composable
 private fun DpadArea(onRemoteKey: (String) -> Unit) {
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(250.dp),
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             // Up
             DpadBtn(Icons.Default.KeyboardArrowUp, "Up") { onRemoteKey("dpad_up") }
 
             // Left, OK, Right
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                DpadBtn(Icons.Default.KeyboardArrowLeft, "Left") { onRemoteKey("dpad_left") }
+                DpadBtn(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left") { onRemoteKey("dpad_left") }
 
                 // OK button (larger, primary color)
                 FilledTonalButton(
                     onClick = { onRemoteKey("dpad_center") },
-                    modifier = Modifier.size(72.dp),
+                    modifier = Modifier.size(80.dp),
                     shape = CircleShape,
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
-                    Text("OK", style = MaterialTheme.typography.titleMedium)
+                    Text("OK", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
 
-                DpadBtn(Icons.Default.KeyboardArrowRight, "Right") { onRemoteKey("dpad_right") }
+                DpadBtn(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right") { onRemoteKey("dpad_right") }
             }
 
             // Down
@@ -282,16 +294,16 @@ private fun DpadArea(onRemoteKey: (String) -> Unit) {
 private fun DpadBtn(icon: ImageVector, desc: String, onClick: () -> Unit) {
     FilledTonalButton(
         onClick = onClick,
-        modifier = Modifier.size(60.dp),
+        modifier = Modifier.size(64.dp),
         shape = CircleShape,
         contentPadding = PaddingValues(0.dp)
     ) {
-        Icon(icon, contentDescription = desc, modifier = Modifier.size(30.dp))
+        Icon(icon, contentDescription = desc, modifier = Modifier.size(32.dp))
     }
 }
 
 // ─────────────────────────────────────────────
-// Navigation Row (Back)
+// Navigation Row (Back + Home)
 // ─────────────────────────────────────────────
 
 @Composable
@@ -299,19 +311,26 @@ private fun NavigationRow(onRemoteKey: (String) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.Center,
+        horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = { onRemoteKey("back") }) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = MaterialTheme.colorScheme.onSurface
-            )
-        }
+        // Back
+        LabeledIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            label = "Back",
+            tint = MaterialTheme.colorScheme.onSurface,
+            onClick = { onRemoteKey("back") }
+        )
+        // Home
+        LabeledIconButton(
+            icon = Icons.Default.Home,
+            label = "Home",
+            tint = MaterialTheme.colorScheme.onSurface,
+            onClick = { onRemoteKey("home") }
+        )
     }
 }
 
@@ -326,41 +345,46 @@ private fun MediaControlRow(onPlayerControl: (String) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .padding(vertical = 4.dp),
+            .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Seek -10s
-        IconButton(onClick = { onPlayerControl("seek_back") }) {
-            Icon(Icons.Default.Replay10, contentDescription = "Rewind 10s",
-                tint = MaterialTheme.colorScheme.onSurface)
-        }
+        LabeledIconButton(
+            icon = Icons.Default.Replay10,
+            label = "-10s",
+            tint = MaterialTheme.colorScheme.onSurface,
+            onClick = { onPlayerControl("seek_back") }
+        )
 
         // Play/Pause toggle
-        IconButton(onClick = {
-            onPlayerControl(if (isPlaying) "pause" else "play")
-            isPlaying = !isPlaying
-        }) {
-            Icon(
-                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "Pause" else "Play",
-                tint = MaterialTheme.colorScheme.primary
-            )
-        }
+        LabeledIconButton(
+            icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+            label = if (isPlaying) "Pause" else "Play",
+            tint = MaterialTheme.colorScheme.primary,
+            onClick = {
+                onPlayerControl(if (isPlaying) "pause" else "play")
+                isPlaying = !isPlaying
+            }
+        )
 
         // Seek +10s
-        IconButton(onClick = { onPlayerControl("seek_forward") }) {
-            Icon(Icons.Default.Forward10, contentDescription = "Forward 10s",
-                tint = MaterialTheme.colorScheme.onSurface)
-        }
+        LabeledIconButton(
+            icon = Icons.Default.Forward10,
+            label = "+10s",
+            tint = MaterialTheme.colorScheme.onSurface,
+            onClick = { onPlayerControl("seek_forward") }
+        )
 
         // Stop
-        IconButton(onClick = { onPlayerControl("stop") }) {
-            Icon(Icons.Default.Stop, contentDescription = "Stop",
-                tint = MaterialTheme.colorScheme.error)
-        }
+        LabeledIconButton(
+            icon = Icons.Default.Stop,
+            label = "Stop",
+            tint = MaterialTheme.colorScheme.error,
+            onClick = { onPlayerControl("stop") }
+        )
     }
 }
 
@@ -373,30 +397,64 @@ private fun BrowserContextRow(onBrowserControl: (String) -> Unit) {
     var isVideoMaximized by remember { mutableStateOf(false) }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Refresh
-        IconButton(onClick = { onBrowserControl("refresh") }) {
-            Icon(Icons.Default.Refresh, contentDescription = "Refresh",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        LabeledIconButton(
+            icon = Icons.Default.Refresh,
+            label = "Refresh",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = { onBrowserControl("refresh") }
+        )
         // Ad Blocker
-        IconButton(onClick = { onBrowserControl("toggle_ublock") }) {
-            Icon(Icons.Default.Shield, contentDescription = "Ad Blocker",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        LabeledIconButton(
+            icon = Icons.Default.Shield,
+            label = "Ad Block",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = { onBrowserControl("toggle_ublock") }
+        )
         // Maximize / Restore Video
-        IconButton(onClick = {
-            onBrowserControl(if (isVideoMaximized) "restore_video" else "maximize_video")
-            isVideoMaximized = !isVideoMaximized
-        }) {
-            Icon(
-                if (isVideoMaximized) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                contentDescription = if (isVideoMaximized) "Restore Video" else "Maximize Video",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        LabeledIconButton(
+            icon = if (isVideoMaximized) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+            label = if (isVideoMaximized) "Restore" else "Fullscreen",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = {
+                onBrowserControl(if (isVideoMaximized) "restore_video" else "maximize_video")
+                isVideoMaximized = !isVideoMaximized
+            }
+        )
+    }
+}
+
+// ─────────────────────────────────────────────
+// Labeled Icon Button
+// ─────────────────────────────────────────────
+
+@Composable
+private fun LabeledIconButton(
+    icon: ImageVector,
+    label: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = 4.dp)
+    ) {
+        IconButton(onClick = onClick) {
+            Icon(icon, contentDescription = label, tint = tint)
         }
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = tint.copy(alpha = 0.7f),
+            fontSize = 10.sp
+        )
     }
 }
