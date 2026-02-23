@@ -4,10 +4,11 @@ import android.content.Context
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import org.json.JSONObject
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
-import org.mozilla.geckoview.ContentBlocking
+import org.mozilla.geckoview.WebExtension
 
 class GeckoViewEngine(
     private val context: Context,
@@ -24,6 +25,9 @@ class GeckoViewEngine(
     private val runtime = GeckoRuntime.getDefault(context)
     
     private var _canGoBack: Boolean = false
+    
+    // WebExtension bridge port for JS evaluation
+    private var bridgePort: WebExtension.Port? = null
 
     init {
         setupGeckoView()
@@ -46,32 +50,42 @@ class GeckoViewEngine(
     override fun canGoBack(): Boolean {
         return _canGoBack
     }
-    
-    // We need a way to expose state updates to the Activity, but the interface doesn't have listeners yet.
-    // The implementations so far rely on internal state.
 
     override fun evaluateJavascript(script: String, callback: ((String?) -> Unit)?) {
-        try {
-            // evaluateJavascript is not available in this GeckoView version or unresolved.
-            // Fallback to javascript: URI scheme.
-            val encoded = java.net.URLEncoder.encode(script, "UTF-8").replace("+", "%20")
-            session.loadUri("javascript:(function(){ try{ eval(decodeURIComponent('$encoded')); } catch(e){} })();void(0);")
-            // We cannot get the result back easily via loadUri
-            callback?.invoke(null)
-        } catch (e: Exception) {
-            Log.e(TAG, "JS Error", e)
-            callback?.invoke(null)
+        val port = bridgePort
+        if (port != null) {
+            try {
+                val message = JSONObject()
+                message.put("type", "eval")
+                message.put("code", script)
+                port.postMessage(message)
+            } catch (e: Exception) {
+                Log.e(TAG, "Bridge eval error", e)
+            }
+        } else {
+            // Fallback: javascript: URI with double-quote wrapper
+            // Key: use " instead of ' for the decodeURIComponent string delimiter,
+            // and force-encode both ' and " to prevent breaking the wrapper.
+            try {
+                val clean = script.trim()
+                val encoded = java.net.URLEncoder.encode(clean, "UTF-8")
+                    .replace("+", "%20")
+                    .replace("'", "%27")
+                    .replace("\"", "%22")
+                session.loadUri("javascript:void(eval(decodeURIComponent(%22$encoded%22)))")
+            } catch (e: Exception) {
+                Log.e(TAG, "JS fallback error", e)
+            }
         }
+        callback?.invoke(null)
     }
 
     override fun destroy() {
+        bridgePort = null
         session.close()
     }
 
     override fun scrollBy(dx: Int, dy: Int) {
-        // GeckoView doesn't have a direct scrollBy(x, y) on the view itself that scrolls web content reliably 
-        // the same way WebView does. It handles input events.
-        // However, we can use JS to scroll.
         evaluateJavascript("window.scrollBy($dx, $dy)", null)
     }
 
@@ -94,6 +108,34 @@ class GeckoViewEngine(
         upEvent.recycle()
     }
 
+    /**
+     * Register message delegate for the PB Bridge extension.
+     * For background script messaging, the delegate is set directly on the extension object.
+     */
+    private fun registerBridgeDelegate(ext: WebExtension) {
+        ext.setMessageDelegate(
+            object : WebExtension.MessageDelegate {
+                override fun onConnect(port: WebExtension.Port) {
+                    Log.i(TAG, "PB Bridge port connected")
+                    bridgePort = port
+                    port.setDelegate(object : WebExtension.PortDelegate {
+                        override fun onPortMessage(message: Any, port: WebExtension.Port) {
+                            Log.d(TAG, "PB Bridge response: $message")
+                        }
+                        override fun onDisconnect(port: WebExtension.Port) {
+                            Log.d(TAG, "PB Bridge port disconnected")
+                            if (bridgePort === port) {
+                                bridgePort = null
+                            }
+                        }
+                    })
+                }
+            },
+            "pbBridge"
+        )
+        Log.d(TAG, "PB Bridge delegate registered")
+    }
+
     private fun setupGeckoView() {
         session.open(runtime)
         geckoView.setSession(session)
@@ -101,11 +143,9 @@ class GeckoViewEngine(
         // Settings
         session.settings.apply {
             useTrackingProtection = true
-            // Enable recommended tracking protection (Standard)
-            // Strict mode might break some sites.
         }
         
-        // Install uBlock Origin from bundled assets (Must point to an extracted folder, ending in '/')
+        // Install uBlock Origin from bundled assets
         runtime.webExtensionController.ensureBuiltIn(
             "resource://android/assets/extensions/ublock_origin/",
             "uBlock0@raymondhill.net"
@@ -119,9 +159,27 @@ class GeckoViewEngine(
             { e -> Log.e(TAG, "Failed to install uBlock Origin extension", e) }
         )
         
-        // User Agent
-        // Use mobile user agent by default (GeckoView usually does this, but we can enforce)
-        // session.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+        // Install PB Bridge extension for native JS evaluation
+        // First, try to register delegate for already-installed extension (handles app restart)
+        runtime.webExtensionController.list().accept({ extensions ->
+            val bridge = extensions?.find { it.id == "pb-bridge@playbridge.com" }
+            if (bridge != null) {
+                Log.i(TAG, "PB Bridge already installed, registering delegate")
+                registerBridgeDelegate(bridge)
+            }
+        }, { e -> Log.w(TAG, "Failed to list extensions", e) })
+        
+        // Then, ensure it's installed (handles first run + updates)
+        runtime.webExtensionController.ensureBuiltIn(
+            "resource://android/assets/extensions/pb_bridge/",
+            "pb-bridge@playbridge.com"
+        ).accept(
+            { ext ->
+                Log.i(TAG, "PB Bridge extension ensured")
+                registerBridgeDelegate(ext!!)
+            },
+            { e -> Log.e(TAG, "Failed to install PB Bridge extension", e) }
+        )
         
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
@@ -129,7 +187,7 @@ class GeckoViewEngine(
             }
         }
         
-        // Add minimal navigation delegate to log
+        // Navigation delegate
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                 _canGoBack = canGoBack

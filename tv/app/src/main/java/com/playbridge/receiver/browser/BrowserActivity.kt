@@ -486,136 +486,57 @@ class BrowserActivity : ComponentActivity() {
             "refresh" -> engine?.reload()
             "switch_engine" -> switchEngine()
             "maximize_video" -> {
-                val js = """
-                    (function() {
-                        // Remove previous maximize if any
-                        var old = document.getElementById('pb-maximize-style');
-                        if (old) old.parentNode.removeChild(old);
-                        
-                        // Helper: find largest video in a document
-                        function findLargestVideo(doc) {
-                            try {
-                                var videos = doc.querySelectorAll('video');
-                                var largest = null;
-                                var largestArea = 0;
-                                for (var i = 0; i < videos.length; i++) {
-                                    var v = videos[i];
-                                    var area = v.offsetWidth * v.offsetHeight;
-                                    if (area > largestArea || (area === 0 && !largest)) {
-                                        largest = v;
-                                        largestArea = area;
-                                    }
-                                }
-                                return largest;
-                            } catch(e) { return null; }
-                        }
-                        
-                        // 1. Try main document first
-                        var target = findLargestVideo(document);
-                        var targetIsIframe = false;
-                        
-                        // 2. If no video in main doc, check same-origin iframes
-                        if (!target) {
-                            var iframes = document.querySelectorAll('iframe');
-                            for (var i = 0; i < iframes.length; i++) {
-                                try {
-                                    var iframeDoc = iframes[i].contentDocument || iframes[i].contentWindow.document;
-                                    var v = findLargestVideo(iframeDoc);
-                                    if (v) {
-                                        // Found video in same-origin iframe - maximize the iframe
-                                        target = iframes[i];
-                                        targetIsIframe = true;
-                                        break;
-                                    }
-                                } catch(e) {
-                                    // Cross-origin iframe - can't access content
-                                }
-                            }
-                        }
-                        
-                        // 3. If still nothing, maximize the largest iframe (for cross-origin embeds)
-                        if (!target) {
-                            var iframes = document.querySelectorAll('iframe');
-                            var largestIframe = null;
-                            var largestArea = 0;
-                            for (var i = 0; i < iframes.length; i++) {
-                                var area = iframes[i].offsetWidth * iframes[i].offsetHeight;
-                                if (area > largestArea) {
-                                    largestIframe = iframes[i];
-                                    largestArea = area;
-                                }
-                            }
-                            if (largestIframe && largestArea > 100) {
-                                target = largestIframe;
-                                targetIsIframe = true;
-                            }
-                        }
-                        
-                        if (!target) return 'no_video';
-                        
-                        // Play if it's a video and paused
-                        if (!targetIsIframe && target.paused) {
-                            try { target.play(); } catch(e) {}
-                        }
-                        
-                        // Mark the target
-                        target.dataset.pbMaximized = 'true';
-                        
-                        // Walk up from target to body, mark each ancestor
-                        var el = target;
-                        while (el && el !== document.body && el !== document.documentElement) {
-                            el.dataset.pbAncestor = 'true';
-                            el = el.parentElement;
-                        }
-                        
-                        // Inject CSS
-                        var style = document.createElement('style');
-                        style.id = 'pb-maximize-style';
-                        style.textContent = 
-                            'body > *:not([data-pb-ancestor]) { display:none!important; }' +
-                            '[data-pb-ancestor] > *:not([data-pb-ancestor]):not([data-pb-maximized]) { display:none!important; }' +
-                            'body { margin:0!important; padding:0!important; overflow:hidden!important; background:#000!important; }' +
-                            '[data-pb-ancestor] { width:100vw!important; height:100vh!important; max-width:100vw!important; max-height:100vh!important; margin:0!important; padding:0!important; position:fixed!important; top:0!important; left:0!important; overflow:hidden!important; }' +
-                            '[data-pb-maximized] { width:100vw!important; height:100vh!important; max-width:100vw!important; max-height:100vh!important; object-fit:contain!important; position:fixed!important; top:0!important; left:0!important; z-index:2147483647!important; background:#000!important; border:none!important; }';
-                        document.head.appendChild(style);
-                        
-                        return targetIsIframe ? 'ok_iframe' : 'ok_video';
-                    })();
-                """.trimIndent()
+                val js = "(function(){" +
+                    "var old=document.getElementById('pb-maximize-style');" +
+                    "if(old)old.parentNode.removeChild(old);" +
+                    "function findLargestVideo(doc){" +
+                      "try{var videos=doc.querySelectorAll('video');var largest=null;var largestArea=0;" +
+                      "for(var i=0;i<videos.length;i++){var v=videos[i];var area=v.offsetWidth*v.offsetHeight;" +
+                      "if(area>largestArea||(area===0&&!largest)){largest=v;largestArea=area;}}" +
+                      "return largest;}catch(e){return null;}}" +
+                    "var target=findLargestVideo(document);var targetIsIframe=false;" +
+                    "if(!target){var iframes=document.querySelectorAll('iframe');" +
+                      "for(var i=0;i<iframes.length;i++){try{" +
+                        "var iframeDoc=iframes[i].contentDocument||iframes[i].contentWindow.document;" +
+                        "var v=findLargestVideo(iframeDoc);" +
+                        "if(v){target=iframes[i];targetIsIframe=true;break;}" +
+                      "}catch(e){}}}" +
+                    "if(!target){var iframes=document.querySelectorAll('iframe');" +
+                      "var largestIframe=null;var largestArea=0;" +
+                      "for(var i=0;i<iframes.length;i++){" +
+                        "var area=iframes[i].offsetWidth*iframes[i].offsetHeight;" +
+                        "if(area>largestArea){largestIframe=iframes[i];largestArea=area;}}" +
+                      "if(largestIframe&&largestArea>100){target=largestIframe;targetIsIframe=true;}}" +
+                    "if(!target)return 'no_video';" +
+                    "if(!targetIsIframe&&target.paused){try{target.play();}catch(e){}}" +
+                    "target.dataset.pbMaximized='true';" +
+                    "var el=target;while(el&&el!==document.body&&el!==document.documentElement){el.dataset.pbAncestor='true';el=el.parentElement;}" +
+                    "var style=document.createElement('style');style.id='pb-maximize-style';" +
+                    "style.textContent=" +
+                      "'body>*:not([data-pb-ancestor]){display:none!important;}'" +
+                      "+'[data-pb-ancestor]>*:not([data-pb-ancestor]):not([data-pb-maximized]){display:none!important;}'" +
+                      "+'body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;}'" +
+                      "+'[data-pb-ancestor]{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;margin:0!important;padding:0!important;position:fixed!important;top:0!important;left:0!important;overflow:hidden!important;}'" +
+                      "+'[data-pb-maximized]{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;object-fit:contain!important;position:fixed!important;top:0!important;left:0!important;z-index:2147483647!important;background:#000!important;border:none!important;}';" +
+                    "document.head.appendChild(style);" +
+                    "return targetIsIframe?'ok_iframe':'ok_video';" +
+                    "})();"
                 engine?.evaluateJavascript(js) { result ->
                     Log.d(TAG, "maximize_video result: $result")
                 }
             }
             "restore_video" -> {
-                val js = """
-                    (function() {
-                        // Remove the injected style
-                        var style = document.getElementById('pb-maximize-style');
-                        if (style) style.parentNode.removeChild(style);
-                        
-                        // Clean up data attributes from ancestors
-                        var ancestors = document.querySelectorAll('[data-pb-ancestor]');
-                        for (var i = 0; i < ancestors.length; i++) {
-                            delete ancestors[i].dataset.pbAncestor;
-                        }
-                        
-                        // Clean up video
-                        var video = document.querySelector('video[data-pb-maximized]');
-                        if (video) {
-                            delete video.dataset.pbMaximized;
-                            return 'ok';
-                        }
-                        
-                        // Try native fullscreen exit
-                        if (document.fullscreenElement || document.webkitFullscreenElement) {
-                            var exitFs = document.exitFullscreen || document.webkitExitFullscreen;
-                            if (exitFs) exitFs.call(document);
-                            return 'ok_native';
-                        }
-                        
-                        return 'not_maximized';
-                    })();
-                """.trimIndent()
+                val js = "(function(){" +
+                    "var style=document.getElementById('pb-maximize-style');" +
+                    "if(style)style.parentNode.removeChild(style);" +
+                    "var ancestors=document.querySelectorAll('[data-pb-ancestor]');" +
+                    "for(var i=0;i<ancestors.length;i++){delete ancestors[i].dataset.pbAncestor;}" +
+                    "var el=document.querySelector('[data-pb-maximized]');" +
+                    "if(el){delete el.dataset.pbMaximized;return 'ok';}" +
+                    "if(document.fullscreenElement||document.webkitFullscreenElement){" +
+                      "var exitFs=document.exitFullscreen||document.webkitExitFullscreen;" +
+                      "if(exitFs)exitFs.call(document);return 'ok_native';}" +
+                    "return 'not_maximized';})();"
                 engine?.evaluateJavascript(js) { result ->
                     Log.d(TAG, "restore_video result: $result")
                 }
