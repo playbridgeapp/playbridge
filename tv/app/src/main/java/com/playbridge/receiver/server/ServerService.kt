@@ -27,13 +27,16 @@ import java.net.NetworkInterface
 
 private const val TAG = "ServerService"
 private const val CHANNEL_ID = "playbridge_server"
+private const val CHANNEL_ID_LAUNCH = "playbridge_launch"
 private const val NOTIFICATION_ID = 1
+private const val NOTIFICATION_ID_LAUNCH = 2
 
 class ServerService : Service() {
     
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocketServer: WebSocketServer? = null
     private lateinit var pairingStore: PairingStore
+    private lateinit var overlayWindow: OverlayWindowHelper
     
     // Track what is currently active on the TV
     private var activeContext: String = "idle" // "player", "browser", or "idle"
@@ -53,6 +56,7 @@ class ServerService : Service() {
     override fun onCreate() {
         super.onCreate()
         pairingStore = PairingStore(applicationContext)
+        overlayWindow = OverlayWindowHelper(applicationContext)
         nsdManager = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
         createNotificationChannel()
     }
@@ -60,9 +64,10 @@ class ServerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
-                NOTIFICATION_ID, 
+                NOTIFICATION_ID,
                 createNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
             )
         } else {
             startForeground(NOTIFICATION_ID, createNotification())
@@ -127,6 +132,18 @@ class ServerService : Service() {
                         updateNotification(state)
                         _connectionState.value = state
                         
+                        // Show/hide overlay window tied to connection:
+                        // When the overlay is visible, Android's BAL check sees
+                        // callingUidHasNonAppVisibleWindow=true which exempts us from
+                        // background activity launch restrictions on Android 14+.
+                        when (state) {
+                            is WebSocketServer.ConnectionState.Connected -> overlayWindow.show()
+                            is WebSocketServer.ConnectionState.Running,
+                            is WebSocketServer.ConnectionState.Stopped,
+                            is WebSocketServer.ConnectionState.Error -> overlayWindow.hide()
+                            else -> Unit
+                        }
+
                         // Persist paired device on connection
                         if (state is WebSocketServer.ConnectionState.Connected) {
                             val device = PairedDevice(
@@ -161,15 +178,8 @@ class ServerService : Service() {
                 Log.i(TAG, "=== PLAY COMMAND ===")
                 activeContext = "player"
                 broadcastContext()
-                
-                // Clear stack to MainActivity first
-                val homeIntent = Intent(this, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                }
-                startActivity(homeIntent)
 
-                // Launch PlayerActivity
-                val intent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                val playerIntent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
                     putExtra(EXTRA_URL, command.url)
                     putExtra(EXTRA_TITLE, command.title)
                     putExtra(EXTRA_CONTENT_TYPE, command.contentType)
@@ -182,27 +192,20 @@ class ServerService : Service() {
                     if (command.headers != null) {
                         putExtra(EXTRA_HEADERS, HashMap(command.headers))
                     }
-                    // No CLEAR_TASK, just NEW_TASK to add to the stack we just cleared
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) 
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
-                startActivity(intent)
+                launchActivityFromBackground(playerIntent, "Playing media")
             }
             is Command.Browser -> {
                 Log.i(TAG, "Browser command: ${command.url}")
                 activeContext = "browser"
                 broadcastContext()
-                
-                 // Clear stack to MainActivity first
-                val homeIntent = Intent(this, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                }
-                startActivity(homeIntent)
 
-                val intent = Intent(this, com.playbridge.receiver.browser.BrowserActivity::class.java).apply {
+                val browserIntent = Intent(this, com.playbridge.receiver.browser.BrowserActivity::class.java).apply {
                     putExtra(com.playbridge.receiver.browser.BrowserActivity.EXTRA_URL, command.url)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
-                startActivity(intent)
+                launchActivityFromBackground(browserIntent, "Opening browser")
             }
             is Command.Control -> {
                 Log.i(TAG, "Control command: ${command.command}")
@@ -263,6 +266,45 @@ class ServerService : Service() {
         }
     }
     
+    /**
+     * Launches an activity from the background (e.g. when the app is not in the foreground).
+     *
+     * Strategy:
+     * 1. startActivity() — works because we have a `mediaPlayback` foreground service, which
+     *    qualifies for the Android 10+ background-launch exemption.
+     * 2. fullScreenIntent notification — belt-and-suspenders fallback for strict OEMs that
+     *    ignore the exemption. Android pops this as an overlay over whatever is on screen.
+     */
+    private fun launchActivityFromBackground(intent: Intent, description: String) {
+        // Attempt 1: direct startActivity (requires mediaPlayback foreground service type)
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "startActivity failed, falling back to fullScreenIntent: ${e.message}")
+        }
+
+        // Attempt 2: fullScreenIntent notification (fires in parallel as a guaranteed fallback)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            intent.component.hashCode(), // unique request code per activity
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID_LAUNCH)
+            .setContentTitle("PlayBridge")
+            .setContentText(description)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setFullScreenIntent(pendingIntent, true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .build()
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID_LAUNCH, notification)
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -272,9 +314,19 @@ class ServerService : Service() {
             ).apply {
                 description = "Shows when PlayBridge server is running"
             }
-            
+
+            // High-priority channel used when launching activities from background
+            val launchChannel = NotificationChannel(
+                CHANNEL_ID_LAUNCH,
+                "PlayBridge Commands",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Used to bring PlayBridge to foreground when a command is received"
+            }
+
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(launchChannel)
         }
     }
     
@@ -343,6 +395,8 @@ class ServerService : Service() {
         // Stop server synchronously
         webSocketServer?.stop()
         webSocketServer = null
+        // Remove overlay window if still visible
+        overlayWindow.hide()
         // Cancel scope after stopping server
         scope.cancel()
         super.onDestroy()

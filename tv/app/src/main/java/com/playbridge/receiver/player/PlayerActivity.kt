@@ -481,6 +481,12 @@ class PlayerActivity : ComponentActivity() {
         progressManager.saveProgress(bitmap)
         releasePlayer()
         cachedBitmap = null
+        // Finish the activity when the user backgrounds the app (presses Home).
+        // This keeps memory clean — only the lightweight ServerService stays running.
+        // The next play command from the phone will create a fresh PlayerActivity.
+        if (!isFinishing && !isChangingConfigurations) {
+            finish()
+        }
     }
     
     override fun onDestroy() {

@@ -592,6 +592,16 @@ class BrowserActivity : ComponentActivity() {
         cursorHideHandler.postDelayed(cursorHideRunnable, cursorHideDelayMs)
     }
     
+    override fun onStop() {
+        super.onStop()
+        // Finish the activity when the user backgrounds the app (presses Home).
+        // WebView/GeckoView are heavy — clearing them keeps only the lightweight
+        // ServerService running in background. The next browser command creates a fresh instance.
+        if (!isFinishing && !isChangingConfigurations) {
+            finish()
+        }
+    }
+
     override fun onDestroy() {
         cursorHideHandler.removeCallbacks(cursorHideRunnable)
         unregisterReceiver(commandReceiver)
