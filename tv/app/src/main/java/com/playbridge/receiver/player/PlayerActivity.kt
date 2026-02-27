@@ -259,7 +259,14 @@ class PlayerActivity : ComponentActivity() {
 
         // 1. Prepare Headers
         val requestProperties = HashMap<String, String>()
-        intentHeaders?.forEach { (key, value) -> requestProperties[key] = value }
+        intentHeaders?.forEach { (key, value) -> 
+            // Filter out headers that interfere with ExoPlayer's own chunking and buffering
+            if (!key.equals("Range", ignoreCase = true) && !key.equals("Accept-Encoding", ignoreCase = true)) {
+                requestProperties[key] = value 
+            } else {
+                Log.i(TAG, "Stripping header to prevent ExoPlayer buffering issues: $key: $value")
+            }
+        }
 
         if (!requestProperties.containsKey("Referer")) {
             try {

@@ -187,7 +187,14 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 headers: message.headers || {},
                 timestamp: message.timestamp || Date.now()
             });
+            if (videos.length > 50) {
+                videos.shift(); // Keep only last 50
+            }
+            
             seenUrls.add(message.url);
+            if (seenUrls.size > 500) {
+                seenUrls.delete(seenUrls.keys().next().value);
+            }
             
             // Inject UI when videos are detected
             injectDesktopUI();

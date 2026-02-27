@@ -74,15 +74,6 @@ function handleNavigation(details) {
         browserAPI.tabs.sendMessage(details.tabId, { type: 'clear_videos' }).catch((e) => {
             console.log(`[VideoDetector BG] Failed to send clear_videos to tab ${details.tabId}:`, e.message);
         });
-        
-        // Update global storage if needed
-        const allVideos = [];
-        for (const [, vids] of tabVideos) allVideos.push(...vids);
-        browserAPI.storage.local.set({
-            detectedVideos: allVideos,
-            lastUpdate: Date.now(),
-            count: allVideos.length
-        });
     }
 }
 
@@ -107,8 +98,15 @@ function notifyContentScript(video, tabId, headers = null) {
     }
 
     seenUrls.add(video.url);
+    if (seenUrls.size > 500) {
+        seenUrls.delete(seenUrls.keys().next().value);
+    }
+
     if (hasHeaders) {
         headersCaptured.add(video.url);
+        if (headersCaptured.size > 500) {
+            headersCaptured.delete(headersCaptured.keys().next().value);
+        }
         video.headers = headers;
     }
 
@@ -118,6 +116,9 @@ function notifyContentScript(video, tabId, headers = null) {
         videos[existingIndex] = { ...videos[existingIndex], ...video };
     } else {
         videos.push(video);
+        if (videos.length > 50) {
+            videos.shift(); // Keep only last 50 unique videos per tab
+        }
     }
 
     console.log(`[VideoDetector BG] VIDEO DETECTED tab=${tabId} (Headers: ${hasHeaders}): ${video.url.substring(0, 80)}`);
@@ -128,14 +129,6 @@ function notifyContentScript(video, tabId, headers = null) {
             ...video
         }).catch(() => {});
     }
-
-    const allVideos = [];
-    for (const [, vids] of tabVideos) allVideos.push(...vids);
-    browserAPI.storage.local.set({
-        detectedVideos: allVideos,
-        lastUpdate: Date.now(),
-        count: allVideos.length
-    });
 }
 
 function processAndNotifyVideo(videoData, tabId, headers) {
@@ -247,10 +240,16 @@ browserAPI.webRequest.onHeadersReceived.addListener(
             let isVideo = false;
             let detectedBy = 'unknown';
 
+            const urlLower = details.url.toLowerCase().split('?')[0];
+            const isSegment = ['.ts', '.m4s', '.m4v'].some(ext => urlLower.endsWith(ext)) || urlLower.includes('/segment') || urlLower.includes('frag');
+            if (isSegment) {
+                if (storedData) requestHeadersMap.delete(details.requestId);
+                return; // ignore fragments to save memory and CPU
+            }
+
             const isVideoContentType = VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
             const isM3u8Url = details.url.toLowerCase().includes('m3u8');
             
-            const urlLower = details.url.toLowerCase().split('?')[0];
             const hasVideoExtension = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv'].some(ext => urlLower.endsWith(ext));
             const hasSubtitleExtension = ['.vtt', '.srt'].some(ext => urlLower.endsWith(ext));
             
@@ -456,7 +455,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
             tabHeadersCaptured.clear();
             requestHeadersMap.clear();
         }
-        browserAPI.storage.local.set({ detectedVideos: [], lastUpdate: Date.now(), count: 0 });
         sendResponse({ cleared: true });
         return true;
     }
