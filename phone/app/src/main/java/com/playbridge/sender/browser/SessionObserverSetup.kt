@@ -46,7 +46,7 @@ fun SessionObserverSetup(
     isDesktopMode: Boolean,
     isSecureConnection: MutableState<Boolean>,
     onXpiDetected: (String) -> Unit,
-    onVideoHashDetected: (String) -> Unit
+    onVideoHashDetected: (String, String) -> Unit  // (url, kotlinTabId)
 ) {
     // Desktop Mode User Agent
     val desktopUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
@@ -117,15 +117,18 @@ fun SessionObserverSetup(
 
                 // Clear detected videos only when navigating to a different page
                 if (baseUrl != previousBaseUrl && previousBaseUrl.isNotEmpty()) {
-                    VideoDetector.clear()
-                    Log.d(TAG, "Cleared detected videos - navigated from $previousBaseUrl to $baseUrl")
+                    if (selectedTab != null) {
+                        VideoDetector.clearTab(selectedTab.id)
+                        Log.d(TAG, "Cleared detected videos for tab ${selectedTab.id} - navigated from $previousBaseUrl to $baseUrl")
+                    }
                 }
 
                 previousUrl.value = url
 
                 // Check for playbridge-video hash signal from content script
                 if (url.contains("#playbridge-video=")) {
-                    onVideoHashDetected(url)
+                    val tabId = selectedTab?.id ?: "_unknown"
+                    onVideoHashDetected(url, tabId)
                 }
             }
 

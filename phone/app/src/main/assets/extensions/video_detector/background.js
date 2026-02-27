@@ -1,6 +1,6 @@
 // PlayBridge Video Detector - Background Script
-// Detects video URLs and sends them to content script for storage
-// Refactored to use Store & Forward mechanism
+// Detects video URLs per-tab and sends them to content script for storage
+// Uses per-tab Maps so each tab tracks its own videos independently
 
 const VIDEO_CONTENT_TYPES = [
     'video/',
@@ -14,14 +14,14 @@ const VIDEO_CONTENT_TYPES = [
     '.srt'
 ];
 
-console.log('[VideoDetector BG] Starting...');
+console.log('[VideoDetector BG] Starting (Per-Tab Mode)...');
 
-// Store detected videos to avoid duplicates
-let detectedVideos = [];
-let seenUrls = new Set();
-let urlHeadersCaptured = new Set();
+// Per-tab video storage
+const tabVideos = new Map();           // geckoTabId → [{url, ...}]
+const tabSeenUrls = new Map();         // geckoTabId → Set<url>
+const tabHeadersCaptured = new Map();  // geckoTabId → Set<url>
 
-// Map to store headers temporarily: requestId -> { headers: Object, timestamp: Number }
+// Map to store headers temporarily: requestId -> { headers, tabId, timestamp }
 const requestHeadersMap = new Map();
 
 // Configuration for cleanup
@@ -43,36 +43,65 @@ setInterval(() => {
     }
 }, CLEANUP_INTERVAL_MS);
 
+// Helper: get or create per-tab structures
+function getTabVideos(tabId) {
+    if (!tabVideos.has(tabId)) tabVideos.set(tabId, []);
+    return tabVideos.get(tabId);
+}
+function getTabSeenUrls(tabId) {
+    if (!tabSeenUrls.has(tabId)) tabSeenUrls.set(tabId, new Set());
+    return tabSeenUrls.get(tabId);
+}
+function getTabHeadersCaptured(tabId) {
+    if (!tabHeadersCaptured.has(tabId)) tabHeadersCaptured.set(tabId, new Set());
+    return tabHeadersCaptured.get(tabId);
+}
 
-// Send video to content script for storage
+// Clean up state for a closed tab
+function cleanupTab(tabId) {
+    tabVideos.delete(tabId);
+    tabSeenUrls.delete(tabId);
+    tabHeadersCaptured.delete(tabId);
+    console.log(`[VideoDetector BG] Cleaned up tab ${tabId}`);
+}
+
+// Listen for tab removal to free memory
+browser.tabs.onRemoved.addListener((tabId) => {
+    cleanupTab(tabId);
+});
+
+// Send video to content script for storage (per-tab)
 function notifyContentScript(video, tabId, headers = null) {
     const hasHeaders = headers && Object.keys(headers).length > 0;
+    const seenUrls = getTabSeenUrls(tabId);
+    const headersCaptured = getTabHeadersCaptured(tabId);
 
     if (seenUrls.has(video.url)) {
         // If we already saw this URL, check if we're improving it with headers
-        if (urlHeadersCaptured.has(video.url) || !hasHeaders) {
+        if (headersCaptured.has(video.url) || !hasHeaders) {
             return;
         }
     }
 
     seenUrls.add(video.url);
     if (hasHeaders) {
-        urlHeadersCaptured.add(video.url);
+        headersCaptured.add(video.url);
         video.headers = headers;
     }
 
     // Update if exists or push new
-    const existingIndex = detectedVideos.findIndex(v => v.url === video.url);
+    const videos = getTabVideos(tabId);
+    const existingIndex = videos.findIndex(v => v.url === video.url);
     if (existingIndex !== -1) {
-        detectedVideos[existingIndex] = { ...detectedVideos[existingIndex], ...video };
+        videos[existingIndex] = { ...videos[existingIndex], ...video };
     } else {
-        detectedVideos.push(video);
+        videos.push(video);
     }
 
-    const count = detectedVideos.length;
-    console.log('[VideoDetector BG] VIDEO DETECTED #' + count + ' (Headers: ' + hasHeaders + '): ' + video.url.substring(0, 80));
+    const count = videos.length;
+    console.log('[VideoDetector BG] VIDEO DETECTED tab=' + tabId + ' #' + count + ' (Headers: ' + hasHeaders + '): ' + video.url.substring(0, 80));
 
-    // Send to content script in the specific tab
+    // Send to content script in the specific tab only
     if (tabId && tabId > 0) {
         browser.tabs.sendMessage(tabId, {
             type: 'video_detected',
@@ -82,21 +111,15 @@ function notifyContentScript(video, tabId, headers = null) {
         });
     }
 
-    // Also broadcast to all tabs (useful for iframes)
-    browser.tabs.query({}).then(tabs => {
-        tabs.forEach(tab => {
-            browser.tabs.sendMessage(tab.id, {
-                type: 'video_detected',
-                ...video
-            }).catch(() => { });
-        });
-    }).catch(() => { });
-
-    // Store in extension storage as backup
+    // Store in extension storage as backup (per-tab)
+    const allVideos = [];
+    for (const [, vids] of tabVideos) {
+        allVideos.push(...vids);
+    }
     browser.storage.local.set({
-        detectedVideos: detectedVideos,
+        detectedVideos: allVideos,
         lastUpdate: Date.now(),
-        count: count
+        count: allVideos.length
     });
 }
 
@@ -133,6 +156,7 @@ browser.webRequest.onBeforeSendHeaders.addListener(
         if (Object.keys(headers).length > 0) {
             requestHeadersMap.set(details.requestId, {
                 headers: headers,
+                tabId: details.tabId,
                 timestamp: Date.now()
             });
         }
@@ -267,14 +291,22 @@ browser.webRequest.onHeadersReceived.addListener(
 // Handle messages from content scripts
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'getVideos') {
-        sendResponse({ videos: detectedVideos, count: detectedVideos.length });
+        const tabId = message.tabId || (sender.tab && sender.tab.id);
+        const videos = tabId ? (tabVideos.get(tabId) || []) : [];
+        sendResponse({ videos: videos, count: videos.length });
         return true;
     }
     if (message.action === 'clearVideos') {
-        detectedVideos = [];
-        seenUrls.clear();
-        urlHeadersCaptured.clear();
-        requestHeadersMap.clear(); // Also clear the map just in case
+        const tabId = message.tabId || (sender.tab && sender.tab.id);
+        if (tabId) {
+            cleanupTab(tabId);
+        } else {
+            // Clear all tabs
+            tabVideos.clear();
+            tabSeenUrls.clear();
+            tabHeadersCaptured.clear();
+            requestHeadersMap.clear();
+        }
         browser.storage.local.set({ detectedVideos: [], lastUpdate: Date.now(), count: 0 });
         sendResponse({ cleared: true });
         return true;
@@ -282,4 +314,4 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
 });
 
-console.log('[VideoDetector BG] Loaded (Store & Forward Mode)');
+console.log('[VideoDetector BG] Loaded (Per-Tab Mode)');

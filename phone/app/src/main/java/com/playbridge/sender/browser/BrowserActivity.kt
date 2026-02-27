@@ -170,6 +170,9 @@ class BrowserActivity : ComponentActivity() {
             Components.initialize(applicationContext)
         }
         
+        // Set tabManager reference for resolving Kotlin tab IDs from extension messages
+        Components.tabManager = tabManager
+        
         // Install the bundled video detector extension
         Components.installBundledExtension()
 
@@ -284,10 +287,14 @@ class BrowserActivity : ComponentActivity() {
             // Back press handling
             var backPressedTime by remember { mutableLongStateOf(0L) }
             
-            // Video detection state
+            // Video detection state — per-tab
             var showVideoSheet by remember { mutableStateOf(false) }
-            val detectedVideos = VideoDetector.detectedVideos
-            val videoCount by remember { derivedStateOf { detectedVideos.size } }
+            val detectedVideos by remember(selectedTabId) {
+                derivedStateOf { VideoDetector.getVideosForTab(selectedTabId ?: "") }
+            }
+            val videoCount by remember(selectedTabId) {
+                derivedStateOf { VideoDetector.getVideoCountForTab(selectedTabId ?: "") }
+            }
             
             // TV active context - updated via WebSocket messages from TV
             var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
@@ -440,11 +447,11 @@ class BrowserActivity : ComponentActivity() {
                         }
                     }
                 },
-                onVideoHashDetected = { url ->
+                onVideoHashDetected = { url, kotlinTabId ->
                     try {
                         val hashData = url.substringAfter("#playbridge-video=")
                         val decoded = java.net.URLDecoder.decode(hashData, "UTF-8")
-                        Log.d(TAG, "PlayBridge video signal: $decoded")
+                        Log.d(TAG, "PlayBridge video signal for tab $kotlinTabId: $decoded")
                         
                         val json = kotlinx.serialization.json.Json.parseToJsonElement(decoded)
                         if (json is kotlinx.serialization.json.JsonObject) {
@@ -456,8 +463,8 @@ class BrowserActivity : ComponentActivity() {
                                 "originUrl" to (json["originUrl"] ?: kotlinx.serialization.json.JsonNull),
                                 "headers" to (json["headers"] ?: kotlinx.serialization.json.JsonNull),
                                 "timestamp" to (json["timestamp"] ?: kotlinx.serialization.json.JsonPrimitive(System.currentTimeMillis()))
-                            )))
-                            Log.d(TAG, "Video added to VideoDetector from hash signal")
+                            )), kotlinTabId)
+                            Log.d(TAG, "Video added to VideoDetector for tab $kotlinTabId from hash signal")
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error parsing playbridge-video hash", e)
@@ -1168,7 +1175,7 @@ class BrowserActivity : ComponentActivity() {
                 // Video detection bottom sheet
                 if (showVideoSheet) {
                     DetectedVideosSheet(
-                        videos = detectedVideos.toList(),
+                        videos = detectedVideos,
                         onDismiss = { showVideoSheet = false },
                         onVideoClick = { video, subtitles ->
                             Log.d(TAG, "=== PLAY ON TV CLICKED ===")
@@ -1234,7 +1241,7 @@ class BrowserActivity : ComponentActivity() {
 
                         },
                         onClear = {
-                            VideoDetector.clear()
+                            VideoDetector.clearTab(selectedTabId ?: "")
                         },
                         onDownload = { video ->
                             DownloadUtils.enqueueDownload(

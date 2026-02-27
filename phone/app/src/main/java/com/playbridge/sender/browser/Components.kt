@@ -7,6 +7,7 @@ import android.util.Log
 import android.widget.Toast
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import mozilla.components.browser.engine.gecko.GeckoEngine
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.webextension.WebExtension
@@ -31,6 +32,9 @@ object Components {
     
     private const val TAG = "Components"
     private lateinit var appContext: Context
+    
+    // Reference to TabManager for resolving Kotlin tab IDs from extension messages
+    var tabManager: TabManager? = null
     
     val applicationContext: Context
         get() = appContext
@@ -287,7 +291,9 @@ object Components {
     
 
     /**
-     * Process incoming message from extension
+     * Process incoming message from extension.
+     * Resolves the Kotlin tab ID by matching the message's originUrl against
+     * the currently open tabs in BrowserStore.
      */
     private fun processMessage(message: Any) {
         try {
@@ -301,12 +307,55 @@ object Components {
             
             val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
             if (jsonObject != null) {
-                VideoDetector.onMessageReceived(jsonObject)
-                Log.i(TAG, "Message sent to VideoDetector")
+                val kotlinTabId = resolveKotlinTabId(jsonObject)
+                VideoDetector.onMessageReceived(jsonObject, kotlinTabId)
+                Log.i(TAG, "Message sent to VideoDetector for tab $kotlinTabId")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error processing message", e)
         }
+    }
+    
+    /**
+     * Resolve the Kotlin tab ID from a video detection message.
+     * Matches the originUrl from the message against the URLs of currently open tabs.
+     * Falls back to the selected tab, then "_unknown".
+     */
+    private fun resolveKotlinTabId(message: JsonObject): String {
+        try {
+            val originUrl = message["originUrl"]?.jsonPrimitive?.content
+            if (!originUrl.isNullOrEmpty()) {
+                val state = store.state
+                // Try exact match first
+                val matchedTab = state.tabs.find { tab ->
+                    tab.content.url == originUrl ||
+                    tab.content.url.substringBefore("#") == originUrl.substringBefore("#")
+                }
+                if (matchedTab != null) {
+                    return matchedTab.id
+                }
+                
+                // Try domain match as fallback
+                val originDomain = try { java.net.URI(originUrl).host } catch (e: Exception) { null }
+                if (originDomain != null) {
+                    val domainMatch = state.tabs.find { tab ->
+                        try { java.net.URI(tab.content.url).host == originDomain } catch (e: Exception) { false }
+                    }
+                    if (domainMatch != null) {
+                        return domainMatch.id
+                    }
+                }
+            }
+            
+            // Fallback: use the currently selected tab
+            val selectedId = store.state.selectedTabId
+            if (selectedId != null) {
+                return selectedId
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resolving Kotlin tab ID", e)
+        }
+        return "_unknown"
     }
     
     /**

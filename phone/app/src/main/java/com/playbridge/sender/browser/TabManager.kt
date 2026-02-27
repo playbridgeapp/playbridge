@@ -124,6 +124,8 @@ class TabManager {
                 }
             }
             sessions.remove(id)
+            // Clean up detected videos for this tab
+            VideoDetector.clearTab(id)
         }
     }
 

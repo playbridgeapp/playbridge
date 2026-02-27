@@ -2,7 +2,8 @@ package com.playbridge.sender.browser
 
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -52,26 +53,43 @@ data class Cue(val startTime: Long, val endTime: Long, val text: String) : Compa
 
 /**
  * Singleton that manages video detection from the WebExtension.
- * Receives native messages from the video_detector extension and stores detected videos.
+ * Stores detected videos **per Kotlin tab ID** so that each browser tab
+ * has its own isolated list of detected videos.
  */
 object VideoDetector {
     
     private const val TAG = "VideoDetector"
     
-    // Observable list of detected videos
-    val detectedVideos = mutableStateListOf<DetectedVideo>()
+    // Per-tab storage: Kotlin tab ID -> list of detected videos
+    private val tabVideos = mutableStateMapOf<String, SnapshotStateList<DetectedVideo>>()
     
-    // Track videos by URL to avoid duplicates
-    private val seenUrls = mutableSetOf<String>()
+    // Per-tab seen URLs to avoid duplicates
+    private val tabSeenUrls = mutableMapOf<String, MutableSet<String>>()
 
-    // Track ignored URLs (e.g., HLS variants)
+    // Track ignored URLs (e.g., HLS variants) — global since variants can appear across tabs
     private val ignoredUrls = mutableSetOf<String>()
     
     /**
-     * Process a message received from the video detector extension
+     * Get the observable video list for a specific tab.
+     * Returns an empty list if no videos have been detected for the tab.
      */
-    fun onMessageReceived(message: JsonObject) {
-        Log.d(TAG, "Received message from extension: $message")
+    fun getVideosForTab(tabId: String): List<DetectedVideo> {
+        return tabVideos[tabId] ?: emptyList()
+    }
+    
+    /**
+     * Get the count of detected videos for a specific tab.
+     */
+    fun getVideoCountForTab(tabId: String): Int {
+        return tabVideos[tabId]?.size ?: 0
+    }
+    
+    /**
+     * Process a message received from the video detector extension,
+     * associating it with the given Kotlin tab ID.
+     */
+    fun onMessageReceived(message: JsonObject, kotlinTabId: String) {
+        Log.d(TAG, "Received message for tab $kotlinTabId: $message")
         
         val type = message["type"]?.jsonPrimitive?.content
         
@@ -88,22 +106,26 @@ object VideoDetector {
                 val headersJson = try { message["headers"]?.jsonObject } catch(e: Exception) { null }
                 val headers = headersJson?.mapValues { it.value.jsonPrimitive.content }
                 
-                 // Check if already exists to update
-                val existingIndex = detectedVideos.indexOfFirst { it.url == url }
+                // Get or create per-tab structures
+                val videos = tabVideos.getOrPut(kotlinTabId) { mutableStateListOf() }
+                val seenUrls = tabSeenUrls.getOrPut(kotlinTabId) { mutableSetOf() }
+                
+                // Check if already exists to update
+                val existingIndex = videos.indexOfFirst { it.url == url }
                 
                 if (existingIndex != -1) {
-                     val existing = detectedVideos[existingIndex]
-                     // If we have new headers, update them
-                     if (headers != null && headers.isNotEmpty()) {
-                         Log.i(TAG, "Updating headers for video: $url")
-                         detectedVideos[existingIndex] = existing.copy(
-                             headers = headers,
-                             originUrl = message["originUrl"]?.jsonPrimitive?.content ?: existing.originUrl,
-                             contentType = message["contentType"]?.jsonPrimitive?.content ?: existing.contentType,
-                             originalMessage = message.toString()
-                         )
-                     }
-                     return
+                    val existing = videos[existingIndex]
+                    // If we have new headers, update them
+                    if (headers != null && headers.isNotEmpty()) {
+                        Log.i(TAG, "Updating headers for video in tab $kotlinTabId: $url")
+                        videos[existingIndex] = existing.copy(
+                            headers = headers,
+                            originUrl = message["originUrl"]?.jsonPrimitive?.content ?: existing.originUrl,
+                            contentType = message["contentType"]?.jsonPrimitive?.content ?: existing.contentType,
+                            originalMessage = message.toString()
+                        )
+                    }
+                    return
                 }
                 
                 val video = DetectedVideo(
@@ -117,17 +139,24 @@ object VideoDetector {
                     originalMessage = message.toString()
                 )
                 
-                Log.i(TAG, "VIDEO DETECTED: ${video.url}")
+                Log.i(TAG, "VIDEO DETECTED in tab $kotlinTabId: ${video.url}")
                 Log.i(TAG, "  Type: ${video.contentType ?: "N/A"}")
                 Log.i(TAG, "  Header Count: ${video.headers?.size ?: 0}")
                 
                 seenUrls.add(url)
-                detectedVideos.add(video)
+                videos.add(video)
             }
             else -> {
                 Log.w(TAG, "Unknown message type: $type")
             }
         }
+    }
+
+    /**
+     * Legacy overload — routes to "unknown" tab. Prefer the tab-aware overload.
+     */
+    fun onMessageReceived(message: JsonObject) {
+        onMessageReceived(message, "_unknown")
     }
     
     /**
@@ -329,9 +358,10 @@ object VideoDetector {
     }
     
     /**
-     * Fetch HLS variant qualities if the video is an m3u8 playlist
+     * Fetch HLS variant qualities if the video is an m3u8 playlist.
+     * Operates on a specific tab's video list for variant cleanup.
      */
-    suspend fun fetchHlsQualities(video: DetectedVideo): List<VideoQuality> {
+    suspend fun fetchHlsQualities(video: DetectedVideo, kotlinTabId: String? = null): List<VideoQuality> {
         if (video.qualitiesChecked) {
             return video.qualities
         }
@@ -355,12 +385,18 @@ object VideoDetector {
                             }
                             
                             // Remove any already detected videos that are actually variants
-                            val removed = detectedVideos.removeAll { detected ->
-                                ignoredUrls.contains(detected.url)
-                            }
-                            
-                            if (removed) {
-                                Log.d(TAG, "Removed detected videos that were actually variants")
+                            if (kotlinTabId != null) {
+                                val videos = tabVideos[kotlinTabId]
+                                videos?.removeAll { detected ->
+                                    ignoredUrls.contains(detected.url)
+                                }
+                            } else {
+                                // Clean across all tabs
+                                for ((_, videos) in tabVideos) {
+                                    videos.removeAll { detected ->
+                                        ignoredUrls.contains(detected.url)
+                                    }
+                                }
                             }
                         }
                     }
@@ -381,17 +417,26 @@ object VideoDetector {
     }
 
     /**
-     * Clear all detected videos
+     * Clear detected videos for a specific tab.
+     */
+    fun clearTab(tabId: String) {
+        Log.d(TAG, "Clearing videos for tab $tabId (had ${tabVideos[tabId]?.size ?: 0})")
+        tabVideos.remove(tabId)
+        tabSeenUrls.remove(tabId)
+    }
+
+    /**
+     * Clear all detected videos across all tabs.
      */
     fun clear() {
-        Log.d(TAG, "Clearing ${detectedVideos.size} detected videos")
-        detectedVideos.clear()
-        seenUrls.clear()
+        Log.d(TAG, "Clearing all detected videos across ${tabVideos.size} tabs")
+        tabVideos.clear()
+        tabSeenUrls.clear()
         ignoredUrls.clear()
     }
     
     /**
-     * Get count of detected videos
+     * Get count of detected videos across all tabs (for debugging).
      */
-    fun getVideoCount(): Int = detectedVideos.size
+    fun getVideoCount(): Int = tabVideos.values.sumOf { it.size }
 }
