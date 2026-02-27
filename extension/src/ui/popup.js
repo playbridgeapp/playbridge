@@ -1,5 +1,3 @@
-const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
-
 // DOM Elements
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabContents = document.querySelectorAll('.tab-content');
@@ -63,13 +61,13 @@ function showToast(msg) {
 
 // Background Communication
 function loadVideos() {
-    if (browserAPI.tabs && browserAPI.tabs.query) {
-        browserAPI.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+    if (browser.tabs && browser.tabs.query) {
+        browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
             const currentTab = tabs[0];
             const msg = { action: 'getVideos' };
             if (currentTab) msg.tabId = currentTab.id;
             
-            browserAPI.runtime.sendMessage(msg).then(response => {
+            browser.runtime.sendMessage(msg).then(response => {
                 if (response) {
                     currentVideos = response.videos || [];
                     renderVideos();
@@ -77,7 +75,7 @@ function loadVideos() {
             }).catch(err => console.error("Error loading videos:", err));
         }).catch(() => {
             // Fallback for Firefox if tabs.query fails in some context
-            browserAPI.runtime.sendMessage({ action: 'getVideos' }).then(response => {
+            browser.runtime.sendMessage({ action: 'getVideos' }).then(response => {
                 if (response) {
                     currentVideos = response.videos || [];
                     renderVideos();
@@ -85,7 +83,7 @@ function loadVideos() {
             });
         });
     } else {
-        browserAPI.runtime.sendMessage({ action: 'getVideos' }).then(response => {
+        browser.runtime.sendMessage({ action: 'getVideos' }).then(response => {
             if (response) {
                 currentVideos = response.videos || [];
                 renderVideos();
@@ -95,7 +93,7 @@ function loadVideos() {
 }
 
 function loadStatus() {
-    browserAPI.runtime.sendMessage({ action: 'wsGetStatus' }).then(response => {
+    browser.runtime.sendMessage({ action: 'wsGetStatus' }).then(response => {
         if (response) {
             updateStatusUI(response.status);
             if (response.ip) tvIpInput.value = response.ip;
@@ -104,13 +102,13 @@ function loadStatus() {
     });
     
     // Load UI visibility state and saved connections
-    browserAPI.storage.local.get(['showPlayOverlay', 'savedConnections'], function(result) {
+    browser.storage.local.get(['showPlayOverlay', 'savedConnections'], function(result) {
         if (result.showPlayOverlay !== undefined) {
             showOverlayToggle.checked = result.showPlayOverlay;
         } else {
             // Default to true if not set
             showOverlayToggle.checked = true;
-            browserAPI.storage.local.set({ showPlayOverlay: true });
+            browser.storage.local.set({ showPlayOverlay: true });
         }
         
         if (result.savedConnections) {
@@ -132,7 +130,7 @@ function saveConnection(ip, pin) {
         savedConnections = savedConnections.slice(0, 5);
     }
     
-    browserAPI.storage.local.set({ savedConnections: savedConnections });
+    browser.storage.local.set({ savedConnections: savedConnections });
     renderSavedConnections();
 }
 
@@ -176,7 +174,7 @@ function renderSavedConnections() {
         item.querySelector('.delete-connection-btn').addEventListener('click', (e) => {
             e.stopPropagation();
             savedConnections.splice(index, 1);
-            browserAPI.storage.local.set({ savedConnections: savedConnections });
+            browser.storage.local.set({ savedConnections: savedConnections });
             renderSavedConnections();
         });
         
@@ -341,7 +339,7 @@ function renderVideos() {
 
 // User Actions
 showOverlayToggle.addEventListener('change', (e) => {
-    browserAPI.storage.local.set({ showPlayOverlay: e.target.checked });
+    browser.storage.local.set({ showPlayOverlay: e.target.checked });
 });
 
 masterPlayBtn.addEventListener('click', () => {
@@ -372,7 +370,7 @@ masterPlayBtn.addEventListener('click', () => {
     
     const videoPayload = { ...videoObj, url: urlToSend };
     
-    browserAPI.runtime.sendMessage({ 
+    browser.runtime.sendMessage({ 
         action: 'wsPlayOnTv', 
         video: videoPayload,
         subtitleUrl: selectedSubtitleUrl
@@ -403,7 +401,7 @@ connectBtn.addEventListener('click', () => {
         return;
     }
     
-    browserAPI.runtime.sendMessage({
+    browser.runtime.sendMessage({
         action: 'wsConnect',
         ip: ip,
         pin: pin
@@ -412,12 +410,12 @@ connectBtn.addEventListener('click', () => {
 });
 
 disconnectBtn.addEventListener('click', () => {
-    browserAPI.runtime.sendMessage({ action: 'wsDisconnect' });
+    browser.runtime.sendMessage({ action: 'wsDisconnect' });
     updateStatusUI('disconnected');
 });
 
 // Listen for updates from background
-browserAPI.runtime.onMessage.addListener((message) => {
+browser.runtime.onMessage.addListener((message) => {
     if (message.type === 'ws_status_update') {
         updateStatusUI(message.status);
     } else if (message.type === 'video_detected') {

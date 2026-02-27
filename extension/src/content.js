@@ -1,14 +1,12 @@
 // PlayBridge Unified Video Detector - Content Script
 // Receives video info from background and communicates with native app or desktop UI
 
-const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
-
 let videos = [];
 let seenUrls = new Set();
 let uiInjected = false;
 let fabVisible = true;
 
-browserAPI.storage.local.get(['showPlayOverlay'], function(result) {
+browser.storage.local.get(['showPlayOverlay'], function(result) {
     if (result.showPlayOverlay === false) {
         fabVisible = false;
     }
@@ -48,7 +46,7 @@ function injectDesktopUI() {
     // Create iframe for popup
     const popupFrame = document.createElement('iframe');
     popupFrame.id = 'playbridge-ext-popup';
-    popupFrame.src = browserAPI.runtime.getURL('ui/popup.html');
+    popupFrame.src = browser.runtime.getURL('ui/popup.html');
     popupFrame.allowTransparency = "true";
     
     // Styles
@@ -134,7 +132,7 @@ function injectDesktopUI() {
     // Hide deeply
     hideBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        browserAPI.storage.local.set({ showPlayOverlay: false });
+        browser.storage.local.set({ showPlayOverlay: false });
         fabContainer.style.display = 'none';
         popupFrame.classList.remove('visible');
     });
@@ -156,7 +154,7 @@ function injectDesktopUI() {
     uiInjected = true;
 }
 
-browserAPI.storage.onChanged.addListener((changes, area) => {
+browser.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.showPlayOverlay !== undefined) {
         fabVisible = changes.showPlayOverlay.newValue;
         const container = document.getElementById('playbridge-ext-fab-container');
@@ -174,7 +172,7 @@ browserAPI.storage.onChanged.addListener((changes, area) => {
     }
 });
 
-browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'video_detected') {
         const existingIndex = videos.findIndex(v => v.url === message.url);
 

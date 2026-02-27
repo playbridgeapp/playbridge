@@ -1,10 +1,18 @@
 {
+    "manifest_version": 2,
     "name": "PlayBridge Video Detector",
     "version": "1.0",
     "description": "Detects video URLs for PlayBridge casting",
     "icons": {
         "48": "icon.png",
         "128": "icon.png"
+    },
+    "background": {
+        "scripts": [
+            "hls-parser.js",
+            "background.js"
+        ],
+        "persistent": true
     },
     "content_scripts": [
         {
@@ -13,19 +21,26 @@
             "run_at": "document_start"
         }
     ],
+    "browser_action": {
+        "default_popup": "ui/popup.html",
+        "default_icon": "icon.png"
+    },
     "web_accessible_resources": [
-        {
-            "resources": ["ui/*", "icon.png"],
-            "matches": ["<all_urls>"]
-        }
+        "ui/*",
+        "icon.png"
     ],
     "permissions": [
         "webRequest",
+        "webRequestBlocking",
         "webNavigation",
         "storage",
-        "tabs"
-    ],
-    "host_permissions": [
+        "tabs",
         "<all_urls>"
-    ]
+    ],
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "video-detector@playbridge",
+            "strict_min_version": "102.0"
+        }
+    }
 }

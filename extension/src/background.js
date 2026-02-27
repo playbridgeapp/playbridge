@@ -6,8 +6,6 @@ if (typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWo
     importScripts("hls-parser.js");
 }
 
-// Polyfill browser API
-const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
 
 const VIDEO_CONTENT_TYPES = [
     'video/',
@@ -61,7 +59,7 @@ function cleanupTab(tabId) {
 }
 
 // Clear on tab close
-browserAPI.tabs.onRemoved.addListener((tabId) => {
+browser.tabs.onRemoved.addListener((tabId) => {
     cleanupTab(tabId);
 });
 
@@ -71,18 +69,18 @@ function handleNavigation(details) {
         console.log(`[VideoDetector BG] Clearing videos for tab ${details.tabId} due to navigation: ${details.url}`);
         cleanupTab(details.tabId);
         // Inform content script to hide/reset UI
-        browserAPI.tabs.sendMessage(details.tabId, { type: 'clear_videos' }).catch((e) => {
+        browser.tabs.sendMessage(details.tabId, { type: 'clear_videos' }).catch((e) => {
             console.log(`[VideoDetector BG] Failed to send clear_videos to tab ${details.tabId}:`, e.message);
         });
     }
 }
 
-if (browserAPI.webNavigation) {
-    if (browserAPI.webNavigation.onCommitted) {
-        browserAPI.webNavigation.onCommitted.addListener(handleNavigation);
+if (browser.webNavigation) {
+    if (browser.webNavigation.onCommitted) {
+        browser.webNavigation.onCommitted.addListener(handleNavigation);
     }
-    if (browserAPI.webNavigation.onHistoryStateUpdated) {
-        browserAPI.webNavigation.onHistoryStateUpdated.addListener(handleNavigation);
+    if (browser.webNavigation.onHistoryStateUpdated) {
+        browser.webNavigation.onHistoryStateUpdated.addListener(handleNavigation);
     }
 } else {
     console.error("[VideoDetector BG] webNavigation API is NOT available!");
@@ -124,7 +122,7 @@ function notifyContentScript(video, tabId, headers = null) {
     console.log(`[VideoDetector BG] VIDEO DETECTED tab=${tabId} (Headers: ${hasHeaders}): ${video.url.substring(0, 80)}`);
 
     if (tabId && tabId > 0) {
-        browserAPI.tabs.sendMessage(tabId, {
+        browser.tabs.sendMessage(tabId, {
             type: 'video_detected',
             ...video
         }).catch(() => {});
@@ -175,7 +173,7 @@ function processAndNotifyVideo(videoData, tabId, headers) {
 const DEBUG = true;
 
 // 1. Capture Headers
-browserAPI.webRequest.onBeforeSendHeaders.addListener(
+browser.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
         if (details.method === 'OPTIONS') return;
         
@@ -203,20 +201,9 @@ browserAPI.webRequest.onBeforeSendHeaders.addListener(
 );
 
 // 2. Confirm Video & Merge Headers
-let extraInfoSpec = ["responseHeaders"];
-// In Chrome/Edge MV3, "blocking" is not allowed in extraInfoSpec unless it's declarativeNetRequest, but we don't block.
-// However Firefox/Gecko views require blocking to call filterResponseData.
-// Let's add blocking conditionally based on whether we compiled for V2.
-// We will just handle the filterResponseData gracefully.
+let extraInfoSpec = ["responseHeaders", "blocking"];
 
-// Actually, webRequest.onHeadersReceived requires "blocking" to modify headers, but we just read them.
-// Wait, filterResponseData REQUIRES "blocking" on onHeadersReceived in Firefox.
-// So we just specify blocking here. The build process can strip it for chrome if necessary later.
-if (typeof browser !== 'undefined' && browser.webRequest && browser.webRequest.filterResponseData) {
-    extraInfoSpec.push("blocking");
-}
-
-browserAPI.webRequest.onHeadersReceived.addListener(
+browser.webRequest.onHeadersReceived.addListener(
     (details) => {
         const contentTypeHeader = details.responseHeaders?.find(
             h => h.name.toLowerCase() === 'content-type'
@@ -341,9 +328,9 @@ let reconnectTimeout = null;
 function updateWsStatus(newStatus) {
     wsStatus = newStatus;
     // Broadcast status to all tabs so popup knows
-    browserAPI.tabs.query({}).then(tabs => {
+    browser.tabs.query({}).then(tabs => {
         tabs.forEach(tab => {
-            browserAPI.tabs.sendMessage(tab.id, { type: 'ws_status_update', status: wsStatus })
+            browser.tabs.sendMessage(tab.id, { type: 'ws_status_update', status: wsStatus })
                 .catch(() => {});
         });
     });
@@ -364,7 +351,7 @@ function connectWebSocket(ip, pin) {
     playbridgePin = pin;
     
     // Save to storage
-    browserAPI.storage.local.set({ pb_ip: ip, pb_pin: pin });
+    browser.storage.local.set({ pb_ip: ip, pb_pin: pin });
     
     updateWsStatus('connecting');
     
@@ -404,7 +391,7 @@ function connectWebSocket(ip, pin) {
                 console.log('[VideoDetector BG] Unintentional disconnect, scheduling reconnect in 5s...');
                 reconnectTimeout = setTimeout(() => {
                     if (wsStatus === 'disconnected' && !intentionalDisconnect) {
-                        browserAPI.storage.local.get(['savedConnections']).then(res => {
+                        browser.storage.local.get(['savedConnections']).then(res => {
                             if (res.savedConnections && res.savedConnections.length > 0) {
                                 const lastConn = res.savedConnections[0];
                                 console.log('[VideoDetector BG] Auto-reconnecting to', lastConn.ip);
@@ -453,7 +440,7 @@ function sendTvPlayCommand(videoData) {
 }
 
 // Load saved settings
-browserAPI.storage.local.get(['pb_ip', 'pb_pin', 'savedConnections']).then(res => {
+browser.storage.local.get(['pb_ip', 'pb_pin', 'savedConnections']).then(res => {
     if (res.pb_ip) {
         // Auto connect on start if we have an IP
         connectWebSocket(res.pb_ip, res.pb_pin || '');
@@ -465,7 +452,7 @@ browserAPI.storage.local.get(['pb_ip', 'pb_pin', 'savedConnections']).then(res =
 });
 
 // Handle messages from content scripts / popups
-browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'getVideos') {
         const tabId = message.tabId || (sender.tab && sender.tab.id);
         const videos = tabId ? (tabVideos.get(tabId) || []) : [];
@@ -488,7 +475,7 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     // WS Related Messages
     if (message.action === 'wsGetStatus') {
-        browserAPI.storage.local.get(['pb_ip', 'pb_pin']).then(res => {
+        browser.storage.local.get(['pb_ip', 'pb_pin']).then(res => {
             sendResponse({ 
                 status: wsStatus, 
                 ip: res.pb_ip || '', 
@@ -513,7 +500,7 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (wsConnection) {
             wsConnection.close();
             // Clear settings so it doesn't auto-connect
-            browserAPI.storage.local.remove(['pb_ip', 'pb_pin']);
+            browser.storage.local.remove(['pb_ip', 'pb_pin']);
         }
         sendResponse({ disconnected: true });
         return true;

@@ -1,13 +1,17 @@
 :root {
-    --bg-primary: #121214;
-    --bg-secondary: #1e1e24;
-    --bg-tertiary: #2d2d36;
-    --accent: #fca311;
-    --accent-hover: #ffb703;
-    --text-main: #fcfcfc;
-    --text-muted: #a0a0ab;
-    --danger: #ef233c;
-    --success: #2a9d8f;
+    --bg-primary: #1C1B1F;
+    /* Material Background */
+    --bg-secondary: #2C2C32;
+    --bg-tertiary: #3A3A42;
+    --accent: #D0BCFF;
+    /* Purple80 */
+    --accent-hover: #E8DEF8;
+    --text-main: #E6E1E5;
+    /* onSurface */
+    --text-muted: #CAC4D0;
+    --danger: #F2B8B5;
+    /* Material M3 Error */
+    --success: #A8E6CF;
 }
 
 * {
@@ -45,7 +49,7 @@ h1 {
     font-size: 20px;
     font-weight: 700;
     margin: 0;
-    background: linear-gradient(135deg, #fca311, #ffb703);
+    background: linear-gradient(135deg, var(--accent), var(--accent-hover));
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -177,12 +181,12 @@ h3 {
 
 .video-item:hover {
     transform: translateY(-2px);
-    border-color: rgba(252, 163, 17, 0.3);
+    border-color: rgba(208, 188, 255, 0.3);
 }
 
 .video-item.selected {
     border-color: var(--accent);
-    background-color: rgba(252, 163, 17, 0.08);
+    background-color: rgba(208, 188, 255, 0.08);
 }
 
 .vid-url {
@@ -355,12 +359,12 @@ button {
 }
 
 .action-btn.play {
-    background-color: rgba(252, 163, 17, 0.15);
+    background-color: rgba(208, 188, 255, 0.15);
     color: var(--accent);
 }
 
 .action-btn.play:hover {
-    background-color: rgba(252, 163, 17, 0.25);
+    background-color: rgba(208, 188, 255, 0.25);
 }
 
 /* Status Indicator */
@@ -395,12 +399,12 @@ button {
 @keyframes pulse {
     from {
         opacity: 0.5;
-        box-shadow: 0 0 0 rgba(252, 163, 17, 0);
+        box-shadow: 0 0 0 rgba(208, 188, 255, 0);
     }
 
     to {
         opacity: 1;
-        box-shadow: 0 0 8px rgba(252, 163, 17, 0.6);
+        box-shadow: 0 0 8px rgba(208, 188, 255, 0.6);
     }
 }
 
@@ -486,6 +490,7 @@ input:checked+.slider {
 input:checked+.slider:before {
     transform: translateX(16px);
 }
+
 /* Saved Connections */
 .saved-connections-list {
     display: flex;
