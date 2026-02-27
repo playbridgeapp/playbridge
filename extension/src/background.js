@@ -344,7 +344,12 @@ function connectWebSocket(ip, pin) {
     }
 
     if (wsConnection) {
+        // Prevent the old connection's onclose from interpreting this as a disconnect
+        // that should wipe out the new connection we are about to create.
+        wsConnection.onclose = null;
+        wsConnection.onerror = null;
         wsConnection.close();
+        wsConnection = null;
     }
     
     playbridgeIp = ip;
@@ -470,6 +475,20 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
             requestHeadersMap.clear();
         }
         sendResponse({ cleared: true });
+        return true;
+    }
+
+    if (message.action === 'getCurrentTabUrl') {
+        // If message comes from a content script/iframe, we can just use the sender's tab url
+        if (sender.tab && sender.tab.url) {
+            sendResponse({ url: sender.tab.url });
+        } else {
+            // Otherwise query the active tab
+            browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+                const currentTab = tabs[0];
+                sendResponse({ url: currentTab ? currentTab.url : null });
+            }).catch(() => sendResponse({ url: null }));
+        }
         return true;
     }
     

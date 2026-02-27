@@ -170,9 +170,14 @@ function renderSavedConnections() {
         item.addEventListener('click', () => {
             tvIpInput.value = conn.ip;
             tvPinInput.value = conn.pin;
-            if (!connectBtn.classList.contains('hidden')) {
-                connectBtn.click();
-            }
+            
+            // Connect directly
+            browser.runtime.sendMessage({
+                action: 'wsConnect',
+                ip: conn.ip,
+                pin: conn.pin
+            });
+            updateStatusUI('connecting');
         });
         
         // Delete connection
@@ -347,9 +352,57 @@ showOverlayToggle.addEventListener('change', (e) => {
     browser.storage.local.set({ showPlayOverlay: e.target.checked });
 });
 
-masterPlayBtn.addEventListener('click', () => {
+// Utility to wait for connection
+function ensureConnected() {
+    return new Promise((resolve) => {
+        // We know that if a user just clicked connect, they want to connect.
+        // Even if it says "Disconnected", it might be an intermediate state 
+        // because bg script closes the old connection and emits 'disconnected' first.
+
+        if (statusText.textContent === 'Connected') {
+            resolve(true);
+            return;
+        }
+        
+        // Wait up to 3 seconds for connection regardless of current text, 
+        // as we might be in the middle of a disconnect-then-reconnect cycle
+        let timeout;
+        
+        const listener = (message) => {
+            if (message.type === 'ws_status_update') {
+                if (message.status === 'connected') {
+                    browser.runtime.onMessage.removeListener(listener);
+                    clearTimeout(timeout);
+                    resolve(true);
+                }
+                // We IGNORE 'disconnected' and 'connecting' events here, 
+                // we ONLY care if it successfully connects within 3s.
+                // If it fails to connect, the 3s timeout will catch it.
+            }
+        };
+        
+        browser.runtime.onMessage.addListener(listener);
+        
+        timeout = setTimeout(() => {
+            browser.runtime.onMessage.removeListener(listener);
+            resolve(statusText.textContent === 'Connected');
+        }, 3000);
+    });
+}
+
+masterPlayBtn.addEventListener('click', async () => {
     if (!selectedVideoUrl) {
         showToast('Please select a video first');
+        return;
+    }
+    
+    // Wait for connection if currently connecting
+    if (statusText.textContent === 'Connecting...') {
+        showToast('Waiting for TV to connect...');
+    }
+    const isConnected = await ensureConnected();
+    if (!isConnected) {
+        showToast('Please connect to TV first');
         return;
     }
     
@@ -385,7 +438,6 @@ masterPlayBtn.addEventListener('click', () => {
         } else {
             if (res && res.reason === "Not connected to TV") {
                 showToast('Please connect to TV first');
-                document.querySelector('.tab-btn[data-tab="settings"]').click();
             } else {
                 showToast('Error: ' + (res?.reason || 'Unknown'));
             }
@@ -393,36 +445,55 @@ masterPlayBtn.addEventListener('click', () => {
     }).catch(err => console.error("Error sending play command:", err));
 });
 
-openCurrentTabBtn.addEventListener('click', () => {
-    browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
-        const currentTab = tabs[0];
-        if (currentTab && currentTab.url) {
+openCurrentTabBtn.addEventListener('click', async () => {
+    // Wait for connection if currently connecting
+    if (statusText.textContent === 'Connecting...') {
+        showToast('Waiting for TV to connect...');
+    }
+    const isConnected = await ensureConnected();
+    if (!isConnected) {
+        showToast('Please connect to TV first');
+        return;
+    }
+
+    browser.runtime.sendMessage({ action: 'getCurrentTabUrl' }).then(res => {
+        const url = res?.url;
+        if (url) {
             browser.runtime.sendMessage({
                 action: 'wsSendToTv',
-                url: currentTab.url,
+                url: url,
                 target: 'browser'
-            }).then(res => {
-                if (res && res.success) {
+            }).then(sendRes => {
+                if (sendRes && sendRes.success) {
                     showToast('Opening tab on TV');
                 } else {
-                    if (res && res.reason === "Not connected to TV") {
+                    if (sendRes && sendRes.reason === "Not connected to TV") {
                         showToast('Please connect to TV first');
-                        document.querySelector('.tab-btn[data-tab="settings"]').click();
                     } else {
-                        showToast('Error: ' + (res?.reason || 'Unknown'));
+                        showToast('Error: ' + (sendRes?.reason || 'Unknown'));
                     }
                 }
             }).catch(err => console.error("Error sending open command:", err));
         } else {
             showToast('Cannot get current tab URL');
         }
-    }).catch(err => console.error("Error querying tabs:", err));
+    }).catch(err => console.error("Error asking bg for tab url:", err));
 });
 
-openUrlBrowserBtn.addEventListener('click', () => {
+openUrlBrowserBtn.addEventListener('click', async () => {
     const url = customUrlInput.value.trim();
     if (!url) {
         showToast('Please enter a URL');
+        return;
+    }
+    
+    // Wait for connection if currently connecting
+    if (statusText.textContent === 'Connecting...') {
+        showToast('Waiting for TV to connect...');
+    }
+    const isConnected = await ensureConnected();
+    if (!isConnected) {
+        showToast('Please connect to TV first');
         return;
     }
     
@@ -436,7 +507,6 @@ openUrlBrowserBtn.addEventListener('click', () => {
         } else {
             if (res && res.reason === "Not connected to TV") {
                 showToast('Please connect to TV first');
-                document.querySelector('.tab-btn[data-tab="settings"]').click();
             } else {
                 showToast('Error: ' + (res?.reason || 'Unknown'));
             }
@@ -444,10 +514,20 @@ openUrlBrowserBtn.addEventListener('click', () => {
     }).catch(err => console.error("Error sending open command:", err));
 });
 
-openUrlPlayerBtn.addEventListener('click', () => {
+openUrlPlayerBtn.addEventListener('click', async () => {
     const url = customUrlInput.value.trim();
     if (!url) {
         showToast('Please enter a URL');
+        return;
+    }
+    
+    // Wait for connection if currently connecting
+    if (statusText.textContent === 'Connecting...') {
+        showToast('Waiting for TV to connect...');
+    }
+    const isConnected = await ensureConnected();
+    if (!isConnected) {
+        showToast('Please connect to TV first');
         return;
     }
     
@@ -461,7 +541,6 @@ openUrlPlayerBtn.addEventListener('click', () => {
         } else {
             if (res && res.reason === "Not connected to TV") {
                 showToast('Please connect to TV first');
-                document.querySelector('.tab-btn[data-tab="settings"]').click();
             } else {
                 showToast('Error: ' + (res?.reason || 'Unknown'));
             }
