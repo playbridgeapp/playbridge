@@ -31,7 +31,8 @@ data class AudioTrack(
 data class HlsPlaylist(
     val videoQualities: List<VideoQuality>,
     val audioTracks: List<AudioTrack> = emptyList(),
-    val masterPlaylistUrl: String
+    val masterPlaylistUrl: String,
+    val segmentPrefixes: Set<String> = emptySet()
 )
 
 /**
@@ -68,6 +69,7 @@ object HlsParser {
 
             val videoQualities = mutableListOf<VideoQuality>()
             val audioTracks = mutableListOf<AudioTrack>()
+            val segmentPrefixes = mutableSetOf<String>()
 
             // Split by lines and process
             val lines = content.lines()
@@ -128,8 +130,8 @@ object HlsParser {
                     currentFrameRate = Regex("FRAME-RATE=([\\d\\.]+)").find(attributes)?.groupValues?.get(1)
                     
                 } else if (!line.startsWith("#") && line.isNotEmpty()) {
-                    // This is a URI line following a stream info tag
                     if (currentBandwidth != null) {
+                        // This is a URI line following a stream info tag (a variant playlist)
                         val variantUrl = resolveUrl(masterPlaylistUrl, line)
                         
                         // Create quality label
@@ -155,6 +157,13 @@ object HlsParser {
                         currentCodecs = null
                         currentAudioGroup = null
                         currentFrameRate = null
+                    } else {
+                        // This is a URI line NOT following stream info, likely a media segment
+                        val segmentUrl = resolveUrl(masterPlaylistUrl, line)
+                        val prefix = segmentUrl.substringBeforeLast("/") + "/"
+                        if (prefix.startsWith("http")) {
+                            segmentPrefixes.add(prefix)
+                        }
                     }
                 }
             }
@@ -162,11 +171,11 @@ object HlsParser {
             // Sort by bandwidth descending (highest quality first)
             videoQualities.sortByDescending { it.bandwidth }
             
-            HlsPlaylist(videoQualities, audioTracks, masterPlaylistUrl)
+            HlsPlaylist(videoQualities, audioTracks, masterPlaylistUrl, segmentPrefixes)
             
         } catch (e: Exception) {
             e.printStackTrace()
-            HlsPlaylist(emptyList(), emptyList(), masterPlaylistUrl)
+            HlsPlaylist(emptyList(), emptyList(), masterPlaylistUrl, emptySet())
         }
     }
 

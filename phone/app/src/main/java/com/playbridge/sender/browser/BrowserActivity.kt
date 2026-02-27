@@ -290,10 +290,10 @@ class BrowserActivity : ComponentActivity() {
             // Video detection state — per-tab
             var showVideoSheet by remember { mutableStateOf(false) }
             val detectedVideos by remember(selectedTabId) {
-                derivedStateOf { VideoDetector.getVideosForTab(selectedTabId ?: "") }
+                derivedStateOf { VideoDetector.getVideosForTab(selectedTabId ?: "").toList() }
             }
             val videoCount by remember(selectedTabId) {
-                derivedStateOf { VideoDetector.getVideoCountForTab(selectedTabId ?: "") }
+                derivedStateOf { detectedVideos.count { !it.isSubtitle } }
             }
             
             // TV active context - updated via WebSocket messages from TV

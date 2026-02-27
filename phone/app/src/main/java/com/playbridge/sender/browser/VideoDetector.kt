@@ -33,7 +33,8 @@ data class DetectedVideo(
     var qualitiesChecked: Boolean = false,
     var hlsPlaylist: HlsPlaylist? = null,
     var subtitlePreview: String? = null,
-    var subtitlePreviewChecked: Boolean = false
+    var subtitlePreviewChecked: Boolean = false,
+    var isPlayable: Boolean? = null
 ) {
     val isSubtitle: Boolean
         get() = contentType?.contains("vtt", ignoreCase = true) == true ||
@@ -97,9 +98,9 @@ object VideoDetector {
             "video_detected" -> {
                 val url = message["url"]?.jsonPrimitive?.content ?: return
                 
-                // Check if URL is ignored
-                if (ignoredUrls.contains(url)) {
-                    Log.d(TAG, "Ignoring video URL: $url")
+                // Check if URL is in exact ignore list or starts with an ignored segment prefix
+                if (ignoredUrls.contains(url) || ignoredUrls.any { url.startsWith(it) }) {
+                    Log.d(TAG, "Ignoring video URL (matched blocklist or segment prefix): $url")
                     return
                 }
                 
@@ -176,15 +177,26 @@ object VideoDetector {
                 connection.readTimeout = 5000
                 connection.instanceFollowRedirects = true
                 
-                // Set user agent to avoid being blocked
+                // Set user agent and apply captured headers (crucial for auth/cookies)
                 connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
+                video.headers?.forEach { (key, value) ->
+                    connection.setRequestProperty(key, value)
+                }
                 
                 connection.connect()
                 
                 val contentLength = connection.contentLengthLong
+                val responseCode = connection.responseCode
                 connection.disconnect()
                 
-                video.fileSize = if (contentLength > 0) contentLength else null
+                if (responseCode in 200..299) {
+                    video.isPlayable = true
+                    video.fileSize = if (contentLength > 0) contentLength else null
+                } else {
+                    video.isPlayable = false
+                    Log.w(TAG, "Video unplayable: HTTP $responseCode for ${video.url}")
+                }
+                
                 video.fileSizeChecked = true
                 
                 Log.d(TAG, "File size for ${video.url.take(50)}: ${video.fileSize ?: "unknown"}")
@@ -377,7 +389,28 @@ object VideoDetector {
                     video.qualities = playlist.videoQualities
                     video.qualitiesChecked = true
                     
+                    if (playlist.segmentPrefixes.isNotEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            ignoredUrls.addAll(playlist.segmentPrefixes)
+                            
+                            // Remove any already detected videos that are actually segments
+                            val prefixes = playlist.segmentPrefixes
+                            if (kotlinTabId != null) {
+                                tabVideos[kotlinTabId]?.removeAll { detected ->
+                                    prefixes.any { detected.url.startsWith(it) }
+                                }
+                            } else {
+                                for ((_, videos) in tabVideos) {
+                                    videos.removeAll { detected ->
+                                        prefixes.any { detected.url.startsWith(it) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (playlist.videoQualities.isNotEmpty()) {
+                        video.isPlayable = true
                         withContext(Dispatchers.Main) {
                             // Add variants to ignore list
                             playlist.videoQualities.forEach { quality ->
@@ -399,6 +432,9 @@ object VideoDetector {
                                 }
                             }
                         }
+                    } else if (playlist.segmentPrefixes.isNotEmpty()) {
+                        // It's a media playlist directly (no variants), so it is playable
+                        video.isPlayable = true
                     }
                     
                     Log.d(TAG, "Fetched ${playlist.videoQualities.size} qualities for ${video.url}")
@@ -409,7 +445,8 @@ object VideoDetector {
                     emptyList()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching HLS qualities: ${e.message}")
+                Log.e(TAG, "Error fetching HLS qualities for ${video.url}: ${e.message}")
+                video.isPlayable = false
                 video.qualitiesChecked = true
                 emptyList()
             }

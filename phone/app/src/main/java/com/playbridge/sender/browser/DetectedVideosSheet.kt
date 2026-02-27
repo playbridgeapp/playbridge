@@ -51,8 +51,24 @@ fun DetectedVideosSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
     
-    // Separate distinct videos and subtitles
-    val playableVideos = remember(videos) { videos.filter { !it.isSubtitle } }
+    // Separate distinct videos and subtitles, and sort videos by priority
+    val playableVideos = remember(videos) { 
+        videos.filter { !it.isSubtitle }
+              .sortedByDescending { video ->
+                  when {
+                      // Score 5: HLS with multiple variants (Master Playlist)
+                      video.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
+                      // Score 4: Playable stream (HLS/DASH)
+                      video.isPlayable == true && (video.url.contains(".m3u8", ignoreCase = true) || video.url.contains(".mpd", ignoreCase = true)) -> 4
+                      // Score 3: Playable normal video
+                      video.isPlayable == true -> 3
+                      // Score 2: Unchecked status
+                      video.isPlayable == null -> 2
+                      // Score 1: Verified unplayable (dead link, 403, etc)
+                      else -> 1
+                  }
+              }
+    }
     val allSubtitles = remember(videos) { videos.filter { it.isSubtitle } }
     
     ModalBottomSheet(
