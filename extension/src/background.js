@@ -335,6 +335,8 @@ let playbridgePin = null;
 
 // Status values: disconnected, connecting, connected
 let wsStatus = 'disconnected'; 
+let intentionalDisconnect = false;
+let reconnectTimeout = null;
 
 function updateWsStatus(newStatus) {
     wsStatus = newStatus;
@@ -348,6 +350,12 @@ function updateWsStatus(newStatus) {
 }
 
 function connectWebSocket(ip, pin) {
+    intentionalDisconnect = false;
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+    }
+
     if (wsConnection) {
         wsConnection.close();
     }
@@ -391,6 +399,21 @@ function connectWebSocket(ip, pin) {
             console.log('[VideoDetector BG] WS Disconnected');
             updateWsStatus('disconnected');
             wsConnection = null;
+            
+            if (!intentionalDisconnect) {
+                console.log('[VideoDetector BG] Unintentional disconnect, scheduling reconnect in 5s...');
+                reconnectTimeout = setTimeout(() => {
+                    if (wsStatus === 'disconnected' && !intentionalDisconnect) {
+                        browserAPI.storage.local.get(['savedConnections']).then(res => {
+                            if (res.savedConnections && res.savedConnections.length > 0) {
+                                const lastConn = res.savedConnections[0];
+                                console.log('[VideoDetector BG] Auto-reconnecting to', lastConn.ip);
+                                connectWebSocket(lastConn.ip, lastConn.pin || '');
+                            }
+                        });
+                    }
+                }, 5000);
+            }
         };
         
         wsConnection.onerror = (e) => {
@@ -430,10 +453,14 @@ function sendTvPlayCommand(videoData) {
 }
 
 // Load saved settings
-browserAPI.storage.local.get(['pb_ip', 'pb_pin']).then(res => {
+browserAPI.storage.local.get(['pb_ip', 'pb_pin', 'savedConnections']).then(res => {
     if (res.pb_ip) {
         // Auto connect on start if we have an IP
         connectWebSocket(res.pb_ip, res.pb_pin || '');
+    } else if (res.savedConnections && res.savedConnections.length > 0) {
+        const lastConn = res.savedConnections[0];
+        console.log('[VideoDetector BG] Using last saved connection on startup:', lastConn.ip);
+        connectWebSocket(lastConn.ip, lastConn.pin || '');
     }
 });
 
@@ -478,6 +505,11 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     
     if (message.action === 'wsDisconnect') {
+        intentionalDisconnect = true;
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+        }
         if (wsConnection) {
             wsConnection.close();
             // Clear settings so it doesn't auto-connect
