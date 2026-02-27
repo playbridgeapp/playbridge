@@ -30,6 +30,7 @@ let videoItems = [];
 let subtitleItems = [];
 let selectedVideoUrl = null;
 let selectedSubtitleUrl = null;
+let savedConnections = [];
 
 // Navigation
 tabBtns.forEach(btn => {
@@ -62,15 +63,35 @@ function showToast(msg) {
 
 // Background Communication
 function loadVideos() {
-    // Since this runs in an iframe injected into the content page,
-    // we can simply send a message to the background script.
-    // The background script will use sender.tab.id automatically.
-    browserAPI.runtime.sendMessage({ action: 'getVideos' }).then(response => {
-        if (response) {
-            currentVideos = response.videos || [];
-            renderVideos();
-        }
-    }).catch(err => console.error("Error loading videos:", err));
+    if (browserAPI.tabs && browserAPI.tabs.query) {
+        browserAPI.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+            const currentTab = tabs[0];
+            const msg = { action: 'getVideos' };
+            if (currentTab) msg.tabId = currentTab.id;
+            
+            browserAPI.runtime.sendMessage(msg).then(response => {
+                if (response) {
+                    currentVideos = response.videos || [];
+                    renderVideos();
+                }
+            }).catch(err => console.error("Error loading videos:", err));
+        }).catch(() => {
+            // Fallback for Firefox if tabs.query fails in some context
+            browserAPI.runtime.sendMessage({ action: 'getVideos' }).then(response => {
+                if (response) {
+                    currentVideos = response.videos || [];
+                    renderVideos();
+                }
+            });
+        });
+    } else {
+        browserAPI.runtime.sendMessage({ action: 'getVideos' }).then(response => {
+            if (response) {
+                currentVideos = response.videos || [];
+                renderVideos();
+            }
+        }).catch(err => console.error("Error loading videos:", err));
+    }
 }
 
 function loadStatus() {
@@ -82,8 +103,8 @@ function loadStatus() {
         }
     });
     
-    // Load UI visibility state
-    browserAPI.storage.local.get(['showPlayOverlay'], function(result) {
+    // Load UI visibility state and saved connections
+    browserAPI.storage.local.get(['showPlayOverlay', 'savedConnections'], function(result) {
         if (result.showPlayOverlay !== undefined) {
             showOverlayToggle.checked = result.showPlayOverlay;
         } else {
@@ -91,10 +112,78 @@ function loadStatus() {
             showOverlayToggle.checked = true;
             browserAPI.storage.local.set({ showPlayOverlay: true });
         }
+        
+        if (result.savedConnections) {
+            savedConnections = result.savedConnections;
+            renderSavedConnections();
+        }
     });
 }
 
+function saveConnection(ip, pin) {
+    // Remove if already exists to move to top
+    savedConnections = savedConnections.filter(c => !(c.ip === ip && c.pin === pin));
+    
+    // Add to top
+    savedConnections.unshift({ ip, pin });
+    
+    // Keep only last 5
+    if (savedConnections.length > 5) {
+        savedConnections = savedConnections.slice(0, 5);
+    }
+    
+    browserAPI.storage.local.set({ savedConnections: savedConnections });
+    renderSavedConnections();
+}
+
 // UI Renderers
+function renderSavedConnections() {
+    const container = document.getElementById('saved-connections-container');
+    const list = document.getElementById('saved-connections-list');
+    
+    if (!savedConnections || savedConnections.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+    
+    container.style.display = 'block';
+    list.innerHTML = '';
+    
+    savedConnections.forEach((conn, index) => {
+        const item = document.createElement('div');
+        item.className = 'saved-connection-item';
+        
+        item.innerHTML = `
+            <div class="saved-connection-info">
+                <span class="saved-connection-ip">${conn.ip}</span>
+                <span class="saved-connection-pin">PIN: ${conn.pin ? '*'.repeat(conn.pin.length) : 'None'}</span>
+            </div>
+            <button class="delete-connection-btn" title="Remove connection">
+                <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 24 24" width="18" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+            </button>
+        `;
+        
+        // Auto-fill and connect on click
+        item.addEventListener('click', () => {
+            tvIpInput.value = conn.ip;
+            tvPinInput.value = conn.pin;
+            if (!connectBtn.classList.contains('hidden')) {
+                connectBtn.click();
+            }
+        });
+        
+        // Delete connection
+        item.querySelector('.delete-connection-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            savedConnections.splice(index, 1);
+            browserAPI.storage.local.set({ savedConnections: savedConnections });
+            renderSavedConnections();
+        });
+        
+        list.appendChild(item);
+    });
+}
+
 function updateStatusUI(status) {
     statusDot.className = `dot mx-${status}`;
     
@@ -105,6 +194,11 @@ function updateStatusUI(status) {
         disconnectBtn.classList.remove('hidden');
         tvIpInput.disabled = true;
         tvPinInput.disabled = true;
+        
+        // Save successful connection
+        if (tvIpInput.value && tvPinInput.value) {
+            saveConnection(tvIpInput.value, tvPinInput.value);
+        }
     } else if (status === 'connecting') {
         statusText.textContent = 'Connecting...';
         statusText.style.color = 'var(--accent)';
@@ -304,6 +398,11 @@ connectBtn.addEventListener('click', () => {
         return;
     }
     
+    if (!pin) {
+        showToast('PIN is required');
+        return;
+    }
+    
     browserAPI.runtime.sendMessage({
         action: 'wsConnect',
         ip: ip,
@@ -324,6 +423,18 @@ browserAPI.runtime.onMessage.addListener((message) => {
     } else if (message.type === 'video_detected') {
         // Reload videos if a new one is detected while popup is open
         loadVideos();
+    }
+});
+
+// Listen for updates from the content script (iframe parent)
+window.addEventListener('message', (event) => {
+    if (event.data && event.data.action === 'pb_videos_cleared') {
+        currentVideos = [];
+        videoItems = [];
+        subtitleItems = [];
+        selectedVideoUrl = null;
+        selectedSubtitleUrl = null;
+        renderVideos();
     }
 });
 

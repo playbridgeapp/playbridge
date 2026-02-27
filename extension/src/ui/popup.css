@@ -486,3 +486,62 @@ input:checked+.slider {
 input:checked+.slider:before {
     transform: translateX(16px);
 }
+/* Saved Connections */
+.saved-connections-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.saved-connection-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.saved-connection-item:hover {
+    border-color: var(--accent);
+    background-color: #363640;
+}
+
+.saved-connection-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.saved-connection-ip {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.saved-connection-pin {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.delete-connection-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.delete-connection-btn:hover {
+    color: var(--danger);
+    background-color: rgba(239, 35, 60, 0.1);
+}

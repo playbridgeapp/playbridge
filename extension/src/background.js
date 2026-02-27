@@ -66,23 +66,35 @@ browserAPI.tabs.onRemoved.addListener((tabId) => {
 });
 
 // Clear on navigation to a new page in the same tab
-if (browserAPI.webNavigation && browserAPI.webNavigation.onCommitted) {
-    browserAPI.webNavigation.onCommitted.addListener((details) => {
-        if (details.frameId === 0) { // Main frame only
-            cleanupTab(details.tabId);
-            // Inform content script to hide/reset UI
-            browserAPI.tabs.sendMessage(details.tabId, { type: 'clear_videos' }).catch(() => {});
-            
-            // Update global storage if needed
-            const allVideos = [];
-            for (const [, vids] of tabVideos) allVideos.push(...vids);
-            browserAPI.storage.local.set({
-                detectedVideos: allVideos,
-                lastUpdate: Date.now(),
-                count: allVideos.length
-            });
-        }
-    });
+function handleNavigation(details) {
+    if (details.frameId === 0) { // Main frame only
+        console.log(`[VideoDetector BG] Clearing videos for tab ${details.tabId} due to navigation: ${details.url}`);
+        cleanupTab(details.tabId);
+        // Inform content script to hide/reset UI
+        browserAPI.tabs.sendMessage(details.tabId, { type: 'clear_videos' }).catch((e) => {
+            console.log(`[VideoDetector BG] Failed to send clear_videos to tab ${details.tabId}:`, e.message);
+        });
+        
+        // Update global storage if needed
+        const allVideos = [];
+        for (const [, vids] of tabVideos) allVideos.push(...vids);
+        browserAPI.storage.local.set({
+            detectedVideos: allVideos,
+            lastUpdate: Date.now(),
+            count: allVideos.length
+        });
+    }
+}
+
+if (browserAPI.webNavigation) {
+    if (browserAPI.webNavigation.onCommitted) {
+        browserAPI.webNavigation.onCommitted.addListener(handleNavigation);
+    }
+    if (browserAPI.webNavigation.onHistoryStateUpdated) {
+        browserAPI.webNavigation.onHistoryStateUpdated.addListener(handleNavigation);
+    }
+} else {
+    console.error("[VideoDetector BG] webNavigation API is NOT available!");
 }
 
 function notifyContentScript(video, tabId, headers = null) {
@@ -221,6 +233,17 @@ browserAPI.webRequest.onHeadersReceived.addListener(
         const storedData = requestHeadersMap.get(details.requestId);
 
         if (contentTypeHeader) {
+            // Prevent spam from range requests. If already processed fully, ignore.
+            const captured = getTabHeadersCaptured(details.tabId);
+            const seen = getTabSeenUrls(details.tabId);
+            
+            if (seen.has(details.url)) {
+                if (captured.has(details.url) || !storedData) {
+                    if (storedData) requestHeadersMap.delete(details.requestId);
+                    return;
+                }
+            }
+
             let isVideo = false;
             let detectedBy = 'unknown';
 

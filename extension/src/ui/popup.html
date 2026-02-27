@@ -19,6 +19,7 @@
         <div class="tabs">
             <button class="tab-btn active" data-tab="videos">Videos</button>
             <button class="tab-btn" data-tab="subtitles">Subtitles</button>
+            <button class="tab-btn" data-tab="connections">Connections</button>
             <button class="tab-btn" data-tab="settings">Settings</button>
         </div>
     </div>
@@ -50,8 +51,8 @@
             </div>
         </div>
 
-        <!-- Settings Tab -->
-        <div id="settings-tab" class="tab-content">
+        <!-- Connections Tab -->
+        <div id="connections-tab" class="tab-content">
             <div class="settings-card">
                 <h2>Connect to TV</h2>
                 <p class="subtitle">Enter the IP shown on your PlayBridge TV app</p>
@@ -62,19 +63,8 @@
                 </div>
                 
                 <div class="input-group">
-                    <label>PIN (Optional)</label>
-                    <input type="text" id="tv-pin" placeholder="0000">
-                </div>
-                
-                <div class="input-group toggle-group" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-                    <div>
-                        <label for="show-overlay-toggle" style="margin-bottom: 2px;">Show 'Play' Overlay</label>
-                        <span style="font-size: 10px; color: var(--text-muted);">Injects floating button on valid pages</span>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" id="show-overlay-toggle" checked>
-                        <span class="slider round"></span>
-                    </label>
+                    <label>PIN (Required)</label>
+                    <input type="password" id="tv-pin" placeholder="0000">
                 </div>
                 
                 <button id="connect-btn" class="primary-btn">Connect</button>
@@ -86,6 +76,31 @@
                 <div class="status-indicator">
                     <span id="status-dot" class="dot mx-disconnected"></span>
                     <span id="status-text">Disconnected</span>
+                </div>
+            </div>
+
+            <div class="settings-card" id="saved-connections-container" style="display: none;">
+                <h3>Recent Connections</h3>
+                <div id="saved-connections-list" class="saved-connections-list">
+                    <!-- Connections injected here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div id="settings-tab" class="tab-content">
+            <div class="settings-card">
+                <h2>Extension Settings</h2>
+                
+                <div class="input-group toggle-group" style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+                    <div>
+                        <label for="show-overlay-toggle" style="margin-bottom: 2px;">Show 'Play' Overlay</label>
+                        <span style="font-size: 10px; color: var(--text-muted);">Injects floating button on valid pages</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="show-overlay-toggle" checked>
+                        <span class="slider round"></span>
+                    </label>
                 </div>
             </div>
         </div>

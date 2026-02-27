@@ -2,8 +2,8 @@ const fs = require('fs');
 const path = require('path');
 
 const target = process.argv[2];
-if (!['android', 'firefox', 'chrome'].includes(target)) {
-    console.error('Usage: node build.js [android|firefox|chrome]');
+if (!['firefox', 'chrome'].includes(target)) {
+    console.error('Usage: node build.js [firefox|chrome]');
     process.exit(1);
 }
 
@@ -38,7 +38,7 @@ for (const file of fs.readdirSync(srcDir)) {
 // 2. Process manifest
 const baseManifest = JSON.parse(fs.readFileSync(path.join(srcDir, 'manifest.json'), 'utf8'));
 
-if (target === 'android' || target === 'firefox') {
+if (target === 'firefox') {
     // Manifest V2 for GeckoView / Firefox
     baseManifest.manifest_version = 2;
     baseManifest.background = {
