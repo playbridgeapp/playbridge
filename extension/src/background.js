@@ -144,20 +144,36 @@ function processAndNotifyVideo(videoData, tabId, headers) {
     } 
     // If it's a subtitle, fetch a small preview of the text
     else if (videoData.detectedBy === 'subtitle_extension' || videoData.url.endsWith('.srt') || videoData.url.endsWith('.vtt')) {
-        fetch(videoData.url, { method: 'GET', headers: { 'Range': 'bytes=0-500' } })
+        fetch(videoData.url, { method: 'GET', headers: { 'Range': 'bytes=0-1500' } })
             .then(res => res.text())
             .then(text => {
-                // Clean up WebVTT headers and timestamps to get just a bit of readable text
-                let preview = text.replace(/WEBVTT[\s\S]*?(?=\r?\n\r?\n)/i, '') // Remove WEBVTT header
-                                  .replace(/[\d:,]+ --> [\d:,]+[^\n]*\n/g, '') // Remove timestamps
-                                  .replace(/<[^>]+>/g, '') // Remove tags like <i>
-                                  .replace(/^\s*\d+\s*$/gm, '') // Remove sequence numbers
-                                  .replace(/\r?\n|\r/g, ' ') // Flatten to single line
-                                  .trim()
-                                  .substring(0, 80);
-                                  
-                if (preview.length > 0) {
-                    videoData.subtitlePreview = preview + "...";
+                // Split lines
+                const lines = text.split(/\r?\n/);
+                const validLines = [];
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    // Skip empty lines
+                    if (!line) continue;
+                    // Skip WEBVTT header
+                    if (line === 'WEBVTT' || line.startsWith('Kind:') || line.startsWith('Language:')) continue;
+                    // Skip sequence numbers (just digits)
+                    if (/^\d+$/.test(line)) continue;
+                    // Skip timestamps (e.g. 00:00:20,000 --> 00:00:24,400 or 00:00.000 --> ...)
+                    if (line.includes('-->')) continue;
+                    
+                    // It's a text line, strip HTML tags (like <i>, <b>, <font>)
+                    const cleanLine = line.replace(/<[^>]+>/g, '').trim();
+                    if (cleanLine) {
+                        validLines.push(cleanLine);
+                    }
+                    
+                    // Allow up to 6 lines of preview
+                    if (validLines.length >= 6) break;
+                }
+                
+                if (validLines.length > 0) {
+                    videoData.subtitlePreview = validLines.join(' • ') + "...";
                 }
                 notifyContentScript(videoData, tabId, headers);
             })
