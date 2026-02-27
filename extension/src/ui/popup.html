@@ -17,10 +17,26 @@
             </div>
         </div>
         <div class="tabs">
-            <button class="tab-btn active" data-tab="videos">Videos</button>
-            <button class="tab-btn" data-tab="subtitles">Subtitles</button>
-            <button class="tab-btn" data-tab="connections">Connections</button>
-            <button class="tab-btn" data-tab="settings">Settings</button>
+            <button class="tab-btn active" data-tab="videos" title="Videos">
+                <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+                <span class="tab-text">Videos</span>
+            </button>
+            <button class="tab-btn" data-tab="subtitles" title="Subtitles">
+                <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12zm-2-9H10v2h8V7zm0 4H10v2h8v-2z"/></svg>
+                <span class="tab-text">Subtitles</span>
+            </button>
+            <button class="tab-btn" data-tab="urls" title="URLs">
+                <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>
+                <span class="tab-text">URLs</span>
+            </button>
+            <button class="tab-btn" data-tab="connections" title="Connections">
+                <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M21 3H3c-1.11 0-2 .89-2 2v12c0 1.1.89 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.11-.9-2-2-2zm0 14H3V5h18v12zm-5-6l-7 4V7z"/></svg>
+                <span class="tab-text">Connections</span>
+            </button>
+            <button class="tab-btn" data-tab="settings" title="Settings">
+                <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.06-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.73,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.06,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.49-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+                <span class="tab-text">Settings</span>
+            </button>
         </div>
     </div>
 
@@ -48,6 +64,29 @@
             
             <div id="subtitles-list" class="videos-list hidden">
                 <!-- Subtitle items injected via JS -->
+            </div>
+        </div>
+
+        <!-- URLs Tab -->
+        <div id="urls-tab" class="tab-content">
+            <div class="settings-card">
+                <h2>Open URL on TV</h2>
+                <p class="subtitle">Send URLs to the TV's browser or video player</p>
+
+                <button id="open-current-tab-btn" class="primary-btn" style="margin-bottom: 20px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20" fill="currentColor" style="margin-right: 6px; vertical-align: middle;"><path d="M0 0h24v24H0z" fill="none"/><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h4v-2H5V8h14v10h-4v2h4c1.1 0 2-.9 2-2V6c0-1.1-.89-2-2-2zm-7 6l-4 4h3v6h2v-6h3l-4-4z"/></svg>
+                    <span style="vertical-align: middle;">Open Current Tab on TV</span>
+                </button>
+
+                <div class="input-group">
+                    <label>Custom URL</label>
+                    <input type="text" id="custom-url-input" placeholder="https://example.com/video">
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button id="open-url-browser-btn" class="secondary-btn" style="flex: 1;">Open in Browser</button>
+                    <button id="open-url-player-btn" class="secondary-btn" style="flex: 1;">Play in Player</button>
+                </div>
             </div>
         </div>
 

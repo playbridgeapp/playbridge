@@ -11,6 +11,11 @@ const noSubtitlesMsg = document.getElementById('no-subtitles-msg');
 const masterPlayBtn = document.getElementById('master-play-btn');
 const actionBar = document.getElementById('action-bar');
 
+const openCurrentTabBtn = document.getElementById('open-current-tab-btn');
+const customUrlInput = document.getElementById('custom-url-input');
+const openUrlBrowserBtn = document.getElementById('open-url-browser-btn');
+const openUrlPlayerBtn = document.getElementById('open-url-player-btn');
+
 const tvIpInput = document.getElementById('tv-ip');
 const tvPinInput = document.getElementById('tv-pin');
 const connectBtn = document.getElementById('connect-btn');
@@ -387,6 +392,83 @@ masterPlayBtn.addEventListener('click', () => {
         }
     }).catch(err => console.error("Error sending play command:", err));
 });
+
+openCurrentTabBtn.addEventListener('click', () => {
+    browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+        const currentTab = tabs[0];
+        if (currentTab && currentTab.url) {
+            browser.runtime.sendMessage({
+                action: 'wsSendToTv',
+                url: currentTab.url,
+                target: 'browser'
+            }).then(res => {
+                if (res && res.success) {
+                    showToast('Opening tab on TV');
+                } else {
+                    if (res && res.reason === "Not connected to TV") {
+                        showToast('Please connect to TV first');
+                        document.querySelector('.tab-btn[data-tab="settings"]').click();
+                    } else {
+                        showToast('Error: ' + (res?.reason || 'Unknown'));
+                    }
+                }
+            }).catch(err => console.error("Error sending open command:", err));
+        } else {
+            showToast('Cannot get current tab URL');
+        }
+    }).catch(err => console.error("Error querying tabs:", err));
+});
+
+openUrlBrowserBtn.addEventListener('click', () => {
+    const url = customUrlInput.value.trim();
+    if (!url) {
+        showToast('Please enter a URL');
+        return;
+    }
+    
+    browser.runtime.sendMessage({
+        action: 'wsSendToTv',
+        url: url,
+        target: 'browser'
+    }).then(res => {
+        if (res && res.success) {
+            showToast('Opening URL on TV');
+        } else {
+            if (res && res.reason === "Not connected to TV") {
+                showToast('Please connect to TV first');
+                document.querySelector('.tab-btn[data-tab="settings"]').click();
+            } else {
+                showToast('Error: ' + (res?.reason || 'Unknown'));
+            }
+        }
+    }).catch(err => console.error("Error sending open command:", err));
+});
+
+openUrlPlayerBtn.addEventListener('click', () => {
+    const url = customUrlInput.value.trim();
+    if (!url) {
+        showToast('Please enter a URL');
+        return;
+    }
+    
+    browser.runtime.sendMessage({
+        action: 'wsSendToTv',
+        url: url,
+        target: 'player'
+    }).then(res => {
+        if (res && res.success) {
+            showToast('Playing URL on TV');
+        } else {
+            if (res && res.reason === "Not connected to TV") {
+                showToast('Please connect to TV first');
+                document.querySelector('.tab-btn[data-tab="settings"]').click();
+            } else {
+                showToast('Error: ' + (res?.reason || 'Unknown'));
+            }
+        }
+    }).catch(err => console.error("Error sending play command:", err));
+});
+
 connectBtn.addEventListener('click', () => {
     const ip = tvIpInput.value.trim();
     const pin = tvPinInput.value.trim();

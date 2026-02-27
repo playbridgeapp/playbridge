@@ -527,5 +527,39 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
     }
     
+    if (message.action === 'wsSendToTv') {
+        if (wsStatus === 'connected' && wsConnection) {
+            let command;
+            if (message.target === 'browser') {
+                command = {
+                    type: "command",
+                    action: "browser",
+                    payload: { url: message.url }
+                };
+            } else if (message.target === 'player') {
+                command = {
+                    type: "command",
+                    action: "play",
+                    payload: {
+                        url: message.url,
+                        title: message.url,
+                        contentType: "unknown"
+                    }
+                };
+            }
+            
+            if (command) {
+                console.log(`[VideoDetector BG] Sending ${message.target} command to TV:`, command);
+                wsConnection.send(JSON.stringify(command));
+                sendResponse({ success: true, reason: null });
+            } else {
+                sendResponse({ success: false, reason: "Invalid target" });
+            }
+        } else {
+            sendResponse({ success: false, reason: "Not connected to TV" });
+        }
+        return true;
+    }
+    
     return false;
 });

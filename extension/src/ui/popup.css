@@ -31,6 +31,22 @@ body {
     flex-direction: column;
 }
 
+/* Mobile Responsiveness */
+@media (max-width: 480px) {
+    body {
+        width: 100vw;
+        height: 100vh;
+        max-width: none;
+        max-height: none;
+        border-radius: 0;
+    }
+
+    .contentArea {
+        padding-bottom: 80px;
+        /* More room for sticky actions */
+    }
+}
+
 /* Header & Tabs */
 .header {
     background-color: var(--bg-secondary);
@@ -68,7 +84,8 @@ h1 {
 
 .tabs {
     display: flex;
-    gap: 16px;
+    justify-content: space-between;
+    width: 100%;
 }
 
 .tab-btn {
@@ -82,15 +99,26 @@ h1 {
     cursor: pointer;
     border-bottom: 2px solid transparent;
     transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .tab-btn:hover {
     color: var(--text-main);
 }
 
+.tab-btn .tab-text {
+    display: none;
+}
+
 .tab-btn.active {
     color: var(--accent);
     border-bottom-color: var(--accent);
+}
+
+.tab-btn.active .tab-text {
+    display: inline;
 }
 
 /* Content Area */
@@ -419,6 +447,15 @@ button {
     border-top: 1px solid var(--bg-tertiary);
     display: flex;
     flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+    .action-bar {
+        padding: 16px;
+        position: sticky;
+        bottom: 0;
+        z-index: 10;
+    }
 }
 
 /* Toast */

@@ -13,7 +13,7 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 | **Phone (Sender)** | `com.playbridge.sender` | GeckoView-based browser with video detection, downloads, bookmarks, remote control, sends commands to TV |
 | **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + ExoPlayer + dual-engine browser (SystemWebView/GeckoView) with ad blocking, receives and plays video streams |
 | **Protocol** | `com.playbridge.protocol` | Shared protocol: NSD constants, message classes, command parser, and helper functions |
-| **Extension** | `extension/` | Standalone browser extension for Firefox (V2) and Chrome (V3). Direct WebSocket connection to TV for desktop |
+| **Extension** | `extension/src/` | Standalone browser extension for Firefox (V2). Direct WebSocket connection to TV for desktop. Sends videos and URLs to TV |
 
 ---
 
@@ -234,9 +234,7 @@ com.playbridge.receiver/
 ## Standalone Browser Extension
 
 A standalone extension architecture exists in the `extension/` directory to bring PlayBridge casting capabilities to desktop browsers.
-This is a cross-platform Web Extension that builds for:
-1. **Firefox (Desktop)** (Manifest V2, direct WebSocket connection to TV, injected Shadow DOM UI)
-2. **Chrome (Desktop)** (Manifest V3, direct WebSocket connection to TV, injected Shadow DOM UI)
+This is a natively built Web Extension specifically targeted for **Firefox (Desktop)** (Manifest V2, direct WebSocket connection to TV, injected Shadow DOM UI).
 
 *(Note: The Android Phone app uses its own dedicated, lightweight legacy extension found in `phone/app/src/main/assets/extensions/video_detector` for internal GeckoView communication).*
 
@@ -244,10 +242,9 @@ This is a cross-platform Web Extension that builds for:
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| Build System | `extension/build.js` | Generates target-specific extensions and `manifest.json` versions |
-| Background Script | `extension/src/background.js` | Video detection logic, WebSocket client for direct TV connection |
+| Background Script | `extension/src/background.js` | Video detection logic, WebSocket client for direct TV connection, sends TV commands |
 | Content Script | `extension/src/content.js` | In-page video UI (Shadow DOM floating button) |
-| Extension UI | `extension/src/popup.*` | Video list view and TV connection settings |
+| Extension UI | `extension/src/ui/popup.*` | Video list view, Subtitles view, URLs sender, and TV connection settings |
 
 ---
 
@@ -433,9 +430,8 @@ PlayBridge/
 │   ├── workflows/
 │   │   └── android_build.yml
 │   └── ISSUE_TEMPLATE/          # NEW
-├── extension/                   # Standalone Desktop Web Extension
-│   ├── build.js                 # Cross-platform build script
-│   └── src/                     # Shared extension code (Chrome, Firefox)
+├── extension/                   # Standalone Desktop Web Extension (Firefox native)
+│   └── src/                     # Extension source code (manifest.json, background.js, etc.)
 ├── protocol/                    # Shared module
 │   ├── build.gradle.kts
 │   └── src/main/java/com/playbridge/protocol/
