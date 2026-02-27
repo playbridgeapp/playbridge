@@ -33,3 +33,5 @@ Thumbs.db
 deploymentTargetSelector.xml
 tv/app/release
 phone/app/release
+
+extension/dist

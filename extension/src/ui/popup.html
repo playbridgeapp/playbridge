@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PlayBridge Video Detector</title>
+    <link rel="stylesheet" href="popup.css">
+    <!-- Modern font to wow the user -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="header">
+        <div class="title-row">
+            <h1>PlayBridge</h1>
+            <div id="close-btn" class="close-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20" fill="white"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/></svg>
+            </div>
+        </div>
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="videos">Videos</button>
+            <button class="tab-btn" data-tab="subtitles">Subtitles</button>
+            <button class="tab-btn" data-tab="settings">Settings</button>
+        </div>
+    </div>
+
+    <div class="contentArea">
+        <!-- Videos Tab -->
+        <div id="videos-tab" class="tab-content active">
+            <div id="no-videos-msg" class="empty-state">
+                <svg xmlns="http://www.w3.org/2000/svg" height="48" viewBox="0 0 24 24" width="48" fill="#5c5c66"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M21 3H3c-1.11 0-2 .89-2 2v12c0 1.1.89 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.11-.9-2-2-2zm0 14H3V5h18v12zm-5-6l-7 4V7z"/></svg>
+                <p>No videos detected yet</p>
+                <span>Play a video on this page to detect streams</span>
+            </div>
+            
+            <div id="videos-list" class="videos-list hidden">
+                <!-- Video items injected via JS -->
+            </div>
+        </div>
+
+        <!-- Subtitles Tab -->
+        <div id="subtitles-tab" class="tab-content">
+            <div id="no-subtitles-msg" class="empty-state">
+                <svg xmlns="http://www.w3.org/2000/svg" height="48" viewBox="0 0 24 24" width="48" fill="#5c5c66"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12zm-2-9H10v2h8V7zm0 4H10v2h8v-2z"/></svg>
+                <p>No subtitles detected</p>
+                <span>Subtitles (.srt, .vtt) will appear here</span>
+            </div>
+            
+            <div id="subtitles-list" class="videos-list hidden">
+                <!-- Subtitle items injected via JS -->
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div id="settings-tab" class="tab-content">
+            <div class="settings-card">
+                <h2>Connect to TV</h2>
+                <p class="subtitle">Enter the IP shown on your PlayBridge TV app</p>
+                
+                <div class="input-group">
+                    <label>IP Address</label>
+                    <input type="text" id="tv-ip" placeholder="e.g. 192.168.1.100">
+                </div>
+                
+                <div class="input-group">
+                    <label>PIN (Optional)</label>
+                    <input type="text" id="tv-pin" placeholder="0000">
+                </div>
+                
+                <div class="input-group toggle-group" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+                    <div>
+                        <label for="show-overlay-toggle" style="margin-bottom: 2px;">Show 'Play' Overlay</label>
+                        <span style="font-size: 10px; color: var(--text-muted);">Injects floating button on valid pages</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="show-overlay-toggle" checked>
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                
+                <button id="connect-btn" class="primary-btn">Connect</button>
+                <button id="disconnect-btn" class="secondary-btn hidden">Disconnect</button>
+            </div>
+            
+            <div class="status-card">
+                <h3>Connection Status</h3>
+                <div class="status-indicator">
+                    <span id="status-dot" class="dot mx-disconnected"></span>
+                    <span id="status-text">Disconnected</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sticky Action Bar for Playback -->
+    <div id="action-bar" class="action-bar hidden">
+        <button id="master-play-btn" class="primary-btn play">
+            <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20" fill="currentColor" style="margin-right: 6px;"><path d="M0 0h24v24H0z" fill="none"/><path d="M8 5v14l11-7z"/></svg>
+            Play Selected on TV
+        </button>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden">Message</div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

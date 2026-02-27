@@ -13,6 +13,7 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 | **Phone (Sender)** | `com.playbridge.sender` | GeckoView-based browser with video detection, downloads, bookmarks, remote control, sends commands to TV |
 | **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + ExoPlayer + dual-engine browser (SystemWebView/GeckoView) with ad blocking, receives and plays video streams |
 | **Protocol** | `com.playbridge.protocol` | Shared protocol: NSD constants, message classes, command parser, and helper functions |
+| **Extension** | `extension/` | Standalone browser extension for Firefox (V2) and Chrome (V3). Direct WebSocket connection to TV for desktop |
 
 ---
 
@@ -140,8 +141,7 @@ com.playbridge.sender/
 | WebSocket | [WebSocketClient.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/connection/WebSocketClient.kt) | OkHttp-based client with auto-retry (60 attempts, 5s intervals) |
 | Connection | [ConnectionScreen.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/ui/ConnectionScreen.kt) | NSD auto-discovery, QR scanning, manual IP entry, PIN authentication |
 | Service Discovery | [NsdHelper.kt](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/connection/NsdHelper.kt) | Network Service Discovery to find TV services on local network |
-| Video Detection Extension | [background.js](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/background.js) | Browser extension detecting video content types via webRequest |
-| Content Script | [content.js](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/content.js) | Content script for in-page video element detection |
+| Embedded Extension | `assets/extensions/video_detector` | Legacy internal extension bundled with the phone app for video detection in GeckoView |
 
 ### Dependencies
 - **GeckoView** (Mozilla) v147 — Full Firefox engine
@@ -228,6 +228,26 @@ com.playbridge.receiver/
 - **OkHttp** v4.12 — HTTP client for ExoPlayer data source + URL connections
 - **Kotlin Serialization** v1.7 — JSON protocol
 - **DataStore** v1.1 — Preferences persistence
+
+---
+
+## Standalone Browser Extension
+
+A standalone extension architecture exists in the `extension/` directory to bring PlayBridge casting capabilities to desktop browsers.
+This is a cross-platform Web Extension that builds for:
+1. **Firefox (Desktop)** (Manifest V2, direct WebSocket connection to TV, injected Shadow DOM UI)
+2. **Chrome (Desktop)** (Manifest V3, direct WebSocket connection to TV, injected Shadow DOM UI)
+
+*(Note: The Android Phone app uses its own dedicated, lightweight legacy extension found in `phone/app/src/main/assets/extensions/video_detector` for internal GeckoView communication).*
+
+### Key Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Build System | `extension/build.js` | Generates target-specific extensions and `manifest.json` versions |
+| Background Script | `extension/src/background.js` | Video detection logic, WebSocket client for direct TV connection |
+| Content Script | `extension/src/content.js` | In-page video UI (Shadow DOM floating button) |
+| Extension UI | `extension/src/popup.*` | Video list view and TV connection settings |
 
 ---
 
@@ -413,6 +433,9 @@ PlayBridge/
 │   ├── workflows/
 │   │   └── android_build.yml
 │   └── ISSUE_TEMPLATE/          # NEW
+├── extension/                   # Standalone Desktop Web Extension
+│   ├── build.js                 # Cross-platform build script
+│   └── src/                     # Shared extension code (Chrome, Firefox)
 ├── protocol/                    # Shared module
 │   ├── build.gradle.kts
 │   └── src/main/java/com/playbridge/protocol/
@@ -441,7 +464,7 @@ PlayBridge/
 │   │       │   ├── data/history/
 │   │       │   ├── model/
 │   │       │   └── ui/
-│   │       └── assets/extensions/
+│   │       └── assets/extensions/video_detector/  # Embedded legacy phone extension
 │   └── build.gradle.kts
 └── tv/
     ├── app/

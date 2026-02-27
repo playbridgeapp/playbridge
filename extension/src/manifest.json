@@ -1,0 +1,30 @@
+{
+    "name": "PlayBridge Video Detector",
+    "version": "1.0",
+    "description": "Detects video URLs for PlayBridge casting",
+    "icons": {
+        "48": "icon.png",
+        "128": "icon.png"
+    },
+    "content_scripts": [
+        {
+            "matches": ["<all_urls>"],
+            "js": ["content.js"],
+            "run_at": "document_start"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": ["ui/*", "icon.png"],
+            "matches": ["<all_urls>"]
+        }
+    ],
+    "permissions": [
+        "webRequest",
+        "storage",
+        "tabs"
+    ],
+    "host_permissions": [
+        "<all_urls>"
+    ]
+}
