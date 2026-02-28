@@ -90,19 +90,6 @@ Details on the shared protocol and communication flow between Phone and TV have 
 
 ## Issues & Refactoring Recommendations
 
-### ✅ Resolved Issues
-
-#### ~~1. Duplicated Protocol Code~~ ✅ RESOLVED
-- **Resolved**: All shared protocol code has been migrated to `protocol/src/main/java/com/playbridge/protocol/Message.kt`. Phone `model/Message.kt` now only contains `QRCodeData`. TV `model/Message.kt` has been deleted.
-
-### 🔴 Critical Issues
-
-#### ~~2. Very Large File: BrowserActivity.kt (~1555 lines)~~
-- ✅ **RESOLVED**: Extracted `TabManager.kt`, `SessionObserverSetup.kt`, `DownloadConfirmDialog.kt`, and `LinkContextMenu.kt`. `BrowserActivity.kt` reduced to ~1115 lines.
-
-#### ~~3. Large File: PlayerActivity.kt (~1125 lines)~~
-- ✅ **RESOLVED**: Extracted `ContentSniffer.kt`, `PlayerControlsManager.kt`, `ProgressManager.kt`, and `InputHandler.kt`. `PlayerActivity.kt` reduced to ~592 lines.
-
 ### 🟡 Moderate Issues
 
 #### 4. Unsafe SSL in PlayerActivity
@@ -134,6 +121,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 ## Open-Source Preparation Checklist
 
 ### ✅ Already Good
+- [x] `CONTRIBUTING.md` created with contribution guidelines
 - [x] `.gitignore` properly configured (34 entries covering build, IDE, keystore, OS files)
 - [x] GitHub Actions CI exists ([android_build.yml](file:///Users/atulmehla/repos/personal/PlayBridge/.github/workflows/android_build.yml))
 - [x] Clean package structure with clear separation
@@ -153,26 +141,16 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] Desktop mode toggle (phone)
 - [x] SSL lock indicator (phone)
 - [x] Video maximize/restore via JS injection (TV browser)
+- [x] `SECURITY.md` finalized with security considerations (SSL bypass, local network)
 
 ### ❌ Missing for Open-Source
 
-#### 1. CONTRIBUTING.md
-Guidelines for:
-- Code style
-- Pull request process
-- Issue templates
-
-#### 2. Security Considerations Documentation
-Document:
-- Local network assumption
-- SSL bypass option and when to use it
-
-#### 3. Remove/Review Sensitive Data
+#### 1. Remove/Review Sensitive Data
 - Check `local.properties` is gitignored ✅
 - Remove any hardcoded API keys or tokens
 - Review commit history for accidentally committed secrets
 
-#### 4. Build Configuration
+#### 2. Build Configuration
 - Both apps have `isMinifyEnabled = false` for release
 - Consider enabling for production releases with proper ProGuard rules
 
@@ -248,11 +226,7 @@ PlayBridge/
 
 | Priority | Task | Effort |
 |----------|------|--------|
-| 🔴 High | Add CONTRIBUTING.md | 30 minutes |
-| ~~🟡 Medium~~ | ~~Migrate messages to shared protocol module~~ | ✅ Done |
-| ~~🟡 Medium~~ | ~~Further slim BrowserActivity.kt (~1555 lines)~~ | ✅ Done |
-| ~~🟡 Medium~~ | ~~Extract PlayerActivity.kt logic (~1125 lines)~~ | ✅ Done |
-| 🟢 Low | Enable ProGuard for release | 2-4 hours |
+| � Low | Enable ProGuard for release | 2-4 hours |
 
 ---
 
@@ -270,9 +244,6 @@ PlayBridge/
 - NSD auto-discovery for seamless phone-to-TV connection
 
 **Key Actions Before Open-Sourcing:**
-1. Add CONTRIBUTING.md
-2. ~~Expand .gitignore~~ ✅
-3. ~~Extract shared protocol module~~ ✅
-4. Document security considerations (SSL bypass, local network assumptions)
+1. Review commit history for accidentally committed secrets
 
 The codebase is in good shape for open-sourcing with relatively minor documentation additions.

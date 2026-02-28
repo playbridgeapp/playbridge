@@ -42,7 +42,15 @@ Contributions are welcome! Please follow these steps:
 3.  Commit your changes.
 4.  Open a Pull Request.
 
+For detailed instructions, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 This project is licensed under the **GNU General Public License v3.0** (GPLv3). See the [LICENSE](LICENSE) file for details.
 Some components (GeckoView) are licensed under MPL 2.0, which is compatible with GPLv3.
+
+## Contact
+
+For questions, feedback, or support, please reach out to us at [playbridgeapp@gmail.com](mailto:playbridgeapp@gmail.com).
+
+For security-related issues, please refer to our [Security Policy](SECURITY.md).

@@ -49,6 +49,10 @@ Thank you for your interest in contributing to PlayBridge! We welcome contributi
     ./gradlew lint
     ```
 
+## Questions?
+
+If you have any questions about contributing or need help getting started, please reach out to us at [playbridgeapp@gmail.com](mailto:playbridgeapp@gmail.com).
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the GNU General Public License v3.0.
