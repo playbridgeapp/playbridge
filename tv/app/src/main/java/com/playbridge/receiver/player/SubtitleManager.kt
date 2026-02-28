@@ -13,8 +13,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.net.HttpURLConnection
 import java.net.URL
+import okhttp3.Request
+import java.io.IOException
 import java.util.Collections
 import java.util.TreeMap
 import java.util.regex.Pattern
@@ -101,15 +102,16 @@ class SubtitleManager(
     }
 
     private fun downloadUrl(urlString: String): String {
-        val url = URL(urlString)
-        val connection = url.openConnection() as HttpURLConnection
-        connection.connectTimeout = 10000
-        connection.readTimeout = 10000
-        connection.requestMethod = "GET"
-        
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+        val client = ContentSniffer().getUnsafeOkHttpClient()
+        val request = Request.Builder()
+            .url(urlString)
+            .header("User-Agent", "Mozilla/5.0")
+            .build()
 
-        return connection.inputStream.bufferedReader().use { it.readText() }
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Unexpected HTTP code: " + response.code)
+            return response.body?.string() ?: ""
+        }
     }
 
     private fun parseSrt(content: String): List<Cue> {
@@ -201,14 +203,17 @@ class SubtitleManager(
     
     suspend fun getPreview(url: String): String? = withContext(Dispatchers.IO) {
         try {
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.setRequestProperty("Range", "bytes=0-4096") // Fetch first 4KB
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
-            connection.requestMethod = "GET"
-            connection.setRequestProperty("User-Agent", "Mozilla/5.0")
-            
-            val content = connection.inputStream.bufferedReader().use { it.readText() }
+            val client = ContentSniffer().getUnsafeOkHttpClient()
+            val request = Request.Builder()
+                .url(url)
+                .header("Range", "bytes=0-4096") // Fetch first 4KB
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+
+            val content = client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw IOException("Unexpected HTTP code: " + response.code)
+                response.body?.string() ?: ""
+            }
             
             val cues = if (url.endsWith(".vtt", true)) {
                 parseVtt(content)

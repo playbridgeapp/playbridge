@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Settings
 import coil3.request.crossfade
 import com.playbridge.receiver.server.ServerService
 import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -142,7 +143,7 @@ fun HistoryItemCard(
                  if (item.thumbnailPath != null) {
                      coil3.compose.AsyncImage(
                          model = coil3.request.ImageRequest.Builder(LocalContext.current)
-                             .data(item.thumbnailPath)
+                             .data(File(item.thumbnailPath))
                              .memoryCacheKey("${item.thumbnailPath}_${item.timestamp}")
                              .diskCacheKey("${item.thumbnailPath}_${item.timestamp}")
                              .crossfade(true)
