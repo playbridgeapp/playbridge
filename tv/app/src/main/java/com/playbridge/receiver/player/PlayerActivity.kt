@@ -687,6 +687,30 @@ class PlayerActivity : ComponentActivity() {
             }
 
             FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
+
+            // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found)
+            if (playlistItems.isNotEmpty()) {
+                val isNetworkOrHttpError = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                                           error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                                           error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ||
+                                           error.cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException ||
+                                           error.cause is java.net.UnknownHostException ||
+                                           error.cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException
+
+                if (isNetworkOrHttpError) {
+                    FileLogger.w(TAG, "Network/HTTP error detected. Skipping to next item in playlist.")
+                    runOnUiThread {
+                        android.widget.Toast.makeText(this@PlayerActivity, "Link failed, skipping to next channel...", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    // Add a small delay so the user sees the toast before it skips
+                    lifecycleScope.launch(Dispatchers.Main) {
+                        kotlinx.coroutines.delay(1000)
+                        playNextInPlaylist()
+                    }
+                    return
+                }
+            }
+
             runOnUiThread {
                 android.widget.Toast.makeText(this@PlayerActivity, "Error: ${error.message}", android.widget.Toast.LENGTH_LONG).show()
             }
