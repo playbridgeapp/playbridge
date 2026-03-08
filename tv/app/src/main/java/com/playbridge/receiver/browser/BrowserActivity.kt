@@ -106,6 +106,10 @@ class BrowserActivity : ComponentActivity() {
                 android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
             )
+        } else {
+            // Explicitly tell the window to NOT use hardware acceleration on emulators
+            // to prevent EGL_BAD_CONFIG GPU process crashes in Chromium
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
         }
         // We manage KEEP_SCREEN_ON dynamically during fullscreen video playback
         

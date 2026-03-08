@@ -73,7 +73,9 @@ class SystemWebViewEngine(
                 Build.MODEL.contains("google_atv") ||
                 Build.MANUFACTURER.contains("Genymotion") ||
                 Build.PRODUCT.contains("sdk") ||
-                Build.PRODUCT.contains("emulator"))
+                Build.PRODUCT.contains("emulator") ||
+                Build.HARDWARE.contains("goldfish") ||
+                Build.HARDWARE.contains("ranchu"))
     }
 
     override fun scrollBy(dx: Int, dy: Int) {
