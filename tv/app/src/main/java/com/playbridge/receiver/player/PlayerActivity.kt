@@ -66,7 +66,7 @@ class PlayerActivity : ComponentActivity() {
     private var subtitleUrls: List<String> = emptyList()
 
     // Playlist queue for auto-advancing through episodes
-    private var playlistItems: List<com.playbridge.protocol.PlayPayload> = emptyList()
+    private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
     private val controlReceiver = object : BroadcastReceiver() {
@@ -249,15 +249,16 @@ class PlayerActivity : ComponentActivity() {
         val playlistJson = intent?.getStringExtra(ServerService.EXTRA_PLAYLIST)
         if (playlistJson != null) {
             try {
-                playlistItems = com.playbridge.protocol.protocolJson.decodeFromString(
+                val itemsList = com.playbridge.protocol.protocolJson.decodeFromString(
                     kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
                     playlistJson
                 )
+                playlistItems = itemsList.toMutableList()
                 playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
                 FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Failed to parse playlist", e)
-                playlistItems = emptyList()
+                playlistItems = mutableListOf()
             }
         }
 
@@ -365,6 +366,35 @@ class PlayerActivity : ComponentActivity() {
                 android.widget.Toast.makeText(this@PlayerActivity, "Detected: $finalContentType", android.widget.Toast.LENGTH_SHORT).show()
             } else {
                 FileLogger.d(TAG, "Pre-flight sniff returned null")
+            }
+
+            // Detect if this is an IPTV playlist and parse it instead of playing directly
+            val urlWithoutQuery = url.substringBefore("?")
+            val isM3u = finalContentType == androidx.media3.common.MimeTypes.APPLICATION_M3U8 || urlWithoutQuery.endsWith(".m3u") || urlWithoutQuery.endsWith(".m3u8")
+            if (isM3u) {
+                val parsedPlaylist = M3uParser.fetchAndParseM3u(url, intentHeaders)
+                if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
+                    FileLogger.i(TAG, "Successfully parsed IPTV M3U playlist with ${parsedPlaylist.size} items")
+                    playlistItems = parsedPlaylist.toMutableList()
+                    playlistIndex = 0
+                    controlsManager.setPlaylistVisible(true)
+
+                    val firstItem = parsedPlaylist[0]
+                    val displayTitle = if (firstItem.title != null) {
+                        "${firstItem.title} (1/${parsedPlaylist.size})"
+                    } else {
+                        "Item 1/${parsedPlaylist.size}"
+                    }
+                    startPlayback(
+                        firstItem.url,
+                        displayTitle,
+                        firstItem.contentType,
+                        firstItem.detectedBy,
+                        firstItem.headers,
+                        firstItem.subtitles?.let { ArrayList(it) }
+                    )
+                    return@launch
+                }
             }
             
             startPlayback(url, title, finalContentType, detectedBy, intentHeaders, subtitles)
@@ -581,28 +611,49 @@ class PlayerActivity : ComponentActivity() {
         videoDecoderRetryCount = 0
     }
 
+    private var playbackTimeoutJob: kotlinx.coroutines.Job? = null
+
     private fun createPlayerListener() = object : androidx.media3.common.Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
                 androidx.media3.common.Player.STATE_BUFFERING -> {
                     FileLogger.d(TAG, "Buffering...")
                     controlsManager.showBuffering()
+                    // Start or reset the 15-second timeout for buffering
+                    playbackTimeoutJob?.cancel()
+                    playbackTimeoutJob = lifecycleScope.launch {
+                        kotlinx.coroutines.delay(15000L)
+                        FileLogger.w(TAG, "Playback timed out after 15 seconds of buffering")
+                        handlePlaybackError(androidx.media3.common.PlaybackException(
+                            "Playback timed out", null, androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+                        ))
+                    }
                 }
                 androidx.media3.common.Player.STATE_READY -> {
                     FileLogger.i(TAG, "Playback ready")
                     controlsManager.hideBuffering()
+                    playbackTimeoutJob?.cancel()
                     audioDiscontinuityRetryCount = 0
                     videoDecoderRetryCount = 0
                 }
                 androidx.media3.common.Player.STATE_ENDED -> {
                     FileLogger.i(TAG, "Playback ended")
                     controlsManager.hideBuffering()
+                    playbackTimeoutJob?.cancel()
                     playNextInPlaylist()
+                }
+                androidx.media3.common.Player.STATE_IDLE -> {
+                    playbackTimeoutJob?.cancel()
                 }
             }
         }
         
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            playbackTimeoutJob?.cancel()
+            handlePlaybackError(error)
+        }
+
+        private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
             val isAudioDiscontinuity = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED || 
                                        error.cause is androidx.media3.exoplayer.audio.AudioSink.UnexpectedDiscontinuityException
             
@@ -658,6 +709,41 @@ class PlayerActivity : ComponentActivity() {
             }
 
             FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
+
+            // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found, Timeout)
+            if (playlistItems.isNotEmpty()) {
+                val isNetworkOrHttpError = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                                           error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                                           error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ||
+                                           error.cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException ||
+                                           error.cause is java.net.UnknownHostException ||
+                                           error.cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException ||
+                                           error.cause?.javaClass?.simpleName == "PlaylistStuckException"
+
+                if (isNetworkOrHttpError || error.message?.contains("timed out") == true) {
+                    FileLogger.w(TAG, "Network/HTTP error detected. Skipping to next item in playlist.")
+                    runOnUiThread {
+                        android.widget.Toast.makeText(this@PlayerActivity, "Link failed, skipping to next channel...", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+
+                    // Mark item as failed
+                    if (playlistIndex in playlistItems.indices) {
+                        val failedItem = playlistItems[playlistIndex]
+                        val title = failedItem.title ?: "Channel ${playlistIndex + 1}"
+                        if (!title.startsWith("[FAILED]")) {
+                            playlistItems[playlistIndex] = failedItem.copy(title = "[FAILED] $title")
+                        }
+                    }
+
+                    // Add a small delay so the user sees the toast before it skips
+                    lifecycleScope.launch(Dispatchers.Main) {
+                        kotlinx.coroutines.delay(1000)
+                        playNextInPlaylist()
+                    }
+                    return
+                }
+            }
+
             runOnUiThread {
                 android.widget.Toast.makeText(this@PlayerActivity, "Error: ${error.message}", android.widget.Toast.LENGTH_LONG).show()
             }
@@ -737,9 +823,18 @@ class PlayerActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
-            syncSelectionsToProgressManager()
-            val bitmap = progressManager.captureBitmapSuspend()
-            progressManager.saveProgress(bitmap)
+            // Only capture screenshot and save progress if playback was actually ready/started
+            val state = player?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
+            if (hasPlayed && player?.playerError == null) {
+                syncSelectionsToProgressManager()
+                try {
+                    val bitmap = progressManager.captureBitmapSuspend()
+                    progressManager.saveProgress(bitmap)
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "Failed to capture/save progress before previous: ${e.message}")
+                }
+            }
 
             playlistIndex--
             val prevItem = playlistItems[playlistIndex]
@@ -770,10 +865,19 @@ class PlayerActivity : ComponentActivity() {
      */
     private fun playNextInPlaylist() {
         lifecycleScope.launch {
-            // Save progress for the current episode before advancing
-            syncSelectionsToProgressManager()
-            val bitmap = progressManager.captureBitmapSuspend()
-            progressManager.saveProgress(bitmap)
+            // Save progress for the current episode before advancing,
+            // but only if playback was actually ready (to avoid crashes on failed streams)
+            val state = player?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
+            if (hasPlayed && player?.playerError == null) {
+                syncSelectionsToProgressManager()
+                try {
+                    val bitmap = progressManager.captureBitmapSuspend()
+                    progressManager.saveProgress(bitmap)
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "Failed to capture/save progress before next: ${e.message}")
+                }
+            }
 
             if (playlistItems.isEmpty()) {
                 FileLogger.i(TAG, "No playlist — finishing")
@@ -818,10 +922,18 @@ class PlayerActivity : ComponentActivity() {
         if (index < 0 || index >= playlistItems.size) return
 
         lifecycleScope.launch {
-            // Save progress for the current episode before jumping
-            syncSelectionsToProgressManager()
-            val bitmap = progressManager.captureBitmapSuspend()
-            progressManager.saveProgress(bitmap)
+            // Save progress for the current episode before jumping, if it was playing
+            val state = player?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
+            if (hasPlayed && player?.playerError == null) {
+                syncSelectionsToProgressManager()
+                try {
+                    val bitmap = progressManager.captureBitmapSuspend()
+                    progressManager.saveProgress(bitmap)
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "Failed to capture/save progress before jump: ${e.message}")
+                }
+            }
 
             playlistIndex = index
             val item = playlistItems[index]
