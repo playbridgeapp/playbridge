@@ -30,7 +30,6 @@ fun BrowserToolbar(
     isLoading: Boolean,
     canGoBack: Boolean,
     canGoForward: Boolean,
-    videoCount: Int = 0,
     tabCount: Int = 1,
     onUrlChange: (String) -> Unit,
     onNavigate: (String) -> Unit,
@@ -39,7 +38,7 @@ fun BrowserToolbar(
     onRefresh: () -> Unit,
     onStop: () -> Unit,
     onMenuClick: () -> Unit,
-    onVideoClick: () -> Unit = {},
+    onDrawerClick: () -> Unit = {},
     onTabsClick: () -> Unit = {},
     isEditing: Boolean = false,
     isSecure: Boolean = false,
@@ -51,12 +50,12 @@ fun BrowserToolbar(
     modifier: Modifier = Modifier
 ) {
     // Use TextFieldValue for selection control
-    var textFieldValue by remember { mutableStateOf(TextFieldValue(currentUrl)) }
+    var textFieldValue by remember { mutableStateOf(TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)) }
     
     // Update text when currentUrl changes (only if not editing)
     LaunchedEffect(currentUrl) {
         if (!isEditing) {
-            textFieldValue = TextFieldValue(currentUrl)
+            textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)
         }
     }
 
@@ -77,7 +76,7 @@ fun BrowserToolbar(
             }
         } else {
              // Reset to current URL when editing stops
-             textFieldValue = TextFieldValue(currentUrl)
+             textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)
         }
     }
     
@@ -102,7 +101,7 @@ fun BrowserToolbar(
                         onClick = { 
                             onEditingChange(false) 
                             keyboardController?.hide()
-                            textFieldValue = TextFieldValue(currentUrl)
+                            textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)
                         },
                         modifier = Modifier.size(40.dp)
                     ) {
@@ -113,28 +112,17 @@ fun BrowserToolbar(
                          )
                     }
                 } else {
-                    // Video count badge - clickable to show detected videos
+                    // Hamburger menu
                     IconButton(
-                        onClick = onVideoClick,
+                        onClick = onDrawerClick,
                         modifier = Modifier.size(40.dp)
                     ) {
-                        BadgedBox(
-                            badge = {
-                                Badge(
-                                    containerColor = if (videoCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
-                                    contentColor = MaterialTheme.colorScheme.onError
-                                ) {
-                                    Text(videoCount.toString())
-                                }
-                            }
-                        ) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = "$videoCount videos detected",
-                                tint = if (videoCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
+                        Icon(
+                            Icons.Default.Menu,
+                            contentDescription = "Open navigation drawer",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
                 
@@ -145,12 +133,21 @@ fun BrowserToolbar(
                     value = textFieldValue,
                     leadingIcon = if (!isEditing) {
                         {
-                            Icon(
-                                if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
-                                contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
-                                tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            if (currentUrl == "about:blank") {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            } else {
+                                Icon(
+                                    if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                    contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
+                                    tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                     } else null,
                     onValueChange = { newValue ->
@@ -176,7 +173,7 @@ fun BrowserToolbar(
                                     delay(200)
                                     if (isEditing) {
                                         onEditingChange(false)
-                                        textFieldValue = TextFieldValue(currentUrl)
+                                        textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)
                                     }
                                 }
                             }
@@ -184,7 +181,7 @@ fun BrowserToolbar(
                     singleLine = true,
                     placeholder = { 
                         Text(
-                            "Search or enter URL",
+                            "Search or type URL",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodySmall

@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import com.playbridge.receiver.logging.FileLogger
 import androidx.core.app.NotificationCompat
 import com.playbridge.receiver.MainActivity
 import com.playbridge.receiver.R
@@ -89,19 +90,19 @@ class ServerService : Service() {
         
         registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
             override fun onServiceRegistered(NsdServiceInfo: android.net.nsd.NsdServiceInfo) {
-                Log.d(TAG, "Service registered: ${NsdServiceInfo.serviceName}")
+                FileLogger.d(TAG, "Service registered: ${NsdServiceInfo.serviceName}")
             }
             
             override fun onRegistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                Log.e(TAG, "Registration failed: $errorCode")
+                FileLogger.e(TAG, "Registration failed: $errorCode")
             }
             
             override fun onServiceUnregistered(arg0: android.net.nsd.NsdServiceInfo) {
-                Log.d(TAG, "Service unregistered")
+                FileLogger.d(TAG, "Service unregistered")
             }
             
             override fun onUnregistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                Log.e(TAG, "Unregistration failed: $errorCode")
+                FileLogger.e(TAG, "Unregistration failed: $errorCode")
             }
         }
         
@@ -113,6 +114,7 @@ class ServerService : Service() {
     }
     
     private fun startServer() {
+        if (webSocketServer != null) return  // Already running from a previous onStartCommand
         scope.launch {
             val token = pairingStore.getOrCreateToken()
             val port = pairingStore.serverPort.first()
@@ -155,6 +157,13 @@ class ServerService : Service() {
                     }
                 }
                 
+                // Observe connected client count
+                launch {
+                    server.connectedClientCount.collect { count ->
+                        _connectedClientCount.value = count
+                    }
+                }
+                
                 // Expose commands for the activity to observe
                 launch {
                     server.commands.collect { command ->
@@ -163,52 +172,109 @@ class ServerService : Service() {
                 }
             }
             
-            Log.i(TAG, "Server started at $ip:$port")
+            FileLogger.i(TAG, "Server started at $ip:$port")
         }
     }
     
     private fun handleCommand(command: Command) {
         if (command !is Command.Mouse) {
-            Log.i(TAG, "=== COMMAND RECEIVED ===")
-            Log.i(TAG, "Command type: ${command.javaClass.simpleName}")
+            FileLogger.i(TAG, "=== COMMAND RECEIVED ===")
+            FileLogger.i(TAG, "Command type: ${command.javaClass.simpleName}")
         }
         
         when (command) {
             is Command.Play -> {
-                Log.i(TAG, "=== PLAY COMMAND ===")
-                activeContext = "player"
-                broadcastContext()
+                FileLogger.i(TAG, "=== PLAY COMMAND ===")
 
-                val playerIntent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
-                    putExtra(EXTRA_URL, command.url)
-                    putExtra(EXTRA_TITLE, command.title)
-                    putExtra(EXTRA_CONTENT_TYPE, command.contentType)
-                    if (command.detectedBy != null) {
-                        putExtra(EXTRA_DETECTED_BY, command.detectedBy)
-                    }
-                    if (command.subtitles != null) {
-                        putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(command.subtitles))
-                    }
-                    if (command.headers != null) {
-                        putExtra(EXTRA_HEADERS, HashMap(command.headers))
-                    }
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                val tvPref = if (prefs.contains("player_mode")) {
+                    prefs.getString("player_mode", "phone") ?: "phone"
+                } else {
+                    if (prefs.getBoolean("use_external_player", false)) "external" else "phone"
                 }
-                launchActivityFromBackground(playerIntent, "Playing media")
+
+                val finalMode = if (tvPref == "phone") {
+                    val phoneMode = command.playerMode
+                    if (phoneMode != null && phoneMode != "tv") {
+                        phoneMode
+                    } else {
+                        "internal" // Default if no phone mode provided
+                    }
+                } else {
+                    tvPref
+                }
+
+                val useExternalPlayer = finalMode == "external"
+
+                if (useExternalPlayer) {
+                    activeContext = "external_player"
+                    broadcastContext()
+
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        // Force a generic video/* mime type so that all video players show up in the chooser,
+                        // rather than just the ones explicitly registering for strict mime types like application/x-mpegURL
+                        setDataAndType(android.net.Uri.parse(command.url), "video/*")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        
+                        // Pass title to external player (many players read this specifically)
+                        command.title?.let { title ->
+                            putExtra(Intent.EXTRA_TITLE, title)
+                            // MX Player specific title extra
+                            putExtra("title", title)
+                        }
+                        
+                        // Pass headers to external player if supported
+                        command.headers?.let { headersMap ->
+                            val bundle = android.os.Bundle()
+                            headersMap.forEach { (key, value) ->
+                                bundle.putString(key, value)
+                            }
+                            putExtra(android.provider.Browser.EXTRA_HEADERS, bundle)
+                            // MX Player specific headers array
+                            val headersArray = headersMap.flatMap { listOf(it.key, it.value) }.toTypedArray()
+                            putExtra("headers", headersArray)
+                        }
+                    }
+
+                    val chooserIntent = Intent.createChooser(intent, "Open video with...")
+                    chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    launchActivityFromBackground(chooserIntent, "Playing media in external app")
+                } else {
+                    activeContext = "player"
+                    broadcastContext()
+
+                    val playerIntent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                        putExtra(EXTRA_URL, command.url)
+                        putExtra(EXTRA_TITLE, command.title)
+                        putExtra(EXTRA_CONTENT_TYPE, command.contentType)
+                        if (command.detectedBy != null) {
+                            putExtra(EXTRA_DETECTED_BY, command.detectedBy)
+                        }
+                        if (command.subtitles != null) {
+                            putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(command.subtitles))
+                        }
+                        if (command.headers != null) {
+                            putExtra(EXTRA_HEADERS, HashMap(command.headers))
+                        }
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    launchActivityFromBackground(playerIntent, "Playing media")
+                }
             }
             is Command.Browser -> {
-                Log.i(TAG, "Browser command: ${command.url}")
+                FileLogger.i(TAG, "Browser command: ${command.url}")
                 activeContext = "browser"
                 broadcastContext()
 
                 val browserIntent = Intent(this, com.playbridge.receiver.browser.BrowserActivity::class.java).apply {
                     putExtra(com.playbridge.receiver.browser.BrowserActivity.EXTRA_URL, command.url)
+                    putExtra(com.playbridge.receiver.browser.BrowserActivity.EXTRA_BROWSER_MODE, command.browserMode)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
                 launchActivityFromBackground(browserIntent, "Opening browser")
             }
             is Command.Control -> {
-                Log.i(TAG, "Control command: ${command.command}")
+                FileLogger.i(TAG, "Control command: ${command.command}")
                 if (command.command == "stop") {
                     activeContext = "idle"
                     broadcastContext()
@@ -220,7 +286,7 @@ class ServerService : Service() {
                 sendBroadcast(intent)
             }
             is Command.Remote -> {
-                Log.i(TAG, "Remote command: ${command.key}")
+                FileLogger.i(TAG, "Remote command: ${command.key}")
                 val intent = Intent(ACTION_REMOTE).apply {
                     putExtra(EXTRA_REMOTE_KEY, command.key)
                     setPackage(packageName)
@@ -238,7 +304,7 @@ class ServerService : Service() {
                 sendBroadcast(intent)
             }
             is Command.BrowserControl -> {
-                Log.i(TAG, "Browser control: ${command.action}")
+                FileLogger.i(TAG, "Browser control: ${command.action}")
                 val intent = Intent(ACTION_BROWSER_CONTROL).apply {
                     putExtra(EXTRA_BROWSER_ACTION, command.action)
                     setPackage(packageName)
@@ -246,16 +312,41 @@ class ServerService : Service() {
                 sendBroadcast(intent)
             }
             is Command.ContextQuery -> {
-                Log.i(TAG, "Context query - responding with: $activeContext")
+                FileLogger.i(TAG, "Context query - responding with: $activeContext")
                 scope.launch {
                     webSocketServer?.broadcastStatus(createContextJson(activeContext))
                 }
+            }
+            is Command.Playlist -> {
+                FileLogger.i(TAG, "=== PLAYLIST COMMAND === (${command.items.size} items, startIndex: ${command.startIndex})")
+                activeContext = "player"
+                broadcastContext()
+
+                // Serialize playlist items as JSON for the intent
+                val itemsJson = com.playbridge.protocol.protocolJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                    command.items
+                )
+
+                val playerIntent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                    // Start with the first item (or startIndex)
+                    val firstItem = command.items.getOrNull(command.startIndex) ?: command.items.firstOrNull()
+                    if (firstItem != null) {
+                        putExtra(EXTRA_URL, firstItem.url)
+                        putExtra(EXTRA_TITLE, firstItem.title)
+                        putExtra(EXTRA_CONTENT_TYPE, firstItem.contentType)
+                    }
+                    putExtra(EXTRA_PLAYLIST, itemsJson)
+                    putExtra(EXTRA_PLAYLIST_INDEX, command.startIndex)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+                launchActivityFromBackground(playerIntent, "Playing playlist (${command.items.size} items)")
             }
             is Command.Ping -> {
                 // Handled by WebSocketServer
             }
             is Command.Unknown -> {
-                Log.w(TAG, "Unknown command: ${command.type}")
+                FileLogger.w(TAG, "Unknown command: ${command.type}")
             }
         }
     }
@@ -280,7 +371,7 @@ class ServerService : Service() {
         try {
             startActivity(intent)
         } catch (e: Exception) {
-            Log.w(TAG, "startActivity failed, falling back to fullScreenIntent: ${e.message}")
+            FileLogger.w(TAG, "startActivity failed, falling back to fullScreenIntent: ${e.message}")
         }
 
         // Attempt 2: fullScreenIntent notification (fires in parallel as a guaranteed fallback)
@@ -376,7 +467,7 @@ class ServerService : Service() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get IP address", e)
+            FileLogger.e(TAG, "Failed to get IP address", e)
         }
         return null
     }
@@ -421,10 +512,21 @@ class ServerService : Service() {
         const val EXTRA_MOUSE_DY = "mouse_dy"
         const val ACTION_BROWSER_CONTROL = "com.playbridge.receiver.ACTION_BROWSER_CONTROL"
         const val EXTRA_BROWSER_ACTION = "browser_action"
+        const val EXTRA_PLAYLIST = "playlist"
+        const val EXTRA_PLAYLIST_INDEX = "playlist_index"
+        const val EXTRA_PREFERRED_AUDIO_LANG = "preferred_audio_lang"
+        const val EXTRA_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_lang"
+        const val EXTRA_EXTERNAL_SUBTITLE_URL = "external_subtitle_url"
+        const val EXTRA_VIDEO_FILTER = "video_filter"
+        const val EXTRA_CUSTOM_FILTER_VALUES = "custom_filter_values"
         
         // Static flow for UI to observe connection state
         private val _connectionState = MutableStateFlow<WebSocketServer.ConnectionState>(WebSocketServer.ConnectionState.Stopped)
         val connectionState: StateFlow<WebSocketServer.ConnectionState> = _connectionState.asStateFlow()
+        
+        // Static flow for UI to observe connected client count
+        private val _connectedClientCount = MutableStateFlow(0)
+        val connectedClientCount: StateFlow<Int> = _connectedClientCount.asStateFlow()
         
         fun start(context: Context) {
             val intent = Intent(context, ServerService::class.java)

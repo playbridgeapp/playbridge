@@ -18,6 +18,7 @@ const openUrlPlayerBtn = document.getElementById('open-url-player-btn');
 
 const tvIpInput = document.getElementById('tv-ip');
 const tvPinInput = document.getElementById('tv-pin');
+const tvPortInput = document.getElementById('tv-port');
 const connectBtn = document.getElementById('connect-btn');
 const disconnectBtn = document.getElementById('disconnect-btn');
 
@@ -64,6 +65,23 @@ function showToast(msg) {
     }, 2000);
 }
 
+// Clipboard helper (navigator.clipboard doesn't work inside iframes)
+function copyToClipboard(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        showToast('URL copied');
+    } catch (e) {
+        showToast('Copy failed');
+    }
+    document.body.removeChild(textarea);
+}
+
 // Background Communication
 function loadVideos() {
     if (browser.tabs && browser.tabs.query) {
@@ -103,6 +121,7 @@ function loadStatus() {
             updateStatusUI(response.status);
             if (response.ip) tvIpInput.value = response.ip;
             if (response.pin) tvPinInput.value = response.pin;
+            if (response.port && tvPortInput) tvPortInput.value = response.port;
         }
     });
     
@@ -202,6 +221,7 @@ function updateStatusUI(status) {
         disconnectBtn.classList.remove('hidden');
         tvIpInput.disabled = true;
         tvPinInput.disabled = true;
+        if (tvPortInput) tvPortInput.disabled = true;
         
         // Save successful connection
         if (tvIpInput.value && tvPinInput.value) {
@@ -214,6 +234,7 @@ function updateStatusUI(status) {
         disconnectBtn.classList.add('hidden');
         tvIpInput.disabled = true;
         tvPinInput.disabled = true;
+        if (tvPortInput) tvPortInput.disabled = true;
     } else {
         statusText.textContent = 'Disconnected';
         statusText.style.color = 'var(--danger)';
@@ -221,6 +242,7 @@ function updateStatusUI(status) {
         disconnectBtn.classList.add('hidden');
         tvIpInput.disabled = false;
         tvPinInput.disabled = false;
+        if (tvPortInput) tvPortInput.disabled = false;
     }
 }
 
@@ -266,13 +288,36 @@ function renderVideos() {
             const typeStr = video.contentType || 'Unknown Type';
             const detectStr = video.detectedBy || 'unknown';
             
-            item.innerHTML = `
-                <div class="vid-url" title="${video.url}">${video.url}</div>
-                <div class="vid-meta">
-                    <span class="vid-type">${typeStr}</span>
-                    <span>${detectStr}</span>
-                </div>
-            `;
+            // URL display (safe textContent)
+            const urlDiv = document.createElement('div');
+            urlDiv.className = 'vid-url-row';
+            const urlText = document.createElement('div');
+            urlText.className = 'vid-url';
+            urlText.title = video.url;
+            urlText.textContent = video.url;
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-url-btn';
+            copyBtn.title = 'Copy URL';
+            copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="14" viewBox="0 0 24 24" width="14" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
+            copyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                copyToClipboard(video.url);
+            });
+            urlDiv.appendChild(urlText);
+            urlDiv.appendChild(copyBtn);
+            item.appendChild(urlDiv);
+
+            // Meta row (safe textContent)
+            const metaDiv = document.createElement('div');
+            metaDiv.className = 'vid-meta';
+            const typeSpan = document.createElement('span');
+            typeSpan.className = 'vid-type';
+            typeSpan.textContent = typeStr;
+            const detectSpan = document.createElement('span');
+            detectSpan.textContent = detectStr;
+            metaDiv.appendChild(typeSpan);
+            metaDiv.appendChild(detectSpan);
+            item.appendChild(metaDiv);
             
             // Qualities Dropdown for HLS
             if (video.qualities && video.qualities.length > 0) {
@@ -296,13 +341,46 @@ function renderVideos() {
             }
             
             item.addEventListener('click', () => {
-                selectedVideoUrl = video.url;
-                document.querySelectorAll('#videos-list .video-item').forEach(el => el.classList.remove('selected'));
-                item.classList.add('selected');
+                if (selectedVideoUrl === video.url) {
+                    selectedVideoUrl = null;
+                    item.classList.remove('selected');
+                } else {
+                    selectedVideoUrl = video.url;
+                    document.querySelectorAll('#videos-list .video-item').forEach(el => el.classList.remove('selected'));
+                    item.classList.add('selected');
+                }
             });
             
             videosList.appendChild(item);
         });
+
+        // Action bar: Deselect + Clear All
+        const listActions = document.createElement('div');
+        listActions.className = 'list-actions';
+        const deselectBtn = document.createElement('button');
+        deselectBtn.className = 'list-action-btn';
+        deselectBtn.textContent = 'Deselect';
+        deselectBtn.addEventListener('click', () => {
+            selectedVideoUrl = null;
+            document.querySelectorAll('#videos-list .video-item').forEach(el => el.classList.remove('selected'));
+        });
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'list-action-btn danger';
+        clearBtn.textContent = 'Clear All';
+        clearBtn.addEventListener('click', () => {
+            browser.runtime.sendMessage({ action: 'clearVideos' }).then(() => {
+                currentVideos = [];
+                videoItems = [];
+                subtitleItems = [];
+                selectedVideoUrl = null;
+                selectedSubtitleUrl = null;
+                renderVideos();
+                showToast('Videos cleared');
+            });
+        });
+        listActions.appendChild(deselectBtn);
+        listActions.appendChild(clearBtn);
+        videosList.appendChild(listActions);
     }
 
     if (subtitleItems.length === 0) {
@@ -317,19 +395,44 @@ function renderVideos() {
             const item = document.createElement('div');
             item.className = 'video-item' + (selectedSubtitleUrl === sub.url ? ' selected' : '');
             
-            let previewHtml = '';
+            // URL display (safe textContent)
+            const urlDiv = document.createElement('div');
+            urlDiv.className = 'vid-url-row';
+            const urlText = document.createElement('div');
+            urlText.className = 'vid-url';
+            urlText.title = sub.url;
+            urlText.textContent = sub.url;
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-url-btn';
+            copyBtn.title = 'Copy URL';
+            copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="14" viewBox="0 0 24 24" width="14" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
+            copyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                copyToClipboard(sub.url);
+            });
+            urlDiv.appendChild(urlText);
+            urlDiv.appendChild(copyBtn);
+            item.appendChild(urlDiv);
+
+            // Preview
             if (sub.subtitlePreview) {
-                previewHtml = `<div class="vid-preview">${sub.subtitlePreview}</div>`;
+                const previewDiv = document.createElement('div');
+                previewDiv.className = 'vid-preview';
+                previewDiv.textContent = sub.subtitlePreview;
+                item.appendChild(previewDiv);
             }
-            
-            item.innerHTML = `
-                <div class="vid-url" title="${sub.url}">${sub.url}</div>
-                ${previewHtml}
-                <div class="vid-meta">
-                    <span class="vid-type">${sub.contentType || 'Subtitle'}</span>
-                    <span>${sub.detectedBy || 'unknown'}</span>
-                </div>
-            `;
+
+            // Meta row (safe textContent)
+            const metaDiv = document.createElement('div');
+            metaDiv.className = 'vid-meta';
+            const typeSpan = document.createElement('span');
+            typeSpan.className = 'vid-type';
+            typeSpan.textContent = sub.contentType || 'Subtitle';
+            const detectSpan = document.createElement('span');
+            detectSpan.textContent = sub.detectedBy || 'unknown';
+            metaDiv.appendChild(typeSpan);
+            metaDiv.appendChild(detectSpan);
+            item.appendChild(metaDiv);
             
             item.addEventListener('click', () => {
                 if (selectedSubtitleUrl === sub.url) {
@@ -344,6 +447,34 @@ function renderVideos() {
             
             subtitlesList.appendChild(item);
         });
+
+        // Action bar: Deselect + Clear All
+        const listActions = document.createElement('div');
+        listActions.className = 'list-actions';
+        const deselectBtn = document.createElement('button');
+        deselectBtn.className = 'list-action-btn';
+        deselectBtn.textContent = 'Deselect';
+        deselectBtn.addEventListener('click', () => {
+            selectedSubtitleUrl = null;
+            document.querySelectorAll('#subtitles-list .video-item').forEach(el => el.classList.remove('selected'));
+        });
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'list-action-btn danger';
+        clearBtn.textContent = 'Clear All';
+        clearBtn.addEventListener('click', () => {
+            browser.runtime.sendMessage({ action: 'clearVideos' }).then(() => {
+                currentVideos = [];
+                videoItems = [];
+                subtitleItems = [];
+                selectedVideoUrl = null;
+                selectedSubtitleUrl = null;
+                renderVideos();
+                showToast('Subtitles cleared');
+            });
+        });
+        listActions.appendChild(deselectBtn);
+        listActions.appendChild(clearBtn);
+        subtitlesList.appendChild(listActions);
     }
 }
 
@@ -551,6 +682,7 @@ openUrlPlayerBtn.addEventListener('click', async () => {
 connectBtn.addEventListener('click', () => {
     const ip = tvIpInput.value.trim();
     const pin = tvPinInput.value.trim();
+    const port = tvPortInput ? parseInt(tvPortInput.value.trim(), 10) : 8765;
     
     if (!ip) {
         showToast('Please enter an IP address');
@@ -565,7 +697,8 @@ connectBtn.addEventListener('click', () => {
     browser.runtime.sendMessage({
         action: 'wsConnect',
         ip: ip,
-        pin: pin
+        pin: pin,
+        port: port || 8765
     });
     updateStatusUI('connecting');
 });

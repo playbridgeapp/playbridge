@@ -2,6 +2,7 @@ package com.playbridge.sender.browser
 
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,9 +12,13 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
@@ -24,10 +29,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -179,6 +187,9 @@ class BrowserActivity : ComponentActivity() {
         database = DatabaseProvider.getDatabase(applicationContext)
 
         // Restore tabs
+        // Track whether tab restoration is complete to avoid blank screen
+        val tabsRestoredOrReady = mutableStateOf(Components.store.state.tabs.isNotEmpty())
+
         lifecycleScope.launch(Dispatchers.IO) {
             if (Components.store.state.tabs.isEmpty()) {
                 val savedTabs = database.tabDao().getAll()
@@ -196,6 +207,9 @@ class BrowserActivity : ComponentActivity() {
                     }
                 }
             }
+            withContext(Dispatchers.Main) {
+                tabsRestoredOrReady.value = true
+            }
         }
 
         setContent {
@@ -209,6 +223,9 @@ class BrowserActivity : ComponentActivity() {
             // Uses the activity-scoped database instance
             val historyDao = remember { database.historyDao() }
             val bookmarkDao = remember { database.bookmarkDao() }
+            val addonDao = remember { database.addonDao() }
+            val addonRepository = remember { com.playbridge.sender.data.library.AddonRepository(addonDao) }
+            val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
             
             // Suggestions State
             var isEditing by remember { mutableStateOf(false) }
@@ -244,8 +261,8 @@ class BrowserActivity : ComponentActivity() {
             }
             
             // Sync sessions with tabs
-            LaunchedEffect(browserState.tabs) {
-                tabManager.syncSessions(browserState.tabs)
+            LaunchedEffect(browserState.tabs, browserState.selectedTabId) {
+                tabManager.syncSessions(browserState.tabs, browserState.selectedTabId)
             }
             
             val sessions = tabManager.sessions
@@ -259,6 +276,12 @@ class BrowserActivity : ComponentActivity() {
             
             // If no session is available (e.g. during init), show loading or empty
             if (session == null) {
+                if (tabsRestoredOrReady.value) {
+                    // Restoration done but session is still null — force create a tab
+                    LaunchedEffect(Unit) {
+                        tabManager.ensureAtLeastOneTab(store)
+                    }
+                }
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
@@ -271,8 +294,27 @@ class BrowserActivity : ComponentActivity() {
             var browserCanGoBack by remember { mutableStateOf(false) }
             var browserCanGoForward by remember { mutableStateOf(false) }
             var menuExpanded by remember { mutableStateOf(false) }
+            
+            // User preferences
+            val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+            var detectVideosEnabled by remember { mutableStateOf(prefs.getBoolean("detect_videos", true)) }
             var isDesktopMode by remember { mutableStateOf(false) }
             var isSecureConnection by remember { mutableStateOf(false) }
+            var isFullscreen by remember { mutableStateOf(false) }
+            
+            // Fullscreen: hide/show system bars
+            val view = LocalView.current
+            LaunchedEffect(isFullscreen) {
+                val window = this@BrowserActivity.window ?: return@LaunchedEffect
+                val controller = WindowInsetsControllerCompat(window, view)
+                if (isFullscreen) {
+                    controller.hide(WindowInsetsCompat.Type.systemBars())
+                    controller.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                }
+            }
             
             // Update simple UI state from selected tab
             LaunchedEffect(selectedTab?.id) {
@@ -284,8 +326,17 @@ class BrowserActivity : ComponentActivity() {
             // View state - browser or scanner
             var showScanner by remember { mutableStateOf(false) }
             
+            // FAB Drag state
+            var fabOffsetX by remember { mutableFloatStateOf(0f) }
+            var fabOffsetY by remember { mutableFloatStateOf(0f) }
+            
             // Back press handling
             var backPressedTime by remember { mutableLongStateOf(0L) }
+            
+            // Magnet parsing state
+            var interceptedMagnet by remember { mutableStateOf<String?>(null) }
+            var interceptedTorrentBytes by remember { mutableStateOf<ByteArray?>(null) }
+            val debridRepository = remember { com.playbridge.sender.data.debrid.DebridRepository(applicationContext) }
             
             // Video detection state — per-tab
             var showVideoSheet by remember { mutableStateOf(false) }
@@ -380,7 +431,10 @@ class BrowserActivity : ComponentActivity() {
                 url = contextMenuUrl,
                 isConnected = connectionState is WebSocketClient.ConnectionState.Connected,
                 onPlayOnTv = { linkUrl ->
-                    val cmd = com.playbridge.protocol.createPlayCommandJson(url = linkUrl)
+                    val cmd = com.playbridge.protocol.createPlayCommandJson(
+                        url = linkUrl, 
+                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                    )
                     webSocketClient.send(cmd)
                     Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                     contextMenuUrl = null
@@ -389,6 +443,12 @@ class BrowserActivity : ComponentActivity() {
                 onOpenInNewTab = { linkUrl ->
                     tabManager.createTab(linkUrl, store)
                     Toast.makeText(this@BrowserActivity, "Opened in new tab", Toast.LENGTH_SHORT).show()
+                    contextMenuUrl = null
+                    contextMenuUrlState.value = null
+                },
+                onOpenInBackground = { linkUrl ->
+                    tabManager.createTab(linkUrl, store, select = false)
+                    Toast.makeText(this@BrowserActivity, "Opened in background", Toast.LENGTH_SHORT).show()
                     contextMenuUrl = null
                     contextMenuUrlState.value = null
                 },
@@ -420,6 +480,7 @@ class BrowserActivity : ComponentActivity() {
                 historyDao = historyDao,
                 pendingDownload = pendingDownloadState,
                 isDesktopMode = isDesktopMode,
+                detectVideosEnabled = detectVideosEnabled,
                 isSecureConnection = isSecureConnectionState,
                 onXpiDetected = { url ->
                     runOnUiThread {
@@ -447,6 +508,12 @@ class BrowserActivity : ComponentActivity() {
                         }
                     }
                 },
+                onMagnetDetected = { uri ->
+                    interceptedMagnet = uri
+                },
+                onTorrentDownloaded = { bytes ->
+                    interceptedTorrentBytes = bytes
+                },
                 onVideoHashDetected = { url, kotlinTabId ->
                     try {
                         val hashData = url.substringAfter("#playbridge-video=")
@@ -469,6 +536,9 @@ class BrowserActivity : ComponentActivity() {
                     } catch (e: Exception) {
                         Log.e(TAG, "Error parsing playbridge-video hash", e)
                     }
+                },
+                onFullScreenChange = { fullScreen ->
+                    isFullscreen = fullScreen
                 }
             )
 
@@ -493,10 +563,63 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             
+
+
+            val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+
             PlayBridgeTheme {
-                Scaffold(
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    gesturesEnabled = drawerState.isOpen, // Only swipe to close, not to open
+                    drawerContent = {
+                        ModalDrawerSheet(modifier = Modifier.width(280.dp)) {
+                            Spacer(Modifier.height(16.dp))
+                            Text(
+                                "PlayBridge",
+                                style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 16.dp)
+                            )
+                            HorizontalDivider()
+                            Spacer(Modifier.height(8.dp))
+                            
+                            NavigationDrawerItem(
+                                icon = { Icon(Icons.Default.Language, contentDescription = null) },
+                                label = { Text("Browser") },
+                                selected = currentScreen == Screen.Browser || currentScreen == Screen.Tabs || currentScreen == Screen.History || currentScreen == Screen.Downloads,
+                                onClick = {
+                                    scope.launch { drawerState.close() }
+                                    currentScreen = Screen.Browser
+                                },
+                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
+                            NavigationDrawerItem(
+                                icon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = null) },
+                                label = { Text("Library") },
+                                selected = currentScreen == Screen.Library,
+                                onClick = {
+                                    scope.launch { drawerState.close() }
+                                    currentScreen = Screen.Library
+                                },
+                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
+                            NavigationDrawerItem(
+                                icon = { Icon(Icons.Default.Cloud, contentDescription = null) },
+                                label = { Text("Debrid Library") },
+                                selected = currentScreen == Screen.DebridLibrary,
+                                onClick = {
+                                    scope.launch { drawerState.close() }
+                                    currentScreen = Screen.DebridLibrary
+                                },
+                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
+                        }
+                    }
+                ) {
+                    Scaffold(
                     topBar = {
-                        when (currentScreen) {
+                        if (isFullscreen) {
+                            // Hide toolbar in fullscreen
+                        } else when (currentScreen) {
                             Screen.Browser -> {
                                 Box(modifier = Modifier.fillMaxWidth()) {
                                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -505,7 +628,6 @@ class BrowserActivity : ComponentActivity() {
                                             isLoading = isLoading,
                                             canGoBack = browserCanGoBack,
                                             canGoForward = browserCanGoForward,
-                                            videoCount = videoCount,
                                             tabCount = browserState.tabs.size,
                                             isEditing = isEditing,
                                             isSecure = isSecureConnection,
@@ -528,7 +650,7 @@ class BrowserActivity : ComponentActivity() {
                                             onRefresh = { session.reload() },
                                             onStop = { session.stopLoading() },
                                             onMenuClick = { menuExpanded = true },
-                                            onVideoClick = { showVideoSheet = true },
+                                            onDrawerClick = { scope.launch { drawerState.open() } },
                                             onTabsClick = { currentScreen = Screen.Tabs },
                                             menuContent = {
 
@@ -616,7 +738,10 @@ class BrowserActivity : ComponentActivity() {
                                                         index = 2,
                                                         onClick = {
                                                             menuExpanded = false
-                                                            val cmd = com.playbridge.protocol.createBrowserCommandJson(currentUrl)
+                                                            val cmd = com.playbridge.protocol.createBrowserCommandJson(
+                                                                currentUrl, 
+                                                                browserMode = prefs.getString("tv_browser_mode", "tv")?.takeIf { it != "tv" }
+                                                            )
                                                             webSocketClient.send(cmd)
                                                             Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                         }
@@ -631,9 +756,7 @@ class BrowserActivity : ComponentActivity() {
                                                     
                                                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                                 }
-                                                
 
-                                                
                                                 AnimatedMenuItem(
                                                     index = 3,
                                                     onClick = {
@@ -659,6 +782,28 @@ class BrowserActivity : ComponentActivity() {
                                                     DropdownMenuItem(
                                                         text = { Text("Find in Page", style = MaterialTheme.typography.bodyLarge) },
                                                         leadingIcon = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary) },
+                                                        onClick = onClick,
+                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                                    )
+                                                }
+
+                                                AnimatedMenuItem(
+                                                    index = 4,
+                                                    onClick = {
+                                                        detectVideosEnabled = !detectVideosEnabled
+                                                        prefs.edit().putBoolean("detect_videos", detectVideosEnabled).apply()
+                                                        menuExpanded = false
+                                                    }
+                                                ) { onClick ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("Detect Videos", style = MaterialTheme.typography.bodyLarge) },
+                                                        leadingIcon = { 
+                                                            Icon(
+                                                                if (detectVideosEnabled) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked, 
+                                                                null, 
+                                                                tint = if (detectVideosEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                                            ) 
+                                                        },
                                                         onClick = onClick,
                                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                     )
@@ -875,6 +1020,21 @@ class BrowserActivity : ComponentActivity() {
                             Screen.Settings -> {
                                 // No TopAppBar here as SettingsScreen has its own
                             }
+                            Screen.Library -> {
+                                // No TopAppBar here as LibraryScreen has its own
+                            }
+                            is Screen.MovieDetail -> {
+                                // No TopAppBar here as MovieDetailScreen has its own
+                            }
+                            is Screen.TvShowDetail -> {
+                                // No TopAppBar here as TvShowDetailScreen has its own
+                            }
+                            Screen.AddonSettings -> {
+                                // No TopAppBar here as AddonSettingsScreen has its own
+                            }
+                            Screen.DebridLibrary -> {
+                                // No TopAppBar here as DebridLibraryScreen has its own
+                            }
                         }
                     }
                 ) { innerPadding ->
@@ -889,10 +1049,10 @@ class BrowserActivity : ComponentActivity() {
                                     } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
                                         slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
-                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote) && initialState == Screen.Browser) {
+                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.Library || targetState == Screen.DebridLibrary || targetState == Screen.AddonSettings || targetState is Screen.MovieDetail || targetState is Screen.TvShowDetail) && initialState == Screen.Browser) {
                                          slideInVertically { height -> height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> -height } + fadeOut()
-                                    } else if (targetState == Screen.Browser && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote)) {
+                                    } else if (targetState == Screen.Browser && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.Library || initialState == Screen.DebridLibrary || initialState == Screen.AddonSettings || initialState is Screen.MovieDetail || initialState is Screen.TvShowDetail)) {
                                          slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
                                     } else {
@@ -905,8 +1065,16 @@ class BrowserActivity : ComponentActivity() {
                                 Box(modifier = Modifier.fillMaxSize()) {
                                     when (targetScreen) {
                                         Screen.Browser -> {
+                                            // Fullscreen back handler — takes priority
+                                            if (isFullscreen) {
+                                                BackHandler {
+                                                    isFullscreen = false
+                                                    val gs = tabManager.getGeckoSession(session)
+                                                    gs?.exitFullScreen()
+                                                }
+                                            }
                                             // Browser: first back goes to browser history, second back exits
-                                            BackHandler {
+                                            BackHandler(enabled = !isFullscreen) {
                                                 if (browserCanGoBack) {
                                                     session.goBack()
                                                 } else {
@@ -979,6 +1147,41 @@ class BrowserActivity : ComponentActivity() {
                                                                 )
                                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                                                             }
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                // Draggable Video FAB
+                                                if (videoCount > 0 && detectVideosEnabled && !isEditing) {
+                                                    FloatingActionButton(
+                                                        onClick = { showVideoSheet = true },
+                                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                        shape = CircleShape,
+                                                        modifier = Modifier
+                                                            .align(Alignment.BottomEnd)
+                                                            .padding(24.dp)
+                                                            .offset(x = fabOffsetX.dp, y = fabOffsetY.dp)
+                                                            .pointerInput(Unit) {
+                                                                detectDragGestures { change, dragAmount ->
+                                                                    change.consume()
+                                                                    // Convert pixel drag to dp
+                                                                    fabOffsetX += dragAmount.x / density
+                                                                    fabOffsetY += dragAmount.y / density
+                                                                }
+                                                            }
+                                                    ) {
+                                                        BadgedBox(
+                                                            badge = {
+                                                                Badge(
+                                                                    containerColor = MaterialTheme.colorScheme.error,
+                                                                    contentColor = MaterialTheme.colorScheme.onError
+                                                                ) {
+                                                                    Text(videoCount.toString())
+                                                                }
+                                                            }
+                                                        ) {
+                                                            Icon(Icons.Default.PlayArrow, "Detected $videoCount videos")
                                                         }
                                                     }
                                                 }
@@ -1090,8 +1293,12 @@ class BrowserActivity : ComponentActivity() {
                                         }
                                         Screen.Settings -> {
                                             BackHandler { currentScreen = Screen.Browser }
+                                            val tvDevice by connectionStore.tvDevice.collectAsState(initial = null)
                                             SettingsScreen(
-                                                onBack = { currentScreen = Screen.Browser }
+                                                onBack = { currentScreen = Screen.Browser },
+                                                onAddonSettings = { currentScreen = Screen.AddonSettings },
+                                                tvIp = if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) tvDevice?.ip else null,
+                                                tvPort = if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) tvDevice?.port else null
                                             )
                                         }
                                         Screen.Bookmarks -> {
@@ -1140,19 +1347,9 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Home -> {
-                                            // Home is root, but if we came from elsewhere back might exit?
-                                            // Actually Home might be the starting screen.
-                                            // For now, let's say Home -> Browser (if url entered) or back exits app?
-                                            // If Home is "New Tab", then back might close tab?
-                                            // Let's treat Home as a screen that navigates to Browser.
                                             BackHandler { 
-                                                // If on Home, back exits app or goes to Browser?
-                                                // If we have tabs, maybe go to Browser?
-                                                // For now, mimicking standard behavior:
                                                 if (browserCanGoBack) {
                                                     session.goBack() 
-                                                    // But Home is not part of session history directly usually.
-                                                    // If URL is "playbridge://home", we show Home.
                                                 } else {
                                                     finish()
                                                 }
@@ -1164,6 +1361,103 @@ class BrowserActivity : ComponentActivity() {
                                                 },
                                                 historyDao = historyDao,
                                                 bookmarkDao = bookmarkDao
+                                            )
+                                        }
+                                        Screen.Library -> {
+                                            BackHandler { currentScreen = Screen.Browser }
+                                            LibraryScreen(
+                                                onBack = { currentScreen = Screen.Browser },
+                                                onMovieClick = { movieId ->
+                                                    currentScreen = Screen.MovieDetail(movieId)
+                                                },
+                                                onTvShowClick = { tvId ->
+                                                    currentScreen = Screen.TvShowDetail(tvId)
+                                                }
+                                            )
+                                        }
+                                        is Screen.MovieDetail -> {
+                                            val movieId = (targetScreen as Screen.MovieDetail).movieId
+                                            BackHandler { currentScreen = Screen.Library }
+                                            MovieDetailScreen(
+                                                movieId = movieId,
+                                                addonRepository = addonRepository,
+                                                onPlayStream = { url, title ->
+                                                    val cmd = com.playbridge.protocol.createPlayCommandJson(
+                                                        url = url, 
+                                                        title = title,
+                                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                    )
+                                                    webSocketClient.send(cmd)
+                                                },
+                                                onBack = { currentScreen = Screen.Library }
+                                            )
+                                        }
+                                        is Screen.TvShowDetail -> {
+                                            val tvId = (targetScreen as Screen.TvShowDetail).tvId
+                                            BackHandler { currentScreen = Screen.Library }
+                                            TvShowDetailScreen(
+                                                tvId = tvId,
+                                                addonRepository = addonRepository,
+                                                onPlayStream = { url, title ->
+                                                    val cmd = com.playbridge.protocol.createPlayCommandJson(
+                                                        url = url, 
+                                                        title = title,
+                                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                    )
+                                                    webSocketClient.send(cmd)
+                                                },
+                                                onPlayPlaylist = { items ->
+                                                    // The items (PlayPayloads) already need playerMode injected beforehand. 
+                                                    // Let's modify the onPlayPlaylist lambda caller if needed, or inject here. Wait, onPlayPlaylist passes List<PlayPayload>.
+                                                    // We can map over them to inject playerMode.
+                                                    val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                    val itemsWithMode = items.map { it.copy(playerMode = playerMode) }
+                                                    val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode)
+                                                    webSocketClient.send(cmd)
+                                                },
+                                                onBack = { currentScreen = Screen.Library }
+                                            )
+                                        }
+                                        Screen.AddonSettings -> {
+                                            BackHandler { currentScreen = Screen.Settings }
+                                            AddonSettingsScreen(
+                                                addonRepository = addonRepository,
+                                                installedAddons = installedAddons,
+                                                onBack = { currentScreen = Screen.Settings }
+                                            )
+                                        }
+                                        Screen.DebridLibrary -> {
+                                            BackHandler { currentScreen = Screen.Browser }
+                                            DebridLibraryScreen(
+                                                onBack = { currentScreen = Screen.Browser },
+                                                onCopyUrl = { linkUrl ->
+                                                    clipboardManager.setText(AnnotatedString(linkUrl))
+                                                    Toast.makeText(this@BrowserActivity, "Link copied", Toast.LENGTH_SHORT).show()
+                                                },
+                                                onPlayOnTv = { playUrl, title ->
+                                                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                                        val cmd = com.playbridge.protocol.createPlayCommandJson(
+                                                            url = playUrl,
+                                                            title = title,
+                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                        )
+                                                        webSocketClient.send(cmd)
+                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                },
+                                                onPlayPlaylistOnTv = { items ->
+                                                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                                        val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                        val itemsWithMode = items.map { it.copy(playerMode = playerMode) }
+                                                        val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode)
+                                                        webSocketClient.send(cmd)
+                                                        Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
                                             )
                                         }
                                     }
@@ -1207,7 +1501,8 @@ class BrowserActivity : ComponentActivity() {
                                         headers = headers,
                                         contentType = video.contentType,
                                         subtitles = subtitles,
-                                        detectedBy = video.detectedBy
+                                        detectedBy = video.detectedBy,
+                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                     )
                                     Log.d(TAG, "Sending play command: $commandJson")
                                     val sent = webSocketClient.send(commandJson)
@@ -1262,7 +1557,7 @@ class BrowserActivity : ComponentActivity() {
                 // Download Confirmation Dialog
                 DownloadConfirmDialog(
                     pendingDownload = pendingDownload,
-                    onConfirm = { download ->
+                    onConfirm = { download: PendingDownload ->
                         DownloadUtils.enqueueDownload(
                             this@BrowserActivity,
                             download.url,
@@ -1281,10 +1576,56 @@ class BrowserActivity : ComponentActivity() {
                         pendingDownloadState.value = null
                     }
                 )
+
+                // Magnet and Torrent Parsing Sheet
+                if (interceptedMagnet != null || interceptedTorrentBytes != null) {
+                    val provider = debridRepository.getActiveProvider()
+                    if (provider != null) {
+                        MagnetParsingSheet(
+                            magnetUri = interceptedMagnet,
+                            torrentBytes = interceptedTorrentBytes,
+                            provider = provider,
+                            onDismiss = { 
+                                interceptedMagnet = null
+                                interceptedTorrentBytes = null
+                            },
+                            onPlayLinks = { links ->
+                                if (links.size == 1) {
+                                    val commandJson = com.playbridge.protocol.createPlayCommandJson(
+                                        url = links.first().downloadUrl,
+                                        title = links.first().filename,
+                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                    )
+                                    webSocketClient.send(commandJson)
+                                    tvActiveContext = "player"
+                                    Toast.makeText(this@BrowserActivity, "Playing on TV", Toast.LENGTH_SHORT).show()
+                                } else if (links.size > 1) {
+                                    val videos = links.map { link ->
+                                        com.playbridge.protocol.PlayPayload(
+                                            url = link.downloadUrl,
+                                            title = link.filename,
+                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                        )
+                                    }
+                                    val playlistCmd = com.playbridge.protocol.createPlaylistCommandJson(items = videos)
+                                    webSocketClient.send(playlistCmd)
+                                    tvActiveContext = "player"
+                                    Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
+                                }
+                                interceptedMagnet = null
+                                interceptedTorrentBytes = null
+                            }
+                        )
+                    } else {
+                        Toast.makeText(this@BrowserActivity, "No Debrid provider configured. Configure it in Settings.", Toast.LENGTH_LONG).show()
+                        interceptedMagnet = null
+                        interceptedTorrentBytes = null
+                    }
+                }
             }
         }
     }
-    
+    }
 
 
     override fun onDestroy() {
@@ -1336,4 +1677,9 @@ sealed class Screen {
     object Bookmarks : Screen()
     object Home : Screen()
     object Remote : Screen()
+    object Library : Screen()
+    object DebridLibrary : Screen()
+    object AddonSettings : Screen()
+    data class MovieDetail(val movieId: Int) : Screen()
+    data class TvShowDetail(val tvId: Int) : Screen()
 }

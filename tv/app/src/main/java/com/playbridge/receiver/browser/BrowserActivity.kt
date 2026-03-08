@@ -42,6 +42,7 @@ class BrowserActivity : ComponentActivity() {
     companion object {
         private const val TAG = "TVBrowserActivity"
         const val EXTRA_URL = "extra_url"
+        const val EXTRA_BROWSER_MODE = "extra_browser_mode"
     }
 
     private var engine: BrowserEngine? = null
@@ -200,7 +201,25 @@ class BrowserActivity : ComponentActivity() {
         }
         
         val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-        val useGecko = prefs.getBoolean("use_gecko", false)
+        
+        val tvPref = if (prefs.contains("browser_mode")) {
+            prefs.getString("browser_mode", "phone") ?: "phone"
+        } else {
+            if (prefs.getBoolean("use_gecko", false)) "gecko" else "phone"
+        }
+        
+        val finalMode = if (tvPref == "phone") {
+            val phoneMode = intent.getStringExtra(EXTRA_BROWSER_MODE)
+            if (phoneMode != null && phoneMode != "tv") {
+                phoneMode
+            } else {
+                "webview" // Default if no phone mode provided
+            }
+        } else {
+            tvPref
+        }
+        
+        val useGecko = finalMode == "gecko"
         
         engine = if (useGecko) {
             Log.d(TAG, "Initializing GeckoView Engine")

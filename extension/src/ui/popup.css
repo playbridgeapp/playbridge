@@ -196,6 +196,34 @@ h3 {
     gap: 12px;
 }
 
+.list-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.list-action-btn {
+    background: transparent;
+    border: 1px solid var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.list-action-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.list-action-btn.danger:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
 .video-item {
     background-color: var(--bg-secondary);
     border-radius: 8px;
@@ -222,10 +250,37 @@ h3 {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-bottom: 8px;
     background: var(--bg-tertiary);
     padding: 6px;
     border-radius: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
+.vid-url-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.copy-url-btn {
+    flex-shrink: 0;
+    background: var(--bg-tertiary);
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.copy-url-btn:hover {
+    color: var(--accent);
+    background: rgba(208, 188, 255, 0.15);
 }
 
 .vid-preview {

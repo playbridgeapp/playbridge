@@ -278,6 +278,30 @@ browser.webRequest.onHeadersReceived.addListener(
             }
         }
 
+        // --- HTTP Error Detection ---
+        // If it's a main_frame request and status is >= 400, notify the native app
+        if (details.type === 'main_frame' && details.statusCode >= 400) {
+            console.log(`[VideoDetector BG] HTTP ERROR detected: ${details.statusCode} for ${details.url}`);
+
+            // We use the "browser" port if available, or just log it.
+            // Native app will listen for messages of type 'http_error'
+            const errorMsg = {
+                type: 'http_error',
+                url: details.url,
+                statusCode: details.statusCode,
+                tabId: details.tabId,
+                timestamp: Date.now()
+            };
+
+            // Send to native side directly via runtime.sendMessage (Components.kt message delegate)
+            browser.runtime.sendMessage(errorMsg).catch(() => {});
+
+            // Also update storage so polling can find it if needed
+            browser.storage.local.set({
+                lastHttpError: errorMsg
+            });
+        }
+
         // Cleanup: Once headers are received, we don't need to store the request headers anymore
         // for this specific request ID.
         if (storedData) {

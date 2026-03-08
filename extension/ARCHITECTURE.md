@@ -13,3 +13,9 @@ This is a natively built Web Extension specifically targeted for **Firefox (Desk
 | Content Script | `extension/src/content.js` | In-page video UI (Shadow DOM floating button) |
 | HLS Parser | `extension/src/hls-parser.js` | Parses HLS manifests for quality selection |
 | Extension UI | `extension/src/ui/popup.*` | Video list view, Subtitles view, URLs sender, and TV connection settings |
+| Context Menu | `extension/src/background.js` | Right-click "PlayBridge" menu with "Play on TV" (links, video/audio elements) and "Open on TV" (links or current tab) |
+
+## Build & Release
+
+The extension is continuously integrated and released alongside the Android apps via GitHub Actions.
+When a new release is triggered (via merging into `main` and updating the version), the `.github/workflows/extension_build.yml` workflow automatically packages the contents of the `extension/src/` directory into a `.xpi` file (Firefox extension package) and attaches it to the newly created GitHub Release.

@@ -1,0 +1,288 @@
+package com.playbridge.sender.browser
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.playbridge.sender.data.library.ResolvedStream
+
+/**
+ * Quality filter options for streams.
+ */
+private enum class QualityFilter(val label: String, val patterns: List<String>) {
+    ALL("All", emptyList()),
+    UHD("4K", listOf("2160p", "4k", "uhd", "4K")),
+    FHD("1080p", listOf("1080p", "1080")),
+    HD("720p", listOf("720p", "720")),
+}
+
+/**
+ * Check if a stream matches a quality filter by scanning name + title.
+ */
+private fun ResolvedStream.matchesFilter(filter: QualityFilter): Boolean {
+    if (filter == QualityFilter.ALL) return true
+    val text = "${stream.name.orEmpty()} ${stream.title.orEmpty()}".lowercase()
+    return filter.patterns.any { text.contains(it.lowercase()) }
+}
+
+/**
+ * Bottom sheet displaying resolved streams from Stremio addons.
+ * Supports quality filter chips and incremental display (streams appear as they resolve).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun StreamPickerSheet(
+    streams: List<ResolvedStream>,
+    isLoading: Boolean,
+    title: String,
+    onStreamSelected: (ResolvedStream) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var selectedFilter by remember { mutableStateOf(QualityFilter.ALL) }
+
+    val filteredStreams = remember(streams, selectedFilter) {
+        streams.filter { it.matchesFilter(selectedFilter) }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 32.dp)
+        ) {
+            // Header
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+
+            // Quality filter chips (always visible)
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                items(QualityFilter.entries) { filter ->
+                    val count = if (filter == QualityFilter.ALL) {
+                        streams.size
+                    } else {
+                        streams.count { it.matchesFilter(filter) }
+                    }
+                    FilterChip(
+                        selected = selectedFilter == filter,
+                        onClick = { selectedFilter = filter },
+                        label = {
+                            Text(
+                                if (count > 0) "${filter.label} ($count)"
+                                else filter.label
+                            )
+                        },
+                        enabled = count > 0 || isLoading
+                    )
+                }
+            }
+
+            // Stream count + loading indicator
+            Row(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (streams.isNotEmpty()) {
+                    Text(
+                        text = "${filteredStreams.size} stream${if (filteredStreams.size != 1) "s" else ""}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = "Resolving…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Stream list (shows incrementally as streams arrive)
+            if (streams.isEmpty() && isLoading) {
+                // Initial loading state — no streams yet
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "Resolving streams from addons…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else if (streams.isEmpty() && !isLoading) {
+                // No streams found at all
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.SearchOff,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "No streams found",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Make sure you have addons installed with Real-Debrid configured",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 32.dp)
+                        )
+                    }
+                }
+            } else if (filteredStreams.isEmpty()) {
+                // Streams exist but none match the filter
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "No ${selectedFilter.label} streams found",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 400.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(filteredStreams, key = { "${it.addonName}:${it.stream.url}" }) { resolved ->
+                        StreamItem(
+                            resolvedStream = resolved,
+                            onClick = { onStreamSelected(resolved) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StreamItem(
+    resolvedStream: ResolvedStream,
+    onClick: () -> Unit
+) {
+    val stream = resolvedStream.stream
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Play icon
+            Icon(
+                Icons.Default.PlayCircle,
+                contentDescription = "Play",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                // Stream name (addon name + stream quality)
+                Text(
+                    text = stream.displayName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                // Quality info from title field (often contains codec, resolution, size)
+                if (stream.qualityInfo.isNotBlank()) {
+                    Text(
+                        text = stream.qualityInfo,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                // File size and addon name row
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // File size
+                    stream.behaviorHints?.fileSizeFormatted?.let { size ->
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = size,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    // Addon source
+                    Text(
+                        text = "via ${resolvedStream.addonName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}

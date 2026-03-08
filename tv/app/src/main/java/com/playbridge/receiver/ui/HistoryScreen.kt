@@ -28,6 +28,7 @@ import java.io.File
 fun HistoryScreen(
     historyStore: HistoryStore,
     deviceName: String,
+    connectedCount: Int = 0,
     onNavigateToPairing: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onPlayItem: (PlaybackHistoryItem) -> Unit
@@ -54,9 +55,12 @@ fun HistoryScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Connected",
+                    text = if (connectedCount > 0) {
+                        if (connectedCount == 1) "1 device connected"
+                        else "$connectedCount devices connected"
+                    } else "Not connected",
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color.White
+                    color = if (connectedCount > 0) Color(0xFF00FF88) else Color.Gray
                 )
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {

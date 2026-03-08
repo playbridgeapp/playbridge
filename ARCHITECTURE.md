@@ -90,29 +90,41 @@ Details on the shared protocol and communication flow between Phone and TV have 
 
 ## Issues & Refactoring Recommendations
 
+### 🔴 Critical Issues (Play Store Blockers)
+
+#### 1. Unsafe SSL in ContentSniffer (TV App)
+- **Problem**: `getUnsafeOkHttpClient()` trusts ALL certificates and disables hostname verification
+- **Impact**: Google Play automated scanner will reject — [policy violation](https://support.google.com/faqs/answer/7188426)
+- **Recommendation**: Scope SSL bypass to private/local IPs only (`192.168.*`, `10.*`, `172.16-31.*`)
+
+#### 2. Cleartext Traffic Globally Enabled (TV App)
+- **Problem**: `network_security_config.xml` has `<base-config cleartextTrafficPermitted="true">` for all domains
+- **Impact**: Security review flag during Play Store review
+- **Recommendation**: Remove the `<base-config>` block; keep only `<domain-config>` for local network addresses
+
+#### 3. Dangerous Permissions Not Used (TV App)
+- **Problem**: `CAMERA` and `RECORD_AUDIO` declared as "forensic permissions" but not used in core functionality
+- **Impact**: Triggers manual review + requires privacy policy + data safety declarations
+- **Recommendation**: Remove if not actually needed
+
 ### 🟡 Moderate Issues
 
-#### 4. Unsafe SSL in PlayerActivity
-- **Problem**: `getUnsafeOkHttpClient()` trusts all certificates
-- **Impact**: Security vulnerability for MITM attacks
-- **Recommendation**: Make this optional/configurable with clear warnings
-
-#### 5. Hardcoded Values
+#### 4. Hardcoded Values
 - Port `8765` hardcoded across both apps
 - Retry counts (60), delays (5s) embedded in code
 - **Recommendation**: Move to a `config` object or DataStore preferences
 
-#### 6. Missing Error Handling in Extensions
+#### 5. Missing Error Handling in Extensions
 - Browser extension silently catches errors in [background.js:76-89](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/background.js#L76) (3 separate silent catches)
 - **Recommendation**: Add proper error logging/reporting
 
 ### 🟢 Minor Improvements
 
-#### 7. Components.kt is Not True DI
+#### 6. Components.kt is Not True DI
 - Uses lazy singletons, not proper dependency injection
 - **Recommendation**: Consider Hilt/Koin for testability, or keep as-is if testing isn't a priority
 
-#### 8. ProGuard Rules Minimal
+#### 7. ProGuard Rules Minimal
 - Default ProGuard rules may strip needed Kotlin serialization classes
 - **Recommendation**: Add rules for kotlinx.serialization, Ktor, etc.
 
@@ -123,7 +135,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 ### ✅ Already Good
 - [x] `CONTRIBUTING.md` created with contribution guidelines
 - [x] `.gitignore` properly configured (34 entries covering build, IDE, keystore, OS files)
-- [x] GitHub Actions CI exists ([android_build.yml](file:///Users/atulmehla/repos/personal/PlayBridge/.github/workflows/android_build.yml))
+- [x] GitHub Actions CI exists for separated projects (`phone_build.yml`, `tv_build.yml`, `extension_build.yml`)
 - [x] Clean package structure with clear separation
 - [x] Well-documented protocol messages with KDoc
 - [x] Sealed class pattern for type-safe command handling (shared protocol module)
@@ -154,6 +166,26 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - Both apps have `isMinifyEnabled = false` for release
 - Consider enabling for production releases with proper ProGuard rules
 
+### ❌ Missing for Play Store (TV App)
+
+#### 1. Google Play Console Setup
+- [ ] Developer account ($25 one-time)
+- [ ] Privacy Policy URL (mandatory — must be a hosted web page)
+- [ ] Data Safety Section declaration
+- [ ] Content Rating (IARC questionnaire)
+- [ ] Target Audience declaration (NOT for children)
+- [ ] Store listing: title, descriptions, feature graphic (1024×500), screenshots, icon (512×512)
+
+#### 2. Critical Code Fixes
+- [ ] Fix SSL bypass in `ContentSniffer.kt` — scope to private IPs only
+- [ ] Fix `network_security_config.xml` — remove global cleartext base-config
+- [ ] Review CAMERA/RECORD_AUDIO permissions — remove if not needed
+- [ ] Prepare SYSTEM_ALERT_WINDOW justification for manual review
+
+#### 3. Build Pipeline
+- [ ] Switch from APK to AAB (Android App Bundle) — required for new Play Store apps
+- [ ] Enroll in Play App Signing
+
 ---
 
 ## Suggested Project Structure (Refactored)
@@ -165,7 +197,9 @@ PlayBridge/
 ├── CONTRIBUTING.md              # NEW
 ├── .github/
 │   ├── workflows/
-│   │   └── android_build.yml
+│   │   ├── phone_build.yml
+│   │   ├── tv_build.yml
+│   │   └── extension_build.yml
 │   └── ISSUE_TEMPLATE/          # NEW
 ├── extension/                   # Standalone Desktop Web Extension (Firefox native)
 │   └── src/                     # Extension source code (manifest.json, background.js, etc.)
@@ -226,7 +260,13 @@ PlayBridge/
 
 | Priority | Task | Effort |
 |----------|------|--------|
-| � Low | Enable ProGuard for release | 2-4 hours |
+| 🔴 High | Fix SSL bypass for Play Store (scope to private IPs) | 1-2 hours |
+| 🔴 High | Fix network_security_config.xml (remove global cleartext) | 30 min |
+| 🔴 High | Remove unused CAMERA/RECORD_AUDIO permissions | 15 min |
+| 🔴 High | Switch TV build to AAB format | 1-2 hours |
+| 🟡 Medium | Create & host Privacy Policy | 2-4 hours |
+| 🟡 Medium | Fill out Play Console (data safety, content rating, listing) | 2-3 hours |
+| 🟢 Low | Enable ProGuard for release | 2-4 hours |
 
 ---
 
@@ -246,4 +286,12 @@ PlayBridge/
 **Key Actions Before Open-Sourcing:**
 1. Review commit history for accidentally committed secrets
 
-The codebase is in good shape for open-sourcing with relatively minor documentation additions.
+**Key Actions Before Play Store (TV App):**
+1. Fix SSL certificate bypass in `ContentSniffer.kt` (auto-rejection risk)
+2. Remove global cleartext traffic permission
+3. Remove unused CAMERA/RECORD_AUDIO permissions
+4. Switch build pipeline from APK to AAB
+5. Create and host a Privacy Policy
+6. Complete Play Console setup (data safety, content rating, store listing)
+
+The codebase is in good shape for open-sourcing with relatively minor documentation additions. Play Store publishing requires addressing several security policy items first — see `tv/ARCHITECTURE.md` for the full readiness checklist.

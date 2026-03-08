@@ -307,9 +307,32 @@ object Components {
             
             val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
             if (jsonObject != null) {
-                val kotlinTabId = resolveKotlinTabId(jsonObject)
-                VideoDetector.onMessageReceived(jsonObject, kotlinTabId)
-                Log.i(TAG, "Message sent to VideoDetector for tab $kotlinTabId")
+                val type = jsonObject["type"]?.jsonPrimitive?.content
+                if (type == "http_error") {
+                    val statusCode = jsonObject["statusCode"]?.jsonPrimitive?.content ?: "unknown"
+                    val url = jsonObject["url"]?.jsonPrimitive?.content ?: "unknown"
+                    val tabId = jsonObject["tabId"]?.jsonPrimitive?.content
+                    Log.e(TAG, "HTTP ERROR detected via extension: $statusCode for $url (Tab: $tabId)")
+
+                    Handler(Looper.getMainLooper()).post {
+                        // Find the session for the tab and load error page
+                        val sessionToLoad = if (tabId != null) {
+                            // The extension tabId matches our session keys if it's the internal Gecko ID
+                            // However, we need to map Gecko tabId back to our Kotlin UUID tabId
+                            // For now, let's load it into the selected tab if it's the current one,
+                            // or search for the matching session.
+                            tabManager?.sessions?.get(resolveKotlinTabId(jsonObject))
+                        } else {
+                            tabManager?.sessions?.get(store.state.selectedTabId)
+                        }
+
+                        sessionToLoad?.loadUrl(ErrorPageUtils.generateErrorPage(url, statusCode))
+                    }
+                } else {
+                    val kotlinTabId = resolveKotlinTabId(jsonObject)
+                    VideoDetector.onMessageReceived(jsonObject, kotlinTabId)
+                    Log.i(TAG, "Message sent to VideoDetector for tab $kotlinTabId")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error processing message", e)

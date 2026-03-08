@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -42,6 +43,7 @@ fun LinkContextMenu(
     isConnected: Boolean,
     onPlayOnTv: (String) -> Unit,
     onOpenInNewTab: (String) -> Unit,
+    onOpenInBackground: (String) -> Unit,
     onCopyLink: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -89,6 +91,17 @@ fun LinkContextMenu(
                     Icon(Icons.AutoMirrored.Filled.OpenInNew, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Open in new tab")
+                }
+                Spacer(Modifier.height(8.dp))
+
+                // Open in background
+                OutlinedButton(
+                    onClick = { onOpenInBackground(url) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.OpenInBrowser, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Open in background")
                 }
                 Spacer(Modifier.height(8.dp))
 

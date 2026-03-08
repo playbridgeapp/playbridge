@@ -4,9 +4,10 @@
 ```
 com.playbridge.sender/
 ├── browser/                # GeckoView browser, video detection, extensions, downloads
-│   ├── AddonInstallDialog.kt       (extension install confirmation dialog)
+│    ├── AddonInstallDialog.kt       (extension install confirmation dialog)
+│   ├── AddonSettingsScreen.kt      (Stremio addon management UI)
 │   ├── BookmarksScreen.kt          (bookmarks list UI with add/remove)
-│   ├── BrowserActivity.kt          (main browser activity, ~1330 lines)
+│   ├── BrowserActivity.kt          (main browser activity, ~1400 lines)
 │   ├── BrowserToolbar.kt           (custom Compose toolbar with URL bar, navigation, SSL lock, menu)
 │   ├── Components.kt               (singleton DI container for GeckoRuntime, BrowserStore)
 │   ├── DetectedVideosSheet.kt      (bottom sheet for detected videos + quality selection)
@@ -14,16 +15,20 @@ com.playbridge.sender/
 │   ├── DownloadManagerSingleton.kt  (Media3 ExoPlayer download manager for HLS)
 │   ├── DownloadsScreen.kt          (downloads list UI with progress tracking)
 │   ├── DownloadUtils.kt            (download helpers: enqueue, file size, error strings)
-│   ├── ExtensionsScreen.kt         (addon management screen)
+│   ├── ExtensionsScreen.kt         (browser addon management screen)
 │   ├── FindOnPageBar.kt            (UI for in-page text search)
 │   ├── HistoryScreen.kt            (browsing history list UI)
 │   ├── HlsParser.kt               (HLS manifest parsing for quality selection with audio tracks)
 │   ├── HomeScreen.kt               (browser home page with bookmarks)
+│   ├── LibraryDetailScreen.kt      (movie/TV details with stream resolution)
+│   ├── LibraryScreen.kt            (TMDB popular/trending/search UI)
 │   ├── LinkContextMenu.kt          (long-press link context menu dialog)
+│   ├── MagnetParsingSheet.kt       (bottom sheet UI for Debrid magnet and .torrent parsing)
 │   ├── MediaDownloadService.kt     (foreground service for HLS/media downloads)
 │   ├── RemoteControlScreen.kt      (TV remote control UI: D-pad, touchpad, player controls)
 │   ├── SessionObserverSetup.kt     (session observer + GeckoSession delegate proxies)
 │   ├── SettingsScreen.kt           (browser settings: inbuilt extension visibility)
+│   ├── StreamPickerSheet.kt        (bottom sheet for resolved Stremio streams)
 │   ├── TabManager.kt               (tab/session lifecycle, find-in-page helpers)
 │   ├── TabsScreen.kt               (tab management overlay)
 │   └── VideoDetector.kt            (video content type detection via request interception)
@@ -32,15 +37,28 @@ com.playbridge.sender/
 │   ├── NsdHelper.kt                (Network Service Discovery to find TV services)
 │   └── WebSocketClient.kt          (OkHttp-based client with auto-retry)
 ├── data/                   # Local data persistence
-│   └── history/
-│       ├── BookmarkDao.kt           (Room DAO for bookmarks CRUD)
-│       ├── BookmarkEntity.kt        (Bookmark entry data class: url, title, timestamp)
-│       ├── DatabaseProvider.kt      (Room database singleton provider)
-│       ├── HistoryDao.kt            (Room DAO for browsing history CRUD)
-│       ├── HistoryDatabase.kt       (Room database definition with history, bookmarks, tabs)
-│       ├── HistoryEntity.kt         (History entry data class: url, title, timestamp)
-│       ├── TabDao.kt                (Room DAO for tab persistence)
-│       └── TabEntity.kt             (Tab state data class: id, url, title, parentId, isSelected)
+│   ├── debrid/
+│   │   ├── AllDebridClient.kt       (All-Debrid API client implementation)
+│   │   ├── DebridModels.kt          (Data models for torrents, files, links)
+│   │   ├── DebridProvider.kt        (Abstract interface for Debrid services)
+│   │   ├── DebridRepository.kt      (Factory and active provider configuration)
+│   │   ├── PremiumizeClient.kt      (Premiumize API client implementation)
+│   │   └── RealDebridClient.kt      (Real-Debrid API client implementation)
+│   ├── history/
+│   │   ├── BookmarkDao.kt           (Room DAO for bookmarks CRUD)
+│   │   ├── BookmarkEntity.kt        (Bookmark entry data class: url, title, timestamp)
+│   │   ├── DatabaseProvider.kt      (Room database singleton provider)
+│   │   ├── HistoryDao.kt            (Room DAO for browsing history CRUD)
+│   │   ├── HistoryDatabase.kt       (Room database with history, bookmarks, tabs, addons)
+│   │   ├── HistoryEntity.kt         (History entry data class: url, title, timestamp)
+│   │   ├── TabDao.kt                (Room DAO for tab persistence)
+│   │   └── TabEntity.kt             (Tab state data class: id, url, title, parentId, isSelected)
+│   └── library/
+│       ├── AddonDao.kt              (Room DAO for installed Stremio addons)
+│       ├── AddonModels.kt           (Stremio manifest and stream models)
+│       ├── AddonRepository.kt       (Stremio addon config and stream resolution)
+│       ├── TmdbModels.kt            (TMDB API data models)
+│       └── TmdbRepository.kt        (TMDB API client for movies/TV shows)
 ├── model/                  # App-specific models
 │   ├── Message.kt                   (QRCodeData + parseQRCode — phone-only)
 │   └── TvDevice.kt                  (TV device connection info)
@@ -55,12 +73,21 @@ com.playbridge.sender/
 | Component | File | Purpose |
 |-----------|------|---------|
 | Browser Engine | Components.kt | Singleton DI container for GeckoRuntime, BrowserStore, AddonManager |
-| Browser UI | BrowserActivity.kt | Main browser activity (~1330 lines) with UI composition, screen routing, toolbar, dropdown menu, tab persistence |
-| Browser Toolbar | BrowserToolbar.kt | Custom Compose toolbar with navigation, URL bar (full-width on edit), SSL lock indicator, desktop mode toggle, menu |
+| Browser UI | BrowserActivity.kt | Main browser activity (~1400 lines) with UI composition, target routing, toolbar, dropdown menu |
+| Browser Toolbar | BrowserToolbar.kt | Custom Compose toolbar with navigation, URL bar, SSL lock indicator, desktop mode toggle |
+| Library View | LibraryScreen.kt | Main Library screen for TMDB browsing and multi-search |
+| Library Details | LibraryDetailScreen.kt | Movie/TV Details with stream resolution integration |
+| Addon Manager | AddonRepository.kt | Installs Stremio addons and resolves video streams via IMDB ID |
+| TMDB Client | TmdbRepository.kt | Coroutine-based client for TMDB API v3 |
+| Stream Selection | StreamPickerSheet.kt | Bottom sheet displaying resolved Debrid/Addon streams |
+| Debrid Integration | DebridProvider.kt | Abstract interface for Debrid magnet and `.torrent` parsing |
+| Debrid Clients | RealDebrid, AllDebrid, Premiumize | API implementations for major Debrid services |
+| Magnet UI | MagnetParsingSheet.kt | Bottom sheet UI for selecting files from intercepted magnets/torrents |
+| Addon Config | AddonSettingsScreen.kt | UI for managing installed Stremio addons |
 | Tab Management | TabManager.kt | Tab/session lifecycle, session sync, find-in-page helpers |
 | Tab UI | TabsScreen.kt | Tab list/grid overlay with thumbnails |
-| Session Observer | SessionObserverSetup.kt | EngineSession.Observer + GeckoSession delegate proxies, desktop mode user-agent switching |
-| Extension Management | ExtensionsScreen.kt | Addon installation and management UI |
+| Session Observer | SessionObserverSetup.kt | EngineSession.Observer + GeckoSession delegate proxies, user-agent switching, download interceptions |
+| Extension Config | ExtensionsScreen.kt | Browser addon installation and management UI |
 | Addon Install | AddonInstallDialog.kt | Extension installation confirmation dialog |
 | Remote Control | RemoteControlScreen.kt | Context-aware D-pad, touchpad, and player controls for TV |
 | HLS Parser | HlsParser.kt | Parses HLS manifests for quality selection with audio track support |

@@ -17,11 +17,8 @@ android {
         applicationId = "com.playbridge.receiver"
         minSdk = 26
         targetSdk = 36
-        val versionProps = Properties()
-        versionProps.load(file("../../version.properties").inputStream())
-        
-        versionCode = versionProps.getProperty("VERSION_CODE").toInt()
-        versionName = versionProps.getProperty("VERSION_NAME")
+        versionCode = 22
+        versionName = "0.1.22"
 
     }
 
@@ -116,6 +113,7 @@ dependencies {
     implementation(libs.media3.ui)                      // PlayerView UI
     implementation(libs.media3.common)                  // Common utilities
     implementation(libs.media3.session)                 // Media session support
+    implementation(libs.media3.effect)                  // Media effects support
     
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

@@ -34,10 +34,9 @@ fun PairingScreen(
     token: String,
     deviceName: String,
     connectionState: WebSocketServer.ConnectionState = WebSocketServer.ConnectionState.Stopped,
+    connectedCount: Int = 0,
     modifier: Modifier = Modifier
 ) {
-    val isConnected = connectionState is WebSocketServer.ConnectionState.Connected
-    
     // Use the first 4 chars of the token as the PIN for display
     // In a real app, we'd generate a separate 4-digit PIN and map it to the token
     // For this implementation, we'll assume the token passed in IS the PIN (or we derive it)
@@ -77,44 +76,40 @@ fun PairingScreen(
                 
                 Text(
                     text = when (connectionState) {
-                        is WebSocketServer.ConnectionState.Connected -> "Phone Connected!"
+                        is WebSocketServer.ConnectionState.Connected -> {
+                            if (connectedCount == 1) "1 device connected"
+                            else "$connectedCount devices connected"
+                        }
                         is WebSocketServer.ConnectionState.Running -> "Ready to Connect"
                         is WebSocketServer.ConnectionState.Starting -> "Starting server..."
                         is WebSocketServer.ConnectionState.Error -> "Error: ${connectionState.message}"
                         is WebSocketServer.ConnectionState.Stopped -> "Server stopped"
                     },
                     style = MaterialTheme.typography.bodyLarge,
-                    color = if (isConnected) Color(0xFF00FF88) else Color.White
+                    color = if (connectionState is WebSocketServer.ConnectionState.Connected) Color(0xFF00FF88) else Color.White
                 )
             }
             
-            if (isConnected) {
+            // Always show PIN for pairing additional devices
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
                 Text(
-                    text = "Connected!",
-                    style = MaterialTheme.typography.displayLarge,
-                    color = Color(0xFF00FF88)
+                    text = "Enter this PIN on your phone",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color.Gray
                 )
-            } else {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text(
-                        text = "Enter this PIN on your phone",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = Color.Gray
-                    )
-                    
-                    // PIN Display
-                    Text(
-                        text = pinDisplay,
-                        style = MaterialTheme.typography.displayLarge,
-                        fontSize = 120.sp,
-                        color = Color.White,
-                        letterSpacing = 24.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                    )
-                }
+                
+                // PIN Display
+                Text(
+                    text = pinDisplay,
+                    style = MaterialTheme.typography.displayLarge,
+                    fontSize = 120.sp,
+                    color = Color.White,
+                    letterSpacing = 24.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
             }
             
             // Connection info
@@ -137,19 +132,11 @@ fun PairingScreen(
                 
                 Spacer(modifier = Modifier.height(32.dp))
                 
-                if (isConnected) {
-                    Text(
-                        text = "Press BACK to return home",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.Gray
-                    )
-                } else {
-                     Text(
-                        text = "Or connect manually using the IP address above",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.Gray.copy(alpha = 0.7f)
-                    )
-                }
+                Text(
+                    text = "Or connect manually using the IP address above",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.Gray.copy(alpha = 0.7f)
+                )
             }
         }
     }

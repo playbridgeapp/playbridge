@@ -23,6 +23,7 @@ fun HomeScreen(
     connectionState: WebSocketServer.ConnectionState,
     serverIp: String?,
     serverPort: Int?,
+    connectedCount: Int,
     onShowPairing: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -78,6 +79,16 @@ fun HomeScreen(
                 )
             }
             
+            // Connected device count
+            if (connectedCount > 0) {
+                Text(
+                    text = if (connectedCount == 1) "1 device connected" else "$connectedCount devices connected",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFF00FF88),
+                    fontSize = 14.sp
+                )
+            }
+            
             // Server Info
             if (serverIp != null && serverPort != null) {
                 Text(
@@ -95,7 +106,7 @@ fun HomeScreen(
                 onClick = onShowPairing
             ) {
                 Text(
-                    text = "Show Pairing QR Code",
+                    text = "Show Pairing Code",
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
                 )
             }

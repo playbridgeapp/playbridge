@@ -2,10 +2,6 @@
 // Detects video URLs per-tab and sends them to content script for storage
 // Uses per-tab Maps so each tab tracks its own videos independently
 
-if (typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope) {
-    importScripts("hls-parser.js");
-}
-
 
 const VIDEO_CONTENT_TYPES = [
     'video/',
@@ -335,19 +331,24 @@ browser.webRequest.onHeadersReceived.addListener(
 let wsConnection = null;
 let playbridgeIp = null;
 let playbridgePin = null;
+let playbridgePort = 8765; // Default port, configurable via settings
 
 // Status values: disconnected, connecting, connected
 let wsStatus = 'disconnected'; 
 let intentionalDisconnect = false;
 let reconnectTimeout = null;
+let reconnectDelay = 5000; // Exponential backoff: 5s → 10s → 20s → 60s max
+let heartbeatInterval = null;
 
 function updateWsStatus(newStatus) {
     wsStatus = newStatus;
-    // Broadcast status to all tabs so popup knows
+    const statusMsg = { type: 'ws_status_update', status: wsStatus };
+    // Broadcast to extension pages (popup, options) via runtime messaging
+    browser.runtime.sendMessage(statusMsg).catch(() => {});
+    // Broadcast to content scripts via tabs messaging
     browser.tabs.query({}).then(tabs => {
         tabs.forEach(tab => {
-            browser.tabs.sendMessage(tab.id, { type: 'ws_status_update', status: wsStatus })
-                .catch(() => {});
+            browser.tabs.sendMessage(tab.id, statusMsg).catch(() => {});
         });
     });
 }
@@ -377,10 +378,11 @@ function connectWebSocket(ip, pin) {
     updateWsStatus('connecting');
     
     try {
-        wsConnection = new WebSocket(`ws://${ip}:8765`);
+        wsConnection = new WebSocket(`ws://${ip}:${playbridgePort}`);
         
         wsConnection.onopen = () => {
             console.log('[VideoDetector BG] WS Connected to PlayBridge TV');
+            reconnectDelay = 5000; // Reset backoff on successful connect
             updateWsStatus('connected');
             
             // Send Auth
@@ -391,6 +393,19 @@ function connectWebSocket(ip, pin) {
                 };
                 wsConnection.send(JSON.stringify(authMsg));
             }
+
+            // Start client-side heartbeat to detect dead connections
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                    try {
+                        wsConnection.send(JSON.stringify({ type: 'ping' }));
+                    } catch (e) {
+                        console.log('[VideoDetector BG] Heartbeat send failed, closing');
+                        wsConnection.close();
+                    }
+                }
+            }, 30000); // Ping every 30 seconds
         };
         
         wsConnection.onmessage = (event) => {
@@ -407,20 +422,27 @@ function connectWebSocket(ip, pin) {
             console.log('[VideoDetector BG] WS Disconnected');
             updateWsStatus('disconnected');
             wsConnection = null;
+            if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
             
             if (!intentionalDisconnect) {
-                console.log('[VideoDetector BG] Unintentional disconnect, scheduling reconnect in 5s...');
+                console.log(`[VideoDetector BG] Unintentional disconnect, reconnecting in ${reconnectDelay / 1000}s...`);
                 reconnectTimeout = setTimeout(() => {
                     if (wsStatus === 'disconnected' && !intentionalDisconnect) {
-                        browser.storage.local.get(['savedConnections']).then(res => {
-                            if (res.savedConnections && res.savedConnections.length > 0) {
+                        // Prefer pb_ip/pb_pin (set on every connectWebSocket call) over savedConnections
+                        browser.storage.local.get(['pb_ip', 'pb_pin', 'savedConnections']).then(res => {
+                            if (res.pb_ip) {
+                                console.log('[VideoDetector BG] Auto-reconnecting to last-used', res.pb_ip);
+                                connectWebSocket(res.pb_ip, res.pb_pin || '');
+                            } else if (res.savedConnections && res.savedConnections.length > 0) {
                                 const lastConn = res.savedConnections[0];
-                                console.log('[VideoDetector BG] Auto-reconnecting to', lastConn.ip);
+                                console.log('[VideoDetector BG] Auto-reconnecting to saved', lastConn.ip);
                                 connectWebSocket(lastConn.ip, lastConn.pin || '');
                             }
                         });
                     }
-                }, 5000);
+                }, reconnectDelay);
+                // Exponential backoff: 5s → 10s → 20s → 40s → 60s max
+                reconnectDelay = Math.min(reconnectDelay * 2, 60000);
             }
         };
         
@@ -461,7 +483,8 @@ function sendTvPlayCommand(videoData) {
 }
 
 // Load saved settings
-browser.storage.local.get(['pb_ip', 'pb_pin', 'savedConnections']).then(res => {
+browser.storage.local.get(['pb_ip', 'pb_pin', 'pb_port', 'savedConnections']).then(res => {
+    if (res.pb_port) playbridgePort = res.pb_port;
     if (res.pb_ip) {
         // Auto connect on start if we have an IP
         connectWebSocket(res.pb_ip, res.pb_pin || '');
@@ -510,17 +533,22 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     // WS Related Messages
     if (message.action === 'wsGetStatus') {
-        browser.storage.local.get(['pb_ip', 'pb_pin']).then(res => {
+        browser.storage.local.get(['pb_ip', 'pb_pin', 'pb_port']).then(res => {
             sendResponse({ 
                 status: wsStatus, 
                 ip: res.pb_ip || '', 
-                pin: res.pb_pin || '' 
+                pin: res.pb_pin || '',
+                port: res.pb_port || 8765
             });
         });
         return true;
     }
     
     if (message.action === 'wsConnect') {
+        if (message.port) {
+            playbridgePort = message.port;
+            browser.storage.local.set({ pb_port: message.port });
+        }
         connectWebSocket(message.ip, message.pin);
         sendResponse({ connecting: true });
         return true;
@@ -597,4 +625,63 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     
     return false;
+});
+
+// === Context Menu ===
+browser.menus.create({
+    id: "playbridge-parent",
+    title: "PlayBridge",
+    contexts: ["all"],
+    icons: { "16": "icon.png" }
+});
+
+browser.menus.create({
+    id: "playbridge-play",
+    parentId: "playbridge-parent",
+    title: "Play on TV",
+    contexts: ["link", "video", "audio"]
+});
+
+browser.menus.create({
+    id: "playbridge-open",
+    parentId: "playbridge-parent",
+    title: "Open on TV",
+    contexts: ["all"]
+});
+
+browser.menus.onClicked.addListener((info, tab) => {
+    if (wsStatus !== 'connected' || !wsConnection) {
+        browser.notifications.create('pb-not-connected', {
+            type: 'basic',
+            iconUrl: 'icon.png',
+            title: 'PlayBridge',
+            message: 'Not connected to TV. Open the extension to connect.'
+        });
+        return;
+    }
+
+    let command;
+
+    if (info.menuItemId === "playbridge-play") {
+        const url = info.srcUrl || info.linkUrl;
+        if (!url) return;
+        command = {
+            type: "command",
+            action: "play",
+            payload: { url, title: url, contentType: "unknown" }
+        };
+    } else if (info.menuItemId === "playbridge-open") {
+        const url = info.linkUrl || info.pageUrl || (tab && tab.url);
+        if (!url) return;
+        command = {
+            type: "command",
+            action: "browser",
+            payload: { url }
+        };
+    }
+
+    if (command) {
+        console.log('[PlayBridge] Context menu →', command);
+        wsConnection.send(JSON.stringify(command));
+    }
 });

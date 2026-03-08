@@ -8,6 +8,7 @@ import androidx.compose.runtime.MutableState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import mozilla.components.browser.engine.gecko.GeckoEngineSession
 import mozilla.components.browser.state.action.ContentAction
 import mozilla.components.browser.state.state.TabSessionState
@@ -44,9 +45,13 @@ fun SessionObserverSetup(
     historyDao: HistoryDao,
     pendingDownload: MutableState<PendingDownload?>,
     isDesktopMode: Boolean,
+    detectVideosEnabled: Boolean,
     isSecureConnection: MutableState<Boolean>,
     onXpiDetected: (String) -> Unit,
-    onVideoHashDetected: (String, String) -> Unit  // (url, kotlinTabId)
+    onMagnetDetected: (String) -> Unit,
+    onTorrentDownloaded: (ByteArray) -> Unit,
+    onVideoHashDetected: (String, String) -> Unit,  // (url, kotlinTabId)
+    onFullScreenChange: (Boolean) -> Unit
 ) {
     // Desktop Mode User Agent
     val desktopUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
@@ -126,7 +131,7 @@ fun SessionObserverSetup(
                 previousUrl.value = url
 
                 // Check for playbridge-video hash signal from content script
-                if (url.contains("#playbridge-video=")) {
+                if (detectVideosEnabled && url.contains("#playbridge-video=")) {
                     val tabId = selectedTab?.id ?: "_unknown"
                     onVideoHashDetected(url, tabId)
                 }
@@ -178,6 +183,19 @@ fun SessionObserverSetup(
                 if (url.endsWith(".xpi") || contentType == "application/x-xpinstall") {
                     Log.d(TAG, "XPI detected, installing addon from: $url")
                     onXpiDetected(url)
+                } else if (url.endsWith(".torrent") || contentType == "application/x-bittorrent") {
+                    Log.d(TAG, ".torrent file detected: $url")
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            // Simple URL connection to download the small .torrent file into memory
+                            val bytes = java.net.URL(url).readBytes()
+                            withContext(Dispatchers.Main) {
+                                onTorrentDownloaded(bytes)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to download .torrent file", e)
+                        }
+                    }
                 } else {
                     // General download interception
                     scope.launch(Dispatchers.Main) {
@@ -231,6 +249,37 @@ fun SessionObserverSetup(
                             }
                         }
 
+                        if (method.name == "onLoadError" && args != null && args.size >= 3) {
+                            val uri = args[1] as? String ?: "unknown"
+                            val error = args[2] // WebRequestError
+                            Log.e(TAG, "Load error for $uri: $error")
+
+                            // error is a WebRequestError — it has a code, but the error URI must not be http/https
+                            // we'll return a data URI generated from ErrorPageUtils
+                            return@newProxyInstance GeckoResult.fromValue(
+                                ErrorPageUtils.generateErrorPage(uri, "NETWORK_ERROR", error.toString())
+                            )
+                        }
+                        
+                        if (method.name == "onLoadRequest" && args != null && args.size >= 2) {
+                            val request = args[1]
+                            if (request != null) {
+                                try {
+                                    val uriField = request.javaClass.getField("uri")
+                                    val uri = uriField.get(request) as? String
+                                    if (uri != null && uri.startsWith("magnet:?")) {
+                                        Log.d(TAG, "Intercepted magnet link: $uri")
+                                        scope.launch(Dispatchers.Main) {
+                                            onMagnetDetected(uri)
+                                        }
+                                        return@newProxyInstance GeckoResult.fromValue(org.mozilla.geckoview.AllowOrDeny.DENY)
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error inspecting load request", e)
+                                }
+                            }
+                        }
+
                         // Forward to original delegate for everything else
                         if (existingNav != null) {
                             try {
@@ -280,6 +329,12 @@ fun SessionObserverSetup(
                                     } catch (_: Exception) {}
                                 }
                             }
+                            if (method.name == "onFullScreen" && args != null && args.size >= 2) {
+                                val fullScreen = args[1] as? Boolean ?: false
+                                scope.launch(Dispatchers.Main) {
+                                    onFullScreenChange(fullScreen)
+                                }
+                            }
                             try {
                                 if (args != null) method.invoke(existingContent, *args)
                                 else method.invoke(existingContent)
@@ -288,6 +343,16 @@ fun SessionObserverSetup(
                             }
                         } as GeckoSession.ContentDelegate
                         gs.contentDelegate = contentProxy
+                    } else {
+                        // No existing content delegate — create a minimal one for fullscreen
+                        val fullscreenDelegate = object : GeckoSession.ContentDelegate {
+                            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                                scope.launch(Dispatchers.Main) {
+                                    onFullScreenChange(fullScreen)
+                                }
+                            }
+                        }
+                        gs.contentDelegate = fullscreenDelegate
                     }
                     
                     // ProgressDelegate for Security/SSL status

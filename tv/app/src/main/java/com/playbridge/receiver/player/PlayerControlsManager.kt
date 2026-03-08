@@ -2,23 +2,22 @@ package com.playbridge.receiver.player
 
 import android.os.Handler
 import android.os.Looper
-import android.view.KeyEvent
 import android.view.View
 import android.util.Log
 import android.widget.ImageButton
 import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.TextView
+import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.exoplayer.ExoPlayer
 
 private const val TAG = "PlayerControlsManager"
 private const val FADE_DURATION = 250L
 
 /**
- * Manages the modern player controls overlay: gradient background, centered play/pause,
- * seekbar with split timestamps, skip buttons, fade animations, and buffering spinner.
- *
- * Inspired by mpvKt/mpvext design patterns.
+ * Manages the player controls overlay: gradient background, play/pause, tracks,
+ * seekbar with split timestamps, fade animations, and buffering spinner.
  */
 class PlayerControlsManager(
     private val controlsRoot: View,
@@ -26,15 +25,21 @@ class PlayerControlsManager(
     private val seekBar: SeekBar,
     private val playPauseButton: ImageButton,
     private val tracksButton: ImageButton,
+    private val playlistButton: ImageButton,
+    private val prevButton: ImageButton,
+    private val nextButton: ImageButton,
+    private val filterButton: ImageButton,
+    private val streamInfoText: TextView,
     private val elapsedText: TextView,
     private val remainingText: TextView,
     private val titleText: TextView,
-    private val centerPlayButton: ImageButton,
-    private val skipBackButton: ImageButton,
-    private val skipForwardButton: ImageButton,
     private val bufferingSpinner: ProgressBar,
     private val playerProvider: () -> ExoPlayer?,
-    private val onShowTrackSelection: () -> Unit
+    private val onShowTrackSelection: () -> Unit,
+    private val onShowPlaylist: () -> Unit,
+    private val onShowFilter: () -> Unit,
+    private val onPrevious: () -> Unit,
+    private val onNext: () -> Unit
 ) {
     // Scrubbing state
     var isScrubbing = false
@@ -57,116 +62,58 @@ class PlayerControlsManager(
         }
     }
 
+    /** Whether the full controls overlay (with buttons) is currently visible. */
+    val isFullOverlayVisible: Boolean
+        get() = controlsRoot.visibility == View.VISIBLE && controlsPanel.visibility == View.VISIBLE
+
     fun setTitle(title: String?) {
         titleText.text = title ?: ""
     }
 
     /**
-     * Helper to apply scale-up/down animation when a view gets/loses focus.
+     * Helper to show UI on focus.
      */
-    private fun attachFocusScaleAnimation(view: View) {
+    private fun ensureUIVisibleOnFocus(view: View) {
         view.setOnFocusChangeListener { v, hasFocus ->
-            val scale = if (hasFocus) 1.1f else 1.0f
-            v.animate()
-                .scaleX(scale)
-                .scaleY(scale)
-                .setDuration(200)
-                .start()
-                
-            // If it's the center play button, we might want to ensure it's visible
-            if (hasFocus && (v == centerPlayButton || v == skipBackButton || v == playPauseButton || v == skipForwardButton || v == tracksButton)) {
+            if (hasFocus && (v == playPauseButton || v == tracksButton)) {
                 showControlsUI()
             }
         }
     }
 
-    /**
-     * Wire up click listeners and SeekBar change/key listeners.
-     */
     fun setupControls() {
-        // Attach scale animations to all navigable buttons
-        attachFocusScaleAnimation(centerPlayButton)
-        attachFocusScaleAnimation(playPauseButton)
-        attachFocusScaleAnimation(skipBackButton)
-        attachFocusScaleAnimation(skipForwardButton)
-        attachFocusScaleAnimation(tracksButton)
-        attachFocusScaleAnimation(seekBar)
-
-        // Center play/pause button
-        centerPlayButton.setOnClickListener {
-            togglePlayPause()
-            showControlsUI()
-        }
-        
-        // Bottom play/pause button
+        // Play/pause button
         playPauseButton.setOnClickListener {
             togglePlayPause()
-            showControlsUI()
-        }
-
-        // Skip buttons
-        skipBackButton.setOnClickListener {
-            playerProvider()?.let {
-                val newPos = maxOf(0L, it.currentPosition - 10_000L)
-                it.seekTo(newPos)
-                updateProgress()
-                showControlsUI()
-            }
-        }
-
-        skipForwardButton.setOnClickListener {
-            playerProvider()?.let {
-                val dur = it.duration
-                val newPos = if (dur > 0) minOf(dur, it.currentPosition + 10_000L) else it.currentPosition + 10_000L
-                it.seekTo(newPos)
-                updateProgress()
-                showControlsUI()
-            }
         }
 
         tracksButton.setOnClickListener {
             onShowTrackSelection()
         }
 
-        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) {
-                    val duration = playerProvider()?.duration ?: 0
-                    val newPosition = (duration * progress) / 1000
-                    updateTimeLabels(newPosition, duration)
-                }
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {
-                hideControlsHandler.removeCallbacks(hideControlsRunnable)
-            }
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                val duration = playerProvider()?.duration ?: 0
-                val newPosition = (duration * this@PlayerControlsManager.seekBar.progress) / 1000
-                playerProvider()?.seekTo(newPosition)
-                showSeekUI()
-            }
-        })
-
-        // Handle D-pad events on SeekBar for TV-optimized scrubbing
-        seekBar.setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        val multiplier = if (event.repeatCount > 10) 5 else 1
-                        handleScrubbing(-10000L * multiplier)
-                        showSeekUI()
-                        return@setOnKeyListener true
-                    }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        val multiplier = if (event.repeatCount > 10) 5 else 1
-                        handleScrubbing(10000L * multiplier)
-                        showSeekUI()
-                        return@setOnKeyListener true
-                    }
-                }
-            }
-            false
+        playlistButton.setOnClickListener {
+            onShowPlaylist()
         }
+
+        filterButton.setOnClickListener {
+            onShowFilter()
+        }
+
+        prevButton.setOnClickListener {
+            onPrevious()
+        }
+
+        nextButton.setOnClickListener {
+            onNext()
+        }
+    }
+
+    /** Show or hide the playlist-related buttons based on whether a playlist is active. */
+    fun setPlaylistVisible(visible: Boolean) {
+        val vis = if (visible) View.VISIBLE else View.GONE
+        playlistButton.visibility = vis
+        prevButton.visibility = vis
+        nextButton.visibility = vis
     }
 
     private fun formatDuration(ms: Long): String {
@@ -215,22 +162,27 @@ class PlayerControlsManager(
         }
         
         controlsPanel.visibility = View.VISIBLE
-        centerPlayButton.visibility = View.VISIBLE
         seekBar.visibility = View.VISIBLE
         titleText.visibility = View.VISIBLE
+        updateStreamInfo()
 
         updatePlayPauseIcon()
         if (!isScrubbing) updateProgress()
         startUpdateProgress()
 
-        // Request focus on center play/pause for D-pad navigation
+        // Only set focus on initial overlay open (not when buttons are already navigated)
         val currentFocus = controlsRoot.rootView.findFocus()
-        if (currentFocus == null || currentFocus.id == com.playbridge.receiver.R.id.player_view) {
-            centerPlayButton.requestFocus()
+        val hasButtonFocus = currentFocus?.id == com.playbridge.receiver.R.id.btn_play_pause ||
+                             currentFocus?.id == com.playbridge.receiver.R.id.btn_tracks ||
+                             currentFocus?.id == com.playbridge.receiver.R.id.btn_playlist ||
+                             currentFocus?.id == com.playbridge.receiver.R.id.btn_prev ||
+                             currentFocus?.id == com.playbridge.receiver.R.id.btn_next ||
+                             currentFocus?.id == com.playbridge.receiver.R.id.btn_filter
+        if (!hasButtonFocus) {
+            playPauseButton.post { playPauseButton.requestFocus() }
         }
 
         hideControlsHandler.removeCallbacks(hideControlsRunnable)
-        hideControlsHandler.postDelayed(hideControlsRunnable, 4000)
     }
 
     fun showSeekUI() {
@@ -244,8 +196,8 @@ class PlayerControlsManager(
         }
         
         controlsPanel.visibility = View.GONE // Hide bottom buttons, show only seekbar
-        centerPlayButton.visibility = View.GONE
         titleText.visibility = View.GONE
+        streamInfoText.visibility = View.GONE
         seekBar.visibility = View.VISIBLE
 
         if (!isScrubbing) updateProgress()
@@ -275,7 +227,13 @@ class PlayerControlsManager(
             return
         }
         playerProvider()?.let {
-            if (it.isPlaying) it.pause() else it.play()
+            if (it.isPlaying) {
+                it.pause()
+            } else {
+                it.play()
+                // Hide overlay when playback resumes
+                hideUI()
+            }
             updatePlayPauseIcon()
         }
     }
@@ -284,19 +242,14 @@ class PlayerControlsManager(
         val isPlaying = playerProvider()?.isPlaying == true
         val iconRes = if (isPlaying) com.playbridge.receiver.R.drawable.ic_pause else com.playbridge.receiver.R.drawable.ic_play
         playPauseButton.setImageResource(iconRes)
-        centerPlayButton.setImageResource(iconRes)
     }
 
     fun showBuffering() {
         bufferingSpinner.visibility = View.VISIBLE
-        centerPlayButton.visibility = View.GONE
     }
 
     fun hideBuffering() {
         bufferingSpinner.visibility = View.GONE
-        if (controlsRoot.visibility == View.VISIBLE) {
-            centerPlayButton.visibility = View.VISIBLE
-        }
     }
 
     fun handleScrubbing(deltaMs: Long) {
@@ -314,7 +267,7 @@ class PlayerControlsManager(
             updateTimeLabels(scrubPosition, duration)
 
             commitSeekHandler.removeCallbacks(commitSeekRunnable)
-            commitSeekHandler.postDelayed(commitSeekRunnable, 1000)
+            commitSeekHandler.postDelayed(commitSeekRunnable, 400) // Lower commit delay for faster responsiveness
 
             hideControlsHandler.removeCallbacks(hideControlsRunnable)
             hideControlsHandler.postDelayed(hideControlsRunnable, 4000)
@@ -328,6 +281,97 @@ class PlayerControlsManager(
             isScrubbing = false
             commitSeekHandler.removeCallbacks(commitSeekRunnable)
             updateProgress()
+        }
+    }
+
+    /** Build and display stream info (resolution, codec, bitrate, audio). */
+    private fun updateStreamInfo() {
+        val player = playerProvider() ?: run {
+            streamInfoText.visibility = View.GONE
+            return
+        }
+
+        val parts = mutableListOf<String>()
+
+        // Get video and audio format from selected tracks (source format, not decoded)
+        var videoFormat: Format? = null
+        var audioFormat: Format? = null
+        for (group in player.currentTracks.groups) {
+            for (i in 0 until group.length) {
+                if (group.isTrackSelected(i)) {
+                    val fmt = group.getTrackFormat(i)
+                    when (group.type) {
+                        C.TRACK_TYPE_VIDEO -> if (videoFormat == null) videoFormat = fmt
+                        C.TRACK_TYPE_AUDIO -> if (audioFormat == null) audioFormat = fmt
+                    }
+                }
+            }
+        }
+
+        // Video info
+        if (videoFormat != null) {
+            // Resolution (from source track, not decoded output)
+            if (videoFormat.height != Format.NO_VALUE) {
+                parts.add("${videoFormat.height}p")
+            }
+            // Video codec
+            videoFormat.codecs?.let { codec ->
+                val shortCodec = when {
+                    codec.startsWith("avc") -> "H.264"
+                    codec.startsWith("hvc") || codec.startsWith("hev") -> "H.265"
+                    codec.startsWith("vp9") || codec.startsWith("vp09") -> "VP9"
+                    codec.startsWith("av01") -> "AV1"
+                    else -> codec.uppercase()
+                }
+                parts.add(shortCodec)
+            }
+            // Video bitrate
+            if (videoFormat.bitrate != Format.NO_VALUE && videoFormat.bitrate > 0) {
+                val mbps = videoFormat.bitrate / 1_000_000f
+                parts.add("%.1f Mbps".format(mbps))
+            }
+        }
+
+        // Audio info
+        if (audioFormat != null) {
+            val audioParts = mutableListOf<String>()
+            audioFormat.codecs?.let { codec ->
+                val shortCodec = when {
+                    codec.startsWith("mp4a") -> "AAC"
+                    codec.startsWith("ac-3") || codec == "ac3" -> "AC3"
+                    codec.startsWith("ec-3") || codec == "eac3" -> "EAC3"
+                    codec.startsWith("dtsc") || codec.startsWith("dtsh") || codec.startsWith("dtse") -> "DTS"
+                    codec.startsWith("opus") -> "Opus"
+                    codec.startsWith("flac") -> "FLAC"
+                    else -> codec.uppercase()
+                }
+                audioParts.add(shortCodec)
+            }
+            if (audioFormat.channelCount != Format.NO_VALUE) {
+                val chLabel = when (audioFormat.channelCount) {
+                    1 -> "Mono"
+                    2 -> "Stereo"
+                    6 -> "5.1"
+                    8 -> "7.1"
+                    else -> "${audioFormat.channelCount}ch"
+                }
+                audioParts.add(chLabel)
+            }
+            audioFormat.language?.let { lang ->
+                if (lang.isNotBlank() && lang != "und") {
+                    audioParts.add(lang.uppercase())
+                }
+            }
+            if (audioParts.isNotEmpty()) {
+                parts.add("\uD83D\uDD0A " + audioParts.joinToString(" "))
+            }
+        }
+
+        if (parts.isNotEmpty()) {
+            streamInfoText.text = parts.joinToString("  •  ")
+            streamInfoText.visibility = View.VISIBLE
+        } else {
+            streamInfoText.visibility = View.GONE
         }
     }
 }

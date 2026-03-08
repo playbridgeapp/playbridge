@@ -19,11 +19,8 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        val versionProps = Properties()
-        versionProps.load(file("../../version.properties").inputStream())
-        
-        versionCode = versionProps.getProperty("VERSION_CODE").toInt()
-        versionName = versionProps.getProperty("VERSION_NAME")
+        versionCode = 18
+        versionName = "0.1.18"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

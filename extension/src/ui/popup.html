@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PlayBridge Video Detector</title>
     <link rel="stylesheet" href="popup.css">
-    <!-- Modern font to wow the user -->
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="fonts/outfit.css">
 </head>
 <body>
     <div class="header">
@@ -104,6 +103,11 @@
                 <div class="input-group">
                     <label>PIN (Required)</label>
                     <input type="password" id="tv-pin" placeholder="0000">
+                </div>
+                
+                <div class="input-group">
+                    <label>Port</label>
+                    <input type="number" id="tv-port" placeholder="8765" value="8765">
                 </div>
                 
                 <button id="connect-btn" class="primary-btn">Connect</button>

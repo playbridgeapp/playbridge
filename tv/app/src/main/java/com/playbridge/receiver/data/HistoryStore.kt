@@ -24,7 +24,14 @@ data class PlaybackHistoryItem(
     val timestamp: Long = System.currentTimeMillis(),
     val contentType: String? = null,
     val headers: Map<String, String>? = null,
-    val thumbnailPath: String? = null
+    val thumbnailPath: String? = null,
+    val playlistJson: String? = null,
+    val playlistIndex: Int = 0,
+    val preferredAudioLanguage: String? = null,
+    val preferredSubtitleLanguage: String? = null,
+    val externalSubtitleUrl: String? = null,
+    val videoFilter: String? = null,
+    val customFilterValues: List<Float>? = null
 )
 
 class HistoryStore(private val context: Context) {
@@ -50,14 +57,24 @@ class HistoryStore(private val context: Context) {
         duration: Long,
         contentType: String?,
         headers: Map<String, String>?,
-        thumbnailPath: String? = null
+        thumbnailPath: String? = null,
+        playlistJson: String? = null,
+        playlistIndex: Int = 0,
+        preferredAudioLanguage: String? = null,
+        preferredSubtitleLanguage: String? = null,
+        externalSubtitleUrl: String? = null,
+        videoFilter: String? = null,
+        customFilterValues: List<Float>? = null
     ) {
         if (url.isBlank()) return
         
-        // Don't save if position is negligible (e.g. < 5s) or fully complete (depend on logic, but here we just save)
-        // We'll filter "completed" items in UI or logic if needed, but saving everything is safer.
-        
-        val id = url // Use URL as ID for simplicity
+        // For playlist items, use a stable ID based on the playlist content
+        // so all episodes update the same history entry instead of creating duplicates.
+        val id = if (playlistJson != null) {
+            "playlist_${playlistJson.hashCode()}"
+        } else {
+            url
+        }
         
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
@@ -80,7 +97,14 @@ class HistoryStore(private val context: Context) {
                 timestamp = System.currentTimeMillis(),
                 contentType = contentType,
                 headers = headers,
-                thumbnailPath = finalThumbnailPath
+                thumbnailPath = finalThumbnailPath,
+                playlistJson = playlistJson,
+                playlistIndex = playlistIndex,
+                preferredAudioLanguage = preferredAudioLanguage,
+                preferredSubtitleLanguage = preferredSubtitleLanguage,
+                externalSubtitleUrl = externalSubtitleUrl,
+                videoFilter = videoFilter,
+                customFilterValues = customFilterValues
             )
 
             // Remove existing item with same ID to update it (move to top)

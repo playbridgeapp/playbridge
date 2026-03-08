@@ -5,6 +5,7 @@ import coil.compose.AsyncImage
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -76,6 +77,15 @@ fun TabsScreen(
         
         Spacer(modifier = Modifier.height(16.dp))
         
+        // Scroll to the active tab
+        val listState = rememberLazyListState()
+        val selectedTabIndex = tabs.indexOfFirst { it.id == state.selectedTabId }
+        LaunchedEffect(selectedTabIndex) {
+            if (selectedTabIndex >= 0) {
+                listState.scrollToItem(selectedTabIndex)
+            }
+        }
+
         if (tabs.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -98,9 +108,10 @@ fun TabsScreen(
             }
         } else {
             LazyColumn(
+                state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(tabs) { tab ->
+                items(items = tabs, key = { it.id }) { tab ->
                     TabCard(
                         tab = tab,
                         onSelect = { onTabSelected(tab.id) },

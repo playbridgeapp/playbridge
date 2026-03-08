@@ -26,6 +26,12 @@ class TabManager {
     /** Map of tab-id → live EngineSession. Observable by Compose. */
     val sessions = mutableStateMapOf<String, EngineSession>()
 
+    /** The maximum number of EngineSessions to keep alive to prevent OOM errors. */
+    private val MAX_ALIVE_SESSIONS = 5
+
+    /** LRU tracker for recently active tab IDs. */
+    private val recentlyActiveTabIds = linkedSetOf<String>()
+
     // ── Tab operations ───────────────────────────────────────────────
 
     /** Ensure [store] always has at least one tab. */
@@ -86,38 +92,59 @@ class TabManager {
 
     /**
      * Create engine sessions for tabs that don't have one yet and
-     * clean up sessions whose tabs have been closed.
+     * clean up sessions whose tabs have been closed or hiberated.
      */
-    fun syncSessions(tabs: List<TabSessionState>) {
-        // Create sessions for new tabs
+    fun syncSessions(tabs: List<TabSessionState>, selectedTabId: String? = null) {
+        val allValidTabIds = tabs.map { it.id }.toSet()
+
+        // 1. Maintain LRU tracker
+        if (selectedTabId != null && allValidTabIds.contains(selectedTabId)) {
+            // Re-adding at the end of a LinkedHashSet moves it to the most-recently-used position
+            recentlyActiveTabIds.remove(selectedTabId)
+            recentlyActiveTabIds.add(selectedTabId)
+        }
+
+        // 2. Cull the LRU tracker
+        // Remove any tabs that were closed by the user
+        recentlyActiveTabIds.retainAll(allValidTabIds)
+        // If we exceed our live limit, remove the oldest (least recently used) tabs from the front
+        while (recentlyActiveTabIds.size > MAX_ALIVE_SESSIONS) {
+            val oldest = recentlyActiveTabIds.first()
+            recentlyActiveTabIds.remove(oldest)
+        }
+
+        // The intersection of our tracking limit and the currently available tabs
+        val activeTabIds = recentlyActiveTabIds.toSet()
+
+        // 3. Create sessions for tabs that are active but have no EngineSession yet
         tabs.forEach { tab ->
-            if (!sessions.containsKey(tab.id)) {
+            if (activeTabIds.contains(tab.id) && !sessions.containsKey(tab.id)) {
                 val newSession = Components.engine.createSession()
                 val url = tab.content.url.ifEmpty { "about:blank" }
                 if (url != "about:blank") {
                     newSession.loadUrl(url)
                 }
                 sessions[tab.id] = newSession
+                Log.d(TAG, "Created/Restored EngineSession for tab ${tab.id}")
             }
         }
 
-        // Cleanup sessions for closed tabs
-        val activeTabIds = tabs.map { it.id }.toSet()
-        val removedIds = sessions.keys.filter { it !in activeTabIds }
+        // 4. Cleanup sessions for closed or hibernated tabs
+        val hibernatedIds = sessions.keys.filter { it !in activeTabIds }
 
-        removedIds.forEach { id ->
+        hibernatedIds.forEach { id ->
             val session = sessions[id]
             if (session != null) {
                 try {
                     session.stopLoading()
-                    // Close the internal GeckoSession via reflection so media stops immediately
+                    // Close the internal GeckoSession via reflection so media stops immediately and memory is freed
                     val geckoEngineSession = session as? GeckoEngineSession
                     if (geckoEngineSession != null) {
                         val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
                         field.isAccessible = true
                         val internalSession = field.get(geckoEngineSession) as? GeckoSession
                         internalSession?.close()
-                        Log.d(TAG, "Closed GeckoSession for tab $id")
+                        Log.d(TAG, "Closed/Hibernated GeckoSession for tab $id")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error closing session for tab $id", e)

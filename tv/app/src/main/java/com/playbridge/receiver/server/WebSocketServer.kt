@@ -4,9 +4,12 @@ import android.util.Log
 import com.playbridge.protocol.Command
 import com.playbridge.protocol.createPongJson
 import com.playbridge.protocol.parseCommand
+import com.playbridge.receiver.logging.FileLogger
+import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
+import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
@@ -39,6 +42,10 @@ class WebSocketServer(
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Stopped)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
+    // Connected client count
+    private val _connectedClientCount = MutableStateFlow(0)
+    val connectedClientCount: StateFlow<Int> = _connectedClientCount.asStateFlow()
+    
     // Command flow for UI to observe
     private val _commands = MutableSharedFlow<Command>(replay = 0)
     val commands = _commands.asSharedFlow()
@@ -53,7 +60,7 @@ class WebSocketServer(
     
     fun start() {
         if (server != null) {
-            Log.w(TAG, "Server already running")
+            FileLogger.w(TAG, "Server already running")
             return
         }
         
@@ -74,6 +81,29 @@ class WebSocketServer(
                     }
                     
                     routing {
+                        // HTTP endpoint: download log files
+                        get("/logs") {
+                            val logFiles = FileLogger.getLogFiles()
+                            if (logFiles.isEmpty()) {
+                                call.respondText("No log files found.", ContentType.Text.Plain)
+                                return@get
+                            }
+                            val combined = logFiles.reversed().joinToString("\n") { it.readText() }
+                            call.response.header(
+                                HttpHeaders.ContentDisposition,
+                                ContentDisposition.Attachment.withParameter(
+                                    ContentDisposition.Parameters.FileName, "playbridge_tv_logs.txt"
+                                ).toString()
+                            )
+                            call.respondText(combined, ContentType.Text.Plain)
+                        }
+
+                        // HTTP endpoint: clear log files
+                        delete("/logs") {
+                            FileLogger.clearLogs()
+                            call.respondText("Logs cleared.", ContentType.Text.Plain)
+                        }
+
                         webSocket("/") {
                             handleConnection(this)
                         }
@@ -81,15 +111,15 @@ class WebSocketServer(
                 }.start(wait = false)
                 
                 _connectionState.value = ConnectionState.Running(port)
-                Log.i(TAG, "WebSocket server started on port $port")
+                FileLogger.i(TAG, "WebSocket server started on port $port")
                 
             } catch (e: java.net.BindException) {
-                Log.w(TAG, "Port $port already in use. Assuming server from previous instance is still active.")
+                FileLogger.w(TAG, "Port $port already in use. Assuming server from previous instance is still active.")
                 // If the port is in use, it's likely our own service from a previous run that hasn't fully released yet,
                 // or a separate instance. We'll mark as running for the UI.
                 _connectionState.value = ConnectionState.Running(port)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start server", e)
+                FileLogger.e(TAG, "Failed to start server", e)
                 _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
             }
         }
@@ -106,24 +136,24 @@ class WebSocketServer(
                     try {
                         session.close(CloseReason(CloseReason.Codes.GOING_AWAY, "Server stopping"))
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error closing client", e)
+                        FileLogger.e(TAG, "Error closing client", e)
                     }
                 }
                 clients.clear()
                 
                 server?.stop(500, 1000)
                 server = null
-                Log.i(TAG, "Server stopped")
+                FileLogger.i(TAG, "Server stopped")
             }
             _connectionState.value = ConnectionState.Stopped
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping server", e)
+            FileLogger.e(TAG, "Error stopping server", e)
         }
     }
     
     private suspend fun handleConnection(session: WebSocketServerSession) {
         val clientId = java.util.UUID.randomUUID().toString()
-        Log.i(TAG, "New connection attempt: $clientId")
+        FileLogger.i(TAG, "New connection attempt: $clientId")
         
         try {
             // Authentication phase
@@ -132,16 +162,16 @@ class WebSocketServer(
             
             // Log the expected PIN for debugging
             val pin = authToken.take(4).uppercase()
-            Log.i(TAG, "Expecting PIN: $pin for client: $clientId")
+            FileLogger.i(TAG, "Expecting PIN: $pin for client: $clientId")
 
             while (!isAuthenticated) {
                 val frame = session.incoming.receive()
                 if (frame is Frame.Text) {
                     val text = frame.readText()
-                    Log.d(TAG, "Message received during auth: $text")
+                    FileLogger.d(TAG, "Message received during auth: $text")
                     
                     if (text.contains("\"type\":\"ping\"") || text.contains("\"type\": \"ping\"")) {
-                        Log.d(TAG, "Received ping during auth, sending pong")
+                        FileLogger.d(TAG, "Received ping during auth, sending pong")
                         session.send(Frame.Text(createPongJson()))
                         continue
                     }
@@ -154,32 +184,32 @@ class WebSocketServer(
                             if (authMessage.token == authToken) {
                                 // Re-connection with valid token
                                 isAuthenticated = true
-                                Log.i(TAG, "Client authenticated with token")
+                                FileLogger.i(TAG, "Client authenticated with token")
                                 session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true}"))
                             } else if (authMessage.pin?.uppercase() == pin) {
                                 isAuthenticated = true
-                                Log.i(TAG, "Client authenticated with PIN")
+                                FileLogger.i(TAG, "Client authenticated with PIN")
                                 // Send back the full token for future use
                                 session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true, \"token\": \"$authToken\"}"))
                             } else {
-                                Log.w(TAG, "Authentication failed. Expected PIN: $pin, Received PIN: ${authMessage.pin}, Token: ${authMessage.token}")
+                                FileLogger.w(TAG, "Authentication failed. Expected PIN: $pin, Received PIN: ${authMessage.pin}, Token: ${authMessage.token}")
                                 session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": false}"))
                                 session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid credentials"))
                                 return
                             }
                         } else {
-                             Log.w(TAG, "Unexpected message type during auth: ${authMessage.type}")
+                              FileLogger.w(TAG, "Unexpected message type during auth: ${authMessage.type}")
                              // Don't close immediately, maybe it's just noise or a wrong message type
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Failed to parse auth message: $text", e)
+                        FileLogger.w(TAG, "Failed to parse auth message: $text", e)
                         // Fallback to substring matching just in case, or treat as error
                         // For now, let's just log and continue waiting
                     }
                 } else {
                     // Ignore non-text frames or close if necessary
                     if (frame is Frame.Close) {
-                        Log.i(TAG, "Client closed connection during auth")
+                        FileLogger.i(TAG, "Client closed connection during auth")
                         return
                     }
                 }
@@ -187,8 +217,9 @@ class WebSocketServer(
             
             // Authentication successful, register client
             clients[clientId] = session
+            _connectedClientCount.value = clients.size
             _connectionState.value = ConnectionState.Connected(clientId)
-            Log.i(TAG, "Client registered: $clientId")
+            FileLogger.i(TAG, "Client registered: $clientId (total: ${clients.size})")
 
             for (frame in session.incoming) {
                 when (frame) {
@@ -206,7 +237,7 @@ class WebSocketServer(
                                 session.send(Frame.Text(createPongJson()))
                             }
                             is Command.Play -> {
-                                Log.i(TAG, "Play command parsed - URL: ${command.url}, Title: ${command.title}")
+                                FileLogger.i(TAG, "Play command parsed - URL: ${command.url}, Title: ${command.title}")
                                 _commands.emit(command)
                             }
                             else -> {
@@ -215,21 +246,22 @@ class WebSocketServer(
                         }
                     }
                     is Frame.Close -> {
-                        Log.i(TAG, "Client requested close: $clientId")
+                        FileLogger.i(TAG, "Client requested close: $clientId")
                     }
                     else -> {}
                 }
             }
         } catch (e: kotlinx.coroutines.channels.ClosedReceiveChannelException) {
-            Log.i(TAG, "Channel closed by client: $clientId")
+            FileLogger.i(TAG, "Channel closed by client: $clientId")
         } catch (e: Exception) {
-            Log.e(TAG, "Connection error for client $clientId", e)
+            FileLogger.e(TAG, "Connection error for client $clientId", e)
         } finally {
             clients.remove(clientId)
+            _connectedClientCount.value = clients.size
             if (clients.isEmpty()) {
                 _connectionState.value = ConnectionState.Running(port)
             }
-            Log.i(TAG, "Client disconnected: $clientId")
+            FileLogger.i(TAG, "Client disconnected: $clientId (remaining: ${clients.size})")
         }
     }
     
@@ -241,7 +273,7 @@ class WebSocketServer(
             try {
                 session.send(Frame.Text(statusJson))
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to send status", e)
+                FileLogger.e(TAG, "Failed to send status", e)
             }
         }
     }

@@ -32,15 +32,58 @@ class ProgressManager(
     private var currentTitle: String? = null
     private var currentContentType: String? = null
     private var currentHeaders: Map<String, String>? = null
+    private var currentPlaylistJson: String? = null
+    private var currentPlaylistIndex: Int = 0
+    private var currentPreferredAudioLanguage: String? = null
+    private var currentPreferredSubtitleLanguage: String? = null
+    private var currentExternalSubtitleUrl: String? = null
+    private var currentVideoFilter: String? = null
+    private var currentCustomFilterValues: List<Float>? = null
 
     /**
      * Store metadata for the currently playing video so it can be saved to history.
      */
-    fun setCurrentMedia(url: String, title: String?, contentType: String?, headers: Map<String, String>?) {
+    fun setCurrentMedia(
+        url: String,
+        title: String?,
+        contentType: String?,
+        headers: Map<String, String>?,
+        playlistJson: String? = null,
+        playlistIndex: Int = 0,
+        preferredAudioLanguage: String? = null,
+        preferredSubtitleLanguage: String? = null,
+        externalSubtitleUrl: String? = null,
+        videoFilter: String? = null,
+        customFilterValues: List<Float>? = null
+    ) {
         currentUrl = url
         currentTitle = title
         currentContentType = contentType
         currentHeaders = headers
+        currentPlaylistJson = playlistJson
+        currentPlaylistIndex = playlistIndex
+        currentPreferredAudioLanguage = preferredAudioLanguage
+        currentPreferredSubtitleLanguage = preferredSubtitleLanguage
+        currentExternalSubtitleUrl = externalSubtitleUrl
+        currentVideoFilter = videoFilter
+        currentCustomFilterValues = customFilterValues
+    }
+
+    /**
+     * Update just the selection metadata (call before saving progress).
+     */
+    fun updateSelections(
+        preferredAudioLanguage: String? = null,
+        preferredSubtitleLanguage: String? = null,
+        externalSubtitleUrl: String? = null,
+        videoFilter: String? = null,
+        customFilterValues: List<Float>? = null
+    ) {
+        currentPreferredAudioLanguage = preferredAudioLanguage
+        currentPreferredSubtitleLanguage = preferredSubtitleLanguage
+        currentExternalSubtitleUrl = externalSubtitleUrl
+        currentVideoFilter = videoFilter
+        currentCustomFilterValues = customFilterValues
     }
 
     /**
@@ -89,7 +132,12 @@ class ProgressManager(
 
                     withContext(Dispatchers.IO) {
                         try {
-                            historyStore.saveProgress(url, title, position, duration, contentType, headers, thumbnailPath)
+                            historyStore.saveProgress(
+                                url, title, position, duration, contentType, headers,
+                                thumbnailPath, currentPlaylistJson, currentPlaylistIndex,
+                                currentPreferredAudioLanguage, currentPreferredSubtitleLanguage,
+                                currentExternalSubtitleUrl, currentVideoFilter, currentCustomFilterValues
+                            )
                             Log.d(TAG, "Progress saved successfully")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to save progress", e)
@@ -103,19 +151,32 @@ class ProgressManager(
     }
 
     /**
-     * Capture a bitmap from the PlayerView's TextureView surface.
+     * Capture a bitmap from the PlayerView's SurfaceView asynchronously.
      */
-    fun captureBitmap(): Bitmap? {
-        try {
-            val textureView = playerView.videoSurfaceView as? TextureView
-            if (textureView != null) {
-                Log.d(TAG, "Capturing bitmap from TextureView")
-                return textureView.bitmap
+    suspend fun captureBitmapSuspend(): Bitmap? {
+        val surfaceView = playerView.videoSurfaceView as? android.view.SurfaceView ?: return null
+        val width = surfaceView.width
+        val height = surfaceView.height
+
+        if (width <= 0 || height <= 0) return null
+
+        return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+            try {
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                android.view.PixelCopy.request(surfaceView, bitmap, { copyResult ->
+                    if (copyResult == android.view.PixelCopy.SUCCESS) {
+                        Log.d(TAG, "Captured bitmap from SurfaceView via PixelCopy")
+                        continuation.resume(bitmap) { }
+                    } else {
+                        Log.e(TAG, "PixelCopy failed with error code: $copyResult")
+                        continuation.resume(null) { }
+                    }
+                }, android.os.Handler(android.os.Looper.getMainLooper()))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to capture screenshot", e)
+                continuation.resume(null) { }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to capture screenshot", e)
         }
-        return null
     }
 
     private suspend fun saveBitmapToStorage(bitmap: Bitmap): String? {

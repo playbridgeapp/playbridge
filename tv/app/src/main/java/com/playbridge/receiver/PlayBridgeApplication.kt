@@ -5,6 +5,7 @@ import android.app.Application
 import android.os.Bundle
 import android.os.Looper
 import android.util.Log
+import com.playbridge.receiver.logging.FileLogger
 import com.playbridge.receiver.server.ServerService
 
 private const val TAG = "PlayBridgeApp"
@@ -27,6 +28,7 @@ class PlayBridgeApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        FileLogger.init(this)
         registerActivityLifecycleCallbacks(activityLifecycleCallbacks)
         installCrashHandler()
     }
@@ -39,7 +41,8 @@ class PlayBridgeApplication : Application() {
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
 
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            Log.e(TAG, "Uncaught exception on thread '${thread.name}'", throwable)
+            // Persist crash to file FIRST — this may be our only chance
+            FileLogger.logCrash(thread, throwable)
 
             val isMainThread = thread == Looper.getMainLooper().thread
 
@@ -47,7 +50,7 @@ class PlayBridgeApplication : Application() {
                 // Main-thread crash: we cannot safely continue — delegate to the OS.
                 // The ServerService is a separate foreground service; Android will restart
                 // it automatically because we use START_STICKY.
-                Log.e(TAG, "Crash on main thread — delegating to system handler")
+                FileLogger.e(TAG, "Crash on main thread — delegating to system handler")
                 defaultHandler?.uncaughtException(thread, throwable)
                 return@setDefaultUncaughtExceptionHandler
             }
@@ -56,7 +59,7 @@ class PlayBridgeApplication : Application() {
             // Finish the foreground activity so we return cleanly to the home screen,
             // but do NOT kill the process — the ServerService keeps running and the TV
             // stays ready to receive the next play/browser command.
-            Log.w(TAG, "Crash on background thread '${thread.name}' — finishing current activity")
+            FileLogger.w(TAG, "Crash on background thread '${thread.name}' — finishing current activity")
 
             val activity = currentActivity
             if (activity != null && !activity.isFinishing) {
@@ -64,7 +67,7 @@ class PlayBridgeApplication : Application() {
                     try {
                         activity.finish()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to finish activity after crash", e)
+                        FileLogger.e(TAG, "Failed to finish activity after crash", e)
                     }
                 }
             }
@@ -73,7 +76,7 @@ class PlayBridgeApplication : Application() {
             try {
                 ServerService.start(applicationContext)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to restart ServerService after crash", e)
+                FileLogger.e(TAG, "Failed to restart ServerService after crash", e)
             }
         }
     }

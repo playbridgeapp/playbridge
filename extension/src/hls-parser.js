@@ -136,10 +136,3 @@ class HlsParser {
     }
 }
 
-// Support for importScripts in Chrome MV3 Service Worker or export if somehow used in module mode
-if (typeof self !== 'undefined') {
-    self.HlsParser = HlsParser;
-}
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = HlsParser;
-}

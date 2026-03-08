@@ -107,6 +107,7 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
     var isInitialCheckDone by remember { mutableStateOf(false) }
     
     val connectionState by ServerService.connectionState.collectAsState()
+    val connectedCount by ServerService.connectedClientCount.collectAsState()
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
     
     // Check initial state once
@@ -153,6 +154,7 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
                 connectionState = connectionState,
                 serverIp = serverIp,
                 serverPort = serverPort,
+                connectedCount = connectedCount,
                 onShowPairing = { currentScreen = Screen.Pairing }
             )
         }
@@ -160,6 +162,7 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
             HistoryScreen(
                 historyStore = historyStore,
                 deviceName = deviceName,
+                connectedCount = connectedCount,
                 onNavigateToPairing = { currentScreen = Screen.Pairing },
                 onNavigateToSettings = { currentScreen = Screen.Settings },
                 onPlayItem = { item ->
@@ -169,6 +172,19 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
                         putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)
                         if (item.headers != null) {
                              putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(item.headers))
+                        }
+                        // Restore playlist context if this item was part of a playlist
+                        if (item.playlistJson != null) {
+                            putExtra(ServerService.EXTRA_PLAYLIST, item.playlistJson)
+                            putExtra(ServerService.EXTRA_PLAYLIST_INDEX, item.playlistIndex)
+                        }
+                        // Restore saved selections
+                        item.preferredAudioLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG, it) }
+                        item.preferredSubtitleLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG, it) }
+                        item.externalSubtitleUrl?.let { putExtra(ServerService.EXTRA_EXTERNAL_SUBTITLE_URL, it) }
+                        item.videoFilter?.let { putExtra(ServerService.EXTRA_VIDEO_FILTER, it) }
+                        item.customFilterValues?.let { vals ->
+                            putExtra(ServerService.EXTRA_CUSTOM_FILTER_VALUES, floatArrayOf(vals[0], vals[1], vals[2]))
                         }
                     }
                     context.startActivity(intent)
@@ -181,7 +197,8 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
                 port = serverPort ?: 8765,
                 token = authToken,
                 deviceName = deviceName,
-                connectionState = connectionState
+                connectionState = connectionState,
+                connectedCount = connectedCount
             )
         }
         Screen.Settings -> {

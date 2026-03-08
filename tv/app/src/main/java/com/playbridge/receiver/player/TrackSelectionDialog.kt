@@ -14,8 +14,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -29,37 +30,42 @@ fun TrackSelectionDialog(
     subtitleUrls: List<String> = emptyList(),
     currentSubtitleUrl: String? = null,
     onDismiss: () -> Unit,
-    onTrackSelected: (Int, Format?) -> Unit, // for embedded tracks
-    onExternalSubtitleSelected: (String?) -> Unit, // for manual subtitles
+    onTrackSelected: (Int, Format?) -> Unit,
+    onExternalSubtitleSelected: (String?) -> Unit,
     onPreviewRequest: suspend (String) -> String? = { null }
 ) {
     var selectedTab by remember { mutableStateOf(C.TRACK_TYPE_VIDEO) }
-    
-    Dialog(onDismissRequest = onDismiss) {
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.CenterEnd
+    ) {
         Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF1E1E2E)) // Dark background
-                .padding(16.dp)
+                .width(420.dp)
+                .fillMaxHeight(0.85f)
+                .padding(end = 24.dp)
+                .background(Color(0xF21A1A2E), RoundedCornerShape(14.dp))
+                .padding(12.dp)
         ) {
-            // Sidebar for Track Types
+            // Sidebar tabs
             Column(
                 modifier = Modifier
-                    .width(200.dp)
+                    .width(100.dp)
                     .fillMaxHeight()
-                    .padding(end = 16.dp)
+                    .padding(end = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "Tracks",
-                    style = MaterialTheme.typography.titleLarge,
+                    text = "Settings",
+                    style = MaterialTheme.typography.titleSmall,
                     color = Color.White,
-                    modifier = Modifier.padding(bottom = 16.dp)
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
                 )
-                
+
                 TrackTypeButton(
-                    text = "Video / Quality",
+                    text = "Video",
                     isSelected = selectedTab == C.TRACK_TYPE_VIDEO,
                     onClick = { selectedTab = C.TRACK_TYPE_VIDEO }
                 )
@@ -73,25 +79,16 @@ fun TrackSelectionDialog(
                     isSelected = selectedTab == C.TRACK_TYPE_TEXT,
                     onClick = { selectedTab = C.TRACK_TYPE_TEXT }
                 )
-                
-                Spacer(modifier = Modifier.weight(1f))
-                
-                Button(
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Close")
-                }
             }
-            
+
             // Divider
             Box(
                 modifier = Modifier
                     .width(1.dp)
                     .fillMaxHeight()
-                    .background(Color.Gray.copy(alpha = 0.5f))
+                    .background(Color.Gray.copy(alpha = 0.3f))
             )
-            
+
             // Track List
             if (selectedTab == C.TRACK_TYPE_TEXT) {
                 SubtitleTrackList(
@@ -113,6 +110,8 @@ fun TrackSelectionDialog(
             }
         }
     }
+
+    androidx.activity.compose.BackHandler { onDismiss() }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -123,30 +122,27 @@ fun TrackTypeButton(
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    
+
     val backgroundColor = when {
-        isSelected -> MaterialTheme.colorScheme.primary
-        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+        isSelected -> Color(0xFF00D9FF).copy(alpha = 0.2f)
+        isFocused -> Color.White.copy(alpha = 0.1f)
         else -> Color.Transparent
     }
-    
-    val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else Color.White
-    
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(backgroundColor)
             .onFocusChanged { isFocused = it.isFocused }
             .clickable(onClick = onClick)
             .focusable()
-            .padding(12.dp)
+            .padding(horizontal = 8.dp, vertical = 10.dp)
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.bodyMedium,
-            color = contentColor,
+            fontSize = 13.sp,
+            color = if (isSelected) Color(0xFF00D9FF) else Color.White,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
         )
     }
@@ -162,14 +158,12 @@ fun SubtitleTrackList(
     onExternalSubtitleSelected: (String?) -> Unit,
     onPreviewRequest: suspend (String) -> String?
 ) {
-    // 1. Off / None option
-    // If no external URL is selected AND track selection disabled, then "Off" is selected.
     val isTextDisabled = trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
     val isOffSelected = isTextDisabled && currentSubtitleUrl == null
-    
+
     var focusedSubtitleUrl by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
-    
+
     LaunchedEffect(focusedSubtitleUrl) {
         if (focusedSubtitleUrl != null) {
             previewText = "Loading preview..."
@@ -178,30 +172,29 @@ fun SubtitleTrackList(
             previewText = null
         }
     }
-    
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(start = 16.dp),
-        contentPadding = PaddingValues(vertical = 8.dp)
+            .padding(start = 8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp)
     ) {
         // "Off" Option
         item {
             TrackItem(
                 name = "Off",
                 isSelected = isOffSelected,
-                onClick = { 
-                    onExternalSubtitleSelected(null) // Clear external
-                    onTrackSelected(C.TRACK_TYPE_TEXT, null) // Setup internal to "Off" (or disabled)
+                onClick = {
+                    onExternalSubtitleSelected(null)
+                    onTrackSelected(C.TRACK_TYPE_TEXT, null)
                 },
                 onFocus = { focusedSubtitleUrl = null }
             )
         }
-        
-        // 2. Embedded Tracks
+
+        // Embedded Tracks
         val trackGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
-        
-        // Find active override for embedded
+
         var activeOverride: androidx.media3.common.TrackSelectionOverride? = null
         for (group in trackGroups) {
              val override = trackSelectionParameters.overrides[group.mediaTrackGroup]
@@ -213,24 +206,28 @@ fun SubtitleTrackList(
 
         if (trackGroups.isNotEmpty()) {
             item {
-                Text("Embedded", color = Color.Gray, modifier = Modifier.padding(vertical = 8.dp))
+                Text("Embedded", color = Color.Gray, fontSize = 11.sp,
+                    modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp))
             }
             trackGroups.forEach { group ->
                 for (i in 0 until group.length) {
                     val format = group.getTrackFormat(i)
-                    val isSelected = activeOverride != null && 
-                                     activeOverride.mediaTrackGroup == group.mediaTrackGroup &&
-                                     activeOverride.trackIndices.contains(i) &&
-                                     currentSubtitleUrl == null // Ensure external is not overriding this visual
-                    
+                    val isSelected = if (activeOverride != null) {
+                        activeOverride.mediaTrackGroup == group.mediaTrackGroup &&
+                        activeOverride.trackIndices.contains(i) &&
+                        currentSubtitleUrl == null
+                    } else {
+                        group.isTrackSelected(i) && currentSubtitleUrl == null
+                    }
+
                     val name = buildTrackName(format)
                     item {
                         TrackItem(
                             name = name,
                             isSelected = isSelected,
                             onClick = {
-                                onExternalSubtitleSelected(null) // Clear external
-                                onTrackSelected(C.TRACK_TYPE_TEXT, format) // Select internal
+                                onExternalSubtitleSelected(null)
+                                onTrackSelected(C.TRACK_TYPE_TEXT, format)
                             },
                             onFocus = { focusedSubtitleUrl = null }
                         )
@@ -238,11 +235,12 @@ fun SubtitleTrackList(
                 }
             }
         }
-        
-        // 3. External Subtitles
+
+        // External Subtitles
         if (subtitleUrls.isNotEmpty()) {
             item {
-                Text("External", color = Color.Gray, modifier = Modifier.padding(vertical = 8.dp))
+                Text("External", color = Color.Gray, fontSize = 11.sp,
+                    modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp))
             }
             items(subtitleUrls) { url ->
                 val filename = try {
@@ -252,15 +250,15 @@ fun SubtitleTrackList(
                 } catch (e: Exception) {
                     "Subtitle"
                 }
-                
+
                 val isSelected = currentSubtitleUrl == url
                 val isFocused = focusedSubtitleUrl == url
-                
+
                 TrackItem(
                     name = filename,
                     isSelected = isSelected,
                     onClick = {
-                        onExternalSubtitleSelected(url) // Set external
+                        onExternalSubtitleSelected(url)
                     },
                     onFocus = { focusedSubtitleUrl = url },
                     previewText = if (isFocused) previewText else null
@@ -281,16 +279,13 @@ fun TrackList(
     val trackGroups = remember(tracks, trackType) {
         tracks.groups.filter { it.type == trackType }
     }
-    
+
     val formats = remember(trackGroups, trackSelectionParameters) {
         val list = mutableListOf<SelectableFormat>()
-        
-        // Check if Text is Disabled
-        val isTextDisabled = trackType == C.TRACK_TYPE_TEXT && 
+
+        val isTextDisabled = trackType == C.TRACK_TYPE_TEXT &&
                              trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
-        
-        // Check for specific overrides in any of the groups for this type
-        // In Media3 1.0+, overrides is a Map<TrackGroup, TrackSelectionOverride>
+
         var activeOverride: androidx.media3.common.TrackSelectionOverride? = null
         for (group in trackGroups) {
              val override = trackSelectionParameters.overrides[group.mediaTrackGroup]
@@ -299,29 +294,50 @@ fun TrackList(
                  break
              }
         }
-        
-        // "Auto" / "Off" Logic
-        
+
+        val hasPreferredLanguage = when (trackType) {
+            C.TRACK_TYPE_AUDIO -> trackSelectionParameters.preferredAudioLanguages.isNotEmpty()
+            C.TRACK_TYPE_TEXT -> trackSelectionParameters.preferredTextLanguages.isNotEmpty()
+            else -> false
+        }
+
+        var hasPlayerSelectedTrack = false
+        if (activeOverride == null && hasPreferredLanguage) {
+            for (group in trackGroups) {
+                for (i in 0 until group.length) {
+                    if (group.isTrackSelected(i)) {
+                        hasPlayerSelectedTrack = true
+                        break
+                    }
+                }
+                if (hasPlayerSelectedTrack) break
+            }
+        }
+
         @Suppress("UnnecessaryVariable")
         val defaultName = if (trackType == C.TRACK_TYPE_TEXT) "Off" else "Auto / Default"
-        
+
         val isDefaultSelected = if (trackType == C.TRACK_TYPE_TEXT) {
              isTextDisabled
         } else {
-             activeOverride == null
+             activeOverride == null && !hasPlayerSelectedTrack
         }
-        
+
         list.add(SelectableFormat(defaultName, null, isDefaultSelected))
-        
+
         trackGroups.forEach { group ->
             for (i in 0 until group.length) {
                 val format = group.getTrackFormat(i)
-                
-                // Determine if this specific track is the one selected by the override
-                val isSelected = activeOverride != null && 
-                                 activeOverride.mediaTrackGroup == group.mediaTrackGroup &&
-                                 activeOverride.trackIndices.contains(i)
-                
+
+                val isSelected = if (activeOverride != null) {
+                    activeOverride.mediaTrackGroup == group.mediaTrackGroup &&
+                    activeOverride.trackIndices.contains(i)
+                } else if (hasPreferredLanguage) {
+                    group.isTrackSelected(i)
+                } else {
+                    false
+                }
+
                 val name = buildTrackName(format)
                 list.add(SelectableFormat(name, format, isSelected))
             }
@@ -332,8 +348,8 @@ fun TrackList(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(start = 16.dp),
-        contentPadding = PaddingValues(vertical = 8.dp)
+            .padding(start = 8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp)
     ) {
         items(formats) { item ->
             TrackItem(
@@ -342,13 +358,14 @@ fun TrackList(
                 onClick = { onTrackSelected(item.format) }
             )
         }
-        
+
         if (formats.isEmpty()) {
             item {
                 Text(
                     text = "No tracks available",
                     color = Color.Gray,
-                    modifier = Modifier.padding(16.dp)
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(12.dp)
                 )
             }
         }
@@ -366,45 +383,53 @@ fun TrackItem(
     previewText: String? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    
-    val backgroundColor = if (isFocused) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f) else Color.Transparent
-    
+
+    val backgroundColor = when {
+        isFocused -> Color.White.copy(alpha = 0.1f)
+        else -> Color.Transparent
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .padding(vertical = 1.dp)
+            .clip(RoundedCornerShape(6.dp))
             .background(backgroundColor)
-            .onFocusChanged { 
-                isFocused = it.isFocused 
+            .onFocusChanged {
+                isFocused = it.isFocused
                 if (isFocused) onFocus()
             }
             .clickable(onClick = onClick)
             .focusable()
-            .padding(12.dp),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Checkmark
-        if (isSelected) {
-            Text("✓ ", color = MaterialTheme.colorScheme.primary)
-        } else {
-            Spacer(modifier = Modifier.width(18.dp)) // Approximate width of checkmark
-        }
-        
-        Column {
+        Text(
+            text = if (isSelected) "✓" else " ",
+            color = Color(0xFF00D9FF),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.width(20.dp)
+        )
+
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White
+                fontSize = 13.sp,
+                color = if (isSelected) Color(0xFF00D9FF) else Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            
+
             if (previewText != null) {
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = previewText,
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 11.sp,
                     color = Color.LightGray,
-                    maxLines = 5
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -413,22 +438,21 @@ fun TrackItem(
 
 fun buildTrackName(format: Format): String {
     val items = mutableListOf<String>()
-    
+
     if (format.height != Format.NO_VALUE) {
         items.add("${format.height}p")
     }
-    
+
     format.label?.let { if (it.isNotEmpty()) items.add(it) }
     format.language?.let { if (it.isNotEmpty()) items.add(it.uppercase()) }
-    
+
     if (format.bitrate != Format.NO_VALUE) {
         items.add("${format.bitrate / 1000} kbps")
     }
-    
-    // Fallback if empty
+
     if (items.isEmpty()) {
         return format.id ?: "Unknown Track"
     }
-    
+
     return items.joinToString(" • ")
 }

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Background shape with standard Android TV Leanback banner dimensions (320x180 dp) -->
+    <item>
+        <shape android:shape="rectangle">
+            <size android:width="320dp" android:height="180dp" />
+            <solid android:color="@color/ic_launcher_background" />
+        </shape>
+    </item>
+
+    <!-- Centered foreground icon -->
+    <item
+        android:gravity="center"
+        android:width="128dp"
+        android:height="128dp"
+        android:drawable="@mipmap/ic_launcher_foreground" />
+</layer-list>
