@@ -89,7 +89,6 @@ fun PlaylistPickerDialog(
             ) {
                 itemsIndexed(items) { index, item ->
                     val isCurrent = index == currentIndex
-                    val isPast = index < currentIndex
                     var isFocused by remember { mutableStateOf(false) }
 
                     val backgroundColor = when {
@@ -123,11 +122,7 @@ fun PlaylistPickerDialog(
 
                         // Status indicator
                         Text(
-                            text = when {
-                                isCurrent -> "▶ "
-                                isPast -> "✓ "
-                                else -> "  "
-                            },
+                            text = if (isCurrent) "▶ " else "  ",
                             fontSize = 12.sp,
                             color = if (isCurrent) Color(0xFF00D9FF) else Color.Gray
                         )
@@ -140,7 +135,6 @@ fun PlaylistPickerDialog(
                             color = when {
                                 isFailed -> Color.Red.copy(alpha = 0.8f)
                                 isCurrent -> Color(0xFF00D9FF)
-                                isPast -> Color.Gray
                                 else -> Color.White
                             },
                             maxLines = 1,
