@@ -414,6 +414,11 @@ class PlayerActivity : ComponentActivity() {
             } catch (e: Exception) { null }
         } else null
 
+        if (plistJson == null) {
+            applyPlaybackSpeed(1.0f)
+            applyVideoScalingMode(androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT)
+        }
+
         progressManager.setCurrentMedia(url, title, contentType, intentHeaders, plistJson, playlistIndex)
         controlsManager.setTitle(title)
 
@@ -517,7 +522,9 @@ class PlayerActivity : ComponentActivity() {
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         } else {
             FileLogger.i(TAG, "Using DefaultMediaSourceFactory")
-             androidx.media3.exoplayer.source.DefaultMediaSourceFactory(okHttpDataSourceFactory)
+            val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
+                .setConstantBitrateSeekingEnabled(true)
+             androidx.media3.exoplayer.source.DefaultMediaSourceFactory(okHttpDataSourceFactory, extractorsFactory)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         }
 
@@ -603,7 +610,17 @@ class PlayerActivity : ComponentActivity() {
         player?.prepare()
         
         // Restore progress from history
-        progressManager.restoreProgress(url)
+        lifecycleScope.launch {
+            val historyItem = progressManager.restoreProgress(url)
+            if (historyItem != null) {
+                if (historyItem.playbackSpeed != null) {
+                    applyPlaybackSpeed(historyItem.playbackSpeed)
+                }
+                if (historyItem.videoScalingMode != null) {
+                    applyVideoScalingMode(historyItem.videoScalingMode)
+                }
+            }
+        }
         
         player?.play()
         
@@ -806,6 +823,10 @@ class PlayerActivity : ComponentActivity() {
     
     private fun releasePlayer() {
         try {
+            // Workaround for Media3 GL resource leakage when using VideoFrameProcessor
+            // with hardware layer surfaces like Exoplayer's playerView.surfaceView.
+            // Force the player to clear its surface before releasing the GL pipeline.
+            player?.clearVideoSurface()
             videoFilterManager.setPlayer(null)
             player?.release()
         } catch (e: Exception) {
@@ -998,6 +1019,8 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private var currentSubtitleUrl: String? = null
+    private var currentPlaybackSpeed: Float = 1.0f
+    private var currentVideoScalingMode: Int = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
 
     // Preferred language for playlists — persists across episodes
     private var preferredAudioLanguage: String? = null
@@ -1017,8 +1040,20 @@ class PlayerActivity : ComponentActivity() {
             preferredSubtitleLanguage = preferredSubtitleLanguage,
             externalSubtitleUrl = currentSubtitleUrl,
             videoFilter = videoFilterManager.currentFilter.name,
-            customFilterValues = customValues
+            customFilterValues = customValues,
+            playbackSpeed = currentPlaybackSpeed,
+            videoScalingMode = currentVideoScalingMode
         )
+    }
+
+    private fun applyPlaybackSpeed(speed: Float) {
+        currentPlaybackSpeed = speed
+        player?.playbackParameters = androidx.media3.common.PlaybackParameters(speed)
+    }
+
+    private fun applyVideoScalingMode(mode: Int) {
+        currentVideoScalingMode = mode
+        playerView.resizeMode = mode
     }
 
     private fun showVideoFilterDialog() {
@@ -1119,6 +1154,9 @@ class PlayerActivity : ComponentActivity() {
             var liveParams by remember { mutableStateOf(player.trackSelectionParameters) }
             var liveSubtitleUrl by remember { mutableStateOf(currentSubtitleUrl) }
 
+            var livePlaybackSpeed by remember { mutableStateOf(currentPlaybackSpeed) }
+            var liveVideoScalingMode by remember { mutableStateOf(currentVideoScalingMode) }
+
             DisposableEffect(Unit) {
                 val listener = object : androidx.media3.common.Player.Listener {
                     override fun onTracksChanged(tracks: Tracks) {
@@ -1126,6 +1164,9 @@ class PlayerActivity : ComponentActivity() {
                     }
                     override fun onTrackSelectionParametersChanged(parameters: androidx.media3.common.TrackSelectionParameters) {
                         liveParams = parameters
+                    }
+                    override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) {
+                        livePlaybackSpeed = playbackParameters.speed
                     }
                 }
                 player.addListener(listener)
@@ -1138,6 +1179,8 @@ class PlayerActivity : ComponentActivity() {
                     trackSelectionParameters = liveParams,
                     subtitleUrls = subtitleUrls,
                     currentSubtitleUrl = liveSubtitleUrl,
+                    currentPlaybackSpeed = livePlaybackSpeed,
+                    currentVideoScalingMode = liveVideoScalingMode,
                     onDismiss = {
                         dialog.dismiss()
                         if (wasPlaying) player.play()
@@ -1174,6 +1217,14 @@ class PlayerActivity : ComponentActivity() {
                     },
                     onPreviewRequest = { url ->
                          subtitleManager.getPreview(url)
+                    },
+                    onPlaybackSpeedSelected = { speed ->
+                        applyPlaybackSpeed(speed)
+                        livePlaybackSpeed = speed
+                    },
+                    onVideoScalingSelected = { mode ->
+                        applyVideoScalingMode(mode)
+                        liveVideoScalingMode = mode
                     }
                 )
             }

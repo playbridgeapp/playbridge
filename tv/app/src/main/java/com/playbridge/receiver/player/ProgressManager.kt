@@ -39,6 +39,8 @@ class ProgressManager(
     private var currentExternalSubtitleUrl: String? = null
     private var currentVideoFilter: String? = null
     private var currentCustomFilterValues: List<Float>? = null
+    private var currentPlaybackSpeed: Float? = null
+    private var currentVideoScalingMode: Int? = null
 
     /**
      * Store metadata for the currently playing video so it can be saved to history.
@@ -54,7 +56,9 @@ class ProgressManager(
         preferredSubtitleLanguage: String? = null,
         externalSubtitleUrl: String? = null,
         videoFilter: String? = null,
-        customFilterValues: List<Float>? = null
+        customFilterValues: List<Float>? = null,
+        playbackSpeed: Float? = null,
+        videoScalingMode: Int? = null
     ) {
         currentUrl = url
         currentTitle = title
@@ -67,6 +71,8 @@ class ProgressManager(
         currentExternalSubtitleUrl = externalSubtitleUrl
         currentVideoFilter = videoFilter
         currentCustomFilterValues = customFilterValues
+        currentPlaybackSpeed = playbackSpeed
+        currentVideoScalingMode = videoScalingMode
     }
 
     /**
@@ -77,31 +83,38 @@ class ProgressManager(
         preferredSubtitleLanguage: String? = null,
         externalSubtitleUrl: String? = null,
         videoFilter: String? = null,
-        customFilterValues: List<Float>? = null
+        customFilterValues: List<Float>? = null,
+        playbackSpeed: Float? = null,
+        videoScalingMode: Int? = null
     ) {
         currentPreferredAudioLanguage = preferredAudioLanguage
         currentPreferredSubtitleLanguage = preferredSubtitleLanguage
         currentExternalSubtitleUrl = externalSubtitleUrl
         currentVideoFilter = videoFilter
         currentCustomFilterValues = customFilterValues
+        currentPlaybackSpeed = playbackSpeed
+        currentVideoScalingMode = videoScalingMode
     }
 
     /**
      * Attempt to restore playback position from history for the given [url].
+     * Returns the history item if found, so callers can restore other settings.
      */
-    fun restoreProgress(url: String) {
-        lifecycleScope.launch {
-            try {
-                val history = historyStore.history.first()
-                val item = history.find { it.url == url }
-                if (item != null && item.position > 5000 && item.position < (item.duration - 5000)) {
-                    Log.i(TAG, "Resuming from history: ${item.position}ms")
-                    playerProvider()?.seekTo(item.position)
+    suspend fun restoreProgress(url: String): com.playbridge.receiver.data.PlaybackHistoryItem? {
+        return try {
+            val history = historyStore.history.first()
+            val item = history.find { it.url == url }
+            if (item != null && item.position > 5000 && item.position < (item.duration - 5000)) {
+                Log.i(TAG, "Resuming from history: ${item.position}ms")
+                playerProvider()?.seekTo(item.position)
+                withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(context, "Resuming playback", android.widget.Toast.LENGTH_SHORT).show()
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to restore history", e)
             }
+            item
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore history", e)
+            null
         }
     }
 
@@ -136,7 +149,8 @@ class ProgressManager(
                                 url, title, position, duration, contentType, headers,
                                 thumbnailPath, currentPlaylistJson, currentPlaylistIndex,
                                 currentPreferredAudioLanguage, currentPreferredSubtitleLanguage,
-                                currentExternalSubtitleUrl, currentVideoFilter, currentCustomFilterValues
+                                currentExternalSubtitleUrl, currentVideoFilter, currentCustomFilterValues,
+                                currentPlaybackSpeed, currentVideoScalingMode
                             )
                             Log.d(TAG, "Progress saved successfully")
                         } catch (e: Exception) {
