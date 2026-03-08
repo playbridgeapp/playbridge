@@ -12,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -34,10 +36,16 @@ fun PlaylistPickerDialog(
     onDismiss: () -> Unit
 ) {
     val listState = rememberLazyListState()
+    val focusRequester = remember { FocusRequester() }
 
-    // Scroll to current item on open
+    // Scroll to and focus the current item on open
     LaunchedEffect(currentIndex) {
-        listState.animateScrollToItem(maxOf(0, currentIndex - 2))
+        listState.scrollToItem(maxOf(0, currentIndex - 2))
+        try {
+            focusRequester.requestFocus()
+        } catch (e: Exception) {
+            // Ignore focus errors if not attached yet
+        }
     }
 
     Box(
@@ -90,11 +98,14 @@ fun PlaylistPickerDialog(
                         else -> Color.Transparent
                     }
 
+                    val isFailed = item.title?.startsWith("[FAILED]") == true
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .background(backgroundColor)
+                            .then(if (isCurrent) Modifier.focusRequester(focusRequester) else Modifier)
                             .onFocusChanged { isFocused = it.isFocused }
                             .clickable { onItemSelected(index) }
                             .focusable()
@@ -127,6 +138,7 @@ fun PlaylistPickerDialog(
                             fontSize = 14.sp,
                             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                             color = when {
+                                isFailed -> Color.Red.copy(alpha = 0.8f)
                                 isCurrent -> Color(0xFF00D9FF)
                                 isPast -> Color.Gray
                                 else -> Color.White

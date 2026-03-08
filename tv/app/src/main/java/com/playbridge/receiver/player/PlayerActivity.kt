@@ -66,7 +66,7 @@ class PlayerActivity : ComponentActivity() {
     private var subtitleUrls: List<String> = emptyList()
 
     // Playlist queue for auto-advancing through episodes
-    private var playlistItems: List<com.playbridge.protocol.PlayPayload> = emptyList()
+    private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
     private val controlReceiver = object : BroadcastReceiver() {
@@ -249,15 +249,16 @@ class PlayerActivity : ComponentActivity() {
         val playlistJson = intent?.getStringExtra(ServerService.EXTRA_PLAYLIST)
         if (playlistJson != null) {
             try {
-                playlistItems = com.playbridge.protocol.protocolJson.decodeFromString(
+                val itemsList = com.playbridge.protocol.protocolJson.decodeFromString(
                     kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
                     playlistJson
                 )
+                playlistItems = itemsList.toMutableList()
                 playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
                 FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Failed to parse playlist", e)
-                playlistItems = emptyList()
+                playlistItems = mutableListOf()
             }
         }
 
@@ -374,7 +375,7 @@ class PlayerActivity : ComponentActivity() {
                 val parsedPlaylist = M3uParser.fetchAndParseM3u(url, intentHeaders)
                 if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
                     FileLogger.i(TAG, "Successfully parsed IPTV M3U playlist with ${parsedPlaylist.size} items")
-                    playlistItems = parsedPlaylist
+                    playlistItems = parsedPlaylist.toMutableList()
                     playlistIndex = 0
                     controlsManager.setPlaylistVisible(true)
 
@@ -702,6 +703,16 @@ class PlayerActivity : ComponentActivity() {
                     runOnUiThread {
                         android.widget.Toast.makeText(this@PlayerActivity, "Link failed, skipping to next channel...", android.widget.Toast.LENGTH_SHORT).show()
                     }
+
+                    // Mark item as failed
+                    if (playlistIndex in playlistItems.indices) {
+                        val failedItem = playlistItems[playlistIndex]
+                        val title = failedItem.title ?: "Channel ${playlistIndex + 1}"
+                        if (!title.startsWith("[FAILED]")) {
+                            playlistItems[playlistIndex] = failedItem.copy(title = "[FAILED] $title")
+                        }
+                    }
+
                     // Add a small delay so the user sees the toast before it skips
                     lifecycleScope.launch(Dispatchers.Main) {
                         kotlinx.coroutines.delay(1000)
