@@ -366,6 +366,35 @@ class PlayerActivity : ComponentActivity() {
             } else {
                 FileLogger.d(TAG, "Pre-flight sniff returned null")
             }
+
+            // Detect if this is an IPTV playlist and parse it instead of playing directly
+            val urlWithoutQuery = url.substringBefore("?")
+            val isM3u = finalContentType == androidx.media3.common.MimeTypes.APPLICATION_M3U8 || urlWithoutQuery.endsWith(".m3u") || urlWithoutQuery.endsWith(".m3u8")
+            if (isM3u) {
+                val parsedPlaylist = M3uParser.fetchAndParseM3u(url, intentHeaders)
+                if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
+                    FileLogger.i(TAG, "Successfully parsed IPTV M3U playlist with ${parsedPlaylist.size} items")
+                    playlistItems = parsedPlaylist
+                    playlistIndex = 0
+                    controlsManager.setPlaylistVisible(true)
+
+                    val firstItem = parsedPlaylist[0]
+                    val displayTitle = if (firstItem.title != null) {
+                        "${firstItem.title} (1/${parsedPlaylist.size})"
+                    } else {
+                        "Item 1/${parsedPlaylist.size}"
+                    }
+                    startPlayback(
+                        firstItem.url,
+                        displayTitle,
+                        firstItem.contentType,
+                        firstItem.detectedBy,
+                        firstItem.headers,
+                        firstItem.subtitles?.let { ArrayList(it) }
+                    )
+                    return@launch
+                }
+            }
             
             startPlayback(url, title, finalContentType, detectedBy, intentHeaders, subtitles)
         }
