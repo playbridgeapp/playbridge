@@ -611,28 +611,49 @@ class PlayerActivity : ComponentActivity() {
         videoDecoderRetryCount = 0
     }
 
+    private var playbackTimeoutJob: kotlinx.coroutines.Job? = null
+
     private fun createPlayerListener() = object : androidx.media3.common.Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
                 androidx.media3.common.Player.STATE_BUFFERING -> {
                     FileLogger.d(TAG, "Buffering...")
                     controlsManager.showBuffering()
+                    // Start or reset the 15-second timeout for buffering
+                    playbackTimeoutJob?.cancel()
+                    playbackTimeoutJob = lifecycleScope.launch {
+                        kotlinx.coroutines.delay(15000L)
+                        FileLogger.w(TAG, "Playback timed out after 15 seconds of buffering")
+                        handlePlaybackError(androidx.media3.common.PlaybackException(
+                            "Playback timed out", null, androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+                        ))
+                    }
                 }
                 androidx.media3.common.Player.STATE_READY -> {
                     FileLogger.i(TAG, "Playback ready")
                     controlsManager.hideBuffering()
+                    playbackTimeoutJob?.cancel()
                     audioDiscontinuityRetryCount = 0
                     videoDecoderRetryCount = 0
                 }
                 androidx.media3.common.Player.STATE_ENDED -> {
                     FileLogger.i(TAG, "Playback ended")
                     controlsManager.hideBuffering()
+                    playbackTimeoutJob?.cancel()
                     playNextInPlaylist()
+                }
+                androidx.media3.common.Player.STATE_IDLE -> {
+                    playbackTimeoutJob?.cancel()
                 }
             }
         }
         
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            playbackTimeoutJob?.cancel()
+            handlePlaybackError(error)
+        }
+
+        private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
             val isAudioDiscontinuity = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED || 
                                        error.cause is androidx.media3.exoplayer.audio.AudioSink.UnexpectedDiscontinuityException
             
@@ -689,16 +710,17 @@ class PlayerActivity : ComponentActivity() {
 
             FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
 
-            // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found)
+            // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found, Timeout)
             if (playlistItems.isNotEmpty()) {
                 val isNetworkOrHttpError = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
                                            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
                                            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ||
                                            error.cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException ||
                                            error.cause is java.net.UnknownHostException ||
-                                           error.cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException
+                                           error.cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException ||
+                                           error.cause?.javaClass?.simpleName == "PlaylistStuckException"
 
-                if (isNetworkOrHttpError) {
+                if (isNetworkOrHttpError || error.message?.contains("timed out") == true) {
                     FileLogger.w(TAG, "Network/HTTP error detected. Skipping to next item in playlist.")
                     runOnUiThread {
                         android.widget.Toast.makeText(this@PlayerActivity, "Link failed, skipping to next channel...", android.widget.Toast.LENGTH_SHORT).show()
