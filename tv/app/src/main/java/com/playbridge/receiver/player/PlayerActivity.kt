@@ -801,9 +801,18 @@ class PlayerActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
-            syncSelectionsToProgressManager()
-            val bitmap = progressManager.captureBitmapSuspend()
-            progressManager.saveProgress(bitmap)
+            // Only capture screenshot and save progress if playback was actually ready/started
+            val state = player?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
+            if (hasPlayed && player?.playerError == null) {
+                syncSelectionsToProgressManager()
+                try {
+                    val bitmap = progressManager.captureBitmapSuspend()
+                    progressManager.saveProgress(bitmap)
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "Failed to capture/save progress before previous: ${e.message}")
+                }
+            }
 
             playlistIndex--
             val prevItem = playlistItems[playlistIndex]
@@ -834,10 +843,19 @@ class PlayerActivity : ComponentActivity() {
      */
     private fun playNextInPlaylist() {
         lifecycleScope.launch {
-            // Save progress for the current episode before advancing
-            syncSelectionsToProgressManager()
-            val bitmap = progressManager.captureBitmapSuspend()
-            progressManager.saveProgress(bitmap)
+            // Save progress for the current episode before advancing,
+            // but only if playback was actually ready (to avoid crashes on failed streams)
+            val state = player?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
+            if (hasPlayed && player?.playerError == null) {
+                syncSelectionsToProgressManager()
+                try {
+                    val bitmap = progressManager.captureBitmapSuspend()
+                    progressManager.saveProgress(bitmap)
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "Failed to capture/save progress before next: ${e.message}")
+                }
+            }
 
             if (playlistItems.isEmpty()) {
                 FileLogger.i(TAG, "No playlist — finishing")
@@ -882,10 +900,18 @@ class PlayerActivity : ComponentActivity() {
         if (index < 0 || index >= playlistItems.size) return
 
         lifecycleScope.launch {
-            // Save progress for the current episode before jumping
-            syncSelectionsToProgressManager()
-            val bitmap = progressManager.captureBitmapSuspend()
-            progressManager.saveProgress(bitmap)
+            // Save progress for the current episode before jumping, if it was playing
+            val state = player?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
+            if (hasPlayed && player?.playerError == null) {
+                syncSelectionsToProgressManager()
+                try {
+                    val bitmap = progressManager.captureBitmapSuspend()
+                    progressManager.saveProgress(bitmap)
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "Failed to capture/save progress before jump: ${e.message}")
+                }
+            }
 
             playlistIndex = index
             val item = playlistItems[index]
