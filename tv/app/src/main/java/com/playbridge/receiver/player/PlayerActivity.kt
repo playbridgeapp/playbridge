@@ -823,6 +823,10 @@ class PlayerActivity : ComponentActivity() {
     
     private fun releasePlayer() {
         try {
+            // Workaround for Media3 GL resource leakage when using VideoFrameProcessor
+            // with hardware layer surfaces like Exoplayer's playerView.surfaceView.
+            // Force the player to clear its surface before releasing the GL pipeline.
+            player?.clearVideoSurface()
             videoFilterManager.setPlayer(null)
             player?.release()
         } catch (e: Exception) {
