@@ -31,7 +31,9 @@ data class PlaybackHistoryItem(
     val preferredSubtitleLanguage: String? = null,
     val externalSubtitleUrl: String? = null,
     val videoFilter: String? = null,
-    val customFilterValues: List<Float>? = null
+    val customFilterValues: List<Float>? = null,
+    val playbackSpeed: Float? = null,
+    val videoScalingMode: Int? = null
 )
 
 class HistoryStore(private val context: Context) {
@@ -64,7 +66,9 @@ class HistoryStore(private val context: Context) {
         preferredSubtitleLanguage: String? = null,
         externalSubtitleUrl: String? = null,
         videoFilter: String? = null,
-        customFilterValues: List<Float>? = null
+        customFilterValues: List<Float>? = null,
+        playbackSpeed: Float? = null,
+        videoScalingMode: Int? = null
     ) {
         if (url.isBlank()) return
         
@@ -104,7 +108,9 @@ class HistoryStore(private val context: Context) {
                 preferredSubtitleLanguage = preferredSubtitleLanguage,
                 externalSubtitleUrl = externalSubtitleUrl,
                 videoFilter = videoFilter,
-                customFilterValues = customFilterValues
+                customFilterValues = customFilterValues,
+                playbackSpeed = playbackSpeed,
+                videoScalingMode = videoScalingMode
             )
 
             // Remove existing item with same ID to update it (move to top)

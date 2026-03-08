@@ -21,6 +21,10 @@ import androidx.tv.material3.*
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.Tracks
+import androidx.media3.ui.AspectRatioFrameLayout
+
+const val TAB_SPEED = 100
+const val TAB_SCALING = 101
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -29,10 +33,14 @@ fun TrackSelectionDialog(
     trackSelectionParameters: androidx.media3.common.TrackSelectionParameters,
     subtitleUrls: List<String> = emptyList(),
     currentSubtitleUrl: String? = null,
+    currentPlaybackSpeed: Float = 1.0f,
+    currentVideoScalingMode: Int = AspectRatioFrameLayout.RESIZE_MODE_FIT,
     onDismiss: () -> Unit,
     onTrackSelected: (Int, Format?) -> Unit,
     onExternalSubtitleSelected: (String?) -> Unit,
-    onPreviewRequest: suspend (String) -> String? = { null }
+    onPreviewRequest: suspend (String) -> String? = { null },
+    onPlaybackSpeedSelected: (Float) -> Unit = {},
+    onVideoScalingSelected: (Int) -> Unit = {}
 ) {
     var selectedTab by remember { mutableStateOf(C.TRACK_TYPE_VIDEO) }
 
@@ -79,6 +87,16 @@ fun TrackSelectionDialog(
                     isSelected = selectedTab == C.TRACK_TYPE_TEXT,
                     onClick = { selectedTab = C.TRACK_TYPE_TEXT }
                 )
+                TrackTypeButton(
+                    text = "Speed",
+                    isSelected = selectedTab == TAB_SPEED,
+                    onClick = { selectedTab = TAB_SPEED }
+                )
+                TrackTypeButton(
+                    text = "Scaling",
+                    isSelected = selectedTab == TAB_SCALING,
+                    onClick = { selectedTab = TAB_SCALING }
+                )
             }
 
             // Divider
@@ -90,23 +108,38 @@ fun TrackSelectionDialog(
             )
 
             // Track List
-            if (selectedTab == C.TRACK_TYPE_TEXT) {
-                SubtitleTrackList(
-                    tracks = tracks,
-                    trackSelectionParameters = trackSelectionParameters,
-                    subtitleUrls = subtitleUrls,
-                    currentSubtitleUrl = currentSubtitleUrl,
-                    onTrackSelected = onTrackSelected,
-                    onExternalSubtitleSelected = onExternalSubtitleSelected,
-                    onPreviewRequest = onPreviewRequest
-                )
-            } else {
-                TrackList(
-                    tracks = tracks,
-                    trackSelectionParameters = trackSelectionParameters,
-                    trackType = selectedTab,
-                    onTrackSelected = { format -> onTrackSelected(selectedTab, format) }
-                )
+            when (selectedTab) {
+                C.TRACK_TYPE_TEXT -> {
+                    SubtitleTrackList(
+                        tracks = tracks,
+                        trackSelectionParameters = trackSelectionParameters,
+                        subtitleUrls = subtitleUrls,
+                        currentSubtitleUrl = currentSubtitleUrl,
+                        onTrackSelected = onTrackSelected,
+                        onExternalSubtitleSelected = onExternalSubtitleSelected,
+                        onPreviewRequest = onPreviewRequest
+                    )
+                }
+                TAB_SPEED -> {
+                    PlaybackSpeedList(
+                        currentSpeed = currentPlaybackSpeed,
+                        onSpeedSelected = onPlaybackSpeedSelected
+                    )
+                }
+                TAB_SCALING -> {
+                    VideoScalingList(
+                        currentMode = currentVideoScalingMode,
+                        onModeSelected = onVideoScalingSelected
+                    )
+                }
+                else -> {
+                    TrackList(
+                        tracks = tracks,
+                        trackSelectionParameters = trackSelectionParameters,
+                        trackType = selectedTab,
+                        onTrackSelected = { format -> onTrackSelected(selectedTab, format) }
+                    )
+                }
             }
         }
     }
@@ -455,4 +488,63 @@ fun buildTrackName(format: Format): String {
     }
 
     return items.joinToString(" • ")
+}
+
+@Composable
+fun PlaybackSpeedList(
+    currentSpeed: Float,
+    onSpeedSelected: (Float) -> Unit
+) {
+    val speeds = listOf(
+        0.5f to "0.5x",
+        0.75f to "0.75x",
+        1.0f to "1.0x (Normal)",
+        1.25f to "1.25x",
+        1.5f to "1.5x",
+        2.0f to "2.0x"
+    )
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(start = 8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp)
+    ) {
+        items(speeds) { (speed, label) ->
+            TrackItem(
+                name = label,
+                isSelected = speed == currentSpeed,
+                onClick = { onSpeedSelected(speed) }
+            )
+        }
+    }
+}
+
+@Composable
+fun VideoScalingList(
+    currentMode: Int,
+    onModeSelected: (Int) -> Unit
+) {
+    val modes = listOf(
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT to "Fit",
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL to "Fill",
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM to "Zoom",
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH to "Fixed Width",
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT to "Fixed Height"
+    )
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(start = 8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp)
+    ) {
+        items(modes) { (mode, label) ->
+            TrackItem(
+                name = label,
+                isSelected = mode == currentMode,
+                onClick = { onModeSelected(mode) }
+            )
+        }
+    }
 }
