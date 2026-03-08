@@ -83,18 +83,21 @@ class SystemWebViewEngine(
     }
 
     override fun simulateClick(x: Float, y: Float) {
-        // Find DOM element at exact coordinates and invoke click() programmatically
-        // Note: x/y coordinates need to account for device pixel ratio
-        val script = """
-            (function() {
-                var dpr = window.devicePixelRatio || 1;
-                var el = document.elementFromPoint($x / dpr, $y / dpr);
-                if (el) {
-                    el.click();
-                }
-            })();
-        """.trimIndent()
-        evaluateJavascript(script, null)
+        val downTime = android.os.SystemClock.uptimeMillis()
+        val eventTime = android.os.SystemClock.uptimeMillis()
+
+        val downEvent = android.view.MotionEvent.obtain(
+            downTime, eventTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0
+        )
+        val upEvent = android.view.MotionEvent.obtain(
+            downTime, eventTime + 100, android.view.MotionEvent.ACTION_UP, x, y, 0
+        )
+
+        webView.dispatchTouchEvent(downEvent)
+        webView.dispatchTouchEvent(upEvent)
+
+        downEvent.recycle()
+        upEvent.recycle()
     }
 
     /**
