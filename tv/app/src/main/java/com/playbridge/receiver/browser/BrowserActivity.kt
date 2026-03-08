@@ -347,36 +347,42 @@ class BrowserActivity : ComponentActivity() {
     }
 
     /**
-     * Dispatch a touch event to the correct target view based on fullscreen state.
-     * In fullscreen: dispatches to the fullscreen view (or GeckoView).
-     * Otherwise: dispatches to the engine's WebView.
+     * Dispatch a click event using the engine's precise DOM interaction when possible.
+     * Only falls back to raw MotionEvents if a purely native, non-browser fullscreen
+     * view (like a generic SurfaceView wrapper) is active and the engine can't handle it.
      */
     private fun simulateClickOnActiveView(x: Float, y: Float) {
-        val downTime = android.os.SystemClock.uptimeMillis()
-        val eventTime = android.os.SystemClock.uptimeMillis()
-
-        val downEvent = android.view.MotionEvent.obtain(
-            downTime, eventTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0
-        )
-        val upEvent = android.view.MotionEvent.obtain(
-            downTime, eventTime + 100, android.view.MotionEvent.ACTION_UP, x, y, 0
-        )
-
-        val targetView = when {
-            fullscreenView != null -> fullscreenView
-            isGeckoFullscreen -> engine?.getView()
-            else -> null
-        }
-
-        if (targetView != null) {
-            targetView.dispatchTouchEvent(downEvent)
-            targetView.dispatchTouchEvent(upEvent)
-        } else {
+        // If we have a GeckoView in fullscreen, the engine handles the click directly
+        // through its JS implementation which accurately targets the video/DOM elements.
+        if (isGeckoFullscreen) {
             engine?.simulateClick(x, y)
+            return
         }
 
-        downEvent.recycle()
-        upEvent.recycle()
+        // SystemWebViewEngine creates a native 'fullscreenView' (usually a FrameLayout
+        // wrapping a SurfaceView or TextureView). Native Android views don't respond
+        // to DOM JS clicks, so we MUST use raw MotionEvents here.
+        if (fullscreenView != null) {
+            val downTime = android.os.SystemClock.uptimeMillis()
+            val eventTime = android.os.SystemClock.uptimeMillis()
+
+            val downEvent = android.view.MotionEvent.obtain(
+                downTime, eventTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0
+            )
+            val upEvent = android.view.MotionEvent.obtain(
+                downTime, eventTime + 100, android.view.MotionEvent.ACTION_UP, x, y, 0
+            )
+
+            fullscreenView?.dispatchTouchEvent(downEvent)
+            fullscreenView?.dispatchTouchEvent(upEvent)
+
+            downEvent.recycle()
+            upEvent.recycle()
+            return
+        }
+
+        // Standard in-page browser click
+        engine?.simulateClick(x, y)
     }
 
     private fun handleMouseCommand(event: String?, dx: Float, dy: Float) {
