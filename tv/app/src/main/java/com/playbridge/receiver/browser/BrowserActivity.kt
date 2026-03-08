@@ -99,18 +99,13 @@ class BrowserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Only enable hardware acceleration if we're not running on an emulator
-        // Emulators often lack proper OpenGL ES 3.1 support which crashes the WebView
-        if (!isEmulator()) {
-            window.setFlags(
-                android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-                android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-            )
-        } else {
-            // Explicitly tell the window to NOT use hardware acceleration on emulators
-            // to prevent EGL_BAD_CONFIG GPU process crashes in Chromium
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
-        }
+        // Always enable hardware acceleration. HTML5 video in WebView requires it.
+        // While some Android emulator images without discrete GPUs may crash (EGL_BAD_CONFIG),
+        // disabling hardware acceleration completely breaks video playback for all emulators.
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+        )
         // We manage KEEP_SCREEN_ON dynamically during fullscreen video playback
         
         // Use the singleton AdBlocker (preloaded from MainActivity)

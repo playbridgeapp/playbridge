@@ -247,15 +247,10 @@ class SystemWebViewEngine(
                 setSupportMultipleWindows(true)
             }
 
-            // Use software rendering on emulators to avoid OpenGL ES 3.1 crash
-            // (Cloudflare Turnstile/WebGL triggers fatal GPU process crash on emulators)
-            if (isEmulator()) {
-                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-                Log.d(TAG, "Emulator detected — using software rendering")
-            } else {
-                // Enable hardware acceleration for video on real devices
-                setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            }
+            // Hardware acceleration is strictly required for WebView HTML5 video playback.
+            // We previously forced SOFTWARE layers on emulators to prevent EGL_BAD_CONFIG
+            // crashes on broken AVDs, but that completely disables video decoding.
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
             // Set high renderer priority for better video performance
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
