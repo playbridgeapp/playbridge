@@ -88,6 +88,7 @@ class AdBlocker(private val context: Context) {
     data class UrlPattern(
         val pattern: Regex,
         val originalRule: String,
+        val literalSearch: String,        // Fast substring search string
         val resourceTypes: Int = TYPE_ALL,
         val thirdPartyOnly: Boolean = false,
         val allowedDomains: Set<String>? = null,  // Domains where this rule applies (null = all domains)
@@ -270,11 +271,17 @@ class AdBlocker(private val context: Context) {
         
         if (canAddPattern) {
             try {
+                // Extract literal substring to speed up matching
+                // We pick the longest sequence of alphanumeric characters (or ./-)
+                val literalParts = pattern.split(Regex("[*^|?+\\[\\](){}\\\\]"))
+                val literalSearch = literalParts.maxByOrNull { it.length } ?: ""
+
                 val regex = patternToRegex(pattern)
                 if (regex != null) {
                     val urlPattern = UrlPattern(
                         pattern = regex,
                         originalRule = pattern,
+                        literalSearch = literalSearch.lowercase(),
                         resourceTypes = resourceTypes,
                         thirdPartyOnly = thirdPartyOnly,
                         allowedDomains = allowedDomains,
@@ -536,6 +543,9 @@ class AdBlocker(private val context: Context) {
             // Check domain restrictions
             if (pageHost != null && !isDomainAllowed(pattern, pageHost)) continue
             
+            // Fast literal check before expensive regex
+            if (pattern.literalSearch.isNotEmpty() && !urlLower.contains(pattern.literalSearch)) continue
+
             // Check pattern
             if (pattern.pattern.containsMatchIn(urlLower)) {
                 Log.d(TAG, "Blocked by pattern: ${pattern.originalRule}")
@@ -583,6 +593,9 @@ class AdBlocker(private val context: Context) {
             // Check domain restrictions
             if (pageHost != null && !isDomainAllowed(pattern, pageHost)) continue
             
+            // Fast literal check before expensive regex
+            if (pattern.literalSearch.isNotEmpty() && !url.contains(pattern.literalSearch)) continue
+
             if (pattern.pattern.containsMatchIn(url)) {
                 return true
             }
