@@ -90,22 +90,18 @@ class GeckoViewEngine(
     }
 
     override fun simulateClick(x: Float, y: Float) {
-        // Dispatch touch events to GeckoView
-        val downTime = android.os.SystemClock.uptimeMillis()
-        val eventTime = android.os.SystemClock.uptimeMillis()
-        
-        val downEvent = MotionEvent.obtain(
-            downTime, eventTime, MotionEvent.ACTION_DOWN, x, y, 0
-        )
-        val upEvent = MotionEvent.obtain(
-            downTime, eventTime + 100, MotionEvent.ACTION_UP, x, y, 0
-        )
-        
-        geckoView.dispatchTouchEvent(downEvent)
-        geckoView.dispatchTouchEvent(upEvent)
-        
-        downEvent.recycle()
-        upEvent.recycle()
+        // Find DOM element at exact coordinates and invoke click() programmatically
+        // Note: x/y coordinates need to account for device pixel ratio
+        val script = """
+            (function() {
+                var dpr = window.devicePixelRatio || 1;
+                var el = document.elementFromPoint($x / dpr, $y / dpr);
+                if (el) {
+                    el.click();
+                }
+            })();
+        """.trimIndent()
+        evaluateJavascript(script, null)
     }
 
     /**
