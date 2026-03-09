@@ -73,7 +73,9 @@ class SystemWebViewEngine(
                 Build.MODEL.contains("google_atv") ||
                 Build.MANUFACTURER.contains("Genymotion") ||
                 Build.PRODUCT.contains("sdk") ||
-                Build.PRODUCT.contains("emulator"))
+                Build.PRODUCT.contains("emulator") ||
+                Build.HARDWARE.contains("goldfish") ||
+                Build.HARDWARE.contains("ranchu"))
     }
 
     override fun scrollBy(dx: Int, dy: Int) {
@@ -81,14 +83,14 @@ class SystemWebViewEngine(
     }
 
     override fun simulateClick(x: Float, y: Float) {
-        val downTime = SystemClock.uptimeMillis()
-        val eventTime = SystemClock.uptimeMillis()
+        val downTime = android.os.SystemClock.uptimeMillis()
+        val eventTime = android.os.SystemClock.uptimeMillis()
 
-        val downEvent = MotionEvent.obtain(
-            downTime, eventTime, MotionEvent.ACTION_DOWN, x, y, 0
+        val downEvent = android.view.MotionEvent.obtain(
+            downTime, eventTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0
         )
-        val upEvent = MotionEvent.obtain(
-            downTime, eventTime + 100, MotionEvent.ACTION_UP, x, y, 0
+        val upEvent = android.view.MotionEvent.obtain(
+            downTime, eventTime + 100, android.view.MotionEvent.ACTION_UP, x, y, 0
         )
 
         webView.dispatchTouchEvent(downEvent)
@@ -248,15 +250,10 @@ class SystemWebViewEngine(
                 setSupportMultipleWindows(true)
             }
 
-            // Use software rendering on emulators to avoid OpenGL ES 3.1 crash
-            // (Cloudflare Turnstile/WebGL triggers fatal GPU process crash on emulators)
-            if (isEmulator()) {
-                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-                Log.d(TAG, "Emulator detected — using software rendering")
-            } else {
-                // Enable hardware acceleration for video on real devices
-                setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            }
+            // Hardware acceleration is strictly required for WebView HTML5 video playback.
+            // We previously forced SOFTWARE layers on emulators to prevent EGL_BAD_CONFIG
+            // crashes on broken AVDs, but that completely disables video decoding.
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
             // Set high renderer priority for better video performance
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

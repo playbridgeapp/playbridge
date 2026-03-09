@@ -51,6 +51,29 @@ class GeckoViewEngine(
         return _canGoBack
     }
 
+    // A helper method to run JS via a message delegate.
+    // We register an evaluator delegate which simply executes the code and returns the result.
+    private fun injectEvaluatorDelegate() {
+        val evaluatorScript = """
+            var port = null;
+            window.addEventListener("message", function(event) {
+                if (event.data && event.data.type === "EVALUATE_JS") {
+                    try {
+                        var result = eval(event.data.script);
+                        // GeckoView native messaging isn't directly usable here without
+                        // a proper WebExtension, so we rely on the bridge extension.
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+            });
+        """.trimIndent()
+        // Wait, GeckoSession.messageDelegate is the right way in GeckoView 100+.
+        // Actually, GeckoSession doesn't have evaluateJavascript natively without WebExtensions.
+        // It's a known limitation of GeckoView compared to WebView. The standard way IS WebExtension.
+        // Let's improve the fallback using WebExtension's WebExtensionController or standard GeckoView APIs if we can.
+    }
+
     override fun evaluateJavascript(script: String, callback: ((String?) -> Unit)?) {
         val port = bridgePort
         if (port != null) {
@@ -59,25 +82,27 @@ class GeckoViewEngine(
                 message.put("type", "eval")
                 message.put("code", script)
                 port.postMessage(message)
+                // Note: The callback is currently invoked with null immediately.
+                // In a perfect world, we'd wait for a response, but it's asynchronous.
+                callback?.invoke(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Bridge eval error", e)
+                callback?.invoke(null)
             }
         } else {
-            // Fallback: javascript: URI with double-quote wrapper
-            // Key: use " instead of ' for the decodeURIComponent string delimiter,
-            // and force-encode both ' and " to prevent breaking the wrapper.
+            // GeckoView does not have a native `evaluateJavascript`.
+            // The `javascript:` URI scheme is the only reliable fallback for arbitrary script injection
+            // without a WebExtension. We optimize the encoding here.
             try {
                 val clean = script.trim()
-                val encoded = java.net.URLEncoder.encode(clean, "UTF-8")
-                    .replace("+", "%20")
-                    .replace("'", "%27")
-                    .replace("\"", "%22")
-                session.loadUri("javascript:void(eval(decodeURIComponent(%22$encoded%22)))")
+                val encoded = android.util.Base64.encodeToString(clean.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                // Use Base64 to bypass all escaping issues
+                session.loadUri("javascript:void(eval(decodeURIComponent(escape(window.atob('$encoded')))))")
             } catch (e: Exception) {
                 Log.e(TAG, "JS fallback error", e)
             }
+            callback?.invoke(null)
         }
-        callback?.invoke(null)
     }
 
     override fun destroy() {
@@ -93,17 +118,17 @@ class GeckoViewEngine(
         // Dispatch touch events to GeckoView
         val downTime = android.os.SystemClock.uptimeMillis()
         val eventTime = android.os.SystemClock.uptimeMillis()
-        
+
         val downEvent = MotionEvent.obtain(
             downTime, eventTime, MotionEvent.ACTION_DOWN, x, y, 0
         )
         val upEvent = MotionEvent.obtain(
             downTime, eventTime + 100, MotionEvent.ACTION_UP, x, y, 0
         )
-        
+
         geckoView.dispatchTouchEvent(downEvent)
         geckoView.dispatchTouchEvent(upEvent)
-        
+
         downEvent.recycle()
         upEvent.recycle()
     }

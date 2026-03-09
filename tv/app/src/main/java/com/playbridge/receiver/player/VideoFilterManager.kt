@@ -27,11 +27,6 @@ class VideoFilterManager(private val playerView: PlayerView) {
 
     fun setPlayer(player: androidx.media3.exoplayer.ExoPlayer?) {
         this.exoPlayer = player
-        
-        // Hook up the effect exactly once when setting the player.
-        // ExoPlayer will build the VideoFrameProcessor with this persistent effect instance.
-        player?.setVideoEffects(listOf(colorMatrixEffect))
-
         reapplyFilter()
     }
 
@@ -60,12 +55,19 @@ class VideoFilterManager(private val playerView: PlayerView) {
     }
 
     private fun applyMatrixToPlayer(matrix: android.graphics.ColorMatrix) {
+        // Only engage the ExoPlayer VideoFrameProcessor pipeline if we actually have an active filter.
+        // Using the pipeline unconditionally causes `glError: out of memory` on low-end TV devices
+        // because it allocates a 1080p GL texture buffer.
+        exoPlayer?.setVideoEffects(listOf(colorMatrixEffect))
         colorMatrixEffect.setMatrix(matrix)
     }
 
     /** Re-apply the current filter (call after player recreation). */
     fun reapplyFilter() {
-        if (currentFilter == VideoFilter.NONE) return
+        if (currentFilter == VideoFilter.NONE) {
+            exoPlayer?.setVideoEffects(emptyList())
+            return
+        }
         if (currentFilter == VideoFilter.CUSTOM) {
             applyCustom(customBrightness, customContrast, customSaturation)
         } else {
@@ -75,7 +77,8 @@ class VideoFilterManager(private val playerView: PlayerView) {
 
     fun clearFilter() {
         currentFilter = VideoFilter.NONE
-        val identityMatrix = android.graphics.ColorMatrix()
-        applyMatrixToPlayer(identityMatrix)
+        // By setting an empty list, ExoPlayer bypasses the GL shader and decodes directly to the surface,
+        // which saves significant GPU memory and prevents OOM crashes.
+        exoPlayer?.setVideoEffects(emptyList())
     }
 }
