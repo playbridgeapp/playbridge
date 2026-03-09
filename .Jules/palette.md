@@ -1,0 +1,1 @@
+## 2026-03-09 - [Add aria-label to Extension Popup] **Learning:**[Icon-only buttons dynamically created in vanilla JS need explicit aria-label attributes for screen readers] **Action:** [Always verify dynamically generated HTML elements for accessibility attributes]
