@@ -120,7 +120,6 @@ com.playbridge.receiver/
 
 | Issue | Details |
 |---|---|
-| **Version mismatch in `SettingsScreen.kt`** | Hardcoded `"Version: 1.0.0"` but `build.gradle.kts` says `0.1.19`. Should read from `BuildConfig.VERSION_NAME` |
 | **No test directory** | No tests exist under `tv/app/src/test/` or `tv/app/src/androidTest/` |
 | **No crash reporting** | No Firebase Crashlytics or equivalent. Hard to debug post-launch issues |
 | **`largeHeap="true"`** | May cause ANR issues on low-memory TV devices |
