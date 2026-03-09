@@ -180,7 +180,7 @@ function renderSavedConnections() {
                 <span class="saved-connection-ip">${conn.ip}</span>
                 <span class="saved-connection-pin">PIN: ${conn.pin ? '*'.repeat(conn.pin.length) : 'None'}</span>
             </div>
-            <button class="delete-connection-btn" title="Remove connection">
+            <button class="delete-connection-btn" title="Remove connection" aria-label="Remove connection">
                 <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 24 24" width="18" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
             </button>
         `;
@@ -298,6 +298,7 @@ function renderVideos() {
             const copyBtn = document.createElement('button');
             copyBtn.className = 'copy-url-btn';
             copyBtn.title = 'Copy URL';
+            copyBtn.setAttribute('aria-label', 'Copy URL');
             copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="14" viewBox="0 0 24 24" width="14" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
             copyBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -405,6 +406,7 @@ function renderVideos() {
             const copyBtn = document.createElement('button');
             copyBtn.className = 'copy-url-btn';
             copyBtn.title = 'Copy URL';
+            copyBtn.setAttribute('aria-label', 'Copy URL');
             copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="14" viewBox="0 0 24 24" width="14" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
             copyBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
