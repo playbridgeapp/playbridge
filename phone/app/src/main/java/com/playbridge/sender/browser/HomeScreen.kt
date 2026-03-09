@@ -3,6 +3,7 @@ package com.playbridge.sender.browser
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -47,76 +48,97 @@ fun HomeScreen(
         color = MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxSize()
     ) {
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(24.dp))
+            item {
+                Spacer(modifier = Modifier.height(24.dp))
+            }
             
             // Bookmarks Section
             if (bookmarks.isNotEmpty()) {
-                Text(
-                    text = "Bookmarks",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.align(Alignment.Start)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    items(bookmarks) { bookmark ->
-                        TopSiteItem(
-                            site = TopSite(
-                                title = bookmark.title.takeIf { !it.isNullOrBlank() } ?: bookmark.url, 
-                                url = bookmark.url
-                            ),
-                            onClick = { onNavigate(bookmark.url) },
-                            isBookmark = true
-                        )
+                item {
+                    Text(
+                        text = "Bookmarks",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(bookmarks) { bookmark ->
+                            TopSiteItem(
+                                site = TopSite(
+                                    title = bookmark.title.takeIf { !it.isNullOrBlank() } ?: bookmark.url,
+                                    url = bookmark.url
+                                ),
+                                onClick = { onNavigate(bookmark.url) },
+                                isBookmark = true
+                            )
+                        }
                     }
+                    Spacer(modifier = Modifier.height(32.dp))
                 }
-                Spacer(modifier = Modifier.height(32.dp))
             }
             
             // Top Sites Section
             if (topSites.isNotEmpty()) {
-                Text(
-                    text = "Top Visited",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.align(Alignment.Start)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    topSites.forEach { site ->
-                        TopSiteItem(site = site, onClick = { onNavigate(site.url) })
+                item {
+                    Text(
+                        text = "Top Visited",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        topSites.forEach { site ->
+                            TopSiteItem(site = site, onClick = { onNavigate(site.url) })
+                        }
                     }
+                    Spacer(modifier = Modifier.height(32.dp))
                 }
-                Spacer(modifier = Modifier.height(32.dp))
             }
             
             // Recent History Section
             if (recentItems.isNotEmpty()) {
-                Text(
-                    text = "History",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.align(Alignment.Start)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                item {
+                    Text(
+                        text = "History",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.fillMaxWidth()
                     )
-                ) {
-                    recentItems.forEach { item ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                items(
+                    count = recentItems.size,
+                    key = { index -> recentItems[index].url }
+                ) { index ->
+                    val item = recentItems[index]
+
+                    // Apply rounded corners only to top/bottom items if they are at the edge
+                    val shape = when {
+                        recentItems.size == 1 -> androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                        index == 0 -> androidx.compose.foundation.shape.RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+                        index == recentItems.lastIndex -> androidx.compose.foundation.shape.RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
+                        else -> androidx.compose.foundation.shape.RoundedCornerShape(0.dp)
+                    }
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = shape,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         ListItem(
                             headlineContent = { 
                                 val displayText = item.title.takeIf { !it.isNullOrBlank() } ?: item.url
@@ -127,6 +149,10 @@ fun HomeScreen(
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                         )
                     }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(32.dp))
                 }
             }
         }
