@@ -22,7 +22,8 @@ com.playbridge.receiver/
 ├── player/                        # Video playback
 │   ├── ContentSniffer.kt          (SSL-bypass OkHttpClient + content type sniffing)
 │   ├── InputHandler.kt            (D-pad, phone remote, control command handling)
-│   ├── PlayerActivity.kt          (~990 lines, ExoPlayer with HLS/DASH/RTSP, playlist queue, filter/track persistence)
+│   ├── M3uParser.kt               (custom IPTV M3U playlist parser bypassing default HLS parser)
+│   ├── PlayerActivity.kt          (~1322 lines, ExoPlayer with HLS/DASH/RTSP, playlist queue, filter/track persistence)
 │   ├── PlayerControlsManager.kt   (custom controls overlay, seekbar, prev/next buttons, dynamic scrubbing)
 │   ├── PlaylistPickerDialog.kt    (Compose compact side-panel playlist picker overlay)
 │   ├── ProgressManager.kt         (progress save/restore, thumbnail capture)
@@ -33,7 +34,7 @@ com.playbridge.receiver/
 │   └── VideoFilterManager.kt      (applies ColorMatrix filters to PlayerView hardware layer)
 ├── server/                        # WebSocket server
 │   ├── OverlayWindowHelper.kt     (helper for drawing invisible overlay to keep WebView active in background)
-│   ├── ServerService.kt           (foreground service + command routing, external player intents, ~481 lines)
+│   ├── ServerService.kt           (foreground service + command routing, external player intents, ~544 lines)
 │   └── WebSocketServer.kt         (Ktor-based WebSocket server)
 └── ui/                            # Compose TV UI screens
     ├── HistoryScreen.kt
@@ -54,6 +55,7 @@ com.playbridge.receiver/
 | Input Handler | InputHandler.kt | D-pad, phone remote, control commands |
 | Progress Manager | ProgressManager.kt | Playback progress save/restore, thumbnail capture |
 | Content Sniffer | ContentSniffer.kt | SSL-bypass OkHttpClient, pre-flight content type detection |
+| M3U Parser | M3uParser.kt | Custom parser for IPTV M3U playlists, bypassing ExoPlayer's default HLS parser for compatibility |
 | Subtitle Manager | SubtitleManager.kt | External subtitle support (SRT/VTT parsing, download, timed sync with player position) |
 | Track Selection | TrackSelectionDialog.kt | Compact side-panel overlay for selecting audio, video, subtitle tracks; shows preferred language auto-selections |
 | Playlist Picker | PlaylistPickerDialog.kt | Compact side-panel overlay listing playlist episodes with current/watched indicators |
@@ -65,8 +67,8 @@ com.playbridge.receiver/
 | Browser Engine Interface | BrowserEngine.kt | Abstraction for swappable browser engines (loadUrl, reload, evaluateJavascript, etc.) |
 | SystemWebView Engine | SystemWebViewEngine.kt | Android WebView engine with JS-based popup/redirect blocking, cosmetic CSS injection, ad request interception |
 | GeckoView Engine | GeckoViewEngine.kt | GeckoView engine with bundled uBlock Origin for advanced ad blocking |
-| Ad Blocker | AdBlocker.kt | Singleton ad blocker preloaded at app startup; EasyList + EasyPrivacy + Adblock Warning Removal List, cosmetic filtering, popup/document blocking |
-| TV Browser | BrowserActivity.kt | TV browser with dual-engine switching, remote input, fullscreen handling, JS-based video maximize/restore, cursor control |
+| Ad Blocker | AdBlocker.kt (~662 lines) | Singleton ad blocker preloaded at app startup; EasyList + EasyPrivacy + Adblock Warning Removal List, cosmetic filtering, popup/document blocking |
+| TV Browser | BrowserActivity.kt (~722 lines) | TV browser with dual-engine switching, remote input, fullscreen handling, JS-based video maximize/restore, cursor control |
 | QR Generator | QRGenerator.kt | ZXing-based QR code generation for pairing (includes IP, port, token, name) |
 | Settings | SettingsScreen.kt | TV app settings UI (including external player selection) |
 
