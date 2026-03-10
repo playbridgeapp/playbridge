@@ -275,7 +275,7 @@ class BrowserActivity : ComponentActivity() {
             var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
             
             // If no session is available (e.g. during init), show loading or empty
-            if (session == null) {
+            if (session == null && currentScreen != Screen.Tabs) {
                 if (tabsRestoredOrReady.value) {
                     // Restoration done but session is still null — force create a tab
                     LaunchedEffect(Unit) {
