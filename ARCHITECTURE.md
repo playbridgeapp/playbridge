@@ -134,6 +134,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 
 ### ✅ Already Good
 - [x] `CONTRIBUTING.md` created with contribution guidelines
+- [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
 - [x] `.gitignore` properly configured (34 entries covering build, IDE, keystore, OS files)
 - [x] GitHub Actions CI exists for separated projects (`phone_build.yml`, `tv_build.yml`, `extension_build.yml`)
 - [x] Clean package structure with clear separation
@@ -156,6 +157,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] `SECURITY.md` finalized with security considerations (SSL bypass, local network)
 - [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
 - [x] Resolved SettingsScreen.kt version mismatch by dynamically reading `packageManager` info (TV app)
+- [x] Custom M3U parser for IPTV playlists bypassing default HLS parser (TV app)
 
 ### ❌ Missing for Open-Source
 
@@ -215,7 +217,7 @@ PlayBridge/
 │   │   └── src/main/
 │   │       ├── java/com/playbridge/sender/
 │   │       │   ├── browser/
-│   │       │   │   ├── BrowserActivity.kt    (~1115 lines, slimmed down)
+│   │       │   │   ├── BrowserActivity.kt    (~1685 lines, slimmed down)
 │   │       │   │   ├── BrowserToolbar.kt
 │   │       │   │   ├── TabManager.kt           (tab/session lifecycle)
 │   │       │   │   ├── SessionObserverSetup.kt (observer + delegates)
@@ -242,14 +244,19 @@ PlayBridge/
     │       │   ├── browser/
     │       │   ├── pairing/
     │       │   ├── player/
-    │       │   │   ├── PlayerActivity.kt   (~592 lines, slimmed down)
+    │       │   │   ├── PlayerActivity.kt   (~1322 lines, slimmed down)
     │       │   │   ├── ContentSniffer.kt
+    │       │   │   ├── M3uParser.kt
     │       │   │   ├── PlayerControlsManager.kt
     │       │   │   ├── ProgressManager.kt
     │       │   │   ├── InputHandler.kt
     │       │   │   ├── SubtitleManager.kt
-    │       │   │   └── TrackSelectionDialog.kt
+    │       │   │   ├── TrackSelectionDialog.kt
+    │       │   │   ├── VideoFilter.kt
+    │       │   │   ├── VideoFilterDialog.kt
+    │       │   │   └── VideoFilterManager.kt
     │       │   ├── server/
+    │       │   │   ├── ServerService.kt    (~544 lines)
     │       │   ├── ui/
     │       │   └── model/
     │       └── res/layout/

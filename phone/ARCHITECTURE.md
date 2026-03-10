@@ -7,7 +7,7 @@ com.playbridge.sender/
 │    ├── AddonInstallDialog.kt       (extension install confirmation dialog)
 │   ├── AddonSettingsScreen.kt      (Stremio addon management UI)
 │   ├── BookmarksScreen.kt          (bookmarks list UI with add/remove)
-│   ├── BrowserActivity.kt          (main browser activity, ~1400 lines)
+│   ├── BrowserActivity.kt          (main browser activity, ~1685 lines)
 │   ├── BrowserToolbar.kt           (custom Compose toolbar with URL bar, navigation, SSL lock, menu)
 │   ├── Components.kt               (singleton DI container for GeckoRuntime, BrowserStore)
 │   ├── DebridLibraryScreen.kt      (Debrid torrent/magnet management and resolution UI)
@@ -75,7 +75,7 @@ com.playbridge.sender/
 | Component | File | Purpose |
 |-----------|------|---------|
 | Browser Engine | Components.kt | Singleton DI container for GeckoRuntime, BrowserStore, AddonManager |
-| Browser UI | BrowserActivity.kt | Main browser activity (~1400 lines) with UI composition, target routing, toolbar, dropdown menu |
+| Browser UI | BrowserActivity.kt | Main browser activity (~1685 lines) with UI composition, target routing, toolbar, dropdown menu |
 | Browser Toolbar | BrowserToolbar.kt | Custom Compose toolbar with navigation, URL bar, SSL lock indicator, desktop mode toggle |
 | Library View | LibraryScreen.kt | Main Library screen for TMDB browsing and multi-search |
 | Library Details | LibraryDetailScreen.kt | Movie/TV Details with stream resolution integration |
