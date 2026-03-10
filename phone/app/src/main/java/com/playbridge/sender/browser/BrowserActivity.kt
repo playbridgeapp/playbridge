@@ -274,8 +274,31 @@ class BrowserActivity : ComponentActivity() {
             // State for download dialog
             var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
             
-            // If no session is available (e.g. during init), show loading or empty
+            // If no session is available (e.g. during init), we normally show loading.
+            // However, if we are in the Tabs screen, we can render the tabs screen standalone
+            // without needing a selected session.
             if (session == null) {
+                if (currentScreen == Screen.Tabs) {
+                    PlayBridgeTheme {
+                        Surface(modifier = Modifier.fillMaxSize()) {
+                            TabsScreen(
+                                onTabSelected = { tabId ->
+                                    tabManager.selectTab(tabId, store)
+                                    currentScreen = Screen.Browser
+                                },
+                                onTabClosed = { tabId ->
+                                    tabManager.closeTab(tabId, store)
+                                },
+                                onNewTab = {
+                                    tabManager.createTab("about:blank", store)
+                                    currentScreen = Screen.Browser
+                                }
+                            )
+                        }
+                    }
+                    return@setContent
+                }
+
                 if (tabsRestoredOrReady.value) {
                     // Restoration done but session is still null — force create a tab
                     LaunchedEffect(Unit) {
@@ -1568,6 +1591,40 @@ class BrowserActivity : ComponentActivity() {
                             download.referer
                         )
                         Toast.makeText(this@BrowserActivity, "Download started", Toast.LENGTH_SHORT).show()
+                        pendingDownload = null
+                        pendingDownloadState.value = null
+                    },
+                    onPlayOnTv = { download: PendingDownload ->
+                        val headers = mutableMapOf<String, String>()
+                        if (download.userAgent != null) headers["User-Agent"] = download.userAgent
+                        if (download.referer != null) headers["Referer"] = download.referer
+                        if (download.cookie != null) headers["Cookie"] = download.cookie
+
+                        when (val state = connectionState) {
+                            is WebSocketClient.ConnectionState.Connected -> {
+                                val commandJson = com.playbridge.protocol.createPlayCommandJson(
+                                    url = download.url,
+                                    title = selectedTab?.content?.title ?: download.fileName ?: "Video from browser",
+                                    headers = headers,
+                                    contentType = download.contentType,
+                                    subtitles = null,
+                                    detectedBy = "download",
+                                    playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                )
+                                val sent = webSocketClient.send(commandJson)
+                                if (sent) {
+                                    tvActiveContext = "player"
+                                    Toast.makeText(this@BrowserActivity, "Playing on ${state.serverName}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            is WebSocketClient.ConnectionState.Connecting,
+                            is WebSocketClient.ConnectionState.Retrying -> {
+                                Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show()
+                            }
+                            else -> {
+                                Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                         pendingDownload = null
                         pendingDownloadState.value = null
                     },

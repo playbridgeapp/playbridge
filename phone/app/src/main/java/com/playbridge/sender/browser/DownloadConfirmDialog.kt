@@ -11,6 +11,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
 
 /** State for a pending download awaiting user confirmation. */
 data class PendingDownload(
@@ -33,9 +38,11 @@ data class PendingDownload(
 fun DownloadConfirmDialog(
     pendingDownload: PendingDownload?,
     onConfirm: (PendingDownload) -> Unit,
+    onPlayOnTv: (PendingDownload) -> Unit,
     onDismiss: () -> Unit
 ) {
     if (pendingDownload == null) return
+    val context = LocalContext.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -62,13 +69,28 @@ fun DownloadConfirmDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(pendingDownload) }) {
-                Text("Download")
+            Column {
+                TextButton(onClick = { onPlayOnTv(pendingDownload) }) {
+                    Text("Play on TV")
+                }
+                TextButton(onClick = { onConfirm(pendingDownload) }) {
+                    Text("Download")
+                }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            Column {
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = ClipData.newPlainText("Download URL", pendingDownload.url)
+                    clipboard.setPrimaryClip(clip)
+                    Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text("Copy URL")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
             }
         }
     )
