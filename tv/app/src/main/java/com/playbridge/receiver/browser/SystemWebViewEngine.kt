@@ -263,6 +263,34 @@ class SystemWebViewEngine(
             // Enable third-party cookies (required for many iframe embeds)
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
+            // Handle Downloads via Android DownloadManager
+            setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
+                try {
+                    val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                    request.setMimeType(mimeType)
+
+                    // Extract filename
+                    var fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+                    request.setTitle(fileName)
+
+                    // Add cookie if needed
+                    val cookies = android.webkit.CookieManager.getInstance().getCookie(url)
+                    request.addRequestHeader("cookie", cookies)
+                    request.addRequestHeader("User-Agent", userAgent)
+
+                    request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+
+                    val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                    dm.enqueue(request)
+
+                    android.widget.Toast.makeText(context, "Downloading file...", android.widget.Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    android.util.Log.e(TAG, "Failed to start download", e)
+                    android.widget.Toast.makeText(context, "Download failed", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+
             // Set WebViewClient with ad blocking
             webViewClient = AdBlockingWebViewClient()
 
