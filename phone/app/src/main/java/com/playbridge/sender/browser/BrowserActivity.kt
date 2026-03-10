@@ -1571,6 +1571,40 @@ class BrowserActivity : ComponentActivity() {
                         pendingDownload = null
                         pendingDownloadState.value = null
                     },
+                    onPlayOnTv = { download: PendingDownload ->
+                        val headers = mutableMapOf<String, String>()
+                        if (download.userAgent != null) headers["User-Agent"] = download.userAgent
+                        if (download.referer != null) headers["Referer"] = download.referer
+                        if (download.cookie != null) headers["Cookie"] = download.cookie
+
+                        when (val state = connectionState) {
+                            is WebSocketClient.ConnectionState.Connected -> {
+                                val commandJson = com.playbridge.protocol.createPlayCommandJson(
+                                    url = download.url,
+                                    title = selectedTab?.content?.title ?: download.fileName ?: "Video from browser",
+                                    headers = headers,
+                                    contentType = download.contentType,
+                                    subtitles = null,
+                                    detectedBy = "download",
+                                    playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                )
+                                val sent = webSocketClient.send(commandJson)
+                                if (sent) {
+                                    tvActiveContext = "player"
+                                    Toast.makeText(this@BrowserActivity, "Playing on ${state.serverName}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            is WebSocketClient.ConnectionState.Connecting,
+                            is WebSocketClient.ConnectionState.Retrying -> {
+                                Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show()
+                            }
+                            else -> {
+                                Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        pendingDownload = null
+                        pendingDownloadState.value = null
+                    },
                     onDismiss = {
                         pendingDownload = null
                         pendingDownloadState.value = null
