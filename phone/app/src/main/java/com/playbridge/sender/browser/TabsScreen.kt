@@ -77,12 +77,13 @@ fun TabsScreen(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // Scroll to the active tab
+        // Scroll to the active tab only on initial load
         val listState = rememberLazyListState()
-        val selectedTabIndex = tabs.indexOfFirst { it.id == state.selectedTabId }
-        LaunchedEffect(selectedTabIndex) {
-            if (selectedTabIndex >= 0) {
-                listState.scrollToItem(selectedTabIndex)
+        val initialSelectedTabIndex = remember { tabs.indexOfFirst { it.id == state.selectedTabId } }
+
+        LaunchedEffect(Unit) {
+            if (initialSelectedTabIndex >= 0) {
+                listState.scrollToItem(initialSelectedTabIndex)
             }
         }
 
