@@ -122,7 +122,7 @@ fun HistoryItemCard(
     onClick: () -> Unit
 ) {
     Card(
-        scale = CardDefaults.scale(focusedScale = 1.02f),
+        scale = CardDefaults.scale(focusedScale = 1.0f),
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
