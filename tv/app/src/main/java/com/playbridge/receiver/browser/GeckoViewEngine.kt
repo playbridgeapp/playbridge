@@ -210,6 +210,43 @@ class GeckoViewEngine(
             override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
                 onFullscreen?.invoke(fullScreen)
             }
+
+            override fun onExternalResponse(
+                session: GeckoSession,
+                response: org.mozilla.geckoview.WebResponse
+            ) {
+                // Handle file downloads from GeckoView
+                try {
+                    val url = response.uri
+                    val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+
+                    response.headers.forEach { entry ->
+                        request.addRequestHeader(entry.key, entry.value)
+                    }
+
+                    val mimeType = response.headers["Content-Type"] ?: "application/octet-stream"
+                    val contentDisposition = response.headers["Content-Disposition"]
+
+                    var fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+
+                    request.setMimeType(mimeType)
+                    request.setTitle(fileName)
+                    request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+
+                    val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                    dm.enqueue(request)
+
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        android.widget.Toast.makeText(context, "Downloading file...", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start GeckoView download", e)
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        android.widget.Toast.makeText(context, "Download failed", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
         
         // Navigation delegate
