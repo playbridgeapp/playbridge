@@ -154,6 +154,8 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] SSL lock indicator (phone)
 - [x] Video maximize/restore via JS injection (TV browser)
 - [x] `SECURITY.md` finalized with security considerations (SSL bypass, local network)
+- [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
+- [x] Resolved SettingsScreen.kt version mismatch by dynamically reading `packageManager` info (TV app)
 
 ### ❌ Missing for Open-Source
 
@@ -277,7 +279,7 @@ PlayBridge/
 - Modern tech stack (Compose, Kotlin Serialization, Coroutines, GeckoView v147, Media3 v1.5)
 - Well-designed protocol with extensible command structure (play, browser, control, remote, mouse, browser_control, context_query)
 - Good use of sealed classes for type-safe command handling
-- Feature-rich phone app with remote control, touchpad, HLS quality parsing, extension management, tab management, download support (standard + HLS), browsing history (Room DB), bookmarks, tab persistence, desktop mode, and SSL lock indicator
+- Feature-rich phone app with remote control, touchpad, HLS quality parsing, extension management, tab management, download support (standard + HLS), browsing history (Room DB), bookmarks, tab persistence, desktop mode, SSL lock indicator, and native Debrid integration
 - TV app has dual-engine browser (SystemWebView/GeckoView) with runtime switching, comprehensive ad blocking (EasyList + cosmetic filtering + popup blocking), video maximize/restore via JS injection, subtitle support (SRT/VTT), track selection dialog, context broadcasting, settings, and foreground service architecture
 - AdBlocker is a singleton preloaded at app startup for instant protection when browser opens
 - Authentication fully implemented with PIN + token flow via QR code pairing
