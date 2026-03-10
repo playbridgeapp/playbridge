@@ -274,8 +274,31 @@ class BrowserActivity : ComponentActivity() {
             // State for download dialog
             var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
             
-            // If no session is available (e.g. during init), show loading or empty
-            if (session == null && currentScreen != Screen.Tabs) {
+            // If no session is available (e.g. during init), we normally show loading.
+            // However, if we are in the Tabs screen, we can render the tabs screen standalone
+            // without needing a selected session.
+            if (session == null) {
+                if (currentScreen == Screen.Tabs) {
+                    PlayBridgeTheme {
+                        Surface(modifier = Modifier.fillMaxSize()) {
+                            TabsScreen(
+                                onTabSelected = { tabId ->
+                                    tabManager.selectTab(tabId, store)
+                                    currentScreen = Screen.Browser
+                                },
+                                onTabClosed = { tabId ->
+                                    tabManager.closeTab(tabId, store)
+                                },
+                                onNewTab = {
+                                    tabManager.createTab("about:blank", store)
+                                    currentScreen = Screen.Browser
+                                }
+                            )
+                        }
+                    }
+                    return@setContent
+                }
+
                 if (tabsRestoredOrReady.value) {
                     // Restoration done but session is still null — force create a tab
                     LaunchedEffect(Unit) {
