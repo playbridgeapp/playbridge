@@ -5,6 +5,22 @@ This is a natively built Web Extension specifically targeted for **Firefox (Desk
 
 *(Note: The Android Phone app uses its own dedicated, lightweight legacy extension found in `phone/app/src/main/assets/extensions/video_detector` for internal GeckoView communication).*
 
+## Package Structure
+```
+extension/src/
+├── background.js        (Video detection logic, WebSocket client for direct TV connection, TV commands)
+├── content.js           (In-page video UI, Shadow DOM floating button)
+├── hls-parser.js        (Parses HLS manifests for quality selection)
+├── icon.png             (Extension icon)
+├── manifest.json        (Firefox Manifest V2 configuration)
+└── ui/                  (Extension popup user interface)
+    ├── fonts/           (Outfit fonts and CSS)
+    │   └── outfit.css   (Outfit font face CSS definitions)
+    ├── popup.css        (Popup styling)
+    ├── popup.html       (Popup layout)
+    └── popup.js         (Popup logic: Video list view, Subtitles view, URLs sender, and TV connection settings)
+```
+
 ## Key Components
 
 | Component | File | Purpose |

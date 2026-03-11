@@ -1,6 +1,15 @@
 # Protocol Module
 
-The `protocol` module (`com.playbridge.protocol`) is a shared Kotlin JVM library consumed by both apps via `implementation(project(":protocol"))`. It contains:
+The `protocol` module (`com.playbridge.protocol`) is a shared Kotlin JVM library consumed by both apps via `implementation(project(":protocol"))`.
+
+## Package Structure
+```
+com.playbridge.protocol/
+├── Message.kt           (All shared protocol classes, sealed Command class, parseCommand, and helpers)
+└── NsdConstants.kt      (NSD service type and key constants)
+```
+
+## Key Components
 
 | File | Contents |
 |------|----------|

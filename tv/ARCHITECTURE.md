@@ -14,12 +14,15 @@ com.playbridge.receiver/
 │   └── SystemWebViewEngine.kt     (Android WebView engine with JS popup/redirect blocking, cosmetic CSS injection)
 ├── data/                          # Persistence
 │   └── HistoryStore.kt            (DataStore-based playback history)
+├── logging/                       # File-backed logging system
+│   └── FileLogger.kt              (appends logs to a rotating file in internal storage)
 ├── model/                         # App-specific models
 │   └── PairedDevice.kt            (paired device info)
 ├── pairing/                       # QR code display, token management
 │   ├── PairingStore.kt            (DataStore persistence for auth tokens)
 │   └── QRGenerator.kt             (ZXing QR code bitmap generation)
 ├── player/                        # Video playback
+│   ├── ColorMatrixEffect.kt       (Media3 GlEffect applying custom ColorMatrix for filters)
 │   ├── ContentSniffer.kt          (SSL-bypass OkHttpClient + content type sniffing)
 │   ├── InputHandler.kt            (D-pad, phone remote, control command handling)
 │   ├── M3uParser.kt               (custom IPTV M3U playlist parser bypassing default HLS parser)
@@ -42,6 +45,9 @@ com.playbridge.receiver/
     ├── PairingScreen.kt
     ├── SettingsScreen.kt
     └── theme/
+        ├── Color.kt
+        ├── Theme.kt
+        └── Type.kt
 ```
 
 ## Key Components
@@ -71,6 +77,8 @@ com.playbridge.receiver/
 | TV Browser | BrowserActivity.kt (~722 lines) | TV browser with dual-engine switching, remote input, fullscreen handling, JS-based video maximize/restore, cursor control |
 | QR Generator | QRGenerator.kt | ZXing-based QR code generation for pairing (includes IP, port, token, name) |
 | Settings | SettingsScreen.kt | TV app settings UI (including external player selection) |
+| File Logger | FileLogger.kt | Mirrored Android Log that persists entries to a rolling file in internal storage |
+| Color Matrix | ColorMatrixEffect.kt | Media3 GlEffect applying custom ColorMatrix for filters via GLSL |
 
 ## Dependencies
 - **Ktor** v3.0 (Netty) — WebSocket server

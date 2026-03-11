@@ -68,6 +68,9 @@ com.playbridge.sender/
     ├── ConnectionScreen.kt          (NSD discovery + QR scan + manual IP + PIN auth)
     ├── HomeScreen.kt                (main home with device connection)
     └── theme/
+        ├── Color.kt
+        ├── Theme.kt
+        └── Type.kt
 ```
 
 ## Key Components
