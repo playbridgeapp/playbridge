@@ -32,6 +32,13 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import com.playbridge.sender.data.debrid.DebridRepository
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+import com.playbridge.sender.data.history.DatabaseProvider
+import com.playbridge.sender.data.library.AddonRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,10 +50,120 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
+
+    val addonDao = remember { DatabaseProvider.getDatabase(context).addonDao() }
+    val addonRepository = remember { AddonRepository(addonDao) }
+
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            val scope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO)
+            scope.launch {
+                try {
+                    val addons = addonDao.getAllSync()
+                    val addonUrls = addons.map { it.manifestUrl }
+
+                    val exported = ExportedSettings(
+                        showInbuiltExtensions = prefs.getBoolean("show_inbuilt_extensions", false),
+                        debridProvider = prefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
+                        debridApiKey = prefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
+                        tmdbApiKey = prefs.getString("tmdb_api_key", ""),
+                        tvPlayerMode = prefs.getString("tv_player_mode", "tv"),
+                        tvBrowserMode = prefs.getString("tv_browser_mode", "tv"),
+                        addonUrls = addonUrls
+                    )
+
+                    val jsonString = Json { prettyPrint = true }.encodeToString(exported)
+                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                        outputStream.write(jsonString.toByteArray())
+                    }
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Settings exported successfully", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to export settings", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
     var showInbuiltExtensions by remember {
         mutableStateOf(prefs.getBoolean("show_inbuilt_extensions", false))
     }
+
+    // Variables for forcing recomposition / state update on import
+    var debridProviderTrigger by remember { mutableStateOf(0) }
+    var tvPlayerTrigger by remember { mutableStateOf(0) }
+    var tvBrowserTrigger by remember { mutableStateOf(0) }
+    var tmdbTrigger by remember { mutableStateOf(0) }
+
     val scope = rememberCoroutineScope()
+    var isImporting by remember { mutableStateOf(false) }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            isImporting = true
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val jsonString = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        inputStream.bufferedReader().use { it.readText() }
+                    }
+
+                    if (jsonString != null) {
+                        val imported = Json { ignoreUnknownKeys = true }.decodeFromString<ExportedSettings>(jsonString)
+
+                        // Update standard preferences
+                        if (imported.showInbuiltExtensions != null) {
+                            prefs.edit().putBoolean("show_inbuilt_extensions", imported.showInbuiltExtensions).apply()
+                            showInbuiltExtensions = imported.showInbuiltExtensions
+                        }
+                        if (imported.tvPlayerMode != null) {
+                            prefs.edit().putString("tv_player_mode", imported.tvPlayerMode).apply()
+                            tvPlayerTrigger++
+                        }
+                        if (imported.tvBrowserMode != null) {
+                            prefs.edit().putString("tv_browser_mode", imported.tvBrowserMode).apply()
+                            tvBrowserTrigger++
+                        }
+
+                        // Update TMDB key
+                        if (imported.tmdbApiKey != null) {
+                            prefs.edit().putString("tmdb_api_key", imported.tmdbApiKey).apply()
+                            tmdbTrigger++
+                        }
+
+                        // Update Debrid settings
+                        val debridEdit = prefs.edit()
+                        if (imported.debridProvider != null) {
+                            debridEdit.putString(DebridRepository.KEY_DEBRID_PROVIDER, imported.debridProvider)
+                        }
+                        if (imported.debridApiKey != null) {
+                            debridEdit.putString(DebridRepository.KEY_DEBRID_API_KEY, imported.debridApiKey)
+                        }
+                        debridEdit.apply()
+                        debridProviderTrigger++
+
+                        // Install Addons
+                        if (imported.addonUrls.isNotEmpty()) {
+                            imported.addonUrls.forEach { url ->
+                                addonRepository.installAddon(url)
+                            }
+                        }
+
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Settings imported successfully", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to import settings: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                } finally {
+                    isImporting = false
+                }
+            }
+        }
+    }
     var isDownloading by remember { mutableStateOf(false) }
     var isClearing by remember { mutableStateOf(false) }
     val isTvAvailable = tvIp != null && tvPort != null
@@ -73,6 +190,45 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Existing setting: Show Inbuilt Extensions
+            // Import / Export Section
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        importLauncher.launch("*/*")
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = !isImporting
+                ) {
+                    if (isImporting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Importing…")
+                    } else {
+                        Text("Import Settings")
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                        exportLauncher.launch("playbridge_settings_$timestamp.json")
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Export Settings")
+                }
+            }
+
+            HorizontalDivider()
+
             // Existing setting: Show Inbuilt Extensions
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -107,7 +263,7 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.titleMedium
             )
 
-            var tmdbApiKey by remember {
+            var tmdbApiKey by remember(tmdbTrigger) {
                 mutableStateOf(prefs.getString("tmdb_api_key", "") ?: "")
             }
             var showApiKey by remember { mutableStateOf(false) }
@@ -149,10 +305,10 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.titleMedium
             )
 
-            var debridProvider by remember {
+            var debridProvider by remember(debridProviderTrigger) {
                 mutableStateOf(prefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) ?: DebridRepository.PROVIDER_NONE)
             }
-            var debridApiKey by remember {
+            var debridApiKey by remember(debridProviderTrigger) {
                 mutableStateOf(prefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") ?: "")
             }
             var debridExpanded by remember { mutableStateOf(false) }
@@ -236,7 +392,7 @@ fun SettingsScreen(
             )
 
             // Video Player setting
-            var playerMode by remember {
+            var playerMode by remember(tvPlayerTrigger) {
                 mutableStateOf(prefs.getString("tv_player_mode", "tv") ?: "tv")
             }
             var playerExpanded by remember { mutableStateOf(false) }
@@ -286,7 +442,7 @@ fun SettingsScreen(
             }
 
             // Browser Engine setting
-            var browserMode by remember {
+            var browserMode by remember(tvBrowserTrigger) {
                 mutableStateOf(prefs.getString("tv_browser_mode", "tv") ?: "tv")
             }
             var browserExpanded by remember { mutableStateOf(false) }
