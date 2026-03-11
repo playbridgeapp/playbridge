@@ -15,6 +15,8 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,7 +55,6 @@ fun SettingsScreen(
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val tmdbPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
-    val debridPrefs = remember { context.getSharedPreferences("debrid_prefs", Context.MODE_PRIVATE) }
 
     val addonDao = remember { DatabaseProvider.getDatabase(context).addonDao() }
     val addonRepository = remember { AddonRepository(addonDao) }
@@ -68,8 +69,8 @@ fun SettingsScreen(
 
                     val exported = ExportedSettings(
                         showInbuiltExtensions = prefs.getBoolean("show_inbuilt_extensions", false),
-                        debridProvider = debridPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
-                        debridApiKey = debridPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
+                        debridProvider = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
+                        debridApiKey = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
                         tmdbApiKey = tmdbPrefs.getString("tmdb_api_key", ""),
                         tvPlayerMode = prefs.getString("tv_player_mode", "tv"),
                         tvBrowserMode = prefs.getString("tv_browser_mode", "tv"),
@@ -131,14 +132,14 @@ fun SettingsScreen(
                 }
 
                 // Update Debrid settings
-                val debridEdit = debridPrefs.edit()
+                        val tmdbEdit = tmdbPrefs.edit()
                 if (imported.debridProvider != null) {
-                    debridEdit.putString(DebridRepository.KEY_DEBRID_PROVIDER, imported.debridProvider)
+                            tmdbEdit.putString(DebridRepository.KEY_DEBRID_PROVIDER, imported.debridProvider)
                 }
                 if (imported.debridApiKey != null) {
-                    debridEdit.putString(DebridRepository.KEY_DEBRID_API_KEY, imported.debridApiKey)
+                            tmdbEdit.putString(DebridRepository.KEY_DEBRID_API_KEY, imported.debridApiKey)
                 }
-                debridEdit.apply()
+                        tmdbEdit.apply()
                 debridProviderTrigger++
 
                 // Install Addons
@@ -207,115 +208,94 @@ fun SettingsScreen(
         ) {
             // Existing setting: Show Inbuilt Extensions
             // Import / Export Section
-            Column(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                OutlinedButton(
+                    onClick = {
+                        importLauncher.launch("*/*")
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = !isImporting
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            importLauncher.launch("*/*")
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = !isImporting
-                    ) {
-                        if (isImporting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Importing…")
-                        } else {
-                            Text("Import from File")
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                            exportLauncher.launch("playbridge_settings_$timestamp.json")
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Export to File")
+                    if (isImporting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Importing…")
+                    } else {
+                        Text("Import")
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clipData = clipboard.primaryClip
-                            if (clipData != null && clipData.itemCount > 0) {
-                                val text = clipData.getItemAt(0).text?.toString()
-                                if (text != null) {
-                                    importSettings(text)
-                                } else {
-                                    Toast.makeText(context, "Clipboard does not contain text", Toast.LENGTH_SHORT).show()
-                                }
+                IconButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clipData = clipboard.primaryClip
+                        if (clipData != null && clipData.itemCount > 0) {
+                            val text = clipData.getItemAt(0).text?.toString()
+                            if (text != null) {
+                                importSettings(text)
                             } else {
-                                Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Clipboard does not contain text", Toast.LENGTH_SHORT).show()
                             }
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = !isImporting
-                    ) {
-                        if (isImporting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Importing…")
                         } else {
-                            Text("Paste from Clipboard")
+                            Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    enabled = !isImporting
+                ) {
+                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste settings from clipboard")
+                }
+
+                Button(
+                    onClick = {
+                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                        exportLauncher.launch("playbridge_settings_$timestamp.json")
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Export")
+                }
+
+                IconButton(
+                    onClick = {
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val addons = addonDao.getAllSync()
+                                val addonUrls = addons.map { it.manifestUrl }
+
+                                val exported = ExportedSettings(
+                                    showInbuiltExtensions = prefs.getBoolean("show_inbuilt_extensions", false),
+                                    debridProvider = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
+                                    debridApiKey = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
+                                    tmdbApiKey = tmdbPrefs.getString("tmdb_api_key", ""),
+                                    tvPlayerMode = prefs.getString("tv_player_mode", "tv"),
+                                    tvBrowserMode = prefs.getString("tv_browser_mode", "tv"),
+                                    addonUrls = addonUrls
+                                )
+
+                                val jsonString = Json { prettyPrint = true }.encodeToString(exported)
+                                withContext(Dispatchers.Main) {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    val clip = ClipData.newPlainText("PlayBridge Settings", jsonString)
+                                    clipboard.setPrimaryClip(clip)
+                                    Toast.makeText(context, "Settings copied to clipboard", Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, "Failed to copy settings", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         }
                     }
-
-                    Button(
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                try {
-                                    val addons = addonDao.getAllSync()
-                                    val addonUrls = addons.map { it.manifestUrl }
-
-                                    val exported = ExportedSettings(
-                                        showInbuiltExtensions = prefs.getBoolean("show_inbuilt_extensions", false),
-                                        debridProvider = debridPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
-                                        debridApiKey = debridPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
-                                        tmdbApiKey = tmdbPrefs.getString("tmdb_api_key", ""),
-                                        tvPlayerMode = prefs.getString("tv_player_mode", "tv"),
-                                        tvBrowserMode = prefs.getString("tv_browser_mode", "tv"),
-                                        addonUrls = addonUrls
-                                    )
-
-                                    val jsonString = Json { prettyPrint = true }.encodeToString(exported)
-                                    withContext(Dispatchers.Main) {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        val clip = ClipData.newPlainText("PlayBridge Settings", jsonString)
-                                        clipboard.setPrimaryClip(clip)
-                                        Toast.makeText(context, "Settings copied to clipboard", Toast.LENGTH_SHORT).show()
-                                    }
-                                } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(context, "Failed to copy settings", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Copy to Clipboard")
-                    }
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy settings to clipboard")
                 }
             }
 
@@ -398,10 +378,10 @@ fun SettingsScreen(
             )
 
             var debridProvider by remember(debridProviderTrigger) {
-                mutableStateOf(debridPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) ?: DebridRepository.PROVIDER_NONE)
+                mutableStateOf(tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) ?: DebridRepository.PROVIDER_NONE)
             }
             var debridApiKey by remember(debridProviderTrigger) {
-                mutableStateOf(debridPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") ?: "")
+                mutableStateOf(tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") ?: "")
             }
             var debridExpanded by remember { mutableStateOf(false) }
             val debridOptions = listOf(
@@ -444,7 +424,7 @@ fun SettingsScreen(
                             onClick = {
                                 debridProvider = selectionOption
                                 debridExpanded = false
-                                debridPrefs.edit().putString(DebridRepository.KEY_DEBRID_PROVIDER, selectionOption).apply()
+                                tmdbPrefs.edit().putString(DebridRepository.KEY_DEBRID_PROVIDER, selectionOption).apply()
                             }
                         )
                     }
@@ -457,7 +437,7 @@ fun SettingsScreen(
                     value = debridApiKey,
                     onValueChange = { newKey ->
                         debridApiKey = newKey
-                        debridPrefs.edit().putString(DebridRepository.KEY_DEBRID_API_KEY, newKey.trim()).apply()
+                        tmdbPrefs.edit().putString(DebridRepository.KEY_DEBRID_API_KEY, newKey.trim()).apply()
                     },
                     label = { Text("$debridProvider API Key") },
                     placeholder = { Text("Enter API key") },
