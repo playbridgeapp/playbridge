@@ -23,9 +23,14 @@ import com.playbridge.receiver.server.ServerService
 import kotlinx.coroutines.launch
 import java.io.File
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun HistoryScreen(
+fun LibraryScreen(
     historyStore: HistoryStore,
     deviceName: String,
     connectedCount: Int = 0,
@@ -36,6 +41,8 @@ fun HistoryScreen(
     val history by historyStore.history.collectAsState(initial = emptyList())
     
     val scope = rememberCoroutineScope()
+    var selectedTabIndex by remember { mutableStateOf(0) }
+    val tabs = listOf("History", "Favorites")
 
     Box(
         modifier = Modifier
@@ -82,32 +89,57 @@ fun HistoryScreen(
                 }
             }
 
-            if (history.isEmpty()) {
+            TabRow(
+                selectedTabIndex = selectedTabIndex,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                tabs.forEachIndexed { index, title ->
+                    Tab(
+                        selected = selectedTabIndex == index,
+                        onFocus = { selectedTabIndex = index },
+                        onClick = { selectedTabIndex = index }
+                    ) {
+                        Text(
+                            text = title,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                }
+            }
+
+            val displayedHistory = if (selectedTabIndex == 1) {
+                history.filter { it.isFavorite }
+            } else {
+                history
+            }
+
+            if (displayedHistory.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No history yet. Pair a phone and play a video!",
+                        text = if (selectedTabIndex == 1) "No favorites yet. Long press an item in History to favorite it." else "No history yet. Pair a phone and play a video!",
                         style = MaterialTheme.typography.bodyLarge,
                         color = Color.Gray
                     )
                 }
             } else {
-                
-                // Recently Played Section
-                Text(
-                    text = "Recently Played",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White
-                )
-                
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     contentPadding = PaddingValues(bottom = 32.dp)
                 ) {
-                    items(history) { item ->
-                        HistoryItemCard(item = item, onClick = { onPlayItem(item) })
+                    items(displayedHistory) { item ->
+                        HistoryItemCard(
+                            item = item,
+                            onClick = { onPlayItem(item) },
+                            onLongClick = {
+                                scope.launch {
+                                    historyStore.toggleFavorite(item.id)
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -115,15 +147,17 @@ fun HistoryScreen(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryItemCard(
     item: PlaybackHistoryItem,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     Card(
-        scale = CardDefaults.scale(focusedScale = 1.0f),
+        scale = CardDefaults.scale(focusedScale = 1.05f),
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = Modifier
             .fillMaxWidth()
             .height(100.dp)
@@ -163,7 +197,7 @@ fun HistoryItemCard(
             }
 
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
@@ -200,6 +234,15 @@ fun HistoryItemCard(
                         )
                     }
                 }
+            }
+
+            if (item.isFavorite) {
+                Icon(
+                    imageVector = Icons.Default.Favorite,
+                    contentDescription = "Favorite",
+                    tint = Color(0xFFFF4081),
+                    modifier = Modifier.size(24.dp).padding(end = 8.dp)
+                )
             }
         }
     }

@@ -21,7 +21,7 @@ import com.playbridge.receiver.pairing.PairingStore
 import com.playbridge.receiver.server.ServerService
 import com.playbridge.receiver.server.WebSocketServer
 import com.playbridge.receiver.ui.HomeScreen
-import com.playbridge.receiver.ui.HistoryScreen
+import com.playbridge.receiver.ui.LibraryScreen
 import com.playbridge.receiver.ui.PairingScreen
 import com.playbridge.receiver.ui.SettingsScreen
 import com.playbridge.receiver.ui.theme.PlayBridgeTVTheme
@@ -96,8 +96,9 @@ class MainActivity : ComponentActivity() {
 enum class Screen {
     Home,
     Pairing,
-    History,
-    Settings
+    Library,
+    Settings,
+    Downloads
 }
 
 @Composable
@@ -113,7 +114,7 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
     // Check initial state once
     LaunchedEffect(pairedDevices) {
         if (!isInitialCheckDone && pairedDevices.isNotEmpty()) {
-            currentScreen = Screen.History
+            currentScreen = Screen.Library
             isInitialCheckDone = true
         } else if (!isInitialCheckDone && pairedDevices.isEmpty()) {
             // Keep default Home
@@ -136,12 +137,12 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
         }
     }
     
-    // Auto-navigate to History when a phone connects (if not already there)
+    // Auto-navigate to Library when a phone connects (if not already there)
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketServer.ConnectionState.Connected) {
-             // If we are on Home (Pairing status page), go to History
+             // If we are on Home (Pairing status page), go to Library
              if (currentScreen == Screen.Home) {
-                 currentScreen = Screen.History
+                 currentScreen = Screen.Library
              }
         }
     }
@@ -158,8 +159,8 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
                 onShowPairing = { currentScreen = Screen.Pairing }
             )
         }
-        Screen.History -> {
-            HistoryScreen(
+        Screen.Library -> {
+            LibraryScreen(
                 historyStore = historyStore,
                 deviceName = deviceName,
                 connectedCount = connectedCount,
@@ -203,18 +204,28 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
         }
         Screen.Settings -> {
             SettingsScreen(
-                onBack = { currentScreen = Screen.History }
+                onBack = { currentScreen = Screen.Library },
+                onNavigateToDownloads = { currentScreen = Screen.Downloads }
+            )
+        }
+        Screen.Downloads -> {
+            com.playbridge.receiver.ui.DownloadsScreen(
+                onBack = { currentScreen = Screen.Settings }
             )
         }
     }
     
     // Handle back button for navigation
-    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.History && pairedDevices.isNotEmpty()) {
-        currentScreen = Screen.History
+    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library && pairedDevices.isNotEmpty()) {
+        currentScreen = Screen.Library
     }
-    // Handle back from Settings to History
+    // Handle back from Settings to Library
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Settings) {
-        currentScreen = Screen.History
+        currentScreen = Screen.Library
+    }
+    // Handle back from Downloads to Settings
+    androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Downloads) {
+        currentScreen = Screen.Settings
     }
     // Also handle back from Pairing to Home if no history
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Pairing && pairedDevices.isEmpty()) {

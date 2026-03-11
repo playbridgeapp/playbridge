@@ -33,7 +33,8 @@ data class PlaybackHistoryItem(
     val videoFilter: String? = null,
     val customFilterValues: List<Float>? = null,
     val playbackSpeed: Float? = null,
-    val videoScalingMode: Int? = null
+    val videoScalingMode: Int? = null,
+    val isFavorite: Boolean = false
 )
 
 class HistoryStore(private val context: Context) {
@@ -110,7 +111,8 @@ class HistoryStore(private val context: Context) {
                 videoFilter = videoFilter,
                 customFilterValues = customFilterValues,
                 playbackSpeed = playbackSpeed,
-                videoScalingMode = videoScalingMode
+                videoScalingMode = videoScalingMode,
+                isFavorite = existingItem?.isFavorite ?: false
             )
 
             // Remove existing item with same ID to update it (move to top)
@@ -152,6 +154,27 @@ class HistoryStore(private val context: Context) {
     suspend fun clearHistory() {
         context.historyDataStore.edit { prefs ->
             prefs.remove(PLAYBACK_HISTORY)
+        }
+    }
+
+    suspend fun toggleFavorite(id: String) {
+        context.historyDataStore.edit { prefs ->
+            val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
+            val currentList = try {
+                protocolJson.decodeFromString<List<PlaybackHistoryItem>>(currentJson).toMutableList()
+            } catch (e: Exception) {
+                mutableListOf()
+            }
+
+            val index = currentList.indexOfFirst { it.id == id }
+            if (index != -1) {
+                val item = currentList[index]
+                currentList[index] = item.copy(isFavorite = !item.isFavorite)
+                prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
+                    ListSerializer(PlaybackHistoryItem.serializer()),
+                    currentList
+                )
+            }
         }
     }
 }

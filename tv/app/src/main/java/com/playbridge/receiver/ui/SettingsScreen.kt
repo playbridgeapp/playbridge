@@ -28,7 +28,8 @@ import androidx.tv.material3.*
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToDownloads: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -140,8 +141,14 @@ fun SettingsScreen(
                 color = Color.Gray
             )
 
-            Button(onClick = onBack) {
-                Text("Back")
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Button(onClick = onBack) {
+                    Text("Back")
+                }
+
+                Button(onClick = onNavigateToDownloads) {
+                    Text("Manage Downloads")
+                }
             }
         }
     }

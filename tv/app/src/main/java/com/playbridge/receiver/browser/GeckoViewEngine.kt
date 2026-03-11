@@ -235,10 +235,13 @@ class GeckoViewEngine(
                     request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
 
                     val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                    dm.enqueue(request)
+                    val downloadId = dm.enqueue(request)
 
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         android.widget.Toast.makeText(context, "Downloading file...", android.widget.Toast.LENGTH_SHORT).show()
+                        if (context is com.playbridge.receiver.browser.BrowserActivity) {
+                            (context as com.playbridge.receiver.browser.BrowserActivity).showDownloadProgress(downloadId, fileName)
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start GeckoView download", e)

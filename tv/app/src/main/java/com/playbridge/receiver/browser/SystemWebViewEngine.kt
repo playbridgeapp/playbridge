@@ -282,9 +282,13 @@ class SystemWebViewEngine(
                     request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
 
                     val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                    dm.enqueue(request)
+                    val downloadId = dm.enqueue(request)
 
                     android.widget.Toast.makeText(context, "Downloading file...", android.widget.Toast.LENGTH_SHORT).show()
+
+                    if (context is com.playbridge.receiver.browser.BrowserActivity) {
+                        (context as com.playbridge.receiver.browser.BrowserActivity).showDownloadProgress(downloadId, fileName)
+                    }
                 } catch (e: Exception) {
                     android.util.Log.e(TAG, "Failed to start download", e)
                     android.widget.Toast.makeText(context, "Download failed", android.widget.Toast.LENGTH_SHORT).show()
