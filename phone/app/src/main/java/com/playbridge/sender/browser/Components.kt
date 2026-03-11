@@ -206,43 +206,45 @@ object Components {
         }
         
         // Use ensureBuiltIn for bundled extensions in assets
-        runtime.webExtensionController.ensureBuiltIn(extensionUrl, extensionId).then { extension ->
-            if (extension != null) {
-                Log.i(TAG, "Video detector extension loaded successfully: ${extension.id}")
+        Handler(Looper.getMainLooper()).post {
+            runtime.webExtensionController.ensureBuiltIn(extensionUrl, extensionId).then { extension ->
+                if (extension != null) {
+                    Log.i(TAG, "Video detector extension loaded successfully: ${extension.id}")
+
+                    // Store extension reference
+                    videoDetectorExtension = extension
+
+                    // Show toast and set up message delegate on the main thread
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(
+                            appContext,
+                            "Video Detector extension installed!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+
+                        // Set up message delegate on the extension to receive messages
+                        extension.setMessageDelegate(globalMessageDelegate, "browser")
+                        Log.i(TAG, "Message delegate registered on extension")
+
+                        // Connect to extension port for bidirectional messaging
+                        connectToExtension(extension)
+                    }
+                } else {
+                    Log.e(TAG, "ensureBuiltIn returned null extension")
+                }
                 
-                // Store extension reference
-                videoDetectorExtension = extension
-                
-                // Show toast on main thread
+                GeckoResult.fromValue(extension)
+            }.exceptionally { throwable ->
+                Log.e(TAG, "Extension ensureBuiltIn FAILED", throwable)
                 Handler(Looper.getMainLooper()).post {
                     Toast.makeText(
                         appContext,
-                        "Video Detector extension installed!",
-                        Toast.LENGTH_SHORT
+                        "Extension install failed: ${throwable.message}",
+                        Toast.LENGTH_LONG
                     ).show()
                 }
-                
-                // Set up message delegate on the extension to receive messages
-                extension.setMessageDelegate(globalMessageDelegate, "browser")
-                Log.i(TAG, "Message delegate registered on extension")
-                
-                // Connect to extension port for bidirectional messaging
-                connectToExtension(extension)
-            } else {
-                Log.e(TAG, "ensureBuiltIn returned null extension")
+                GeckoResult.fromValue(null)
             }
-            
-            GeckoResult.fromValue(extension)
-        }.exceptionally { throwable ->
-            Log.e(TAG, "Extension ensureBuiltIn FAILED", throwable)
-            Handler(Looper.getMainLooper()).post {
-                Toast.makeText(
-                    appContext,
-                    "Extension install failed: ${throwable.message}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-            GeckoResult.fromValue(null)
         }
     }
     
@@ -444,7 +446,9 @@ object Components {
         }
         
         // Register delegate for background script messages
-        extension.setMessageDelegate(messageDelegate, "browser")
-        Log.i(TAG, "Message delegate registered for background script (port: browser)")
+        Handler(Looper.getMainLooper()).post {
+            extension.setMessageDelegate(messageDelegate, "browser")
+            Log.i(TAG, "Message delegate registered for background script (port: browser)")
+        }
     }
 }

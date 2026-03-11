@@ -21,6 +21,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import mozilla.components.feature.addons.Addon
 import org.mozilla.geckoview.WebExtension
+import android.os.Handler
+import android.os.Looper
 
 private const val TAG = "ExtensionsScreen"
 
@@ -48,27 +50,29 @@ fun ExtensionsScreen(
         try {
             Log.d(TAG, "Loading installed extensions from GeckoRuntime...")
             withContext(Dispatchers.Main) {
-                Components.runtime.webExtensionController.list().then({ extensions ->
-                    Log.d(TAG, "Found ${extensions?.size ?: 0} installed extensions")
-                    
-                    val allExtensions = extensions?.toList() ?: emptyList()
-                    val prefs = Components.applicationContext.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE)
-                    val showInbuilt = prefs.getBoolean("show_inbuilt_extensions", false)
-                    
-                    installedExtensions = if (showInbuilt) {
-                        allExtensions
-                    } else {
-                        allExtensions.filter { it.id != "video-detector@playbridge" }
-                    }
-                    
-                    isLoading = false
-                    org.mozilla.geckoview.GeckoResult.fromValue(null)
-                }, { error ->
-                    Log.e(TAG, "Error loading extensions", error)
-                    errorMessage = "Failed to load extensions: ${error?.message}"
-                    isLoading = false
-                    org.mozilla.geckoview.GeckoResult.fromValue(null)
-                })
+                Handler(Looper.getMainLooper()).post {
+                    Components.runtime.webExtensionController.list().then({ extensions ->
+                        Log.d(TAG, "Found ${extensions?.size ?: 0} installed extensions")
+
+                        val allExtensions = extensions?.toList() ?: emptyList()
+                        val prefs = Components.applicationContext.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE)
+                        val showInbuilt = prefs.getBoolean("show_inbuilt_extensions", false)
+
+                        installedExtensions = if (showInbuilt) {
+                            allExtensions
+                        } else {
+                            allExtensions.filter { it.id != "video-detector@playbridge" }
+                        }
+
+                        isLoading = false
+                        org.mozilla.geckoview.GeckoResult.fromValue(null)
+                    }, { error ->
+                        Log.e(TAG, "Error loading extensions", error)
+                        errorMessage = "Failed to load extensions: ${error?.message}"
+                        isLoading = false
+                        org.mozilla.geckoview.GeckoResult.fromValue(null)
+                    })
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load extensions", e)
@@ -200,23 +204,28 @@ fun ExtensionsScreen(
                                 val extensionName = extension.metaData?.name ?: extension.id
                                 scope.launch {
                                     try {
-                                        Components.runtime.webExtensionController.uninstall(extension).then({ _ ->
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                "$extensionName uninstalled",
-                                                android.widget.Toast.LENGTH_SHORT
-                                            ).show()
-                                            // Refresh list
-                                            Components.runtime.webExtensionController.list().then({ exts ->
-                                                installedExtensions = exts?.toList() ?: emptyList()
+                                        Handler(Looper.getMainLooper()).post {
+                                            Components.runtime.webExtensionController.uninstall(extension).then({ _ ->
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "$extensionName uninstalled",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                // Refresh list
+                                                Handler(Looper.getMainLooper()).post {
+                                                    Components.runtime.webExtensionController.list().then({ exts ->
+                                                        installedExtensions = exts?.toList() ?: emptyList()
+                                                        org.mozilla.geckoview.GeckoResult.fromValue(null)
+                                                    }, { _ ->
+                                                        org.mozilla.geckoview.GeckoResult.fromValue(null)
+                                                    })
+                                                }
                                                 org.mozilla.geckoview.GeckoResult.fromValue(null)
-                                            }, { _ ->
+                                            }, { error ->
+                                                errorMessage = "Failed to uninstall: ${error?.message}"
                                                 org.mozilla.geckoview.GeckoResult.fromValue(null)
                                             })
-                                        }, { error ->
-                                            errorMessage = "Failed to uninstall: ${error?.message}"
-                                            org.mozilla.geckoview.GeckoResult.fromValue(null)
-                                        })
+                                        }
                                     } catch (e: Exception) {
                                         errorMessage = "Failed to uninstall: ${e.message}"
                                     }
@@ -242,8 +251,10 @@ fun ExtensionsScreen(
                             onSuccess = {
                                 Log.d(TAG, "Addon installed successfully")
                                 // Refresh list
-                                Components.runtime.webExtensionController.list().accept { exts ->
-                                    installedExtensions = exts?.toList() ?: emptyList()
+                                Handler(Looper.getMainLooper()).post {
+                                    Components.runtime.webExtensionController.list().accept { exts ->
+                                        installedExtensions = exts?.toList() ?: emptyList()
+                                    }
                                 }
                             },
                             onError = { e ->
