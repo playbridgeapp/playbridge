@@ -97,11 +97,11 @@ fun HomeScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Row(
+                    LazyRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
-                        topSites.forEach { site ->
+                        items(topSites) { site ->
                             TopSiteItem(site = site, onClick = { onNavigate(site.url) })
                         }
                     }
