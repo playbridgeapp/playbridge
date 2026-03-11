@@ -143,6 +143,14 @@ class BrowserActivity : ComponentActivity() {
     private lateinit var nsdHelper: NsdHelper
     private lateinit var database: HistoryDatabase
 
+    override fun onResume() {
+        super.onResume()
+        // Ensure sessions are synced when coming back from background (e.g., lock screen)
+        // to prevent black/blank screens.
+        val state = Components.store.state
+        tabManager.syncSessions(state.tabs, state.selectedTabId)
+    }
+
     override fun onPause() {
         super.onPause()
         saveTabs()
