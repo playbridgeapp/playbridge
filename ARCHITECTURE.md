@@ -242,9 +242,12 @@ PlayBridge/
     │   └── src/main/
     │       ├── java/com/playbridge/receiver/
     │       │   ├── browser/
+    │       │   ├── logging/
+    │       │   │   └── FileLogger.kt
     │       │   ├── pairing/
     │       │   ├── player/
     │       │   │   ├── PlayerActivity.kt   (~1322 lines, slimmed down)
+    │       │   │   ├── ColorMatrixEffect.kt
     │       │   │   ├── ContentSniffer.kt
     │       │   │   ├── M3uParser.kt
     │       │   │   ├── PlayerControlsManager.kt
