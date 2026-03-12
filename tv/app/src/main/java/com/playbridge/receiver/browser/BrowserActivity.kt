@@ -786,6 +786,11 @@ class BrowserActivity : ComponentActivity() {
     }
     
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // If the download overlay is visible, let Compose handle the D-pad events
+        if (downloadOverlayView != null) {
+            return super.dispatchKeyEvent(event)
+        }
+
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MENU -> {
