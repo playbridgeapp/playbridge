@@ -21,7 +21,7 @@ import com.playbridge.receiver.pairing.PairingStore
 import com.playbridge.receiver.server.ServerService
 import com.playbridge.receiver.server.WebSocketServer
 import com.playbridge.receiver.ui.HomeScreen
-import com.playbridge.receiver.ui.HistoryScreen
+import com.playbridge.receiver.ui.LibraryScreen
 import com.playbridge.receiver.ui.PairingScreen
 import com.playbridge.receiver.ui.SettingsScreen
 import com.playbridge.receiver.ui.theme.PlayBridgeTVTheme
@@ -30,7 +30,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
-    
+
     private lateinit var pairingStore: PairingStore
     private lateinit var historyStore: HistoryStore
     
@@ -79,14 +79,17 @@ class MainActivity : ComponentActivity() {
         
         // Preload ad blocker filters in background so they're ready when browser opens
         com.playbridge.receiver.browser.AdBlocker.preload(applicationContext)
-        
+
         setContent {
             PlayBridgeTVTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     shape = RectangleShape
                 ) {
-                    MainContent(pairingStore = pairingStore, historyStore = historyStore)
+                    MainContent(
+                        pairingStore = pairingStore,
+                        historyStore = historyStore
+                    )
                 }
             }
         }
@@ -96,12 +99,15 @@ class MainActivity : ComponentActivity() {
 enum class Screen {
     Home,
     Pairing,
-    History,
+    Library,
     Settings
 }
 
 @Composable
-fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
+fun MainContent(
+    pairingStore: PairingStore,
+    historyStore: HistoryStore
+) {
     // Initial State determination
     var currentScreen by remember { mutableStateOf(Screen.Home) }
     var isInitialCheckDone by remember { mutableStateOf(false) }
@@ -113,7 +119,7 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
     // Check initial state once
     LaunchedEffect(pairedDevices) {
         if (!isInitialCheckDone && pairedDevices.isNotEmpty()) {
-            currentScreen = Screen.History
+            currentScreen = Screen.Library
             isInitialCheckDone = true
         } else if (!isInitialCheckDone && pairedDevices.isEmpty()) {
             // Keep default Home
@@ -136,12 +142,12 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
         }
     }
     
-    // Auto-navigate to History when a phone connects (if not already there)
+    // Auto-navigate to Library when a phone connects (if not already there)
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketServer.ConnectionState.Connected) {
-             // If we are on Home (Pairing status page), go to History
+             // If we are on Home (Pairing status page), go to Library
              if (currentScreen == Screen.Home) {
-                 currentScreen = Screen.History
+                 currentScreen = Screen.Library
              }
         }
     }
@@ -158,8 +164,8 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
                 onShowPairing = { currentScreen = Screen.Pairing }
             )
         }
-        Screen.History -> {
-            HistoryScreen(
+        Screen.Library -> {
+            LibraryScreen(
                 historyStore = historyStore,
                 deviceName = deviceName,
                 connectedCount = connectedCount,
@@ -203,18 +209,18 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
         }
         Screen.Settings -> {
             SettingsScreen(
-                onBack = { currentScreen = Screen.History }
+                onBack = { currentScreen = Screen.Library }
             )
         }
     }
     
     // Handle back button for navigation
-    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.History && pairedDevices.isNotEmpty()) {
-        currentScreen = Screen.History
+    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library && pairedDevices.isNotEmpty()) {
+        currentScreen = Screen.Library
     }
-    // Handle back from Settings to History
+    // Handle back from Settings to Library
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Settings) {
-        currentScreen = Screen.History
+        currentScreen = Screen.Library
     }
     // Also handle back from Pairing to Home if no history
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Pairing && pairedDevices.isEmpty()) {
