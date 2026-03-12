@@ -115,7 +115,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - **Recommendation**: Move to a `config` object or DataStore preferences
 
 #### 5. Missing Error Handling in Extensions
-- Browser extension silently catches errors in [background.js:76-89](file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/assets/extensions/video_detector/background.js#L76) (3 separate silent catches)
+- Browser extension silently catches errors in [background.js](phone/app/src/main/assets/extensions/video_detector/background.js) (e.g. lines 109, 267, 273, 297)
 - **Recommendation**: Add proper error logging/reporting
 
 ### 🟢 Minor Improvements
@@ -229,6 +229,7 @@ PlayBridge/
 │   │       │   │   ├── DownloadsScreen.kt
 │   │       │   │   ├── HistoryScreen.kt
 │   │       │   │   ├── SettingsScreen.kt
+│   │       │   │   ├── ExportedSettings.kt     (serializable data models for settings import/export)
 │   │       │   │   ├── HlsParser.kt
 │   │       │   │   └── ...
 │   │       │   ├── connection/
