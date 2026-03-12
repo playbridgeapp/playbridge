@@ -521,10 +521,33 @@ class PlayerActivity : ComponentActivity() {
                 .setAllowChunklessPreparation(true)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         } else {
-            FileLogger.i(TAG, "Using DefaultMediaSourceFactory")
-            val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
-                .setConstantBitrateSeekingEnabled(true)
-             androidx.media3.exoplayer.source.DefaultMediaSourceFactory(okHttpDataSourceFactory, extractorsFactory)
+            FileLogger.i(TAG, "Using DefaultMediaSourceFactory with custom extractors for type: $contentType")
+            val extractorsFactory = androidx.media3.extractor.ExtractorsFactory {
+                when (contentType) {
+                    androidx.media3.common.MimeTypes.VIDEO_MP4 -> arrayOf(
+                        androidx.media3.extractor.mp4.Mp4Extractor(),
+                        androidx.media3.extractor.mp4.FragmentedMp4Extractor()
+                    )
+                    androidx.media3.common.MimeTypes.VIDEO_MATROSKA,
+                    androidx.media3.common.MimeTypes.VIDEO_WEBM -> arrayOf(
+                        androidx.media3.extractor.mkv.MatroskaExtractor()
+                    )
+                    androidx.media3.common.MimeTypes.VIDEO_FLV -> arrayOf(
+                        androidx.media3.extractor.flv.FlvExtractor()
+                    )
+                    androidx.media3.common.MimeTypes.VIDEO_AVI -> arrayOf(
+                        androidx.media3.extractor.avi.AviExtractor()
+                    )
+                    else -> {
+                        // Fallback to all extractors if unknown (e.g., application/octet-stream)
+                        androidx.media3.extractor.DefaultExtractorsFactory()
+                            .setConstantBitrateSeekingEnabled(true)
+                            .createExtractors()
+                    }
+                }
+            }
+
+            androidx.media3.exoplayer.source.DefaultMediaSourceFactory(okHttpDataSourceFactory, extractorsFactory)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         }
 
