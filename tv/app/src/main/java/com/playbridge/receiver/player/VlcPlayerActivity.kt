@@ -111,6 +111,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val url = intent.getStringExtra(ServerService.EXTRA_URL)
         val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
 
+        @Suppress("UNCHECKED_CAST")
+        val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
+
         if (url == null) {
             Toast.makeText(this, "No URL provided", Toast.LENGTH_SHORT).show()
             finish()
@@ -121,13 +124,32 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             Toast.makeText(this, title, Toast.LENGTH_SHORT).show()
         }
 
-        playVideo(url)
+        playVideo(url, headers)
     }
 
-    private fun playVideo(url: String) {
+    private fun playVideo(url: String, headers: Map<String, String>?) {
         val media = Media(libVLC, Uri.parse(url)).apply {
             setHWDecoderEnabled(true, false)
+
+            // Apply headers to VLC
+            headers?.forEach { (key, value) ->
+                when (key.lowercase()) {
+                    "user-agent" -> addOption(":http-user-agent=$value")
+                    "referer" -> addOption(":http-referrer=$value")
+                }
+            }
+
+            // Reconstruct remaining custom headers to VLC's format if they are not agent/referer
+            val customHeaders = headers?.filter { entry ->
+                val lowerKey = entry.key.lowercase()
+                lowerKey != "user-agent" && lowerKey != "referer"
+            }?.map { "${it.key}: ${it.value}" }?.joinToString("\r\n")
+
+            if (!customHeaders.isNullOrBlank()) {
+                addOption(":http-custom-headers=$customHeaders")
+            }
         }
+
         mediaPlayer?.media = media
         media.release()
 
