@@ -270,22 +270,7 @@ class SystemWebViewEngine(
                     request.setMimeType(mimeType)
 
                     // Extract filename
-                    val parsedUri = android.net.Uri.parse(url)
-                    var fileName = parsedUri.getQueryParameter("n") ?: parsedUri.getQueryParameter("filename")
-
-                    if (fileName.isNullOrEmpty()) {
-                        fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
-
-                        if (fileName.endsWith(".bin")) {
-                            val pathLastSegment = parsedUri.lastPathSegment
-                            if (!pathLastSegment.isNullOrEmpty() && pathLastSegment.contains(".")) {
-                                fileName = pathLastSegment
-                            } else {
-                                fileName = fileName.replace(".bin", ".mp4")
-                            }
-                        }
-                    }
-
+                    var fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
                     request.setTitle(fileName)
 
                     // Add cookie if needed
@@ -297,13 +282,9 @@ class SystemWebViewEngine(
                     request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
 
                     val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                    val downloadId = dm.enqueue(request)
+                    dm.enqueue(request)
 
                     android.widget.Toast.makeText(context, "Downloading file...", android.widget.Toast.LENGTH_SHORT).show()
-
-                    if (context is com.playbridge.receiver.browser.BrowserActivity) {
-                        (context as com.playbridge.receiver.browser.BrowserActivity).showDownloadProgress(downloadId, fileName)
-                    }
                 } catch (e: Exception) {
                     android.util.Log.e(TAG, "Failed to start download", e)
                     android.widget.Toast.makeText(context, "Download failed", android.widget.Toast.LENGTH_SHORT).show()

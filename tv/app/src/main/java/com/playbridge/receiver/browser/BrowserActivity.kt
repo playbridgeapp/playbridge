@@ -103,11 +103,6 @@ class BrowserActivity : ComponentActivity() {
 
     private lateinit var rootContainer: FrameLayout
 
-    fun showDownloadProgress(downloadId: Long, fileName: String) {
-        val intent = Intent(this, com.playbridge.receiver.ui.DownloadsActivity::class.java)
-        startActivity(intent)
-    }
-
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

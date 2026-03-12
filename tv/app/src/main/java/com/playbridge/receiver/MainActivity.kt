@@ -209,10 +209,7 @@ fun MainContent(
         }
         Screen.Settings -> {
             SettingsScreen(
-                onBack = { currentScreen = Screen.Library },
-                onNavigateToDownloads = {
-                    context.startActivity(android.content.Intent(context, com.playbridge.receiver.ui.DownloadsActivity::class.java))
-                }
+                onBack = { currentScreen = Screen.Library }
             )
         }
     }

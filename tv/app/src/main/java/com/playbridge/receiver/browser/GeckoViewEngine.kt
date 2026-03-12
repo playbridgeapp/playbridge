@@ -220,24 +220,14 @@ class GeckoViewEngine(
                     val url = response.uri
                     val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
 
+                    response.headers.forEach { entry ->
+                        request.addRequestHeader(entry.key, entry.value)
+                    }
+
                     val mimeType = response.headers["Content-Type"] ?: "application/octet-stream"
                     val contentDisposition = response.headers["Content-Disposition"]
 
-                    val parsedUri = android.net.Uri.parse(url)
-                    var fileName = parsedUri.getQueryParameter("n") ?: parsedUri.getQueryParameter("filename")
-
-                    if (fileName.isNullOrEmpty()) {
-                        fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
-
-                        if (fileName.endsWith(".bin")) {
-                            val pathLastSegment = parsedUri.lastPathSegment
-                            if (!pathLastSegment.isNullOrEmpty() && pathLastSegment.contains(".")) {
-                                fileName = pathLastSegment
-                            } else {
-                                fileName = fileName.replace(".bin", ".mp4")
-                            }
-                        }
-                    }
+                    var fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
 
                     request.setMimeType(mimeType)
                     request.setTitle(fileName)
@@ -245,13 +235,10 @@ class GeckoViewEngine(
                     request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
 
                     val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                    val downloadId = dm.enqueue(request)
+                    dm.enqueue(request)
 
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         android.widget.Toast.makeText(context, "Downloading file...", android.widget.Toast.LENGTH_SHORT).show()
-                        if (context is com.playbridge.receiver.browser.BrowserActivity) {
-                            (context as com.playbridge.receiver.browser.BrowserActivity).showDownloadProgress(downloadId, fileName)
-                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start GeckoView download", e)

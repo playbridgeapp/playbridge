@@ -96,11 +96,6 @@
         </activity>
 
         <activity
-            android:name=".ui.DownloadsActivity"
-            android:exported="false"
-            android:theme="@style/Theme.PlayBridgeTV" />
-
-        <activity
             android:name=".browser.BrowserActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
