@@ -1,0 +1,320 @@
+package com.playbridge.receiver.player
+
+import android.content.Intent
+import android.net.Uri
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.media.AudioManager
+import android.os.Build
+import android.os.Bundle
+import android.view.SurfaceView
+import android.view.View
+import android.widget.ImageButton
+import android.widget.ProgressBar
+import android.widget.SeekBar
+import android.widget.TextView
+import android.widget.Toast
+import com.playbridge.receiver.R
+import com.playbridge.receiver.server.ServerService
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IVLCVout
+
+class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
+
+    private var libVLC: LibVLC? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private lateinit var surfaceView: SurfaceView
+    private lateinit var controlsManager: VlcControlsManager
+
+    override fun play() { mediaPlayer?.play() }
+    override fun pause() { mediaPlayer?.pause() }
+    override fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
+    override fun getMediaDuration(): Long = mediaPlayer?.length ?: 0L
+    override fun getCurrentPosition(): Long = (mediaPlayer?.time) ?: 0L
+    override fun seekTo(position: Long) { mediaPlayer?.time = position }
+
+    private val remoteReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == ServerService.ACTION_REMOTE) {
+                val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
+                when (key) {
+                    "up", "down", "left", "right" -> {
+                        if (!controlsManager.isControlsVisible()) {
+                            controlsManager.showControls()
+                        }
+                    }
+                    "enter" -> {
+                        controlsManager.toggleControls()
+                    }
+                    "back" -> {
+                        if (controlsManager.isControlsVisible()) {
+                            controlsManager.hideControls()
+                        } else {
+                            finish()
+                        }
+                    }
+                }
+            } else if (intent?.action == ServerService.ACTION_CONTROL) {
+                when (intent.getStringExtra(ServerService.EXTRA_COMMAND)) {
+                    "play_pause" -> controlsManager.togglePlayPause()
+                    "stop" -> finish()
+                    "seek_fwd" -> controlsManager.onSeekForward()
+                    "seek_rev" -> controlsManager.onSeekBackward()
+                }
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        setContentView(R.layout.activity_vlc_player)
+        surfaceView = findViewById(R.id.surface_view)
+
+        // Setup VLC
+        val args = ArrayList<String>().apply {
+            add("-vvv") // Verbosity
+            add("--drop-late-frames")
+            add("--skip-frames")
+        }
+        libVLC = LibVLC(this, args)
+        mediaPlayer = MediaPlayer(libVLC)
+
+        mediaPlayer?.vlcVout?.apply {
+            setVideoView(surfaceView)
+            addCallback(this@VlcPlayerActivity)
+            attachViews()
+        }
+
+        // Set video scale to 0 (fit to screen)
+        mediaPlayer?.scale = 0f
+
+        controlsManager = VlcControlsManager(
+            controlsRoot = findViewById(R.id.controls_root),
+            controlsPanel = findViewById(R.id.controls_panel),
+            seekBar = findViewById(R.id.player_seekbar),
+            playPauseButton = findViewById(R.id.btn_play_pause),
+            streamInfoText = findViewById(R.id.tv_stream_info),
+            elapsedText = findViewById(R.id.tv_elapsed),
+            remainingText = findViewById(R.id.tv_remaining),
+            titleText = findViewById(R.id.title_text),
+            bufferingSpinner = findViewById(R.id.buffering_spinner),
+            playerProvider = { mediaPlayer },
+            tracksButton = findViewById(R.id.btn_tracks),
+            playlistButton = findViewById(R.id.btn_playlist),
+            prevButton = findViewById(R.id.btn_prev),
+            nextButton = findViewById(R.id.btn_next),
+            filterButton = findViewById(R.id.btn_filter)
+        )
+
+        controlsManager.attachPlayer()
+
+        val filter = IntentFilter().apply {
+            addAction(ServerService.ACTION_REMOTE)
+            addAction(ServerService.ACTION_CONTROL)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(remoteReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(remoteReceiver, filter)
+        }
+
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        val url = intent.getStringExtra(ServerService.EXTRA_URL)
+        val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
+
+        @Suppress("UNCHECKED_CAST")
+        val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
+
+        if (url == null) {
+            Toast.makeText(this, "No URL provided", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
+        if (title != null) {
+            Toast.makeText(this, title, Toast.LENGTH_SHORT).show()
+            controlsManager.setTitle(title)
+        }
+
+        playVideo(url, headers)
+    }
+
+    private fun playVideo(url: String, headers: Map<String, String>?) {
+        val media = Media(libVLC, Uri.parse(url)).apply {
+            setHWDecoderEnabled(true, false)
+
+            // Apply headers to VLC
+            headers?.forEach { (key, value) ->
+                when (key.lowercase()) {
+                    "user-agent" -> addOption(":http-user-agent=$value")
+                    "referer" -> addOption(":http-referrer=$value")
+                }
+            }
+
+            // Reconstruct remaining custom headers to VLC's format if they are not agent/referer
+            val customHeaders = headers?.filter { entry ->
+                val lowerKey = entry.key.lowercase()
+                lowerKey != "user-agent" && lowerKey != "referer"
+            }?.map { "${it.key}: ${it.value}" }?.joinToString("\r\n")
+
+            if (!customHeaders.isNullOrBlank()) {
+                addOption(":http-custom-headers=$customHeaders")
+            }
+        }
+
+        mediaPlayer?.media = media
+        media.release()
+
+        mediaPlayer?.play()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(remoteReceiver)
+        controlsManager.detachPlayer()
+        mediaPlayer?.vlcVout?.apply {
+            removeCallback(this@VlcPlayerActivity)
+            detachViews()
+        }
+        mediaPlayer?.release()
+        libVLC?.release()
+    }
+
+    // IVLCVout.Callback
+    override fun onSurfacesCreated(vout: IVLCVout?) {
+        val width = surfaceView.width
+        val height = surfaceView.height
+        if (width > 0 && height > 0) {
+            vout?.setWindowSize(width, height)
+        }
+    }
+
+    override fun onSurfacesDestroyed(vout: IVLCVout?) {}
+
+    // Handle physical remote/keyboard events
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (event?.action != android.view.KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
+
+        val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
+
+        if (isFullOverlayVisible) {
+            // When full overlay is visible, let the system handle D-pad navigation for focus,
+            // except for DPAD_UP/DPAD_DOWN which we ignore to prevent focus jumping off controls.
+            return when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_UP,
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> true
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                android.view.KeyEvent.KEYCODE_ENTER,
+                android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> super.onKeyDown(keyCode, event)
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    controlsManager.togglePlayPause()
+                    true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                    mediaPlayer?.play()
+                    true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    mediaPlayer?.pause()
+                    true
+                }
+                else -> super.onKeyDown(keyCode, event)
+            }
+        }
+
+        // When full overlay is hidden (or only seek UI is visible), D-pad controls playback (ExoPlayer parity)
+        return when (keyCode) {
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+            android.view.KeyEvent.KEYCODE_ENTER,
+            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                mediaPlayer?.pause()
+                controlsManager.showControls()
+                true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                val repeatCount = event.repeatCount
+                val multiplier = if (repeatCount > 10) 5 else 1
+                val player = mediaPlayer
+                if (player != null) {
+                    val newTime = (player.time - 10000L * multiplier).coerceAtLeast(0)
+                    player.time = newTime
+                }
+                controlsManager.showSeekUI()
+                true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                val repeatCount = event.repeatCount
+                val multiplier = if (repeatCount > 10) 5 else 1
+                val player = mediaPlayer
+                if (player != null) {
+                    val length = player.length
+                    if (length > 0) {
+                        val newTime = (player.time + 10000L * multiplier).coerceAtMost(length)
+                        player.time = newTime
+                    }
+                }
+                controlsManager.showSeekUI()
+                true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
+                true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+                true
+            }
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                controlsManager.togglePlayPause()
+                true
+            }
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                mediaPlayer?.play()
+                true
+            }
+            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                mediaPlayer?.pause()
+                true
+            }
+            else -> super.onKeyDown(keyCode, event)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (controlsManager.isControlsVisible()) {
+            controlsManager.hideControls()
+        } else {
+            super.onBackPressed()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        surfaceView.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+            val width = right - left
+            val height = bottom - top
+            if (width > 0 && height > 0) {
+                mediaPlayer?.vlcVout?.setWindowSize(width, height)
+            }
+        }
+    }
+}
