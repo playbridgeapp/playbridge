@@ -47,6 +47,7 @@ fun SessionObserverSetup(
     isDesktopMode: Boolean,
     detectVideosEnabled: Boolean,
     isSecureConnection: MutableState<Boolean>,
+    pendingPopupUrl: MutableState<String?>,
     onXpiDetected: (String) -> Unit,
     onMagnetDetected: (String) -> Unit,
     onTorrentDownloaded: (ByteArray) -> Unit,
@@ -241,9 +242,9 @@ fun SessionObserverSetup(
                         if (method.name == "onNewSession" && args != null && args.size >= 2) {
                             val uri = args[1] as? String
                             if (uri != null) {
-                                Log.d(TAG, "Opening new tab for: $uri")
+                                Log.d(TAG, "Intercepting popup: $uri")
                                 scope.launch(Dispatchers.Main) {
-                                    tabManager.createTab(uri, store, parentId = selectedTab?.id)
+                                    pendingPopupUrl.value = uri
                                 }
                                 return@newProxyInstance GeckoResult.fromValue(null)
                             }

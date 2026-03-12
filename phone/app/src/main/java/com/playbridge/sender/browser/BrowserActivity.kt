@@ -384,6 +384,10 @@ class BrowserActivity : ComponentActivity() {
             // Find in Page state
             var showFindBar by remember { mutableStateOf(false) }
             
+            // Snackbar State
+            val snackbarHostState = remember { SnackbarHostState() }
+            var pendingPopupUrl by remember { mutableStateOf<String?>(null) }
+
             // Clear finding when bar closes
             LaunchedEffect(showFindBar) {
                 if (!showFindBar) {
@@ -434,6 +438,8 @@ class BrowserActivity : ComponentActivity() {
             val pendingDownloadState = remember { mutableStateOf(pendingDownload) }
             val isSecureConnectionState = remember { mutableStateOf(isSecureConnection) }
             
+            val pendingPopupUrlState = remember { mutableStateOf(pendingPopupUrl) }
+
             // Sync wrapper states back to local vars
             currentUrl = currentUrlState.value
             isLoading = isLoadingState.value
@@ -443,6 +449,7 @@ class BrowserActivity : ComponentActivity() {
             previousUrl = previousUrlState.value
             pendingDownload = pendingDownloadState.value
             isSecureConnection = isSecureConnectionState.value
+            pendingPopupUrl = pendingPopupUrlState.value
             
             // Sync wrapper states from BrowserStore when the selected tab changes
             // This ensures the URL bar shows the correct URL immediately on tab switch
@@ -513,6 +520,7 @@ class BrowserActivity : ComponentActivity() {
                 isDesktopMode = isDesktopMode,
                 detectVideosEnabled = detectVideosEnabled,
                 isSecureConnection = isSecureConnectionState,
+                pendingPopupUrl = pendingPopupUrlState,
                 onXpiDetected = { url ->
                     runOnUiThread {
                         Toast.makeText(this@BrowserActivity, "Installing extension...", Toast.LENGTH_SHORT).show()
@@ -647,6 +655,7 @@ class BrowserActivity : ComponentActivity() {
                     }
                 ) {
                     Scaffold(
+                    snackbarHost = { SnackbarHost(snackbarHostState) },
                     topBar = {
                         if (isFullscreen) {
                             // Hide toolbar in fullscreen
@@ -1583,7 +1592,28 @@ class BrowserActivity : ComponentActivity() {
                     )
                 }
                 
+                // Show Popup Blocked Snackbar
+                LaunchedEffect(pendingPopupUrl) {
+                    pendingPopupUrl?.let { url ->
+                        val host = try {
+                            java.net.URI(url).host ?: url.take(30)
+                        } catch (e: Exception) {
+                            url.take(30)
+                        }
 
+                        val result = snackbarHostState.showSnackbar(
+                            message = "Popup blocked from $host",
+                            actionLabel = "Allow",
+                            duration = SnackbarDuration.Long
+                        )
+
+                        if (result == SnackbarResult.ActionPerformed) {
+                            tabManager.createTab(url, store, parentId = selectedTab?.id)
+                        }
+                        pendingPopupUrl = null
+                        pendingPopupUrlState.value = null
+                    }
+                }
 
                 // Download Confirmation Dialog
                 DownloadConfirmDialog(
