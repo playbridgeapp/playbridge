@@ -59,39 +59,6 @@ fun SettingsScreen(
     val addonDao = remember { DatabaseProvider.getDatabase(context).addonDao() }
     val addonRepository = remember { AddonRepository(addonDao) }
 
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri != null) {
-            val scope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO)
-            scope.launch {
-                try {
-                    val addons = addonDao.getAllSync()
-                    val addonUrls = addons.map { it.manifestUrl }
-
-                    val exported = ExportedSettings(
-                        showInbuiltExtensions = prefs.getBoolean("show_inbuilt_extensions", false),
-                        debridProvider = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
-                        debridApiKey = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
-                        tmdbApiKey = tmdbPrefs.getString("tmdb_api_key", ""),
-                        tvPlayerMode = prefs.getString("tv_player_mode", "tv"),
-                        tvBrowserMode = prefs.getString("tv_browser_mode", "tv"),
-                        addonUrls = addonUrls
-                    )
-
-                    val jsonString = Json { prettyPrint = true }.encodeToString(exported)
-                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                        outputStream.write(jsonString.toByteArray())
-                    }
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Settings exported successfully", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Failed to export settings", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }
-    }
     var showInbuiltExtensions by remember {
         mutableStateOf(prefs.getBoolean("show_inbuilt_extensions", false))
     }
@@ -102,7 +69,44 @@ fun SettingsScreen(
     var tvBrowserTrigger by remember { mutableStateOf(0) }
     var tmdbTrigger by remember { mutableStateOf(0) }
 
+    // Export Selection State
+    var showExportDialog by remember { mutableStateOf(false) }
+    var exportAction by remember { mutableStateOf<String?>(null) } // "file" or "clipboard"
+    var exportDebrid by remember { mutableStateOf(true) }
+    var exportTmdb by remember { mutableStateOf(true) }
+    var exportTvDefaults by remember { mutableStateOf(true) }
+    var exportUiPrefs by remember { mutableStateOf(true) }
+    var exportAddons by remember { mutableStateOf(true) }
+    var pendingExportJson by remember { mutableStateOf("") }
+
     val scope = rememberCoroutineScope()
+
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    if (pendingExportJson.isNotEmpty()) {
+                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            outputStream.write(pendingExportJson.toByteArray())
+                        }
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Settings exported successfully", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "No settings selected to export", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to export settings: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    pendingExportJson = "" // Reset after export
+                }
+            }
+        }
+    }
     var isImporting by remember { mutableStateOf(false) }
 
     val importSettings = { jsonString: String ->
@@ -184,6 +188,47 @@ fun SettingsScreen(
     var isClearing by remember { mutableStateOf(false) }
     val isTvAvailable = tvIp != null && tvPort != null
 
+    val triggerExport = {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val addons = if (exportAddons) addonDao.getAllSync() else emptyList()
+                val addonUrls = addons.map { it.manifestUrl }
+
+                val exported = ExportedSettings(
+                    showInbuiltExtensions = if (exportUiPrefs) prefs.getBoolean("show_inbuilt_extensions", false) else null,
+                    debridProvider = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) else null,
+                    debridApiKey = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") else null,
+                    tmdbApiKey = if (exportTmdb) tmdbPrefs.getString("tmdb_api_key", "") else null,
+                    tvPlayerMode = if (exportTvDefaults) prefs.getString("tv_player_mode", "tv") else null,
+                    tvBrowserMode = if (exportTvDefaults) prefs.getString("tv_browser_mode", "tv") else null,
+                    addonUrls = if (exportAddons) addonUrls else emptyList()
+                )
+
+                val jsonString = Json {
+                    prettyPrint = true
+                    encodeDefaults = false // Omits null values
+                }.encodeToString(exported)
+
+                withContext(Dispatchers.Main) {
+                    if (exportAction == "clipboard") {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("PlayBridge Settings", jsonString)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "Settings copied to clipboard", Toast.LENGTH_SHORT).show()
+                    } else if (exportAction == "file") {
+                        pendingExportJson = jsonString
+                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                        exportLauncher.launch("playbridge_settings_$timestamp.json")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Failed to prepare export: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp),
         topBar = {
@@ -255,8 +300,8 @@ fun SettingsScreen(
 
                 Button(
                     onClick = {
-                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                        exportLauncher.launch("playbridge_settings_$timestamp.json")
+                        exportAction = "file"
+                        showExportDialog = true
                     },
                     modifier = Modifier.weight(1f)
                 ) {
@@ -265,34 +310,8 @@ fun SettingsScreen(
 
                 IconButton(
                     onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                val addons = addonDao.getAllSync()
-                                val addonUrls = addons.map { it.manifestUrl }
-
-                                val exported = ExportedSettings(
-                                    showInbuiltExtensions = prefs.getBoolean("show_inbuilt_extensions", false),
-                                    debridProvider = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
-                                    debridApiKey = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
-                                    tmdbApiKey = tmdbPrefs.getString("tmdb_api_key", ""),
-                                    tvPlayerMode = prefs.getString("tv_player_mode", "tv"),
-                                    tvBrowserMode = prefs.getString("tv_browser_mode", "tv"),
-                                    addonUrls = addonUrls
-                                )
-
-                                val jsonString = Json { prettyPrint = true }.encodeToString(exported)
-                                withContext(Dispatchers.Main) {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    val clip = ClipData.newPlainText("PlayBridge Settings", jsonString)
-                                    clipboard.setPrimaryClip(clip)
-                                    Toast.makeText(context, "Settings copied to clipboard", Toast.LENGTH_SHORT).show()
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, "Failed to copy settings", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
+                        exportAction = "clipboard"
+                        showExportDialog = true
                     }
                 ) {
                     Icon(Icons.Default.ContentCopy, contentDescription = "Copy settings to clipboard")
@@ -622,6 +641,53 @@ fun SettingsScreen(
                 Text(if (isClearing) "Clearing…" else "Clear TV Logs")
             }
         }
+    }
+
+    if (showExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = { Text("Export Settings") },
+            text = {
+                Column {
+                    Text("Select which settings to export:")
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportDebrid, onCheckedChange = { exportDebrid = it })
+                        Text("Debrid Credentials")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportTmdb, onCheckedChange = { exportTmdb = it })
+                        Text("TMDB Credentials")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportAddons, onCheckedChange = { exportAddons = it })
+                        Text("Stremio Addons")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportTvDefaults, onCheckedChange = { exportTvDefaults = it })
+                        Text("TV Player / Browser Defaults")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportUiPrefs, onCheckedChange = { exportUiPrefs = it })
+                        Text("UI Preferences (e.g., extensions toggle)")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showExportDialog = false
+                    triggerExport()
+                }) {
+                    Text("Export")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showExportDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
