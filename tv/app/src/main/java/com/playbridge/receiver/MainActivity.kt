@@ -172,7 +172,15 @@ fun MainContent(
                 onNavigateToPairing = { currentScreen = Screen.Pairing },
                 onNavigateToSettings = { currentScreen = Screen.Settings },
                 onPlayItem = { item ->
-                    val intent = android.content.Intent(context, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                    val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                    val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
+                    val activityClass = if (tvPref == "internal_vlc") {
+                        com.playbridge.receiver.player.VlcPlayerActivity::class.java
+                    } else {
+                        com.playbridge.receiver.player.ExoPlayerActivity::class.java
+                    }
+
+                    val intent = android.content.Intent(context, activityClass).apply {
                         putExtra(ServerService.EXTRA_URL, item.url)
                         putExtra(ServerService.EXTRA_TITLE, item.title)
                         putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)
