@@ -104,13 +104,7 @@ class BrowserActivity : ComponentActivity() {
     private lateinit var rootContainer: FrameLayout
 
     fun showDownloadProgress(downloadId: Long, fileName: String) {
-        // Instead of showing a popup, launch MainActivity to open Downloads screen
-        val intent = Intent(this, com.playbridge.receiver.MainActivity::class.java).apply {
-            putExtra(com.playbridge.receiver.MainActivity.EXTRA_OPEN_DOWNLOADS, true)
-            // Remove FLAG_ACTIVITY_CLEAR_TOP so we just put MainActivity on top of the stack.
-            // This ensures when we hit 'back' and finish() MainActivity, we land back here in BrowserActivity.
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-        }
+        val intent = Intent(this, com.playbridge.receiver.ui.DownloadsActivity::class.java)
         startActivity(intent)
     }
 

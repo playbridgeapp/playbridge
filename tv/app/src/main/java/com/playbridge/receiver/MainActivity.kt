@@ -30,10 +30,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
-    
-    companion object {
-        const val EXTRA_OPEN_DOWNLOADS = "extra_open_downloads"
-    }
 
     private lateinit var pairingStore: PairingStore
     private lateinit var historyStore: HistoryStore
@@ -45,17 +41,10 @@ class MainActivity : ComponentActivity() {
         ServerService.start(this)
     }
     
-    // State to hold the initially requested screen
-    private var initialScreenOverride: Screen? = null
-
     @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        if (intent.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)) {
-            initialScreenOverride = Screen.Downloads
-        }
-
         pairingStore = PairingStore(applicationContext)
         historyStore = HistoryStore(applicationContext)
         
@@ -90,8 +79,6 @@ class MainActivity : ComponentActivity() {
         
         // Preload ad blocker filters in background so they're ready when browser opens
         com.playbridge.receiver.browser.AdBlocker.preload(applicationContext)
-        
-        val cameFromBrowser = intent.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)
 
         setContent {
             PlayBridgeTVTheme {
@@ -101,24 +88,10 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MainContent(
                         pairingStore = pairingStore,
-                        historyStore = historyStore,
-                        initialScreenOverride = initialScreenOverride,
-                        cameFromBrowser = cameFromBrowser,
-                        onFinishActivity = { finish() }
+                        historyStore = historyStore
                     )
                 }
             }
-        }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        if (intent.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)) {
-            // Need a way to update the current screen from outside compose,
-            // or recreate the activity. Easiest is recreating since it's a TV app
-            // without complex retained state in MainActivity.
-            recreate()
         }
     }
 }
@@ -127,21 +100,17 @@ enum class Screen {
     Home,
     Pairing,
     Library,
-    Settings,
-    Downloads
+    Settings
 }
 
 @Composable
 fun MainContent(
     pairingStore: PairingStore,
-    historyStore: HistoryStore,
-    initialScreenOverride: Screen?,
-    cameFromBrowser: Boolean,
-    onFinishActivity: () -> Unit
+    historyStore: HistoryStore
 ) {
     // Initial State determination
-    var currentScreen by remember { mutableStateOf(initialScreenOverride ?: Screen.Home) }
-    var isInitialCheckDone by remember { mutableStateOf(initialScreenOverride != null) }
+    var currentScreen by remember { mutableStateOf(Screen.Home) }
+    var isInitialCheckDone by remember { mutableStateOf(false) }
     
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
@@ -241,37 +210,20 @@ fun MainContent(
         Screen.Settings -> {
             SettingsScreen(
                 onBack = { currentScreen = Screen.Library },
-                onNavigateToDownloads = { currentScreen = Screen.Downloads }
-            )
-        }
-        Screen.Downloads -> {
-            com.playbridge.receiver.ui.DownloadsScreen(
-                onBack = {
-                    if (cameFromBrowser) {
-                        onFinishActivity()
-                    } else {
-                        currentScreen = Screen.Settings
-                    }
+                onNavigateToDownloads = {
+                    context.startActivity(android.content.Intent(context, com.playbridge.receiver.ui.DownloadsActivity::class.java))
                 }
             )
         }
     }
     
     // Handle back button for navigation
-    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library && pairedDevices.isNotEmpty() && currentScreen != Screen.Downloads) {
+    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library && pairedDevices.isNotEmpty()) {
         currentScreen = Screen.Library
     }
     // Handle back from Settings to Library
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Settings) {
         currentScreen = Screen.Library
-    }
-    // Handle back from Downloads to Settings or Finish Activity
-    androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Downloads) {
-        if (cameFromBrowser) {
-            onFinishActivity()
-        } else {
-            currentScreen = Screen.Settings
-        }
     }
     // Also handle back from Pairing to Home if no history
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Pairing && pairedDevices.isEmpty()) {
