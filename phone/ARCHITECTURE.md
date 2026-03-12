@@ -17,6 +17,7 @@ com.playbridge.sender/
 │   ├── DownloadsScreen.kt          (downloads list UI with progress tracking)
 │   ├── DownloadUtils.kt            (download helpers: enqueue, file size, error strings)
 │   ├── ErrorPageUtils.kt           (utility for rendering error pages)
+│   ├── ExportedSettings.kt         (serializable data models for settings import/export)
 │   ├── ExtensionsScreen.kt         (browser addon management screen)
 │   ├── FindOnPageBar.kt            (UI for in-page text search)
 │   ├── HistoryScreen.kt            (browsing history list UI)
@@ -101,7 +102,8 @@ com.playbridge.sender/
 | Download Utils | DownloadUtils.kt | Download helper: standard files via DownloadManager, HLS via ExoPlayer DownloadService |
 | HLS Download Manager | DownloadManagerSingleton.kt | Media3 ExoPlayer download manager singleton for HLS offline downloads |
 | Media Download Service | MediaDownloadService.kt | Foreground service for HLS media downloads with notifications |
-| Browser Settings | SettingsScreen.kt | Browser settings (e.g., toggle inbuilt extension visibility) |
+| Browser Settings | SettingsScreen.kt | Browser settings (e.g., toggle inbuilt extension visibility, import/export settings) |
+| Settings Export | ExportedSettings.kt | Serializable data models for settings export/import including tabs, addons, Debrid configs |
 | Browser History | HistoryScreen.kt | Browsing history list with clear functionality |
 | Bookmarks | BookmarksScreen.kt | Bookmarks list UI with add/remove |
 | Home Page | HomeScreen.kt | Browser home page with bookmarks display |
