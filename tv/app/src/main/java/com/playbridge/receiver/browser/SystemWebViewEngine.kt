@@ -270,14 +270,19 @@ class SystemWebViewEngine(
                     request.setMimeType(mimeType)
 
                     // Extract filename
-                    var fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+                    val parsedUri = android.net.Uri.parse(url)
+                    var fileName = parsedUri.getQueryParameter("n") ?: parsedUri.getQueryParameter("filename")
 
-                    if (fileName.endsWith(".bin")) {
-                        val pathLastSegment = android.net.Uri.parse(url).lastPathSegment
-                        if (!pathLastSegment.isNullOrEmpty() && pathLastSegment.contains(".")) {
-                            fileName = pathLastSegment
-                        } else {
-                            fileName = fileName.replace(".bin", ".mp4")
+                    if (fileName.isNullOrEmpty()) {
+                        fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+
+                        if (fileName.endsWith(".bin")) {
+                            val pathLastSegment = parsedUri.lastPathSegment
+                            if (!pathLastSegment.isNullOrEmpty() && pathLastSegment.contains(".")) {
+                                fileName = pathLastSegment
+                            } else {
+                                fileName = fileName.replace(".bin", ".mp4")
+                            }
                         }
                     }
 
