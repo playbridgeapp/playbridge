@@ -117,8 +117,28 @@ class BrowserActivity : ComponentActivity() {
                 // Consume touches to avoid interacting with the browser behind the dialog
                 isClickable = true
                 isFocusable = true
+                isFocusableInTouchMode = true
+                // We want this view to receive all D-pad events before the browser
+                descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+
+                setOnKeyListener { _, keyCode, event ->
+                    // Absorb any D-pad events so the browser doesn't get them
+                    if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
+                        when (keyCode) {
+                            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+                            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                                // Compose consumes it if focus is properly set,
+                                // but if it bubbles here, we just absorb it.
+                                false // Let Compose handle it if it needs to, but we handle it at Activity level below
+                            }
+                        }
+                    }
+                    false
+                }
             }
             rootContainer.addView(downloadOverlayView)
+            downloadOverlayView?.requestFocus()
         }
 
         downloadOverlayView?.setContent {
@@ -287,6 +307,8 @@ class BrowserActivity : ComponentActivity() {
             rootContainer.removeView(it)
         }
         downloadOverlayView = null
+        // Return focus to the browser engine
+        engine?.getView()?.requestFocus()
     }
 
     private fun formatBytes(bytes: Long): String {
@@ -787,8 +809,18 @@ class BrowserActivity : ComponentActivity() {
     
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // If the download overlay is visible, let Compose handle the D-pad events
+        // and ALWAYS consume them so they don't leak down to the browser.
         if (downloadOverlayView != null) {
-            return super.dispatchKeyEvent(event)
+            val handledByCompose = super.dispatchKeyEvent(event)
+            // Even if Compose didn't say it handled it (e.g., reaching edge of dialog),
+            // we consume D-pad events to prevent the WebView underneath from scrolling/clicking.
+            return when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_BACK -> true
+                else -> handledByCompose
+            }
         }
 
         if (event.action == KeyEvent.ACTION_DOWN) {
