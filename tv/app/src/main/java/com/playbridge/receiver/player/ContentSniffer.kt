@@ -96,22 +96,59 @@ class ContentSniffer {
                     }
 
                     val headerBytes = try {
-                        source.readByteString(7)
+                        source.readByteString(16)
                     } catch (e: Exception) {
-                        Log.w(TAG, "Sniffing failed: Could not read 7 bytes for signature. Reason: ${e.message}")
+                        Log.w(TAG, "Sniffing failed: Could not read 16 bytes for signature. Reason: ${e.message}")
                         return@use null
                     }
                     
+                    val bytes = headerBytes.toByteArray()
                     val headerText = headerBytes.utf8()
-                    Log.d(TAG, "Sniffed first 7 bytes: '$headerText'")
 
+                    Log.d(TAG, "Sniffed first 16 bytes. Checking signatures...")
+
+                    // 1. Check for HLS Playlist (#EXTM3U)
                     if (headerText.startsWith("#EXTM3U")) {
-                        Log.d(TAG, "Sniffed successfully as APPLICATION_M3U8")
+                        Log.d(TAG, "Sniffed signature: APPLICATION_M3U8")
                         return@use androidx.media3.common.MimeTypes.APPLICATION_M3U8
-                    } else {
-                        Log.d(TAG, "Sniffing complete: Not an M3U8 payload")
-                        return@use null
                     }
+
+                    if (bytes.size >= 4) {
+                        // 2. Check for Matroska / WebM (EBML Header: 1A 45 DF A3)
+                        if (bytes[0] == 0x1A.toByte() && bytes[1] == 0x45.toByte() &&
+                            bytes[2] == 0xDF.toByte() && bytes[3] == 0xA3.toByte()) {
+                            Log.d(TAG, "Sniffed signature: VIDEO_MATROSKA (MKV/WebM)")
+                            return@use androidx.media3.common.MimeTypes.VIDEO_MATROSKA
+                        }
+
+                        // 3. Check for FLV (FLV\x01)
+                        if (bytes[0] == 'F'.code.toByte() && bytes[1] == 'L'.code.toByte() &&
+                            bytes[2] == 'V'.code.toByte() && bytes[3] == 0x01.toByte()) {
+                            Log.d(TAG, "Sniffed signature: VIDEO_FLV")
+                            return@use androidx.media3.common.MimeTypes.VIDEO_FLV
+                        }
+                    }
+
+                    // 4. Check for MP4 (ftyp signature usually starts at byte 4)
+                    if (bytes.size >= 8) {
+                        if (bytes[4] == 'f'.code.toByte() && bytes[5] == 't'.code.toByte() &&
+                            bytes[6] == 'y'.code.toByte() && bytes[7] == 'p'.code.toByte()) {
+                            Log.d(TAG, "Sniffed signature: VIDEO_MP4")
+                            return@use androidx.media3.common.MimeTypes.VIDEO_MP4
+                        }
+                    }
+
+                    // 5. Check for AVI (RIFF)
+                    if (bytes.size >= 4) {
+                        if (bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte() &&
+                            bytes[2] == 'F'.code.toByte() && bytes[3] == 'F'.code.toByte()) {
+                            Log.d(TAG, "Sniffed signature: VIDEO_AVI")
+                            return@use androidx.media3.common.MimeTypes.VIDEO_AVI
+                        }
+                    }
+
+                    Log.d(TAG, "Sniffing complete: Unknown payload signature.")
+                    return@use null
                 }
                 if (result != null) {
                     return@withContext result
