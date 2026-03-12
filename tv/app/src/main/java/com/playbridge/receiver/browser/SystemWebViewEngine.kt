@@ -271,6 +271,16 @@ class SystemWebViewEngine(
 
                     // Extract filename
                     var fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+
+                    if (fileName.endsWith(".bin")) {
+                        val pathLastSegment = android.net.Uri.parse(url).lastPathSegment
+                        if (!pathLastSegment.isNullOrEmpty() && pathLastSegment.contains(".")) {
+                            fileName = pathLastSegment
+                        } else {
+                            fileName = fileName.replace(".bin", ".mp4")
+                        }
+                    }
+
                     request.setTitle(fileName)
 
                     // Add cookie if needed

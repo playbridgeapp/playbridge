@@ -142,11 +142,13 @@ class BrowserActivity : ComponentActivity() {
                         val bytesCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
                         val totalCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
                         val statusCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_STATUS)
+                        val reasonCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_REASON)
 
                         if (bytesCol != -1 && totalCol != -1 && statusCol != -1) {
                             val currentDownloaded = cursor.getLong(bytesCol)
                             val total = cursor.getLong(totalCol)
                             val status = cursor.getInt(statusCol)
+                            val reason = if (reasonCol != -1) cursor.getInt(reasonCol) else -1
 
                             downloadedBytes = currentDownloaded
                             totalBytes = if (total > 0) total else 1L
@@ -169,7 +171,7 @@ class BrowserActivity : ComponentActivity() {
                                 }
                                 android.app.DownloadManager.STATUS_FAILED -> {
                                     isFinished = true
-                                    "Failed"
+                                    "Failed (Error $reason)"
                                 }
                                 android.app.DownloadManager.STATUS_PAUSED -> "Paused"
                                 android.app.DownloadManager.STATUS_PENDING -> "Pending"
@@ -251,9 +253,9 @@ class BrowserActivity : ComponentActivity() {
                     androidx.tv.material3.Text(
                         text = statusStr,
                         style = androidx.tv.material3.MaterialTheme.typography.bodyMedium,
-                        color = when (statusStr) {
-                            "Completed" -> androidx.compose.ui.graphics.Color(0xFF00FF88)
-                            "Failed", "Cancelled" -> androidx.compose.ui.graphics.Color.Red
+                        color = when {
+                            statusStr == "Completed" -> androidx.compose.ui.graphics.Color(0xFF00FF88)
+                            statusStr.startsWith("Failed") || statusStr == "Cancelled" -> androidx.compose.ui.graphics.Color.Red
                             else -> androidx.compose.ui.graphics.Color.White
                         }
                     )

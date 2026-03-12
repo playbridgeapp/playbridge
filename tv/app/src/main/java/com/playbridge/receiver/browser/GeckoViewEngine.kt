@@ -220,14 +220,19 @@ class GeckoViewEngine(
                     val url = response.uri
                     val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
 
-                    response.headers.forEach { entry ->
-                        request.addRequestHeader(entry.key, entry.value)
-                    }
-
                     val mimeType = response.headers["Content-Type"] ?: "application/octet-stream"
                     val contentDisposition = response.headers["Content-Disposition"]
 
                     var fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+
+                    if (fileName.endsWith(".bin")) {
+                        val pathLastSegment = android.net.Uri.parse(url).lastPathSegment
+                        if (!pathLastSegment.isNullOrEmpty() && pathLastSegment.contains(".")) {
+                            fileName = pathLastSegment
+                        } else {
+                            fileName = fileName.replace(".bin", ".mp4")
+                        }
+                    }
 
                     request.setMimeType(mimeType)
                     request.setTitle(fileName)
