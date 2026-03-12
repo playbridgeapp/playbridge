@@ -80,9 +80,6 @@ class BrowserActivity : ComponentActivity() {
     private var contentContainer: FrameLayout? = null
     private var isGeckoFullscreen = false
 
-    // Download overlay
-    private var downloadOverlayView: androidx.compose.ui.platform.ComposeView? = null
-    
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -106,223 +103,13 @@ class BrowserActivity : ComponentActivity() {
 
     private lateinit var rootContainer: FrameLayout
 
-    @OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class)
     fun showDownloadProgress(downloadId: Long, fileName: String) {
-        if (downloadOverlayView == null) {
-            downloadOverlayView = androidx.compose.ui.platform.ComposeView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                )
-                // Consume touches to avoid interacting with the browser behind the dialog
-                isClickable = true
-                isFocusable = true
-                isFocusableInTouchMode = true
-                // We want this view to receive all D-pad events before the browser
-                descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
-
-                setOnKeyListener { _, keyCode, event ->
-                    // Absorb any D-pad events so the browser doesn't get them
-                    if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
-                        when (keyCode) {
-                            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-                            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                                // Compose consumes it if focus is properly set,
-                                // but if it bubbles here, we just absorb it.
-                                false // Let Compose handle it if it needs to, but we handle it at Activity level below
-                            }
-                        }
-                    }
-                    false
-                }
-            }
-            rootContainer.addView(downloadOverlayView)
-            downloadOverlayView?.requestFocus()
+        // Instead of showing a popup, launch MainActivity to open Downloads screen
+        val intent = Intent(this, com.playbridge.receiver.MainActivity::class.java).apply {
+            putExtra(com.playbridge.receiver.MainActivity.EXTRA_OPEN_DOWNLOADS, true)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-
-        downloadOverlayView?.setContent {
-            var progress by androidx.compose.runtime.remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
-            var downloadedBytes by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(0L) }
-            var totalBytes by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(1L) } // Avoid div by zero
-            var speedStr by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("0 KB/s") }
-            var statusStr by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("Starting...") }
-            var isFinished by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-
-            androidx.compose.runtime.LaunchedEffect(downloadId) {
-                val dm = getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                var lastDownloaded = 0L
-                var lastTime = System.currentTimeMillis()
-
-                while (!isFinished) {
-                    val query = android.app.DownloadManager.Query().setFilterById(downloadId)
-                    val cursor = dm.query(query)
-
-                    if (cursor != null && cursor.moveToFirst()) {
-                        val bytesCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-                        val totalCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-                        val statusCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_STATUS)
-                        val reasonCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_REASON)
-
-                        if (bytesCol != -1 && totalCol != -1 && statusCol != -1) {
-                            val currentDownloaded = cursor.getLong(bytesCol)
-                            val total = cursor.getLong(totalCol)
-                            val status = cursor.getInt(statusCol)
-                            val reason = if (reasonCol != -1) cursor.getInt(reasonCol) else -1
-
-                            downloadedBytes = currentDownloaded
-                            totalBytes = if (total > 0) total else 1L
-                            progress = currentDownloaded.toFloat() / totalBytes
-
-                            val currentTime = System.currentTimeMillis()
-                            val timeDiff = currentTime - lastTime
-                            if (timeDiff > 0) {
-                                val bytesDiff = currentDownloaded - lastDownloaded
-                                val speedBps = (bytesDiff * 1000) / timeDiff
-                                speedStr = formatSpeed(speedBps)
-                            }
-                            lastDownloaded = currentDownloaded
-                            lastTime = currentTime
-
-                            statusStr = when (status) {
-                                android.app.DownloadManager.STATUS_SUCCESSFUL -> {
-                                    isFinished = true
-                                    "Completed"
-                                }
-                                android.app.DownloadManager.STATUS_FAILED -> {
-                                    isFinished = true
-                                    "Failed (Error $reason)"
-                                }
-                                android.app.DownloadManager.STATUS_PAUSED -> "Paused"
-                                android.app.DownloadManager.STATUS_PENDING -> "Pending"
-                                android.app.DownloadManager.STATUS_RUNNING -> "Downloading..."
-                                else -> "Unknown"
-                            }
-                        }
-                        cursor.close()
-                    } else {
-                        // Download probably cancelled or removed
-                        isFinished = true
-                        statusStr = "Cancelled"
-                        cursor?.close()
-                    }
-                    if (!isFinished) {
-                        kotlinx.coroutines.delay(1000) // update every second
-                    }
-                }
-            }
-
-            androidx.compose.foundation.layout.Box(
-                modifier = androidx.compose.ui.Modifier
-                    .fillMaxSize()
-                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.7f)),
-                contentAlignment = androidx.compose.ui.Alignment.Center
-            ) {
-                androidx.compose.foundation.layout.Column(
-                    modifier = androidx.compose.ui.Modifier
-                        .fillMaxWidth(0.5f)
-                        .background(androidx.compose.ui.graphics.Color(0xFF1E1E1E), androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
-                        .padding(32.dp),
-                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)
-                ) {
-                    androidx.tv.material3.Text(
-                        text = "Download Status",
-                        style = androidx.tv.material3.MaterialTheme.typography.titleLarge,
-                        color = androidx.compose.ui.graphics.Color.White
-                    )
-
-                    androidx.tv.material3.Text(
-                        text = fileName,
-                        style = androidx.tv.material3.MaterialTheme.typography.bodyMedium,
-                        color = androidx.compose.ui.graphics.Color.LightGray,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                    )
-
-                    androidx.compose.foundation.layout.Box(
-                        modifier = androidx.compose.ui.Modifier
-                            .fillMaxWidth()
-                            .height(8.dp)
-                            .background(androidx.compose.ui.graphics.Color.DarkGray)
-                    ) {
-                        androidx.compose.foundation.layout.Box(
-                            modifier = androidx.compose.ui.Modifier
-                                .fillMaxWidth(if (totalBytes > 1) progress else 0f)
-                                .height(8.dp)
-                                .background(androidx.compose.ui.graphics.Color(0xFF00D9FF))
-                        )
-                    }
-
-                    androidx.compose.foundation.layout.Row(
-                        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
-                    ) {
-                        androidx.tv.material3.Text(
-                            text = "${formatBytes(downloadedBytes)} / ${if (totalBytes > 1) formatBytes(totalBytes) else "Unknown"}",
-                            style = androidx.tv.material3.MaterialTheme.typography.bodySmall,
-                            color = androidx.compose.ui.graphics.Color.Gray
-                        )
-                        androidx.tv.material3.Text(
-                            text = speedStr,
-                            style = androidx.tv.material3.MaterialTheme.typography.bodySmall,
-                            color = androidx.compose.ui.graphics.Color.Gray
-                        )
-                    }
-
-                    androidx.tv.material3.Text(
-                        text = statusStr,
-                        style = androidx.tv.material3.MaterialTheme.typography.bodyMedium,
-                        color = when {
-                            statusStr == "Completed" -> androidx.compose.ui.graphics.Color(0xFF00FF88)
-                            statusStr.startsWith("Failed") || statusStr == "Cancelled" -> androidx.compose.ui.graphics.Color.Red
-                            else -> androidx.compose.ui.graphics.Color.White
-                        }
-                    )
-
-                    androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(16.dp))
-
-                    androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)) {
-                        if (!isFinished) {
-                            androidx.tv.material3.Button(onClick = {
-                                val dm = getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                dm.remove(downloadId)
-                                closeDownloadOverlay()
-                            }) {
-                                androidx.tv.material3.Text("Cancel")
-                            }
-                        } else {
-                            androidx.tv.material3.Button(onClick = { closeDownloadOverlay() }) {
-                                androidx.tv.material3.Text("Done")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private fun closeDownloadOverlay() {
-        downloadOverlayView?.let {
-            rootContainer.removeView(it)
-        }
-        downloadOverlayView = null
-        // Return focus to the browser engine
-        engine?.getView()?.requestFocus()
-    }
-
-    private fun formatBytes(bytes: Long): String {
-        if (bytes < 1024) return "$bytes B"
-        val kb = bytes / 1024.0
-        if (kb < 1024) return String.format("%.1f KB", kb)
-        val mb = kb / 1024.0
-        if (mb < 1024) return String.format("%.1f MB", mb)
-        val gb = mb / 1024.0
-        return String.format("%.1f GB", gb)
-    }
-
-    private fun formatSpeed(bytesPerSec: Long): String {
-        return "${formatBytes(bytesPerSec)}/s"
+        startActivity(intent)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -396,9 +183,7 @@ class BrowserActivity : ComponentActivity() {
 
         // Handle back press
         onBackPressedDispatcher.addCallback(this) {
-            if (downloadOverlayView != null) {
-                closeDownloadOverlay()
-            } else if (fullscreenView != null) {
+            if (fullscreenView != null) {
                 exitFullscreen()
             } else if (isGeckoFullscreen) {
                 exitGeckoFullscreen()
@@ -808,21 +593,6 @@ class BrowserActivity : ComponentActivity() {
     }
     
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // If the download overlay is visible, let Compose handle the D-pad events
-        // and ALWAYS consume them so they don't leak down to the browser.
-        if (downloadOverlayView != null) {
-            val handledByCompose = super.dispatchKeyEvent(event)
-            // Even if Compose didn't say it handled it (e.g., reaching edge of dialog),
-            // we consume D-pad events to prevent the WebView underneath from scrolling/clicking.
-            return when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-                KeyEvent.KEYCODE_BACK -> true
-                else -> handledByCompose
-            }
-        }
-
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MENU -> {

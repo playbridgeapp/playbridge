@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.*
@@ -186,10 +187,13 @@ fun DownloadItemCard(
                 IconButton(onClick = onOpen) {
                     Icon(Icons.Default.PlayArrow, contentDescription = "Open", tint = Color.White)
                 }
-            }
-
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+                }
+            } else {
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.Red)
+                }
             }
         }
     }

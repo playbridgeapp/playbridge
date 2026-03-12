@@ -31,6 +31,10 @@ import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
     
+    companion object {
+        const val EXTRA_OPEN_DOWNLOADS = "extra_open_downloads"
+    }
+
     private lateinit var pairingStore: PairingStore
     private lateinit var historyStore: HistoryStore
     
@@ -41,10 +45,17 @@ class MainActivity : ComponentActivity() {
         ServerService.start(this)
     }
     
+    // State to hold the initially requested screen
+    private var initialScreenOverride: Screen? = null
+
     @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        if (intent.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)) {
+            initialScreenOverride = Screen.Downloads
+        }
+
         pairingStore = PairingStore(applicationContext)
         historyStore = HistoryStore(applicationContext)
         
@@ -86,9 +97,20 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     shape = RectangleShape
                 ) {
-                    MainContent(pairingStore = pairingStore, historyStore = historyStore)
+                    MainContent(pairingStore = pairingStore, historyStore = historyStore, initialScreenOverride = initialScreenOverride)
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)) {
+            // Need a way to update the current screen from outside compose,
+            // or recreate the activity. Easiest is recreating since it's a TV app
+            // without complex retained state in MainActivity.
+            recreate()
         }
     }
 }
@@ -102,10 +124,10 @@ enum class Screen {
 }
 
 @Composable
-fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore) {
+fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore, initialScreenOverride: Screen?) {
     // Initial State determination
-    var currentScreen by remember { mutableStateOf(Screen.Home) }
-    var isInitialCheckDone by remember { mutableStateOf(false) }
+    var currentScreen by remember { mutableStateOf(initialScreenOverride ?: Screen.Home) }
+    var isInitialCheckDone by remember { mutableStateOf(initialScreenOverride != null) }
     
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
