@@ -87,6 +87,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             attachViews()
         }
 
+        // Set video scale to 0 (fit to screen)
+        mediaPlayer?.scale = 0f
+
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
             addAction(ServerService.ACTION_CONTROL)
@@ -168,6 +171,24 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     // IVLCVout.Callback
-    override fun onSurfacesCreated(vout: IVLCVout?) {}
+    override fun onSurfacesCreated(vout: IVLCVout?) {
+        val width = surfaceView.width
+        val height = surfaceView.height
+        if (width > 0 && height > 0) {
+            vout?.setWindowSize(width, height)
+        }
+    }
+
     override fun onSurfacesDestroyed(vout: IVLCVout?) {}
+
+    override fun onResume() {
+        super.onResume()
+        surfaceView.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+            val width = right - left
+            val height = bottom - top
+            if (width > 0 && height > 0) {
+                mediaPlayer?.vlcVout?.setWindowSize(width, height)
+            }
+        }
+    }
 }
