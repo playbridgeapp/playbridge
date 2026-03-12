@@ -127,4 +127,7 @@ dependencies {
 
     // GeckoView
     implementation(libs.geckoview.omni)
+
+    // LibVLC
+    implementation(libs.libvlc.all)
 }

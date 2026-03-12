@@ -81,12 +81,14 @@ fun SettingsScreen(
                 description = when (playerMode) {
                     "phone" -> "Uses whatever the phone app requests (internal or external)."
                     "internal" -> "Always plays with the built-in ExoPlayer. Supports subtitles and remote seek."
+                    "internal_vlc" -> "Always plays with the built-in LibVLC player. Useful for formats ExoPlayer struggles with."
                     "external" -> "Always passes videos to other installed apps like VLC or MX Player."
                     else -> ""
                 },
                 options = listOf(
                     "phone" to "Use Phone Setting",
                     "internal" to "Internal (ExoPlayer)",
+                    "internal_vlc" to "Internal (LibVLC)",
                     "external" to "External Player"
                 ),
                 selected = playerMode,

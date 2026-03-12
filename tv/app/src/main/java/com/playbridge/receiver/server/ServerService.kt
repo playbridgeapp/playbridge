@@ -243,7 +243,13 @@ class ServerService : Service() {
                     activeContext = "player"
                     broadcastContext()
 
-                    val playerIntent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                    val activityClass = if (finalMode == "internal_vlc") {
+                        com.playbridge.receiver.player.VlcPlayerActivity::class.java
+                    } else {
+                        com.playbridge.receiver.player.ExoPlayerActivity::class.java
+                    }
+
+                    val playerIntent = Intent(this, activityClass).apply {
                         putExtra(EXTRA_URL, command.url)
                         putExtra(EXTRA_TITLE, command.title)
                         putExtra(EXTRA_CONTENT_TYPE, command.contentType)
@@ -328,7 +334,15 @@ class ServerService : Service() {
                     command.items
                 )
 
-                val playerIntent = Intent(this, com.playbridge.receiver.player.PlayerActivity::class.java).apply {
+                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
+                val activityClass = if (tvPref == "internal_vlc") {
+                    com.playbridge.receiver.player.VlcPlayerActivity::class.java
+                } else {
+                    com.playbridge.receiver.player.ExoPlayerActivity::class.java
+                }
+
+                val playerIntent = Intent(this, activityClass).apply {
                     // Start with the first item (or startIndex)
                     val firstItem = command.items.getOrNull(command.startIndex) ?: command.items.firstOrNull()
                     if (firstItem != null) {

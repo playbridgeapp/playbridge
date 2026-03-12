@@ -17,6 +17,7 @@ media3 = "1.5.1"
 okhttp = "4.12.0"
 coil = "3.3.0"
 geckoview = "147.0.20260105210555"
+libvlc = "3.6.0-eap5"
 
 [libraries]
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
@@ -69,6 +70,9 @@ okhttp-urlconnection = { group = "com.squareup.okhttp3", name = "okhttp-urlconne
 
 # GeckoView
 geckoview-omni = { group = "org.mozilla.geckoview", name = "geckoview-omni", version.ref = "geckoview" }
+
+# LibVLC
+libvlc-all = { group = "org.videolan.android", name = "libvlc-all", version.ref = "libvlc" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
