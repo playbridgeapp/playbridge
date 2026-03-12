@@ -9,8 +9,12 @@ import android.os.Build
 import android.os.Bundle
 import android.view.SurfaceView
 import android.view.View
-import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ProgressBar
+import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
+import com.playbridge.receiver.R
 import com.playbridge.receiver.server.ServerService
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
@@ -22,6 +26,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var libVLC: LibVLC? = null
     private var mediaPlayer: MediaPlayer? = null
     private lateinit var surfaceView: SurfaceView
+    private lateinit var controlsManager: VlcControlsManager
 
     override fun play() { mediaPlayer?.play() }
     override fun pause() { mediaPlayer?.pause() }
@@ -35,17 +40,28 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             if (intent?.action == ServerService.ACTION_REMOTE) {
                 val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
                 when (key) {
-                    "up", "down", "left", "right", "enter", "back" -> {
-                        // Handle remote dpad keys
+                    "up", "down", "left", "right" -> {
+                        if (!controlsManager.isControlsVisible()) {
+                            controlsManager.showControls()
+                        }
                     }
-                    else -> {}
+                    "enter" -> {
+                        controlsManager.toggleControls()
+                    }
+                    "back" -> {
+                        if (controlsManager.isControlsVisible()) {
+                            controlsManager.hideControls()
+                        } else {
+                            finish()
+                        }
+                    }
                 }
             } else if (intent?.action == ServerService.ACTION_CONTROL) {
                 when (intent.getStringExtra(ServerService.EXTRA_COMMAND)) {
-                    "play_pause" -> if (isPlaying()) pause() else play()
+                    "play_pause" -> controlsManager.togglePlayPause()
                     "stop" -> finish()
-                    "seek_fwd" -> seekTo((getCurrentPosition() + 10000).coerceAtMost(getMediaDuration()))
-                    "seek_rev" -> seekTo((getCurrentPosition() - 10000).coerceAtLeast(0))
+                    "seek_fwd" -> controlsManager.onSeekForward()
+                    "seek_rev" -> controlsManager.onSeekBackward()
                 }
             }
         }
@@ -54,23 +70,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Setup simple layout for VLC
-        val frameLayout = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-            setBackgroundColor(0xFF000000.toInt())
-        }
-
-        surfaceView = SurfaceView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        }
-        frameLayout.addView(surfaceView)
-        setContentView(frameLayout)
+        setContentView(R.layout.activity_vlc_player)
+        surfaceView = findViewById(R.id.surface_view)
 
         // Setup VLC
         val args = ArrayList<String>().apply {
@@ -89,6 +90,26 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         // Set video scale to 0 (fit to screen)
         mediaPlayer?.scale = 0f
+
+        controlsManager = VlcControlsManager(
+            controlsRoot = findViewById(R.id.controls_root),
+            controlsPanel = findViewById(R.id.controls_panel),
+            seekBar = findViewById(R.id.player_seekbar),
+            playPauseButton = findViewById(R.id.btn_play_pause),
+            streamInfoText = findViewById(R.id.tv_stream_info),
+            elapsedText = findViewById(R.id.tv_elapsed),
+            remainingText = findViewById(R.id.tv_remaining),
+            titleText = findViewById(R.id.title_text),
+            bufferingSpinner = findViewById(R.id.buffering_spinner),
+            playerProvider = { mediaPlayer },
+            tracksButton = findViewById(R.id.btn_tracks),
+            playlistButton = findViewById(R.id.btn_playlist),
+            prevButton = findViewById(R.id.btn_prev),
+            nextButton = findViewById(R.id.btn_next),
+            filterButton = findViewById(R.id.btn_filter)
+        )
+
+        controlsManager.attachPlayer()
 
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
@@ -125,6 +146,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         if (title != null) {
             Toast.makeText(this, title, Toast.LENGTH_SHORT).show()
+            controlsManager.setTitle(title)
         }
 
         playVideo(url, headers)
@@ -162,6 +184,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(remoteReceiver)
+        controlsManager.detachPlayer()
         mediaPlayer?.vlcVout?.apply {
             removeCallback(this@VlcPlayerActivity)
             detachViews()
@@ -180,6 +203,51 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     override fun onSurfacesDestroyed(vout: IVLCVout?) {}
+
+    // Handle physical remote/keyboard events
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        when (keyCode) {
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+            android.view.KeyEvent.KEYCODE_ENTER,
+            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (!controlsManager.isControlsVisible()) {
+                    controlsManager.showControls()
+                    return true
+                }
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_UP,
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (!controlsManager.isControlsVisible()) {
+                    controlsManager.showControls()
+                    return true
+                }
+            }
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                controlsManager.togglePlayPause()
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                mediaPlayer?.play()
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                mediaPlayer?.pause()
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (controlsManager.isControlsVisible()) {
+            controlsManager.hideControls()
+        } else {
+            super.onBackPressed()
+        }
+    }
 
     override fun onResume() {
         super.onResume()
