@@ -725,6 +725,42 @@ class PlayerActivity : ComponentActivity() {
                 return
             }
 
+            // Unrecognized Input Format (e.g. WMV) — Prompt for external player
+            val isUnrecognizedFormat = error.cause is androidx.media3.exoplayer.source.UnrecognizedInputFormatException ||
+                                       (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
+            if (isUnrecognizedFormat) {
+                FileLogger.e(TAG, "Unrecognized format detected, prompting for external player")
+                val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString() ?: ""
+                val currentTitle = player?.currentMediaItem?.mediaMetadata?.title?.toString()
+
+                // Pause player just in case, though it's likely already stopped due to the error
+                player?.pause()
+
+                runOnUiThread {
+                    android.app.AlertDialog.Builder(this@PlayerActivity)
+                        .setTitle("Format Not Supported")
+                        .setMessage("This video format is not supported by the internal player. Would you like to play it in an external player?")
+                        .setPositiveButton("Yes") { _, _ ->
+                            launchExternalPlayer(currentUrl, currentTitle)
+                            finish()
+                        }
+                        .setNegativeButton("No") { dialog, _ ->
+                            dialog.dismiss()
+                            // If it's part of a playlist, we can skip it. Otherwise, finish.
+                            if (playlistItems.isNotEmpty()) {
+                                playNextInPlaylist()
+                            } else {
+                                finish()
+                            }
+                        }
+                        .setOnCancelListener {
+                            finish()
+                        }
+                        .show()
+                }
+                return
+            }
+
             FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
 
             // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found, Timeout)
@@ -1300,6 +1336,27 @@ class PlayerActivity : ComponentActivity() {
             player.seekTo(currentWindowIndex, currentPos)
             player.prepare()
             player.playWhenReady = playWhenReady
+        }
+    }
+
+    private fun launchExternalPlayer(url: String, title: String?) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(android.net.Uri.parse(url), "video/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                title?.let {
+                    putExtra(Intent.EXTRA_TITLE, it)
+                    putExtra("title", it)
+                }
+            }
+            val chooser = Intent.createChooser(intent, "Play with...")
+            startActivity(chooser)
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Failed to launch external player", e)
+            runOnUiThread {
+                android.widget.Toast.makeText(this, "Could not find an external player", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 

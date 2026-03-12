@@ -58,12 +58,20 @@ class ContentSniffer {
     }
 
     /**
-     * Fetches the first few bytes of [url] to detect content type by signature.
-     * Currently detects HLS streams (#EXTM3U header).
+     * Attempts to infer the content type from the URL extension.
+     * If unknown, fetches the first few bytes to detect content type by signature.
      *
      * @return detected MIME type, or null if sniffing failed or type is unknown.
      */
     suspend fun sniffContent(url: String, headers: Map<String, String>?): String? {
+        // First try to infer from URL to avoid unnecessary network request and
+        // prevent ExoPlayer from falling back to byte sniffing (which can crash FLVExtractor)
+        val inferredMimeType = inferMimeTypeFromUrl(url)
+        if (inferredMimeType != null) {
+            Log.i(TAG, "Inferred MIME type from URL: $inferredMimeType")
+            return inferredMimeType
+        }
+
         return withContext(Dispatchers.IO) {
             try {
                 // Pass headers to the client so the interceptor applies them
@@ -113,5 +121,29 @@ class ContentSniffer {
             }
             return@withContext null
         }
+    }
+
+    private fun inferMimeTypeFromUrl(url: String): String? {
+        try {
+            // Check both the base URL path and query parameters (like ?n=filename.mp4)
+            val uri = android.net.Uri.parse(url)
+            val path = uri.path?.lowercase() ?: ""
+            val nParam = uri.getQueryParameter("n")?.lowercase() ?: ""
+
+            val checkString = if (nParam.isNotEmpty() && nParam.contains(".")) nParam else path
+
+            when {
+                checkString.endsWith(".mp4") -> return androidx.media3.common.MimeTypes.VIDEO_MP4
+                checkString.endsWith(".mkv") -> return androidx.media3.common.MimeTypes.VIDEO_MATROSKA
+                checkString.endsWith(".webm") -> return androidx.media3.common.MimeTypes.VIDEO_WEBM
+                checkString.endsWith(".avi") -> return androidx.media3.common.MimeTypes.VIDEO_AVI
+                checkString.endsWith(".wmv") -> return "video/x-ms-wmv"
+                checkString.endsWith(".flv") -> return androidx.media3.common.MimeTypes.VIDEO_FLV
+                checkString.endsWith(".m3u8") || checkString.endsWith(".m3u") -> return androidx.media3.common.MimeTypes.APPLICATION_M3U8
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse URL for MIME inference: ${e.message}")
+        }
+        return null
     }
 }
