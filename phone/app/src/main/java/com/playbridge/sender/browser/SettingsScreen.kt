@@ -43,6 +43,9 @@ import kotlinx.serialization.json.Json
 
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.library.AddonRepository
+import org.mozilla.geckoview.GeckoSession
+import mozilla.components.browser.state.state.TabSessionState
+import mozilla.components.browser.state.state.ContentState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,7 +80,10 @@ fun SettingsScreen(
     var exportTvDefaults by remember { mutableStateOf(true) }
     var exportUiPrefs by remember { mutableStateOf(true) }
     var exportAddons by remember { mutableStateOf(true) }
+    var exportTabs by remember { mutableStateOf(true) }
     var pendingExportJson by remember { mutableStateOf("") }
+    var showImportTabsDialog by remember { mutableStateOf(false) }
+    var importedTabsToRestore by remember { mutableStateOf<List<ExportedTab>?>(null) }
 
     val scope = rememberCoroutineScope()
 
@@ -154,7 +160,28 @@ fun SettingsScreen(
                 }
 
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Settings imported successfully", Toast.LENGTH_SHORT).show()
+                    if (imported.tabs != null && imported.tabs.isNotEmpty() && Components.isEngineInitialized()) {
+                        val currentUrls = Components.store.state.tabs.map { it.content.url }
+                        val hasDuplicates = imported.tabs.any { it.url in currentUrls }
+
+                        if (hasDuplicates) {
+                            importedTabsToRestore = imported.tabs
+                            showImportTabsDialog = true
+                        } else {
+                            // Restore directly without dialog
+                            val sessionTabs = imported.tabs.map { tab ->
+                                TabSessionState(
+                                    id = tab.id,
+                                    content = ContentState(url = tab.url, title = tab.title ?: ""),
+                                    parentId = tab.parentId
+                                )
+                            }
+                            Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                            Toast.makeText(context, "Settings imported, restoring tabs...", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        Toast.makeText(context, "Settings imported successfully", Toast.LENGTH_SHORT).show()
+                    }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -193,6 +220,18 @@ fun SettingsScreen(
             try {
                 val addons = if (exportAddons) addonDao.getAllSync() else emptyList()
                 val addonUrls = addons.map { it.manifestUrl }
+                val database = DatabaseProvider.getDatabase(context)
+
+                val currentTabs = if (exportTabs) {
+                    database.tabDao().getAll().map { entity ->
+                        ExportedTab(
+                            id = entity.id,
+                            url = entity.url,
+                            title = entity.title,
+                            parentId = entity.parentId
+                        )
+                    }
+                } else null
 
                 val exported = ExportedSettings(
                     showInbuiltExtensions = if (exportUiPrefs) prefs.getBoolean("show_inbuilt_extensions", false) else null,
@@ -201,7 +240,8 @@ fun SettingsScreen(
                     tmdbApiKey = if (exportTmdb) tmdbPrefs.getString("tmdb_api_key", "") else null,
                     tvPlayerMode = if (exportTvDefaults) prefs.getString("tv_player_mode", "tv") else null,
                     tvBrowserMode = if (exportTvDefaults) prefs.getString("tv_browser_mode", "tv") else null,
-                    addonUrls = if (exportAddons) addonUrls else emptyList()
+                    addonUrls = if (exportAddons) addonUrls else emptyList(),
+                    tabs = currentTabs
                 )
 
                 val jsonString = Json {
@@ -643,6 +683,57 @@ fun SettingsScreen(
         }
     }
 
+    if (showImportTabsDialog && importedTabsToRestore != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showImportTabsDialog = false
+                importedTabsToRestore = null
+            },
+            title = { Text("Duplicate Tabs Found") },
+            text = { Text("Some of the imported tabs are already open. What would you like to do?") },
+            confirmButton = {
+                Button(onClick = {
+                    showImportTabsDialog = false
+                    val sessionTabs = importedTabsToRestore!!.map { tab ->
+                        TabSessionState(
+                            id = tab.id,
+                            content = ContentState(url = tab.url, title = tab.title ?: ""),
+                            parentId = tab.parentId
+                        )
+                    }
+                    Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                    importedTabsToRestore = null
+                }) {
+                    Text("Import All")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = {
+                    showImportTabsDialog = false
+                    val currentUrls = Components.store.state.tabs.map { it.content.url }
+                    val newTabs = importedTabsToRestore!!.filter { it.url !in currentUrls }
+
+                    if (newTabs.isNotEmpty()) {
+                        val sessionTabs = newTabs.map { tab ->
+                            TabSessionState(
+                                id = tab.id,
+                                content = ContentState(url = tab.url, title = tab.title ?: ""),
+                                parentId = tab.parentId
+                            )
+                        }
+                        Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                        Toast.makeText(context, "Imported ${newTabs.size} new tabs", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "No new tabs to import", Toast.LENGTH_SHORT).show()
+                    }
+                    importedTabsToRestore = null
+                }) {
+                    Text("Skip Duplicates")
+                }
+            }
+        )
+    }
+
     if (showExportDialog) {
         AlertDialog(
             onDismissRequest = { showExportDialog = false },
@@ -671,6 +762,10 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = exportUiPrefs, onCheckedChange = { exportUiPrefs = it })
                         Text("UI Preferences (e.g., extensions toggle)")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportTabs, onCheckedChange = { exportTabs = it })
+                        Text("Current Open Tabs")
                     }
                 }
             },
