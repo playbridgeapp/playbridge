@@ -3,6 +3,8 @@ package com.playbridge.sender.browser
 import android.content.Context
 import android.os.Environment
 import android.widget.Toast
+import android.content.ClipboardManager
+import android.content.ClipData
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -13,6 +15,8 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,6 +36,16 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import com.playbridge.sender.data.debrid.DebridRepository
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+import com.playbridge.sender.data.history.DatabaseProvider
+import com.playbridge.sender.data.library.AddonRepository
+import org.mozilla.geckoview.GeckoSession
+import mozilla.components.browser.state.state.TabSessionState
+import mozilla.components.browser.state.state.ContentState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,13 +57,217 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
+    val tmdbPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
+
+    val addonDao = remember { DatabaseProvider.getDatabase(context).addonDao() }
+    val addonRepository = remember { AddonRepository(addonDao) }
+
     var showInbuiltExtensions by remember {
         mutableStateOf(prefs.getBoolean("show_inbuilt_extensions", false))
     }
+
+    // Variables for forcing recomposition / state update on import
+    var debridProviderTrigger by remember { mutableStateOf(0) }
+    var tvPlayerTrigger by remember { mutableStateOf(0) }
+    var tvBrowserTrigger by remember { mutableStateOf(0) }
+    var tmdbTrigger by remember { mutableStateOf(0) }
+
+    // Export Selection State
+    var showExportDialog by remember { mutableStateOf(false) }
+    var exportAction by remember { mutableStateOf<String?>(null) } // "file" or "clipboard"
+    var exportDebrid by remember { mutableStateOf(true) }
+    var exportTmdb by remember { mutableStateOf(true) }
+    var exportTvDefaults by remember { mutableStateOf(true) }
+    var exportUiPrefs by remember { mutableStateOf(true) }
+    var exportAddons by remember { mutableStateOf(true) }
+    var exportTabs by remember { mutableStateOf(true) }
+    var pendingExportJson by remember { mutableStateOf("") }
+    var showImportTabsDialog by remember { mutableStateOf(false) }
+    var importedTabsToRestore by remember { mutableStateOf<List<ExportedTab>?>(null) }
+
     val scope = rememberCoroutineScope()
+
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    if (pendingExportJson.isNotEmpty()) {
+                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            outputStream.write(pendingExportJson.toByteArray())
+                        }
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Settings exported successfully", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "No settings selected to export", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to export settings: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    pendingExportJson = "" // Reset after export
+                }
+            }
+        }
+    }
+    var isImporting by remember { mutableStateOf(false) }
+
+    val importSettings = { jsonString: String ->
+        isImporting = true
+        scope.launch(Dispatchers.IO) {
+            try {
+                val imported = Json { ignoreUnknownKeys = true }.decodeFromString<ExportedSettings>(jsonString)
+
+                // Update standard preferences
+                if (imported.showInbuiltExtensions != null) {
+                    prefs.edit().putBoolean("show_inbuilt_extensions", imported.showInbuiltExtensions).apply()
+                    showInbuiltExtensions = imported.showInbuiltExtensions
+                }
+                if (imported.tvPlayerMode != null) {
+                    prefs.edit().putString("tv_player_mode", imported.tvPlayerMode).apply()
+                    tvPlayerTrigger++
+                }
+                if (imported.tvBrowserMode != null) {
+                    prefs.edit().putString("tv_browser_mode", imported.tvBrowserMode).apply()
+                    tvBrowserTrigger++
+                }
+
+                // Update TMDB key
+                if (imported.tmdbApiKey != null) {
+                    tmdbPrefs.edit().putString("tmdb_api_key", imported.tmdbApiKey).apply()
+                    tmdbTrigger++
+                }
+
+                // Update Debrid settings
+                        val tmdbEdit = tmdbPrefs.edit()
+                if (imported.debridProvider != null) {
+                            tmdbEdit.putString(DebridRepository.KEY_DEBRID_PROVIDER, imported.debridProvider)
+                }
+                if (imported.debridApiKey != null) {
+                            tmdbEdit.putString(DebridRepository.KEY_DEBRID_API_KEY, imported.debridApiKey)
+                }
+                        tmdbEdit.apply()
+                debridProviderTrigger++
+
+                // Install Addons
+                if (imported.addonUrls.isNotEmpty()) {
+                    imported.addonUrls.forEach { url ->
+                        addonRepository.installAddon(url)
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (imported.tabs != null && imported.tabs.isNotEmpty() && Components.isEngineInitialized()) {
+                        val currentUrls = Components.store.state.tabs.map { it.content.url }
+                        val hasDuplicates = imported.tabs.any { it.url in currentUrls }
+
+                        if (hasDuplicates) {
+                            importedTabsToRestore = imported.tabs
+                            showImportTabsDialog = true
+                        } else {
+                            // Restore directly without dialog
+                            val sessionTabs = imported.tabs.map { tab ->
+                                TabSessionState(
+                                    id = tab.id,
+                                    content = ContentState(url = tab.url, title = tab.title ?: ""),
+                                    parentId = tab.parentId
+                                )
+                            }
+                            Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                            Toast.makeText(context, "Settings imported, restoring tabs...", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        Toast.makeText(context, "Settings imported successfully", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Failed to import settings: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                isImporting = false
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val jsonString = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        inputStream.bufferedReader().use { it.readText() }
+                    }
+                    if (jsonString != null) {
+                        importSettings(jsonString)
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to read file: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
     var isDownloading by remember { mutableStateOf(false) }
     var isClearing by remember { mutableStateOf(false) }
     val isTvAvailable = tvIp != null && tvPort != null
+
+    val triggerExport = {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val addons = if (exportAddons) addonDao.getAllSync() else emptyList()
+                val addonUrls = addons.map { it.manifestUrl }
+                val database = DatabaseProvider.getDatabase(context)
+
+                val currentTabs = if (exportTabs) {
+                    database.tabDao().getAll().map { entity ->
+                        ExportedTab(
+                            id = entity.id,
+                            url = entity.url,
+                            title = entity.title,
+                            parentId = entity.parentId
+                        )
+                    }
+                } else null
+
+                val exported = ExportedSettings(
+                    showInbuiltExtensions = if (exportUiPrefs) prefs.getBoolean("show_inbuilt_extensions", false) else null,
+                    debridProvider = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) else null,
+                    debridApiKey = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") else null,
+                    tmdbApiKey = if (exportTmdb) tmdbPrefs.getString("tmdb_api_key", "") else null,
+                    tvPlayerMode = if (exportTvDefaults) prefs.getString("tv_player_mode", "tv") else null,
+                    tvBrowserMode = if (exportTvDefaults) prefs.getString("tv_browser_mode", "tv") else null,
+                    addonUrls = if (exportAddons) addonUrls else emptyList(),
+                    tabs = currentTabs
+                )
+
+                val jsonString = Json {
+                    prettyPrint = true
+                    encodeDefaults = false // Omits null values
+                }.encodeToString(exported)
+
+                withContext(Dispatchers.Main) {
+                    if (exportAction == "clipboard") {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("PlayBridge Settings", jsonString)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "Settings copied to clipboard", Toast.LENGTH_SHORT).show()
+                    } else if (exportAction == "file") {
+                        pendingExportJson = jsonString
+                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                        exportLauncher.launch("playbridge_settings_$timestamp.json")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Failed to prepare export: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp),
@@ -73,6 +291,75 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Existing setting: Show Inbuilt Extensions
+            // Import / Export Section
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        importLauncher.launch("*/*")
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = !isImporting
+                ) {
+                    if (isImporting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Importing…")
+                    } else {
+                        Text("Import")
+                    }
+                }
+
+                IconButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clipData = clipboard.primaryClip
+                        if (clipData != null && clipData.itemCount > 0) {
+                            val text = clipData.getItemAt(0).text?.toString()
+                            if (text != null) {
+                                importSettings(text)
+                            } else {
+                                Toast.makeText(context, "Clipboard does not contain text", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    enabled = !isImporting
+                ) {
+                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste settings from clipboard")
+                }
+
+                Button(
+                    onClick = {
+                        exportAction = "file"
+                        showExportDialog = true
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Export")
+                }
+
+                IconButton(
+                    onClick = {
+                        exportAction = "clipboard"
+                        showExportDialog = true
+                    }
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy settings to clipboard")
+                }
+            }
+
+            HorizontalDivider()
+
             // Existing setting: Show Inbuilt Extensions
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -107,8 +394,8 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.titleMedium
             )
 
-            var tmdbApiKey by remember {
-                mutableStateOf(prefs.getString("tmdb_api_key", "") ?: "")
+            var tmdbApiKey by remember(tmdbTrigger) {
+                mutableStateOf(tmdbPrefs.getString("tmdb_api_key", "") ?: "")
             }
             var showApiKey by remember { mutableStateOf(false) }
 
@@ -116,7 +403,7 @@ fun SettingsScreen(
                 value = tmdbApiKey,
                 onValueChange = { newKey ->
                     tmdbApiKey = newKey
-                    prefs.edit().putString("tmdb_api_key", newKey.trim()).apply()
+                    tmdbPrefs.edit().putString("tmdb_api_key", newKey.trim()).apply()
                 },
                 label = { Text("TMDB API Key") },
                 placeholder = { Text("Enter your TMDB API key") },
@@ -149,11 +436,11 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.titleMedium
             )
 
-            var debridProvider by remember {
-                mutableStateOf(prefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) ?: DebridRepository.PROVIDER_NONE)
+            var debridProvider by remember(debridProviderTrigger) {
+                mutableStateOf(tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) ?: DebridRepository.PROVIDER_NONE)
             }
-            var debridApiKey by remember {
-                mutableStateOf(prefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") ?: "")
+            var debridApiKey by remember(debridProviderTrigger) {
+                mutableStateOf(tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") ?: "")
             }
             var debridExpanded by remember { mutableStateOf(false) }
             val debridOptions = listOf(
@@ -196,7 +483,7 @@ fun SettingsScreen(
                             onClick = {
                                 debridProvider = selectionOption
                                 debridExpanded = false
-                                prefs.edit().putString(DebridRepository.KEY_DEBRID_PROVIDER, selectionOption).apply()
+                                tmdbPrefs.edit().putString(DebridRepository.KEY_DEBRID_PROVIDER, selectionOption).apply()
                             }
                         )
                     }
@@ -209,7 +496,7 @@ fun SettingsScreen(
                     value = debridApiKey,
                     onValueChange = { newKey ->
                         debridApiKey = newKey
-                        prefs.edit().putString(DebridRepository.KEY_DEBRID_API_KEY, newKey.trim()).apply()
+                        tmdbPrefs.edit().putString(DebridRepository.KEY_DEBRID_API_KEY, newKey.trim()).apply()
                     },
                     label = { Text("$debridProvider API Key") },
                     placeholder = { Text("Enter API key") },
@@ -236,7 +523,7 @@ fun SettingsScreen(
             )
 
             // Video Player setting
-            var playerMode by remember {
+            var playerMode by remember(tvPlayerTrigger) {
                 mutableStateOf(prefs.getString("tv_player_mode", "tv") ?: "tv")
             }
             var playerExpanded by remember { mutableStateOf(false) }
@@ -286,7 +573,7 @@ fun SettingsScreen(
             }
 
             // Browser Engine setting
-            var browserMode by remember {
+            var browserMode by remember(tvBrowserTrigger) {
                 mutableStateOf(prefs.getString("tv_browser_mode", "tv") ?: "tv")
             }
             var browserExpanded by remember { mutableStateOf(false) }
@@ -394,6 +681,108 @@ fun SettingsScreen(
                 Text(if (isClearing) "Clearing…" else "Clear TV Logs")
             }
         }
+    }
+
+    if (showImportTabsDialog && importedTabsToRestore != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showImportTabsDialog = false
+                importedTabsToRestore = null
+            },
+            title = { Text("Duplicate Tabs Found") },
+            text = { Text("Some of the imported tabs are already open. What would you like to do?") },
+            confirmButton = {
+                Button(onClick = {
+                    showImportTabsDialog = false
+                    val sessionTabs = importedTabsToRestore!!.map { tab ->
+                        TabSessionState(
+                            id = tab.id,
+                            content = ContentState(url = tab.url, title = tab.title ?: ""),
+                            parentId = tab.parentId
+                        )
+                    }
+                    Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                    importedTabsToRestore = null
+                }) {
+                    Text("Import All")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = {
+                    showImportTabsDialog = false
+                    val currentUrls = Components.store.state.tabs.map { it.content.url }
+                    val newTabs = importedTabsToRestore!!.filter { it.url !in currentUrls }
+
+                    if (newTabs.isNotEmpty()) {
+                        val sessionTabs = newTabs.map { tab ->
+                            TabSessionState(
+                                id = tab.id,
+                                content = ContentState(url = tab.url, title = tab.title ?: ""),
+                                parentId = tab.parentId
+                            )
+                        }
+                        Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                        Toast.makeText(context, "Imported ${newTabs.size} new tabs", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "No new tabs to import", Toast.LENGTH_SHORT).show()
+                    }
+                    importedTabsToRestore = null
+                }) {
+                    Text("Skip Duplicates")
+                }
+            }
+        )
+    }
+
+    if (showExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = { Text("Export Settings") },
+            text = {
+                Column {
+                    Text("Select which settings to export:")
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportDebrid, onCheckedChange = { exportDebrid = it })
+                        Text("Debrid Credentials")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportTmdb, onCheckedChange = { exportTmdb = it })
+                        Text("TMDB Credentials")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportAddons, onCheckedChange = { exportAddons = it })
+                        Text("Stremio Addons")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportTvDefaults, onCheckedChange = { exportTvDefaults = it })
+                        Text("TV Player / Browser Defaults")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportUiPrefs, onCheckedChange = { exportUiPrefs = it })
+                        Text("UI Preferences (e.g., extensions toggle)")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportTabs, onCheckedChange = { exportTabs = it })
+                        Text("Current Open Tabs")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showExportDialog = false
+                    triggerExport()
+                }) {
+                    Text("Export")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showExportDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
