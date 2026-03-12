@@ -5,6 +5,7 @@ import android.net.Uri
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.view.SurfaceView
@@ -206,38 +207,95 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     // Handle physical remote/keyboard events
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
-        when (keyCode) {
+        if (event?.action != android.view.KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
+
+        val isControlsVisible = controlsManager.isControlsVisible()
+
+        if (isControlsVisible) {
+            // When overlay is visible, let the system handle D-pad navigation for focus,
+            // except for DPAD_UP/DPAD_DOWN which we ignore to prevent focus jumping off controls.
+            return when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_UP,
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> true
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                android.view.KeyEvent.KEYCODE_ENTER,
+                android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> super.onKeyDown(keyCode, event)
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    controlsManager.togglePlayPause()
+                    true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                    mediaPlayer?.play()
+                    true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    mediaPlayer?.pause()
+                    true
+                }
+                else -> super.onKeyDown(keyCode, event)
+            }
+        }
+
+        // When overlay is hidden, D-pad controls playback (ExoPlayer parity)
+        return when (keyCode) {
             android.view.KeyEvent.KEYCODE_DPAD_CENTER,
             android.view.KeyEvent.KEYCODE_ENTER,
             android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                if (!controlsManager.isControlsVisible()) {
-                    controlsManager.showControls()
-                    return true
-                }
+                mediaPlayer?.pause()
+                controlsManager.showControls()
+                true
             }
-            android.view.KeyEvent.KEYCODE_DPAD_UP,
-            android.view.KeyEvent.KEYCODE_DPAD_DOWN,
-            android.view.KeyEvent.KEYCODE_DPAD_LEFT,
-            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (!controlsManager.isControlsVisible()) {
-                    controlsManager.showControls()
-                    return true
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                val repeatCount = event.repeatCount
+                val multiplier = if (repeatCount > 10) 5 else 1
+                val player = mediaPlayer
+                if (player != null) {
+                    val newTime = (player.time - 10000L * multiplier).coerceAtLeast(0)
+                    player.time = newTime
                 }
+                controlsManager.showControls()
+                true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                val repeatCount = event.repeatCount
+                val multiplier = if (repeatCount > 10) 5 else 1
+                val player = mediaPlayer
+                if (player != null) {
+                    val length = player.length
+                    if (length > 0) {
+                        val newTime = (player.time + 10000L * multiplier).coerceAtMost(length)
+                        player.time = newTime
+                    }
+                }
+                controlsManager.showControls()
+                true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
+                true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+                true
             }
             android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 controlsManager.togglePlayPause()
-                return true
+                true
             }
             android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
                 mediaPlayer?.play()
-                return true
+                true
             }
             android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                 mediaPlayer?.pause()
-                return true
+                true
             }
+            else -> super.onKeyDown(keyCode, event)
         }
-        return super.onKeyDown(keyCode, event)
     }
 
     @Deprecated("Deprecated in Java")
