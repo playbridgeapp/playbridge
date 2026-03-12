@@ -91,13 +91,21 @@ class MainActivity : ComponentActivity() {
         // Preload ad blocker filters in background so they're ready when browser opens
         com.playbridge.receiver.browser.AdBlocker.preload(applicationContext)
         
+        val cameFromBrowser = intent.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)
+
         setContent {
             PlayBridgeTVTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     shape = RectangleShape
                 ) {
-                    MainContent(pairingStore = pairingStore, historyStore = historyStore, initialScreenOverride = initialScreenOverride)
+                    MainContent(
+                        pairingStore = pairingStore,
+                        historyStore = historyStore,
+                        initialScreenOverride = initialScreenOverride,
+                        cameFromBrowser = cameFromBrowser,
+                        onFinishActivity = { finish() }
+                    )
                 }
             }
         }
@@ -124,7 +132,13 @@ enum class Screen {
 }
 
 @Composable
-fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore, initialScreenOverride: Screen?) {
+fun MainContent(
+    pairingStore: PairingStore,
+    historyStore: HistoryStore,
+    initialScreenOverride: Screen?,
+    cameFromBrowser: Boolean,
+    onFinishActivity: () -> Unit
+) {
     // Initial State determination
     var currentScreen by remember { mutableStateOf(initialScreenOverride ?: Screen.Home) }
     var isInitialCheckDone by remember { mutableStateOf(initialScreenOverride != null) }
@@ -232,22 +246,32 @@ fun MainContent(pairingStore: PairingStore, historyStore: HistoryStore, initialS
         }
         Screen.Downloads -> {
             com.playbridge.receiver.ui.DownloadsScreen(
-                onBack = { currentScreen = Screen.Settings }
+                onBack = {
+                    if (cameFromBrowser) {
+                        onFinishActivity()
+                    } else {
+                        currentScreen = Screen.Settings
+                    }
+                }
             )
         }
     }
     
     // Handle back button for navigation
-    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library && pairedDevices.isNotEmpty()) {
+    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library && pairedDevices.isNotEmpty() && currentScreen != Screen.Downloads) {
         currentScreen = Screen.Library
     }
     // Handle back from Settings to Library
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Settings) {
         currentScreen = Screen.Library
     }
-    // Handle back from Downloads to Settings
+    // Handle back from Downloads to Settings or Finish Activity
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Downloads) {
-        currentScreen = Screen.Settings
+        if (cameFromBrowser) {
+            onFinishActivity()
+        } else {
+            currentScreen = Screen.Settings
+        }
     }
     // Also handle back from Pairing to Home if no history
     androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Pairing && pairedDevices.isEmpty()) {

@@ -94,11 +94,21 @@ fun DownloadsScreen(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            Text(
-                text = "Downloads",
-                style = MaterialTheme.typography.displaySmall,
-                color = Color.White
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Downloads",
+                    style = MaterialTheme.typography.displaySmall,
+                    color = Color.White
+                )
+
+                Button(onClick = onBack) {
+                    Text("Back")
+                }
+            }
 
             if (downloads.isEmpty()) {
                 Box(
