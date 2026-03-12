@@ -209,10 +209,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
         if (event?.action != android.view.KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
 
-        val isControlsVisible = controlsManager.isControlsVisible()
+        val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
 
-        if (isControlsVisible) {
-            // When overlay is visible, let the system handle D-pad navigation for focus,
+        if (isFullOverlayVisible) {
+            // When full overlay is visible, let the system handle D-pad navigation for focus,
             // except for DPAD_UP/DPAD_DOWN which we ignore to prevent focus jumping off controls.
             return when (keyCode) {
                 android.view.KeyEvent.KEYCODE_DPAD_UP,
@@ -238,7 +238,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             }
         }
 
-        // When overlay is hidden, D-pad controls playback (ExoPlayer parity)
+        // When full overlay is hidden (or only seek UI is visible), D-pad controls playback (ExoPlayer parity)
         return when (keyCode) {
             android.view.KeyEvent.KEYCODE_DPAD_CENTER,
             android.view.KeyEvent.KEYCODE_ENTER,
@@ -255,7 +255,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     val newTime = (player.time - 10000L * multiplier).coerceAtLeast(0)
                     player.time = newTime
                 }
-                controlsManager.showControls()
+                controlsManager.showSeekUI()
                 true
             }
             android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
@@ -269,7 +269,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         player.time = newTime
                     }
                 }
-                controlsManager.showControls()
+                controlsManager.showSeekUI()
                 true
             }
             android.view.KeyEvent.KEYCODE_DPAD_UP -> {

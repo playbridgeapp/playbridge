@@ -28,11 +28,12 @@ class VlcControlsManager(
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var isControlsVisible = false
+    private var isSeekOnlyVisible = false
     private val autoHideRunnable = Runnable { hideControls() }
     private val updateProgressRunnable = object : Runnable {
         override fun run() {
             updateProgress()
-            if (isControlsVisible) {
+            if (isControlsVisible || isSeekOnlyVisible) {
                 handler.postDelayed(this, 1000)
             }
         }
@@ -109,7 +110,12 @@ class VlcControlsManager(
 
     fun showControls() {
         isControlsVisible = true
+        isSeekOnlyVisible = false
+
         controlsRoot.visibility = View.VISIBLE
+        controlsPanel.visibility = View.VISIBLE
+        titleText.visibility = View.VISIBLE
+        seekBar.visibility = View.VISIBLE
 
         // Reset hide timer
         handler.removeCallbacks(autoHideRunnable)
@@ -124,8 +130,29 @@ class VlcControlsManager(
         playPauseButton.requestFocus()
     }
 
+    fun showSeekUI() {
+        isControlsVisible = false
+        isSeekOnlyVisible = true
+
+        controlsRoot.visibility = View.VISIBLE
+        controlsPanel.visibility = View.GONE
+        titleText.visibility = View.GONE
+        streamInfoText.visibility = View.GONE
+        seekBar.visibility = View.VISIBLE
+
+        // Reset hide timer
+        handler.removeCallbacks(autoHideRunnable)
+        handler.postDelayed(autoHideRunnable, 3000) // Seek UI hides slightly faster
+
+        // Start updating progress
+        handler.removeCallbacks(updateProgressRunnable)
+        handler.post(updateProgressRunnable)
+    }
+
     fun hideControls() {
         isControlsVisible = false
+        isSeekOnlyVisible = false
+
         controlsRoot.visibility = View.GONE
         handler.removeCallbacks(updateProgressRunnable)
     }
@@ -153,7 +180,7 @@ class VlcControlsManager(
             player.time = newTime
             updateProgress()
         }
-        showControls()
+        showSeekUI()
     }
 
     fun onSeekBackward() {
@@ -161,10 +188,11 @@ class VlcControlsManager(
         val newTime = (player.time - 10000).coerceAtLeast(0)
         player.time = newTime
         updateProgress()
-        showControls()
+        showSeekUI()
     }
 
     fun isControlsVisible() = isControlsVisible
+    fun isFullOverlayVisible() = isControlsVisible
 
     private fun updateProgress() {
         val player = playerProvider() ?: return
