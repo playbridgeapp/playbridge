@@ -36,7 +36,8 @@ data class DebridFile(
     val isVideo: Boolean
         get() = path.lowercase().let { 
             it.endsWith(".mp4") || it.endsWith(".mkv") || it.endsWith(".avi") || 
-            it.endsWith(".wmv") || it.endsWith(".webm") || it.endsWith(".ts") 
+            it.endsWith(".wmv") || it.endsWith(".webm") || it.endsWith(".ts") ||
+            it.endsWith(".m4v") || it.endsWith(".3gp") || it.endsWith(".flv") || it.endsWith(".mov")
         }
 }
 
