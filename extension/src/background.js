@@ -240,7 +240,7 @@ browser.webRequest.onHeadersReceived.addListener(
             let detectedBy = 'unknown';
 
             const urlLower = details.url.toLowerCase().split('?')[0];
-            const isSegment = ['.ts', '.m4s', '.m4v'].some(ext => urlLower.endsWith(ext)) || urlLower.includes('/segment') || urlLower.includes('frag');
+            const isSegment = ['.ts', '.m4s'].some(ext => urlLower.endsWith(ext)) || urlLower.includes('/segment') || urlLower.includes('frag');
             if (isSegment) {
                 if (storedData) requestHeadersMap.delete(details.requestId);
                 return; // ignore fragments to save memory and CPU
@@ -249,7 +249,7 @@ browser.webRequest.onHeadersReceived.addListener(
             const isVideoContentType = VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
             const isM3u8Url = details.url.toLowerCase().includes('m3u8');
             
-            const hasVideoExtension = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv'].some(ext => urlLower.endsWith(ext));
+            const hasVideoExtension = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.m4v', '.wmv', '.3gp'].some(ext => urlLower.endsWith(ext));
             const hasSubtitleExtension = ['.vtt', '.srt'].some(ext => urlLower.endsWith(ext));
             
             const isVideoExtensionMatch = hasVideoExtension && (

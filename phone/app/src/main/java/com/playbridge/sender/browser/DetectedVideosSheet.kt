@@ -745,9 +745,14 @@ private fun getVideoType(video: DetectedVideo): String {
     return when {
         url.contains(".m3u8") -> "HLS"
         url.contains(".mpd") -> "DASH"
-        url.contains(".mp4") -> "MP4"
+        url.contains(".mp4") || url.contains(".m4v") -> "MP4"
         url.contains(".webm") -> "WebM"
         url.contains(".mkv") -> "MKV"
+        url.contains(".wmv") -> "WMV"
+        url.contains(".avi") -> "AVI"
+        url.contains(".flv") -> "FLV"
+        url.contains(".mov") -> "MOV"
+        url.contains(".3gp") -> "3GP"
         url.contains("googlevideo.com") -> "YouTube"
         video.contentType?.contains("mpegurl") == true -> "HLS"
         video.contentType?.contains("dash") == true -> "DASH"
@@ -762,7 +767,7 @@ private fun getTypeColor(type: String): androidx.compose.ui.graphics.Color {
         "HLS" -> MaterialTheme.colorScheme.primary
         "DASH" -> MaterialTheme.colorScheme.secondary
         "YouTube" -> MaterialTheme.colorScheme.error
-        "MP4" -> MaterialTheme.colorScheme.tertiary
+        "MP4", "MKV", "WebM", "WMV", "AVI", "FLV", "MOV", "3GP" -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.primary
     }
 }

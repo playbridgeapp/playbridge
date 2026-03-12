@@ -185,7 +185,7 @@ browser.webRequest.onHeadersReceived.addListener(
             const isM3u8Url = details.url.toLowerCase().includes('m3u8');
             
             // Check for common video extensions
-            const videoExtensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv'];
+            const videoExtensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.m4v', '.wmv', '.3gp'];
             const urlLower = details.url.toLowerCase().split('?')[0]; // Ignore query params
             const hasVideoExtension = videoExtensions.some(ext => urlLower.endsWith(ext));
             
