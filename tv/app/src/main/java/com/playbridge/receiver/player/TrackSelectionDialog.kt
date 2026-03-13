@@ -206,6 +206,35 @@ fun SubtitleTrackList(
         }
     }
 
+    // Embedded Tracks
+    val embeddedFormats = remember(tracks, trackSelectionParameters) {
+        val groups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+        var override: androidx.media3.common.TrackSelectionOverride? = null
+        for (group in groups) {
+            val o = trackSelectionParameters.overrides[group.mediaTrackGroup]
+            if (o != null) {
+                override = o
+                break
+            }
+        }
+
+        val list = mutableListOf<SelectableFormat>()
+        groups.forEach { group ->
+            for (i in 0 until group.length) {
+                val format = group.getTrackFormat(i)
+                val isSelected = if (override != null) {
+                    override.mediaTrackGroup == group.mediaTrackGroup &&
+                    override.trackIndices.contains(i)
+                } else {
+                    group.isTrackSelected(i)
+                }
+                val name = buildTrackName(format)
+                list.add(SelectableFormat(name, format, isSelected))
+            }
+        }
+        list
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -225,47 +254,21 @@ fun SubtitleTrackList(
             )
         }
 
-        // Embedded Tracks
-        val trackGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
-
-        var activeOverride: androidx.media3.common.TrackSelectionOverride? = null
-        for (group in trackGroups) {
-             val override = trackSelectionParameters.overrides[group.mediaTrackGroup]
-             if (override != null) {
-                 activeOverride = override
-                 break
-             }
-        }
-
-        if (trackGroups.isNotEmpty()) {
+        if (embeddedFormats.isNotEmpty()) {
             item {
                 Text("Embedded", color = Color.Gray, fontSize = 11.sp,
                     modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp))
             }
-            trackGroups.forEach { group ->
-                for (i in 0 until group.length) {
-                    val format = group.getTrackFormat(i)
-                    val isSelected = if (activeOverride != null) {
-                        activeOverride.mediaTrackGroup == group.mediaTrackGroup &&
-                        activeOverride.trackIndices.contains(i) &&
-                        currentSubtitleUrl == null
-                    } else {
-                        group.isTrackSelected(i) && currentSubtitleUrl == null
-                    }
-
-                    val name = buildTrackName(format)
-                    item {
-                        TrackItem(
-                            name = name,
-                            isSelected = isSelected,
-                            onClick = {
-                                onExternalSubtitleSelected(null)
-                                onTrackSelected(C.TRACK_TYPE_TEXT, format)
-                            },
-                            onFocus = { focusedSubtitleUrl = null }
-                        )
-                    }
-                }
+            items(embeddedFormats) { item ->
+                TrackItem(
+                    name = item.name,
+                    isSelected = item.isSelected && currentSubtitleUrl == null,
+                    onClick = {
+                        onExternalSubtitleSelected(null)
+                        onTrackSelected(C.TRACK_TYPE_TEXT, item.format)
+                    },
+                    onFocus = { focusedSubtitleUrl = null }
+                )
             }
         }
 
