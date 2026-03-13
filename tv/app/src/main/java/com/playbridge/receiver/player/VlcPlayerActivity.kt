@@ -15,8 +15,16 @@ import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.playbridge.receiver.R
 import com.playbridge.receiver.server.ServerService
+import com.playbridge.receiver.ui.theme.PlayBridgeTVTheme
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
@@ -28,6 +36,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var mediaPlayer: MediaPlayer? = null
     private lateinit var surfaceView: SurfaceView
     private lateinit var controlsManager: VlcControlsManager
+
+    // Settings state
+    private var subtitleUrls: List<String> = emptyList()
+    private var currentSubtitleUrl: String? = null
+    private var currentPlaybackSpeed: Float = 1.0f
+    private var currentVideoScalingMode: String = "Fit"
 
     override fun play() { mediaPlayer?.play() }
     override fun pause() { mediaPlayer?.pause() }
@@ -107,7 +121,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             playlistButton = findViewById(R.id.btn_playlist),
             prevButton = findViewById(R.id.btn_prev),
             nextButton = findViewById(R.id.btn_next),
-            filterButton = findViewById(R.id.btn_filter)
+            filterButton = findViewById(R.id.btn_filter),
+            onShowSettings = { showSettingsDialog() }
         )
 
         controlsManager.attachPlayer()
@@ -135,6 +150,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private fun handleIntent(intent: Intent) {
         val url = intent.getStringExtra(ServerService.EXTRA_URL)
         val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
+
+        val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+        if (subtitles != null) {
+            subtitleUrls = subtitles
+        }
 
         @Suppress("UNCHECKED_CAST")
         val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
@@ -180,6 +200,113 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         media.release()
 
         mediaPlayer?.play()
+    }
+
+    private fun showSettingsDialog() {
+        val player = mediaPlayer ?: return
+        val wasPlaying = player.isPlaying
+        if (wasPlaying) player.pause()
+
+        val audioTracks = player.audioTracks?.toList() ?: emptyList()
+        val currentAudioTrack = player.audioTrack
+
+        val subtitleTracks = player.spuTracks?.toList() ?: emptyList()
+        val currentSubtitleTrack = player.spuTrack
+
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        val composeView = androidx.compose.ui.platform.ComposeView(this)
+
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+
+        composeView.setContent {
+            PlayBridgeTVTheme {
+                // Reactive state for UI updates
+                var liveCurrentAudioTrack by remember { mutableStateOf(currentAudioTrack) }
+                var liveCurrentSubtitleTrack by remember { mutableStateOf(currentSubtitleTrack) }
+                var liveCurrentSubtitleUrl by remember { mutableStateOf(currentSubtitleUrl) }
+                var liveCurrentPlaybackSpeed by remember { mutableFloatStateOf(currentPlaybackSpeed) }
+                var liveCurrentVideoScalingMode by remember { mutableStateOf(currentVideoScalingMode) }
+
+                VlcTrackSelectionDialog(
+                    audioTracks = audioTracks,
+                    currentAudioTrack = liveCurrentAudioTrack,
+                    subtitleTracks = subtitleTracks,
+                    currentSubtitleTrack = liveCurrentSubtitleTrack,
+                    externalSubtitleUrls = subtitleUrls,
+                    currentExternalSubtitleUrl = liveCurrentSubtitleUrl,
+                    currentPlaybackSpeed = liveCurrentPlaybackSpeed,
+                    currentVideoScalingMode = liveCurrentVideoScalingMode,
+                    onDismiss = {
+                        dialog.dismiss()
+                    },
+                    onAudioTrackSelected = { id ->
+                        player.audioTrack = id
+                        liveCurrentAudioTrack = id
+                    },
+                    onSubtitleTrackSelected = { id ->
+                        player.spuTrack = id
+                        liveCurrentSubtitleTrack = id
+                        if (id != -1) {
+                            currentSubtitleUrl = null
+                            liveCurrentSubtitleUrl = null
+                        }
+                    },
+                    onExternalSubtitleSelected = { url ->
+                        currentSubtitleUrl = url
+                        liveCurrentSubtitleUrl = url
+                        if (url != null) {
+                            player.spuTrack = -1 // Disable embedded
+                            liveCurrentSubtitleTrack = -1
+                            // In LibVLC Android bindings, the enum is IMedia.Slave.Type
+                            player.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, android.net.Uri.parse(url), true)
+                        }
+                    },
+                    onPlaybackSpeedSelected = { speed ->
+                        currentPlaybackSpeed = speed
+                        liveCurrentPlaybackSpeed = speed
+                        player.rate = speed
+                    },
+                    onVideoScalingSelected = { mode ->
+                        currentVideoScalingMode = mode
+                        liveCurrentVideoScalingMode = mode
+                        when (mode) {
+                            "Fit" -> {
+                                player.scale = 0f
+                                player.aspectRatio = null
+                            }
+                            "Fill" -> {
+                                player.scale = 0f
+                                // For fill we use the display aspect ratio (handled internally by scale=0 but we could force crop)
+                                // Standard libvlc fill might require exact window size ratio, but for simplicity:
+                                player.aspectRatio = null
+                                player.scale = 0f // Let Vout scale
+                            }
+                            "16:9" -> {
+                                player.scale = 0f
+                                player.aspectRatio = "16:9"
+                            }
+                            "4:3" -> {
+                                player.scale = 0f
+                                player.aspectRatio = "4:3"
+                            }
+                            "Center" -> {
+                                player.scale = 1f // Original size
+                                player.aspectRatio = null
+                            }
+                        }
+                    }
+                )
+            }
+        }
+
+        dialog.setContentView(composeView)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener {
+            if (wasPlaying) player.play()
+            controlsManager.showControls()
+        }
+        dialog.show()
     }
 
     override fun onDestroy() {
