@@ -24,9 +24,10 @@ com.playbridge.receiver/
 ├── player/                        # Video playback
 │   ├── ColorMatrixEffect.kt       (Media3 GlEffect applying custom ColorMatrix for filters)
 │   ├── ContentSniffer.kt          (SSL-bypass OkHttpClient + content type sniffing)
+│   ├── ExoPlayerActivity.kt       (ExoPlayer implementation with HLS/DASH/RTSP)
 │   ├── InputHandler.kt            (D-pad, phone remote, control command handling)
 │   ├── M3uParser.kt               (custom IPTV M3U playlist parser bypassing default HLS parser)
-│   ├── PlayerActivity.kt          (~1322 lines, ExoPlayer with HLS/DASH/RTSP, playlist queue, filter/track persistence)
+│   ├── PlayerActivity.kt          (~1322 lines, abstract base class for players, playlist queue, filter persistence)
 │   ├── PlayerControlsManager.kt   (custom controls overlay, seekbar, prev/next buttons, dynamic scrubbing)
 │   ├── PlaylistPickerDialog.kt    (Compose compact side-panel playlist picker overlay)
 │   ├── ProgressManager.kt         (progress save/restore, thumbnail capture)
@@ -34,7 +35,10 @@ com.playbridge.receiver/
 │   ├── TrackSelectionDialog.kt    (Compose compact side-panel for audio/video/subtitle track selection)
 │   ├── VideoFilter.kt             (filter presets enum with ColorMatrix builders)
 │   ├── VideoFilterDialog.kt       (Compose compact bottom-panel filter picker with custom sliders)
-│   └── VideoFilterManager.kt      (applies ColorMatrix filters to PlayerView hardware layer)
+│   ├── VideoFilterManager.kt      (applies ColorMatrix filters to PlayerView hardware layer)
+│   ├── VlcControlsManager.kt      (custom controls overlay for VLC player)
+│   ├── VlcPlayerActivity.kt       (LibVLC implementation for unsupported ExoPlayer formats)
+│   └── VlcTrackSelectionDialog.kt (Compose compact side-panel for VLC audio/video/subtitle track selection)
 ├── server/                        # WebSocket server
 │   ├── OverlayWindowHelper.kt     (helper for drawing invisible overlay to keep WebView active in background)
 │   ├── ServerService.kt           (foreground service + command routing, external player intents, ~544 lines)
@@ -42,6 +46,7 @@ com.playbridge.receiver/
 └── ui/                            # Compose TV UI screens
     ├── HistoryScreen.kt
     ├── HomeScreen.kt
+    ├── LibraryScreen.kt
     ├── PairingScreen.kt
     ├── SettingsScreen.kt
     └── theme/
@@ -56,14 +61,18 @@ com.playbridge.receiver/
 |-----------|------|---------|
 | WebSocket Server | WebSocketServer.kt | Ktor Netty server on port 8765 with auth |
 | Server Service | ServerService.kt | Foreground service managing server lifecycle, command routing, external player intents, NSD registration, context broadcasting |
-| Video Player | PlayerActivity.kt | ExoPlayer activity with media source construction, track selection, playlist queue, auto-advance |
+| Video Player Base | PlayerActivity.kt | Abstract base class for players, playlist queue, auto-advance |
+| ExoPlayer | ExoPlayerActivity.kt | ExoPlayer implementation with HLS/DASH/RTSP support |
+| LibVLC Player | VlcPlayerActivity.kt | LibVLC implementation for unsupported ExoPlayer formats |
 | Player Controls | PlayerControlsManager.kt | Custom controls overlay, seekbar, play/pause, prev/next episode buttons, filter button, dynamic scrubbing intervals |
+| VLC Controls | VlcControlsManager.kt | Custom controls overlay specific to VLC player |
 | Input Handler | InputHandler.kt | D-pad, phone remote, control commands |
 | Progress Manager | ProgressManager.kt | Playback progress save/restore, thumbnail capture |
 | Content Sniffer | ContentSniffer.kt | SSL-bypass OkHttpClient, pre-flight content type detection |
 | M3U Parser | M3uParser.kt | Custom parser for IPTV M3U playlists, bypassing ExoPlayer's default HLS parser for compatibility |
 | Subtitle Manager | SubtitleManager.kt | External subtitle support (SRT/VTT parsing, download, timed sync with player position) |
 | Track Selection | TrackSelectionDialog.kt | Compact side-panel overlay for selecting audio, video, subtitle tracks; shows preferred language auto-selections |
+| VLC Track Selection | VlcTrackSelectionDialog.kt | Compact side-panel overlay for selecting VLC audio, video, subtitle tracks |
 | Playlist Picker | PlaylistPickerDialog.kt | Compact side-panel overlay listing playlist episodes with current/watched indicators |
 | Video Filters | VideoFilter.kt | 9 preset filters (HDR, Night, Movie, Cinema, Action, Deep Black, Grayscale, Vivid) + Custom with brightness/contrast/saturation |
 | Video Filter Manager | VideoFilterManager.kt | Applies ColorMatrix filters to PlayerView hardware layer (GPU-accelerated, zero decode overhead) |
