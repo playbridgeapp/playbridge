@@ -47,6 +47,7 @@ class VlcControlsManager(
                 handler.post {
                     playPauseButton.setImageResource(android.R.drawable.ic_media_pause)
                     bufferingSpinner.visibility = View.GONE
+                    hideControls()
                 }
             }
             MediaPlayer.Event.Paused -> {

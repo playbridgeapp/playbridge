@@ -85,6 +85,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (::controlsManager.isInitialized && controlsManager.isControlsVisible()) {
+                    controlsManager.hideControls()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+
         setContentView(R.layout.activity_vlc_player)
         surfaceView = findViewById(R.id.surface_view)
 
@@ -239,6 +250,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val wasPlaying = player.isPlaying
         if (wasPlaying) player.pause()
 
+        val videoTracks = player.videoTracks?.toList() ?: emptyList()
+        val currentVideoTrack = player.videoTrack
+
         val audioTracks = player.audioTracks?.toList() ?: emptyList()
         val currentAudioTrack = player.audioTrack
 
@@ -254,6 +268,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         composeView.setContent {
             PlayBridgeTVTheme {
                 // Reactive state for UI updates
+                var liveCurrentVideoTrack by remember { mutableStateOf(currentVideoTrack) }
                 var liveCurrentAudioTrack by remember { mutableStateOf(currentAudioTrack) }
                 var liveCurrentSubtitleTrack by remember { mutableStateOf(currentSubtitleTrack) }
                 var liveCurrentSubtitleUrl by remember { mutableStateOf(currentSubtitleUrl) }
@@ -261,6 +276,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 var liveCurrentVideoScalingMode by remember { mutableStateOf(currentVideoScalingMode) }
 
                 VlcTrackSelectionDialog(
+                    videoTracks = videoTracks,
+                    currentVideoTrack = liveCurrentVideoTrack,
                     audioTracks = audioTracks,
                     currentAudioTrack = liveCurrentAudioTrack,
                     subtitleTracks = subtitleTracks,
@@ -271,6 +288,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     currentVideoScalingMode = liveCurrentVideoScalingMode,
                     onDismiss = {
                         dialog.dismiss()
+                    },
+                    onVideoTrackSelected = { id ->
+                        player.videoTrack = id
+                        liveCurrentVideoTrack = id
                     },
                     onAudioTrackSelected = { id ->
                         player.audioTrack = id
@@ -457,14 +478,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (controlsManager.isControlsVisible()) {
-            controlsManager.hideControls()
-        } else {
-            super.onBackPressed()
-        }
-    }
 
     override fun onResume() {
         super.onResume()
