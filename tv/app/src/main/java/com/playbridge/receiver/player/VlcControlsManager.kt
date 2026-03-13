@@ -25,7 +25,8 @@ class VlcControlsManager(
     private val prevButton: ImageButton,
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
-    private val onShowSettings: () -> Unit
+    private val onShowSettings: () -> Unit,
+    private val onError: () -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var isControlsVisible = false
@@ -68,6 +69,9 @@ class VlcControlsManager(
             }
             MediaPlayer.Event.LengthChanged -> {
                 handler.post { updateProgress() }
+            }
+            MediaPlayer.Event.EncounteredError -> {
+                handler.post { onError() }
             }
         }
     }

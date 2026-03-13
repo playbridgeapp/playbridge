@@ -122,7 +122,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             prevButton = findViewById(R.id.btn_prev),
             nextButton = findViewById(R.id.btn_next),
             filterButton = findViewById(R.id.btn_filter),
-            onShowSettings = { showSettingsDialog() }
+            onShowSettings = { showSettingsDialog() },
+            onError = { handleVlcError() }
         )
 
         controlsManager.attachPlayer()
@@ -171,6 +172,37 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         playVideo(url, headers)
+    }
+
+    private fun handleVlcError() {
+        val currentUrl = intent.getStringExtra(ServerService.EXTRA_URL) ?: ""
+        val currentTitle = intent.getStringExtra(ServerService.EXTRA_TITLE)
+
+        runOnUiThread {
+            android.widget.Toast.makeText(this, "VLC encountered an error. Trying external player...", android.widget.Toast.LENGTH_SHORT).show()
+            launchExternalPlayer(currentUrl, currentTitle)
+            finish()
+        }
+    }
+
+    private fun launchExternalPlayer(url: String, title: String?) {
+        try {
+            val launchIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(android.net.Uri.parse(url), "video/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                title?.let {
+                    putExtra(Intent.EXTRA_TITLE, it)
+                    putExtra("title", it)
+                }
+            }
+            val chooser = Intent.createChooser(launchIntent, "Play with...")
+            startActivity(chooser)
+        } catch (e: Exception) {
+            runOnUiThread {
+                android.widget.Toast.makeText(this, "Could not find an external player", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun playVideo(url: String, headers: Map<String, String>?) {
