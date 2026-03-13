@@ -24,7 +24,8 @@ class VlcControlsManager(
     private val playlistButton: ImageButton,
     private val prevButton: ImageButton,
     private val nextButton: ImageButton,
-    private val filterButton: ImageButton
+    private val filterButton: ImageButton,
+    private val onShowSettings: () -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var isControlsVisible = false
@@ -73,16 +74,22 @@ class VlcControlsManager(
 
     init {
         // Hide unused buttons that ExoPlayer uses but VLC doesn't (for now)
-        tracksButton.visibility = View.GONE
         playlistButton.visibility = View.GONE
         prevButton.visibility = View.GONE
         nextButton.visibility = View.GONE
         filterButton.visibility = View.GONE
         streamInfoText.visibility = View.GONE
 
+        tracksButton.visibility = View.VISIBLE
+
         // Set up Play/Pause
         playPauseButton.setOnClickListener {
             togglePlayPause()
+        }
+
+        // Set up Settings/Tracks button
+        tracksButton.setOnClickListener {
+            onShowSettings()
         }
 
         // Initially hide controls
