@@ -155,7 +155,6 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] SSL lock indicator (phone)
 - [x] Video maximize/restore via JS injection (TV browser)
 - [x] `SECURITY.md` finalized with security considerations (SSL bypass, local network)
-- [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
 - [x] Resolved SettingsScreen.kt version mismatch by dynamically reading `packageManager` info (TV app)
 - [x] Custom M3U parser for IPTV playlists bypassing default HLS parser (TV app)
 
@@ -231,9 +230,14 @@ PlayBridge/
 │   │       │   │   ├── SettingsScreen.kt
 │   │       │   │   ├── ExportedSettings.kt     (serializable data models for settings import/export)
 │   │       │   │   ├── HlsParser.kt
+│   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
+│   │       │   │   ├── MagnetParsingSheet.kt   (Debrid integration)
 │   │       │   │   └── ...
 │   │       │   ├── connection/
-│   │       │   ├── data/history/
+│   │       │   ├── data/
+│   │       │   │   ├── debrid/                 (Debrid integration clients/providers)
+│   │       │   │   ├── history/
+│   │       │   │   └── library/
 │   │       │   ├── model/
 │   │       │   └── ui/
 │   │       └── assets/extensions/video_detector/  # Embedded legacy phone extension
