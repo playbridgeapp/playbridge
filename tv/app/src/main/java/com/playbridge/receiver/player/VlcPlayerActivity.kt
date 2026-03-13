@@ -24,6 +24,8 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.playbridge.receiver.R
 import com.playbridge.receiver.server.ServerService
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.playbridge.receiver.ui.theme.PlayBridgeTVTheme
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
@@ -43,12 +45,33 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var currentPlaybackSpeed: Float = 1.0f
     private var currentVideoScalingMode: String = "Fit"
 
+    // HLS Variant state
+    private var hlsVariants: List<HlsVariant> = emptyList()
+    private var currentHlsVariantUrl: String? = null
+    private var originalM3u8Url: String? = null
+    private var currentHeaders: Map<String, String>? = null
+
+    // Seek buffering
+    private var pendingSeekTime: Long? = null
+    private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val performSeekRunnable = Runnable {
+        pendingSeekTime?.let { targetTime ->
+            mediaPlayer?.time = targetTime
+            pendingSeekTime = null
+            controlsManager.setPendingSeekTime(null)
+        }
+    }
+
     override fun play() { mediaPlayer?.play() }
     override fun pause() { mediaPlayer?.pause() }
     override fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
     override fun getMediaDuration(): Long = mediaPlayer?.length ?: 0L
     override fun getCurrentPosition(): Long = (mediaPlayer?.time) ?: 0L
-    override fun seekTo(position: Long) { mediaPlayer?.time = position }
+    override fun seekTo(position: Long) {
+        mediaPlayer?.time = position
+        pendingSeekTime = null
+        seekHandler.removeCallbacks(performSeekRunnable)
+    }
 
     private val remoteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -84,6 +107,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (::controlsManager.isInitialized && controlsManager.isControlsVisible()) {
+                    controlsManager.hideControls()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
 
         setContentView(R.layout.activity_vlc_player)
         surfaceView = findViewById(R.id.surface_view)
@@ -123,7 +157,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             nextButton = findViewById(R.id.btn_next),
             filterButton = findViewById(R.id.btn_filter),
             onShowSettings = { showSettingsDialog() },
-            onError = { handleVlcError() }
+            onError = { handleVlcError() },
+            onSeekForwardRequested = { handleSeek(1) },
+            onSeekBackwardRequested = { handleSeek(-1) }
         )
 
         controlsManager.attachPlayer()
@@ -171,7 +207,21 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             controlsManager.setTitle(title)
         }
 
-        playVideo(url, headers)
+        originalM3u8Url = url
+        currentHeaders = headers
+
+        // Check if it's an m3u8 playlist that we can parse for multiple variants
+        if (url.contains(".m3u8", ignoreCase = true)) {
+            lifecycleScope.launch {
+                val variants = M3uParser.parseMasterPlaylist(url, headers)
+                if (variants != null && variants.isNotEmpty()) {
+                    hlsVariants = variants
+                }
+                playVideo(url, headers)
+            }
+        } else {
+            playVideo(url, headers)
+        }
     }
 
     private fun handleVlcError() {
@@ -205,7 +255,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun playVideo(url: String, headers: Map<String, String>?) {
+    private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
         val media = Media(libVLC, Uri.parse(url)).apply {
             setHWDecoderEnabled(true, false)
 
@@ -228,16 +278,30 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             }
         }
 
+        mediaPlayer?.stop()
         mediaPlayer?.media = media
         media.release()
 
+        // VLC needs to be playing to reliably accept seek commands for a new media source
         mediaPlayer?.play()
+
+        if (resumeTime != null && resumeTime > 0) {
+            mediaPlayer?.time = resumeTime
+        }
+
+        if (startPaused) {
+            mediaPlayer?.pause()
+        }
     }
 
     private fun showSettingsDialog() {
         val player = mediaPlayer ?: return
         val wasPlaying = player.isPlaying
         if (wasPlaying) player.pause()
+
+        val videoTracks = player.videoTracks?.toList() ?: emptyList()
+        val currentVideoTrack = player.videoTrack
+        val isHlsVariantsAvailable = hlsVariants.isNotEmpty()
 
         val audioTracks = player.audioTracks?.toList() ?: emptyList()
         val currentAudioTrack = player.audioTrack
@@ -254,6 +318,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         composeView.setContent {
             PlayBridgeTVTheme {
                 // Reactive state for UI updates
+                var liveCurrentVideoTrack by remember { mutableStateOf(currentVideoTrack) }
+                var liveCurrentHlsVariant by remember { mutableStateOf(currentHlsVariantUrl) }
                 var liveCurrentAudioTrack by remember { mutableStateOf(currentAudioTrack) }
                 var liveCurrentSubtitleTrack by remember { mutableStateOf(currentSubtitleTrack) }
                 var liveCurrentSubtitleUrl by remember { mutableStateOf(currentSubtitleUrl) }
@@ -261,6 +327,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 var liveCurrentVideoScalingMode by remember { mutableStateOf(currentVideoScalingMode) }
 
                 VlcTrackSelectionDialog(
+                    videoTracks = videoTracks,
+                    currentVideoTrack = liveCurrentVideoTrack,
+                    hlsVariants = hlsVariants,
+                    currentHlsVariantUrl = liveCurrentHlsVariant,
                     audioTracks = audioTracks,
                     currentAudioTrack = liveCurrentAudioTrack,
                     subtitleTracks = subtitleTracks,
@@ -271,6 +341,26 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     currentVideoScalingMode = liveCurrentVideoScalingMode,
                     onDismiss = {
                         dialog.dismiss()
+                    },
+                    onVideoTrackSelected = { id ->
+                        player.videoTrack = id
+                        liveCurrentVideoTrack = id
+                    },
+                    onHlsVariantSelected = { url ->
+                        val wasHlsAuto = currentHlsVariantUrl == null
+                        val newUrl = if (url == "AUTO") originalM3u8Url else url
+
+                        // Avoid unnecessary restarts
+                        if (url != "AUTO" && currentHlsVariantUrl == url) return@VlcTrackSelectionDialog
+                        if (url == "AUTO" && wasHlsAuto) return@VlcTrackSelectionDialog
+
+                        currentHlsVariantUrl = if (url == "AUTO") null else url
+                        liveCurrentHlsVariant = currentHlsVariantUrl
+
+                        if (newUrl != null) {
+                            val time = player.time
+                            playVideo(newUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                        }
                     },
                     onAudioTrackSelected = { id ->
                         player.audioTrack = id
@@ -364,6 +454,23 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onSurfacesDestroyed(vout: IVLCVout?) {}
 
+    private fun handleSeek(multiplier: Int) {
+        val player = mediaPlayer ?: return
+        val length = player.length
+
+        val currentTime = pendingSeekTime ?: player.time
+        val offset = 10000L * multiplier
+        val newTime = (currentTime + offset).coerceIn(0, if (length > 0) length else Long.MAX_VALUE)
+
+        pendingSeekTime = newTime
+        controlsManager.setPendingSeekTime(newTime)
+
+        seekHandler.removeCallbacks(performSeekRunnable)
+        seekHandler.postDelayed(performSeekRunnable, 400)
+
+        controlsManager.showSeekUI()
+    }
+
     // Handle physical remote/keyboard events
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
         if (event?.action != android.view.KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
@@ -409,26 +516,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                 val repeatCount = event.repeatCount
                 val multiplier = if (repeatCount > 10) 5 else 1
-                val player = mediaPlayer
-                if (player != null) {
-                    val newTime = (player.time - 10000L * multiplier).coerceAtLeast(0)
-                    player.time = newTime
-                }
-                controlsManager.showSeekUI()
+                handleSeek(-multiplier)
                 true
             }
             android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 val repeatCount = event.repeatCount
                 val multiplier = if (repeatCount > 10) 5 else 1
-                val player = mediaPlayer
-                if (player != null) {
-                    val length = player.length
-                    if (length > 0) {
-                        val newTime = (player.time + 10000L * multiplier).coerceAtMost(length)
-                        player.time = newTime
-                    }
-                }
-                controlsManager.showSeekUI()
+                handleSeek(multiplier)
                 true
             }
             android.view.KeyEvent.KEYCODE_DPAD_UP -> {
@@ -457,14 +551,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (controlsManager.isControlsVisible()) {
-            controlsManager.hideControls()
-        } else {
-            super.onBackPressed()
-        }
-    }
 
     override fun onResume() {
         super.onResume()

@@ -26,11 +26,14 @@ class VlcControlsManager(
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
     private val onShowSettings: () -> Unit,
-    private val onError: () -> Unit
+    private val onError: () -> Unit,
+    private val onSeekForwardRequested: () -> Unit,
+    private val onSeekBackwardRequested: () -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var isControlsVisible = false
     private var isSeekOnlyVisible = false
+    private var activePendingSeekTime: Long? = null
     private val autoHideRunnable = Runnable { hideControls() }
     private val updateProgressRunnable = object : Runnable {
         override fun run() {
@@ -47,6 +50,7 @@ class VlcControlsManager(
                 handler.post {
                     playPauseButton.setImageResource(android.R.drawable.ic_media_pause)
                     bufferingSpinner.visibility = View.GONE
+                    hideControls()
                 }
             }
             MediaPlayer.Event.Paused -> {
@@ -98,6 +102,15 @@ class VlcControlsManager(
 
         // Initially hide controls
         hideControls()
+    }
+
+    fun setPendingSeekTime(time: Long?) {
+        activePendingSeekTime = time
+        if (time != null) {
+            updatePendingSeekProgress(time)
+        } else {
+            updateProgress()
+        }
     }
 
     fun attachPlayer() {
@@ -183,29 +196,35 @@ class VlcControlsManager(
         }
     }
 
-    fun onSeekForward() {
+    private fun updatePendingSeekProgress(newTime: Long) {
         val player = playerProvider() ?: return
-        val length = player.length
-        if (length > 0) {
-            val newTime = (player.time + 10000).coerceAtMost(length)
-            player.time = newTime
-            updateProgress()
+        val duration = player.length
+
+        if (duration > 0) {
+            val progressPercent = (newTime.toFloat() / duration.toFloat()) * 1000
+            seekBar.progress = progressPercent.toInt()
+        } else {
+            seekBar.progress = 0
         }
-        showSeekUI()
+
+        elapsedText.text = formatTime(newTime)
+        remainingText.text = formatTime(duration - newTime)
+    }
+
+    fun onSeekForward() {
+        onSeekForwardRequested()
     }
 
     fun onSeekBackward() {
-        val player = playerProvider() ?: return
-        val newTime = (player.time - 10000).coerceAtLeast(0)
-        player.time = newTime
-        updateProgress()
-        showSeekUI()
+        onSeekBackwardRequested()
     }
 
     fun isControlsVisible() = isControlsVisible
     fun isFullOverlayVisible() = isControlsVisible
 
     private fun updateProgress() {
+        if (activePendingSeekTime != null) return // Don't override progress if a seek is pending
+
         val player = playerProvider() ?: return
         val position = player.time
         val duration = player.length

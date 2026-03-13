@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import org.videolan.libvlc.MediaPlayer.TrackDescription
 
+const val VLC_TAB_VIDEO = 0
 const val VLC_TAB_AUDIO = 1
 const val VLC_TAB_SUBTITLE = 2
 const val VLC_TAB_SPEED = 100
@@ -28,6 +29,10 @@ const val VLC_TAB_SCALING = 101
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun VlcTrackSelectionDialog(
+    videoTracks: List<TrackDescription>,
+    currentVideoTrack: Int,
+    hlsVariants: List<HlsVariant> = emptyList(),
+    currentHlsVariantUrl: String? = null,
     audioTracks: List<TrackDescription>,
     currentAudioTrack: Int,
     subtitleTracks: List<TrackDescription>,
@@ -37,13 +42,15 @@ fun VlcTrackSelectionDialog(
     currentPlaybackSpeed: Float = 1.0f,
     currentVideoScalingMode: String = "Fit", // e.g. "Fit", "Fill", "16:9", "4:3", "Center"
     onDismiss: () -> Unit,
+    onVideoTrackSelected: (Int) -> Unit,
+    onHlsVariantSelected: (String) -> Unit = {},
     onAudioTrackSelected: (Int) -> Unit,
     onSubtitleTrackSelected: (Int) -> Unit,
     onExternalSubtitleSelected: (String?) -> Unit,
     onPlaybackSpeedSelected: (Float) -> Unit = {},
     onVideoScalingSelected: (String) -> Unit = {}
 ) {
-    var selectedTab by remember { mutableStateOf(VLC_TAB_AUDIO) }
+    var selectedTab by remember { mutableStateOf(VLC_TAB_VIDEO) }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -73,6 +80,11 @@ fun VlcTrackSelectionDialog(
                     modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
                 )
 
+                TrackTypeButton(
+                    text = "Video",
+                    isSelected = selectedTab == VLC_TAB_VIDEO,
+                    onClick = { selectedTab = VLC_TAB_VIDEO }
+                )
                 TrackTypeButton(
                     text = "Audio",
                     isSelected = selectedTab == VLC_TAB_AUDIO,
@@ -105,6 +117,21 @@ fun VlcTrackSelectionDialog(
 
             // Track List
             when (selectedTab) {
+                VLC_TAB_VIDEO -> {
+                    if (hlsVariants.isNotEmpty()) {
+                        VlcHlsVariantList(
+                            variants = hlsVariants,
+                            currentVariantUrl = currentHlsVariantUrl,
+                            onVariantSelected = onHlsVariantSelected
+                        )
+                    } else {
+                        VlcTrackList(
+                            tracks = videoTracks,
+                            currentTrackId = currentVideoTrack,
+                            onTrackSelected = onVideoTrackSelected
+                        )
+                    }
+                }
                 VLC_TAB_AUDIO -> {
                     VlcTrackList(
                         tracks = audioTracks,
@@ -139,6 +166,40 @@ fun VlcTrackSelectionDialog(
     }
 
     androidx.activity.compose.BackHandler { onDismiss() }
+}
+
+@Composable
+fun VlcHlsVariantList(
+    variants: List<HlsVariant>,
+    currentVariantUrl: String?,
+    onVariantSelected: (String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(start = 8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp)
+    ) {
+        item {
+            TrackItem(
+                name = "Auto",
+                isSelected = currentVariantUrl == null,
+                onClick = { onVariantSelected("AUTO") }
+            )
+        }
+        items(variants) { variant ->
+            val isSelected = variant.url == currentVariantUrl
+            val resolutionText = variant.resolution?.let { "${it}p " } ?: ""
+            val bandwidthText = variant.bandwidth?.let { "${it / 1000} kbps" } ?: ""
+            val name = if (resolutionText.isEmpty() && bandwidthText.isEmpty()) "Variant" else "$resolutionText$bandwidthText"
+
+            TrackItem(
+                name = name.trim(),
+                isSelected = isSelected,
+                onClick = { onVariantSelected(variant.url) }
+            )
+        }
+    }
 }
 
 @Composable
