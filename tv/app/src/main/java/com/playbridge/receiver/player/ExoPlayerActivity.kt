@@ -76,6 +76,8 @@ class ExoPlayerActivity : PlayerActivity() {
     private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
+    private var activeDialog: android.app.Dialog? = null
+
     private val controlReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -860,6 +862,8 @@ class ExoPlayerActivity : PlayerActivity() {
 
     override fun onDestroy() {
         unregisterReceiver(controlReceiver)
+        activeDialog?.dismiss()
+        activeDialog = null
         releasePlayer()
         super.onDestroy()
     }
@@ -1033,6 +1037,7 @@ class ExoPlayerActivity : PlayerActivity() {
         if (wasPlaying) player?.pause()
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
         val composeView = androidx.compose.ui.platform.ComposeView(this)
 
         composeView.setViewTreeLifecycleOwner(this)
@@ -1049,8 +1054,6 @@ class ExoPlayerActivity : PlayerActivity() {
                     },
                     onDismiss = {
                         dialog.dismiss()
-                        if (wasPlaying) player?.play()
-                        controlsManager.showControlsUI()
                     }
                 )
             }
@@ -1058,6 +1061,11 @@ class ExoPlayerActivity : PlayerActivity() {
 
         dialog.setContentView(composeView)
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener {
+            activeDialog = null
+            if (wasPlaying) player?.play()
+            controlsManager.showControlsUI()
+        }
         dialog.show()
     }
 
@@ -1143,6 +1151,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
     private fun showVideoFilterDialogInternal(wasPlaying: Boolean, previewBitmap: android.graphics.Bitmap?) {
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
         val composeView = androidx.compose.ui.platform.ComposeView(this)
 
         composeView.setViewTreeLifecycleOwner(this)
@@ -1172,6 +1181,7 @@ class ExoPlayerActivity : PlayerActivity() {
         dialog.setContentView(composeView)
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener {
+            activeDialog = null
             player?.play()
             controlsManager.hideUI()
         }
@@ -1186,6 +1196,7 @@ class ExoPlayerActivity : PlayerActivity() {
         if (wasPlaying) player.pause()
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
         val composeView = androidx.compose.ui.platform.ComposeView(this)
 
         composeView.setViewTreeLifecycleOwner(this)
@@ -1275,6 +1286,11 @@ class ExoPlayerActivity : PlayerActivity() {
 
         dialog.setContentView(composeView)
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener {
+            activeDialog = null
+            if (wasPlaying) player.play()
+            controlsManager.hideUI()
+        }
         dialog.show()
     }
 
