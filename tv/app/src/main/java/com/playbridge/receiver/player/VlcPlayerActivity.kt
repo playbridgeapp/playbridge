@@ -51,12 +51,26 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var originalM3u8Url: String? = null
     private var currentHeaders: Map<String, String>? = null
 
+    // Seek buffering
+    private var pendingSeekTime: Long? = null
+    private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val performSeekRunnable = Runnable {
+        pendingSeekTime?.let { targetTime ->
+            mediaPlayer?.time = targetTime
+            pendingSeekTime = null
+        }
+    }
+
     override fun play() { mediaPlayer?.play() }
     override fun pause() { mediaPlayer?.pause() }
     override fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
     override fun getMediaDuration(): Long = mediaPlayer?.length ?: 0L
     override fun getCurrentPosition(): Long = (mediaPlayer?.time) ?: 0L
-    override fun seekTo(position: Long) { mediaPlayer?.time = position }
+    override fun seekTo(position: Long) {
+        mediaPlayer?.time = position
+        pendingSeekTime = null
+        seekHandler.removeCallbacks(performSeekRunnable)
+    }
 
     private val remoteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -484,8 +498,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 val multiplier = if (repeatCount > 10) 5 else 1
                 val player = mediaPlayer
                 if (player != null) {
-                    val newTime = (player.time - 10000L * multiplier).coerceAtLeast(0)
-                    player.time = newTime
+                    val currentTime = pendingSeekTime ?: player.time
+                    val newTime = (currentTime - 10000L * multiplier).coerceAtLeast(0)
+                    pendingSeekTime = newTime
+
+                    controlsManager.updatePendingSeekProgress(newTime)
+
+                    seekHandler.removeCallbacks(performSeekRunnable)
+                    seekHandler.postDelayed(performSeekRunnable, 400)
                 }
                 controlsManager.showSeekUI()
                 true
@@ -497,8 +517,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 if (player != null) {
                     val length = player.length
                     if (length > 0) {
-                        val newTime = (player.time + 10000L * multiplier).coerceAtMost(length)
-                        player.time = newTime
+                        val currentTime = pendingSeekTime ?: player.time
+                        val newTime = (currentTime + 10000L * multiplier).coerceAtMost(length)
+                        pendingSeekTime = newTime
+
+                        controlsManager.updatePendingSeekProgress(newTime)
+
+                        seekHandler.removeCallbacks(performSeekRunnable)
+                        seekHandler.postDelayed(performSeekRunnable, 400)
                     }
                 }
                 controlsManager.showSeekUI()

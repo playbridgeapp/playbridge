@@ -184,22 +184,57 @@ class VlcControlsManager(
         }
     }
 
+    // Same fix for on-screen controls seeking
+    private var pendingSeekTime: Long? = null
+    private val performSeekRunnable = Runnable {
+        pendingSeekTime?.let { targetTime ->
+            playerProvider()?.time = targetTime
+            pendingSeekTime = null
+        }
+    }
+
+    fun updatePendingSeekProgress(newTime: Long) {
+        val player = playerProvider() ?: return
+        val duration = player.length
+
+        if (duration > 0) {
+            val progressPercent = (newTime.toFloat() / duration.toFloat()) * 1000
+            seekBar.progress = progressPercent.toInt()
+        } else {
+            seekBar.progress = 0
+        }
+
+        elapsedText.text = formatTime(newTime)
+        remainingText.text = formatTime(duration - newTime)
+    }
+
     fun onSeekForward() {
         val player = playerProvider() ?: return
         val length = player.length
         if (length > 0) {
-            val newTime = (player.time + 10000).coerceAtMost(length)
-            player.time = newTime
-            updateProgress()
+            val currentTime = pendingSeekTime ?: player.time
+            val newTime = (currentTime + 10000).coerceAtMost(length)
+            pendingSeekTime = newTime
+
+            updatePendingSeekProgress(newTime)
+
+            handler.removeCallbacks(performSeekRunnable)
+            handler.postDelayed(performSeekRunnable, 400)
         }
         showSeekUI()
     }
 
     fun onSeekBackward() {
         val player = playerProvider() ?: return
-        val newTime = (player.time - 10000).coerceAtLeast(0)
-        player.time = newTime
-        updateProgress()
+        val currentTime = pendingSeekTime ?: player.time
+        val newTime = (currentTime - 10000).coerceAtLeast(0)
+        pendingSeekTime = newTime
+
+        updatePendingSeekProgress(newTime)
+
+        handler.removeCallbacks(performSeekRunnable)
+        handler.postDelayed(performSeekRunnable, 400)
+
         showSeekUI()
     }
 
@@ -207,6 +242,8 @@ class VlcControlsManager(
     fun isFullOverlayVisible() = isControlsVisible
 
     private fun updateProgress() {
+        if (pendingSeekTime != null) return // Don't override progress if a seek is pending
+
         val player = playerProvider() ?: return
         val position = player.time
         val duration = player.length
