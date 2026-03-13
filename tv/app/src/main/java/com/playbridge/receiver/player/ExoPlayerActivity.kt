@@ -734,11 +734,11 @@ class ExoPlayerActivity : PlayerActivity() {
                 return
             }
 
-            // Unrecognized Input Format (e.g. WMV) — Prompt for external player
+            // Unrecognized Input Format (e.g. WMV) — Transition to internal VLC player automatically
             val isUnrecognizedFormat = error.cause is androidx.media3.exoplayer.source.UnrecognizedInputFormatException ||
                                        (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
             if (isUnrecognizedFormat) {
-                FileLogger.e(TAG, "Unrecognized format detected, prompting for external player")
+                FileLogger.e(TAG, "Unrecognized format detected, automatically transitioning to VlcPlayerActivity")
                 val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString() ?: ""
                 val currentTitle = player?.currentMediaItem?.mediaMetadata?.title?.toString()
 
@@ -746,26 +746,36 @@ class ExoPlayerActivity : PlayerActivity() {
                 player?.pause()
 
                 runOnUiThread {
-                    android.app.AlertDialog.Builder(this@ExoPlayerActivity)
-                        .setTitle("Format Not Supported")
-                        .setMessage("This video format is not supported by the internal player. Would you like to play it in an external player?")
-                        .setPositiveButton("Yes") { _, _ ->
-                            launchExternalPlayer(currentUrl, currentTitle)
-                            finish()
+                    android.widget.Toast.makeText(this@ExoPlayerActivity, "Format not supported by ExoPlayer, trying VLC...", android.widget.Toast.LENGTH_SHORT).show()
+                    val vlcIntent = Intent(this@ExoPlayerActivity, VlcPlayerActivity::class.java).apply {
+                        putExtra(com.playbridge.receiver.server.ServerService.EXTRA_URL, currentUrl)
+                        currentTitle?.let { putExtra(com.playbridge.receiver.server.ServerService.EXTRA_TITLE, it) }
+
+                        // Pass along subtitle URLs
+                        if (subtitleUrls.isNotEmpty()) {
+                            putStringArrayListExtra(com.playbridge.receiver.server.ServerService.EXTRA_SUBTITLES, ArrayList(subtitleUrls))
                         }
-                        .setNegativeButton("No") { dialog, _ ->
-                            dialog.dismiss()
-                            // If it's part of a playlist, we can skip it. Otherwise, finish.
-                            if (playlistItems.isNotEmpty()) {
-                                playNextInPlaylist()
+
+                        // Pass along headers
+                        // If we are playing a playlist item, the headers are stored in the active item.
+                        // Otherwise, we fallback to the raw intent extras.
+                        val currentHeaders = if (playlistItems.isNotEmpty()) {
+                            playlistItems.getOrNull(playlistIndex)?.headers ?: emptyMap()
+                        } else {
+                            val intentHeaders = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                intent.getSerializableExtra(com.playbridge.receiver.server.ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
                             } else {
-                                finish()
+                                @Suppress("UNCHECKED_CAST")
+                                intent.getSerializableExtra(com.playbridge.receiver.server.ServerService.EXTRA_HEADERS) as? Map<String, String>
                             }
+                            intentHeaders ?: emptyMap()
                         }
-                        .setOnCancelListener {
-                            finish()
+                        if (currentHeaders.isNotEmpty()) {
+                            putExtra(com.playbridge.receiver.server.ServerService.EXTRA_HEADERS, HashMap(currentHeaders))
                         }
-                        .show()
+                    }
+                    startActivity(vlcIntent)
+                    finish()
                 }
                 return
             }
@@ -1359,27 +1369,6 @@ class ExoPlayerActivity : PlayerActivity() {
             player.seekTo(currentWindowIndex, currentPos)
             player.prepare()
             player.playWhenReady = playWhenReady
-        }
-    }
-
-    private fun launchExternalPlayer(url: String, title: String?) {
-        try {
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(android.net.Uri.parse(url), "video/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
-                title?.let {
-                    putExtra(Intent.EXTRA_TITLE, it)
-                    putExtra("title", it)
-                }
-            }
-            val chooser = Intent.createChooser(intent, "Play with...")
-            startActivity(chooser)
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "Failed to launch external player", e)
-            runOnUiThread {
-                android.widget.Toast.makeText(this, "Could not find an external player", android.widget.Toast.LENGTH_SHORT).show()
-            }
         }
     }
 
