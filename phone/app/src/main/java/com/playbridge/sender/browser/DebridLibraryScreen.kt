@@ -115,7 +115,7 @@ fun DebridLibraryScreen(
                                     TorrentStatus.ERROR -> Icons.Default.Error
                                     else -> Icons.Default.HourglassEmpty
                                 }
-                                Icon(icon, contentDescription = null, tint = if (torrent.status == TorrentStatus.READY) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(icon, contentDescription = "Status: ${torrent.status.name}", tint = if (torrent.status == TorrentStatus.READY) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                             },
                             modifier = Modifier.clickable {
                                 if (torrent.status == TorrentStatus.READY) {
@@ -217,7 +217,7 @@ fun DebridLibraryScreen(
                                 ListItem(
                                     headlineContent = { Text(file.path, maxLines = 2, style = MaterialTheme.typography.bodyMedium) },
                                     supportingContent = { Text("${file.bytes / (1024 * 1024)} MB", style = MaterialTheme.typography.bodySmall) },
-                                    leadingContent = { Icon(Icons.Default.Movie, null) },
+                                    leadingContent = { Icon(Icons.Default.Movie, contentDescription = null) },
                                     trailingContent = {
                                         Row {
                                             IconButton(onClick = {
