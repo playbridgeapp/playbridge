@@ -10,7 +10,108 @@ import java.net.URI
 
 private const val TAG = "M3uParser"
 
+data class HlsVariant(
+    val url: String,
+    val resolution: String?,
+    val bandwidth: Int?,
+    val codecs: String?
+)
+
 object M3uParser {
+
+    suspend fun parseMasterPlaylist(url: String, headers: Map<String, String>?): List<HlsVariant>? = withContext(Dispatchers.IO) {
+        try {
+            val sniffer = ContentSniffer()
+            val client = sniffer.getUnsafeOkHttpClient(headers)
+            val requestBuilder = okhttp3.Request.Builder().url(url)
+
+            val response = client.newCall(requestBuilder.build()).execute()
+            if (!response.isSuccessful) {
+                Log.w(TAG, "Failed to fetch master playlist: HTTP ${response.code}")
+                response.close()
+                return@withContext null
+            }
+
+            val body = response.body
+            if (body == null) {
+                response.close()
+                return@withContext null
+            }
+
+            val variants = mutableListOf<HlsVariant>()
+            var isFirstLine = true
+            var isMasterPlaylist = false
+
+            var currentResolution: String? = null
+            var currentBandwidth: Int? = null
+            var currentCodecs: String? = null
+
+            BufferedReader(InputStreamReader(body.byteStream())).use { reader ->
+                var line: String? = reader.readLine()
+                while (line != null) {
+                    val trimmed = line.trim()
+
+                    if (isFirstLine) {
+                        isFirstLine = false
+                        if (!trimmed.startsWith("#EXTM3U")) {
+                            return@use
+                        }
+                    }
+
+                    if (trimmed.isEmpty()) {
+                        line = reader.readLine()
+                        continue
+                    }
+
+                    if (trimmed.startsWith("#EXT-X-STREAM-INF")) {
+                        isMasterPlaylist = true
+
+                        // Parse attributes
+                        val resMatch = Regex("""RESOLUTION=(\d+x\d+)""").find(trimmed)
+                        currentResolution = resMatch?.groupValues?.get(1)
+
+                        val bwMatch = Regex("""BANDWIDTH=(\d+)""").find(trimmed)
+                        currentBandwidth = bwMatch?.groupValues?.get(1)?.toIntOrNull()
+
+                        val codecsMatch = Regex("""CODECS="([^"]+)"""").find(trimmed)
+                        currentCodecs = codecsMatch?.groupValues?.get(1)
+                    } else if (!trimmed.startsWith("#") && currentBandwidth != null) {
+                        // It's a URI for the stream inf
+                        val streamUrl = try {
+                            val uri = URI(trimmed)
+                            if (uri.isAbsolute) {
+                                trimmed
+                            } else {
+                                URI(url).resolve(uri).toString()
+                            }
+                        } catch (e: Exception) {
+                            trimmed
+                        }
+
+                        variants.add(
+                            HlsVariant(
+                                url = streamUrl,
+                                resolution = currentResolution,
+                                bandwidth = currentBandwidth,
+                                codecs = currentCodecs
+                            )
+                        )
+
+                        // Reset properties for next stream inf
+                        currentResolution = null
+                        currentBandwidth = null
+                        currentCodecs = null
+                    }
+                    line = reader.readLine()
+                }
+            }
+
+            return@withContext if (isMasterPlaylist && variants.isNotEmpty()) variants else null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing master playlist", e)
+            return@withContext null
+        }
+    }
 
     suspend fun fetchAndParseM3u(url: String, headers: Map<String, String>?): List<PlayPayload>? = withContext(Dispatchers.IO) {
         try {

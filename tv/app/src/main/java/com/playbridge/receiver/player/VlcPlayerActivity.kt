@@ -24,6 +24,8 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.playbridge.receiver.R
 import com.playbridge.receiver.server.ServerService
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.playbridge.receiver.ui.theme.PlayBridgeTVTheme
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
@@ -42,6 +44,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var currentSubtitleUrl: String? = null
     private var currentPlaybackSpeed: Float = 1.0f
     private var currentVideoScalingMode: String = "Fit"
+
+    // HLS Variant state
+    private var hlsVariants: List<HlsVariant> = emptyList()
+    private var currentHlsVariantUrl: String? = null
+    private var originalM3u8Url: String? = null
+    private var currentHeaders: Map<String, String>? = null
 
     override fun play() { mediaPlayer?.play() }
     override fun pause() { mediaPlayer?.pause() }
@@ -182,7 +190,21 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             controlsManager.setTitle(title)
         }
 
-        playVideo(url, headers)
+        originalM3u8Url = url
+        currentHeaders = headers
+
+        // Check if it's an m3u8 playlist that we can parse for multiple variants
+        if (url.contains(".m3u8", ignoreCase = true)) {
+            lifecycleScope.launch {
+                val variants = M3uParser.parseMasterPlaylist(url, headers)
+                if (variants != null && variants.isNotEmpty()) {
+                    hlsVariants = variants
+                }
+                playVideo(url, headers)
+            }
+        } else {
+            playVideo(url, headers)
+        }
     }
 
     private fun handleVlcError() {
@@ -252,6 +274,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         val videoTracks = player.videoTracks?.toList() ?: emptyList()
         val currentVideoTrack = player.videoTrack
+        val isHlsVariantsAvailable = hlsVariants.isNotEmpty()
 
         val audioTracks = player.audioTracks?.toList() ?: emptyList()
         val currentAudioTrack = player.audioTrack
@@ -269,6 +292,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             PlayBridgeTVTheme {
                 // Reactive state for UI updates
                 var liveCurrentVideoTrack by remember { mutableStateOf(currentVideoTrack) }
+                var liveCurrentHlsVariant by remember { mutableStateOf(currentHlsVariantUrl) }
                 var liveCurrentAudioTrack by remember { mutableStateOf(currentAudioTrack) }
                 var liveCurrentSubtitleTrack by remember { mutableStateOf(currentSubtitleTrack) }
                 var liveCurrentSubtitleUrl by remember { mutableStateOf(currentSubtitleUrl) }
@@ -278,6 +302,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 VlcTrackSelectionDialog(
                     videoTracks = videoTracks,
                     currentVideoTrack = liveCurrentVideoTrack,
+                    hlsVariants = hlsVariants,
+                    currentHlsVariantUrl = liveCurrentHlsVariant,
                     audioTracks = audioTracks,
                     currentAudioTrack = liveCurrentAudioTrack,
                     subtitleTracks = subtitleTracks,
@@ -292,6 +318,27 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     onVideoTrackSelected = { id ->
                         player.videoTrack = id
                         liveCurrentVideoTrack = id
+                    },
+                    onHlsVariantSelected = { url ->
+                        val wasHlsAuto = currentHlsVariantUrl == null
+                        val newUrl = if (url == "AUTO") originalM3u8Url else url
+
+                        // Avoid unnecessary restarts
+                        if (url != "AUTO" && currentHlsVariantUrl == url) return@VlcTrackSelectionDialog
+                        if (url == "AUTO" && wasHlsAuto) return@VlcTrackSelectionDialog
+
+                        currentHlsVariantUrl = if (url == "AUTO") null else url
+                        liveCurrentHlsVariant = currentHlsVariantUrl
+
+                        if (newUrl != null) {
+                            val time = player.time
+                            playVideo(newUrl, currentHeaders)
+                            mediaPlayer?.time = time
+
+                            if (wasPlaying) {
+                                mediaPlayer?.play()
+                            }
+                        }
                     },
                     onAudioTrackSelected = { id ->
                         player.audioTrack = id
