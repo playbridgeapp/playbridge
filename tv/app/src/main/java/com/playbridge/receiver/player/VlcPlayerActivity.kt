@@ -238,7 +238,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun playVideo(url: String, headers: Map<String, String>?, startPaused: Boolean = false) {
+    private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
         val media = Media(libVLC, Uri.parse(url)).apply {
             setHWDecoderEnabled(true, false)
 
@@ -261,11 +261,19 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             }
         }
 
+        mediaPlayer?.stop()
         mediaPlayer?.media = media
         media.release()
 
-        if (!startPaused) {
-            mediaPlayer?.play()
+        // VLC needs to be playing to reliably accept seek commands for a new media source
+        mediaPlayer?.play()
+
+        if (resumeTime != null && resumeTime > 0) {
+            mediaPlayer?.time = resumeTime
+        }
+
+        if (startPaused) {
+            mediaPlayer?.pause()
         }
     }
 
@@ -334,8 +342,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                         if (newUrl != null) {
                             val time = player.time
-                            playVideo(newUrl, currentHeaders, startPaused = true)
-                            mediaPlayer?.time = time
+                            playVideo(newUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
                         }
                     },
                     onAudioTrackSelected = { id ->
