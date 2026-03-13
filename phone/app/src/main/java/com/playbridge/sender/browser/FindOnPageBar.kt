@@ -51,7 +51,7 @@ fun FindOnPageBar(
             // Search Icon
             Icon(
                 imageVector = Icons.Default.Search,
-                contentDescription = null,
+                contentDescription = "Search",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp, end = 8.dp)
             )
