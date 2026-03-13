@@ -58,6 +58,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         pendingSeekTime?.let { targetTime ->
             mediaPlayer?.time = targetTime
             pendingSeekTime = null
+            controlsManager.setPendingSeekTime(null)
         }
     }
 
@@ -156,7 +157,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             nextButton = findViewById(R.id.btn_next),
             filterButton = findViewById(R.id.btn_filter),
             onShowSettings = { showSettingsDialog() },
-            onError = { handleVlcError() }
+            onError = { handleVlcError() },
+            onSeekForwardRequested = { handleSeek(1) },
+            onSeekBackwardRequested = { handleSeek(-1) }
         )
 
         controlsManager.attachPlayer()
@@ -451,6 +454,23 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onSurfacesDestroyed(vout: IVLCVout?) {}
 
+    private fun handleSeek(multiplier: Int) {
+        val player = mediaPlayer ?: return
+        val length = player.length
+
+        val currentTime = pendingSeekTime ?: player.time
+        val offset = 10000L * multiplier
+        val newTime = (currentTime + offset).coerceIn(0, if (length > 0) length else Long.MAX_VALUE)
+
+        pendingSeekTime = newTime
+        controlsManager.setPendingSeekTime(newTime)
+
+        seekHandler.removeCallbacks(performSeekRunnable)
+        seekHandler.postDelayed(performSeekRunnable, 400)
+
+        controlsManager.showSeekUI()
+    }
+
     // Handle physical remote/keyboard events
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
         if (event?.action != android.view.KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
@@ -496,38 +516,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                 val repeatCount = event.repeatCount
                 val multiplier = if (repeatCount > 10) 5 else 1
-                val player = mediaPlayer
-                if (player != null) {
-                    val currentTime = pendingSeekTime ?: player.time
-                    val newTime = (currentTime - 10000L * multiplier).coerceAtLeast(0)
-                    pendingSeekTime = newTime
-
-                    controlsManager.updatePendingSeekProgress(newTime)
-
-                    seekHandler.removeCallbacks(performSeekRunnable)
-                    seekHandler.postDelayed(performSeekRunnable, 400)
-                }
-                controlsManager.showSeekUI()
+                handleSeek(-multiplier)
                 true
             }
             android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 val repeatCount = event.repeatCount
                 val multiplier = if (repeatCount > 10) 5 else 1
-                val player = mediaPlayer
-                if (player != null) {
-                    val length = player.length
-                    if (length > 0) {
-                        val currentTime = pendingSeekTime ?: player.time
-                        val newTime = (currentTime + 10000L * multiplier).coerceAtMost(length)
-                        pendingSeekTime = newTime
-
-                        controlsManager.updatePendingSeekProgress(newTime)
-
-                        seekHandler.removeCallbacks(performSeekRunnable)
-                        seekHandler.postDelayed(performSeekRunnable, 400)
-                    }
-                }
-                controlsManager.showSeekUI()
+                handleSeek(multiplier)
                 true
             }
             android.view.KeyEvent.KEYCODE_DPAD_UP -> {
