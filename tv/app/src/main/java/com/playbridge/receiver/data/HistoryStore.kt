@@ -153,7 +153,23 @@ class HistoryStore(private val context: Context) {
     
     suspend fun clearHistory() {
         context.historyDataStore.edit { prefs ->
-            prefs.remove(PLAYBACK_HISTORY)
+            val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
+            val currentList = try {
+                protocolJson.decodeFromString<List<PlaybackHistoryItem>>(currentJson)
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+            val favoritesOnly = currentList.filter { it.isFavorite }
+
+            if (favoritesOnly.isEmpty()) {
+                prefs.remove(PLAYBACK_HISTORY)
+            } else {
+                prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
+                    ListSerializer(PlaybackHistoryItem.serializer()),
+                    favoritesOnly
+                )
+            }
         }
     }
 

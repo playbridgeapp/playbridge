@@ -111,7 +111,7 @@ fun LibraryScreen(
             val displayedHistory = if (selectedTabIndex == 1) {
                 history.filter { it.isFavorite }
             } else {
-                history
+                history.filter { !it.isFavorite }
             }
 
             if (displayedHistory.isEmpty()) {
@@ -155,7 +155,7 @@ fun HistoryItemCard(
     onLongClick: () -> Unit
 ) {
     Card(
-        scale = CardDefaults.scale(focusedScale = 1.05f),
+        scale = CardDefaults.scale(focusedScale = 1.0f),
         onClick = onClick,
         onLongClick = onLongClick,
         modifier = Modifier
