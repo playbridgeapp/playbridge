@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -65,6 +66,33 @@ fun LibraryScreen(
     var isSearching by remember { mutableStateOf(false) }
     var searchResults by remember { mutableStateOf<List<TmdbMultiSearchResult>>(emptyList()) }
     var isSearchLoading by remember { mutableStateOf(false) }
+
+    // Discovery state
+    var selectedGenres by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var matchAllGenres by remember { mutableStateOf(false) }
+    var discoveredMovies by remember { mutableStateOf<List<TmdbMovie>>(emptyList()) }
+    var discoveredTvShows by remember { mutableStateOf<List<TmdbTvShow>>(emptyList()) }
+    var isDiscoveryLoading by remember { mutableStateOf(false) }
+
+    // Load discovery data when genres or match type changes
+    LaunchedEffect(selectedGenres, matchAllGenres) {
+        if (selectedGenres.isEmpty()) {
+            discoveredMovies = emptyList()
+            discoveredTvShows = emptyList()
+            return@LaunchedEffect
+        }
+
+        isDiscoveryLoading = true
+        val separator = if (matchAllGenres) "," else "|"
+        val genreString = selectedGenres.joinToString(separator)
+
+        val movies = tmdb.discoverMovies(withGenres = genreString)
+        val tv = tmdb.discoverTvShows(withGenres = genreString)
+
+        discoveredMovies = movies.results
+        discoveredTvShows = tv.results
+        isDiscoveryLoading = false
+    }
 
     // Load initial data
     LaunchedEffect(isConfigured) {
@@ -191,6 +219,120 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
+                    // Discovery Filters
+                    item {
+                        Column(modifier = Modifier.padding(bottom = 8.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Discover by Genre",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (selectedGenres.size > 1) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            if (matchAllGenres) "Match All" else "Match Any",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            modifier = Modifier.padding(end = 8.dp)
+                                        )
+                                        Switch(
+                                            checked = matchAllGenres,
+                                            onCheckedChange = { matchAllGenres = it },
+                                            modifier = Modifier.scale(0.8f)
+                                        )
+                                    }
+                                }
+                            }
+
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(TmdbCommonGenres.list) { genre ->
+                                    val isSelected = selectedGenres.contains(genre.id)
+                                    FilterChip(
+                                        selected = isSelected,
+                                        onClick = {
+                                            selectedGenres = if (isSelected) {
+                                                selectedGenres - genre.id
+                                            } else {
+                                                selectedGenres + genre.id
+                                            }
+                                        },
+                                        label = { Text(genre.name) },
+                                        leadingIcon = if (isSelected) {
+                                            {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = "Selected",
+                                                    modifier = Modifier.size(FilterChipDefaults.IconSize)
+                                                )
+                                            }
+                                        } else null
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (selectedGenres.isNotEmpty()) {
+                        if (isDiscoveryLoading) {
+                            item {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator()
+                                }
+                            }
+                        } else {
+                            if (discoveredMovies.isNotEmpty()) {
+                                item {
+                                    MediaRow(
+                                        title = "✨ Discovered Movies",
+                                        items = discoveredMovies,
+                                        onItemClick = { onMovieClick(it.id) },
+                                        posterUrl = { it.posterUrl },
+                                        displayTitle = { it.title },
+                                        year = { it.year },
+                                        rating = { it.rating }
+                                    )
+                                }
+                            }
+                            if (discoveredTvShows.isNotEmpty()) {
+                                item {
+                                    MediaRow(
+                                        title = "✨ Discovered TV Shows",
+                                        items = discoveredTvShows,
+                                        onItemClick = { onTvShowClick(it.id) },
+                                        posterUrl = { it.posterUrl },
+                                        displayTitle = { it.name },
+                                        year = { it.year },
+                                        rating = { it.rating }
+                                    )
+                                }
+                            }
+                            if (discoveredMovies.isEmpty() && discoveredTvShows.isEmpty()) {
+                                item {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "No results found for selected genres.",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
                     // Trending Today
                     if (trending.isNotEmpty()) {
                         item {
@@ -237,6 +379,7 @@ fun LibraryScreen(
                                 rating = { it.rating }
                             )
                         }
+                    }
                     }
                 }
             }

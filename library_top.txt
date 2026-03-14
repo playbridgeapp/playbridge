@@ -1,0 +1,100 @@
+package com.playbridge.sender.browser
+
+import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.playbridge.sender.data.library.*
+import kotlinx.coroutines.launch
+
+/**
+ * Main Library screen — browse popular movies, TV shows, trending, and search.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LibraryScreen(
+    onBack: () -> Unit,
+    onMovieClick: (Int) -> Unit,
+    onTvShowClick: (Int) -> Unit
+) {
+    val context = LocalContext.current
+    val tmdb = remember { TmdbRepository(context) }
+    val scope = rememberCoroutineScope()
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Check if API key is configured
+    val isConfigured = remember { tmdb.isConfigured() }
+
+    // Data state
+    var popularMovies by remember { mutableStateOf<List<TmdbMovie>>(emptyList()) }
+    var popularTvShows by remember { mutableStateOf<List<TmdbTvShow>>(emptyList()) }
+    var trending by remember { mutableStateOf<List<TmdbMultiSearchResult>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    // Search state
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchResults by remember { mutableStateOf<List<TmdbMultiSearchResult>>(emptyList()) }
+    var isSearchLoading by remember { mutableStateOf(false) }
+
+    // Load initial data
+    LaunchedEffect(isConfigured) {
+        if (isConfigured) {
+            isLoading = true
+            val movies = tmdb.getPopularMovies()
+            val tvShows = tmdb.getPopularTvShows()
+            val trend = tmdb.getTrending()
+            popularMovies = movies.results
+            popularTvShows = tvShows.results
+            trending = trend.results.filter { it.isMovie || it.isTvShow }
+            isLoading = false
+        } else {
+            isLoading = false
+        }
+    }
+
+    Scaffold(
+        contentWindowInsets = WindowInsets(0.dp),
+        topBar = {
+            TopAppBar(
+                title = {
+                    if (isSearching) {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search movies & TV shows...") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = {
+                                    keyboardController?.hide()
+                                    if (searchQuery.isNotBlank()) {
