@@ -124,7 +124,7 @@ class AddonRepository(private val addonDao: AddonDao) {
 
                     // Score each stream: prefer English/Multi language + quality match
                     val best = streams
-                        .map { s ->
+                        .maxByOrNull { s ->
                             val text = "${s.stream.name.orEmpty()} ${s.stream.title.orEmpty()}".lowercase()
                             var score = 0
 
@@ -149,11 +149,8 @@ class AddonRepository(private val addonDao: AddonDao) {
                             // Prefer direct URLs
                             if (s.stream.isDirectUrl) score += 1
 
-                            s to score
+                            score
                         }
-                        .sortedByDescending { it.second }
-                        .firstOrNull()
-                        ?.first
 
                     if (best != null) {
                         EpisodeStream(

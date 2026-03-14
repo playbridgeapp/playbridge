@@ -138,15 +138,17 @@ fun DetectedVideosSheet(
                 }
             } else {
                 // Video list
+                val subtitlesByTabId = remember(allSubtitles) {
+                    allSubtitles.groupBy { it.tabId }
+                }
+
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(playableVideos) { video ->
-                        // Find subtitles from the same tab
-                        val relevantSubtitles = remember(allSubtitles, video.tabId) {
-                            allSubtitles.filter { it.tabId == video.tabId }
-                        }
+                        // Get pre-computed subtitles for this tab
+                        val relevantSubtitles = subtitlesByTabId[video.tabId] ?: emptyList()
                         
                         VideoItemDetailed(
                             video = video,
