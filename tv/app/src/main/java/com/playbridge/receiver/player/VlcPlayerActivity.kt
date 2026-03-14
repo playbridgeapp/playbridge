@@ -255,13 +255,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false, audioUrl: String? = null) {
+    private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
         val media = Media(libVLC, Uri.parse(url)).apply {
             setHWDecoderEnabled(true, false)
-
-            if (audioUrl != null) {
-                addOption(":input-slave=$audioUrl")
-            }
 
             // Apply headers to VLC
             headers?.forEach { (key, value) ->
@@ -352,7 +348,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     },
                     onHlsVariantSelected = { url ->
                         val wasHlsAuto = currentHlsVariantUrl == null
-                        val newUrl = if (url == "AUTO") originalM3u8Url else url
 
                         // Avoid unnecessary restarts
                         if (url != "AUTO" && currentHlsVariantUrl == url) return@VlcTrackSelectionDialog
@@ -361,10 +356,24 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         currentHlsVariantUrl = if (url == "AUTO") null else url
                         liveCurrentHlsVariant = currentHlsVariantUrl
 
-                        if (newUrl != null) {
-                            val time = player.time
-                            val variant = hlsVariants.find { it.url == newUrl }
-                            playVideo(newUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying, audioUrl = variant?.audioUrl)
+                        val time = player.time
+                        if (url == "AUTO" && originalM3u8Url != null) {
+                            playVideo(originalM3u8Url!!, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                        } else if (originalM3u8Url != null) {
+                            lifecycleScope.launch {
+                                val filteredMasterUrl = M3uParser.generateFilteredMasterPlaylist(
+                                    originalM3u8Url!!,
+                                    currentHeaders,
+                                    url,
+                                    cacheDir
+                                )
+                                if (filteredMasterUrl != null) {
+                                    playVideo(filteredMasterUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                                } else {
+                                    // Fallback to playing the direct variant URL if filtering fails
+                                    playVideo(url, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                                }
+                            }
                         }
                     },
                     onAudioTrackSelected = { id ->
