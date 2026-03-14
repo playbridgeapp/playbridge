@@ -7,12 +7,6 @@ import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.URI
-import java.net.ServerSocket
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.GlobalScope
-import java.io.OutputStreamWriter
-import java.io.BufferedWriter
-import java.net.InetAddress
 
 private const val TAG = "M3uParser"
 
@@ -24,59 +18,6 @@ data class HlsVariant(
 )
 
 object M3uParser {
-
-    private var localServerSocket: ServerSocket? = null
-
-    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
-    private fun startLocalServer(payload: String): String {
-        localServerSocket?.close()
-        try {
-            val serverSocket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
-            localServerSocket = serverSocket
-            val port = serverSocket.localPort
-
-            GlobalScope.launch(Dispatchers.IO) {
-                try {
-                    while (!serverSocket.isClosed) {
-                        val socket = serverSocket.accept()
-                        launch(Dispatchers.IO) {
-                            try {
-                                val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-                                val requestLine = reader.readLine()
-
-                                if (requestLine != null && requestLine.startsWith("GET")) {
-                                    // Read and discard remaining HTTP headers to avoid TCP RST on close
-                                    var headerLine = reader.readLine()
-                                    while (!headerLine.isNullOrEmpty()) {
-                                        headerLine = reader.readLine()
-                                    }
-
-                                    val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream()))
-                                    writer.write("HTTP/1.1 200 OK\r\n")
-                                    writer.write("Content-Type: application/vnd.apple.mpegurl\r\n")
-                                    writer.write("Connection: close\r\n")
-                                    writer.write("Content-Length: ${payload.toByteArray().size}\r\n")
-                                    writer.write("\r\n")
-                                    writer.write(payload)
-                                    writer.flush()
-                                }
-                            } catch (e: Exception) {
-                                // Ignore client disconnects
-                            } finally {
-                                socket.close()
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    // Server closed
-                }
-            }
-            return "http://127.0.0.1:$port/master.m3u8"
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start local server", e)
-            throw e
-        }
-    }
 
     suspend fun parseMasterPlaylist(url: String, headers: Map<String, String>?): List<HlsVariant>? = withContext(Dispatchers.IO) {
         try {
@@ -168,94 +109,6 @@ object M3uParser {
             return@withContext if (isMasterPlaylist && variants.isNotEmpty()) variants else null
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing master playlist", e)
-            return@withContext null
-        }
-    }
-
-    suspend fun generateFilteredMasterPlaylist(url: String, headers: Map<String, String>?, targetVariantUrl: String): String? = withContext(Dispatchers.IO) {
-        try {
-            val sniffer = ContentSniffer()
-            val client = sniffer.getUnsafeOkHttpClient(headers)
-            val requestBuilder = okhttp3.Request.Builder().url(url)
-
-            val response = client.newCall(requestBuilder.build()).execute()
-            if (!response.isSuccessful) {
-                Log.w(TAG, "Failed to fetch master playlist for filtering: HTTP ${response.code}")
-                response.close()
-                return@withContext null
-            }
-
-            val body = response.body
-            if (body == null) {
-                response.close()
-                return@withContext null
-            }
-
-            val filteredLines = mutableListOf<String>()
-            var currentVariantInfLine = ""
-
-            BufferedReader(InputStreamReader(body.byteStream())).use { reader ->
-                var line: String? = reader.readLine()
-                while (line != null) {
-                    val trimmed = line.trim()
-
-                    if (trimmed.startsWith("#EXT-X-STREAM-INF")) {
-                        currentVariantInfLine = trimmed
-                    } else if (!trimmed.startsWith("#") && currentVariantInfLine.isNotEmpty()) {
-                        // This is a stream URL line
-                        val streamUrl = try {
-                            val uri = URI(trimmed)
-                            if (uri.isAbsolute) trimmed else URI(url).resolve(uri).toString()
-                        } catch (e: Exception) {
-                            trimmed
-                        }
-
-                        // Modify the BANDWIDTH to trick VLC's adaptive selector
-                        val bwMatch = Regex("""\bBANDWIDTH=(\d+)""").find(currentVariantInfLine)
-                        var modifiedInfLine = currentVariantInfLine
-
-                        if (bwMatch != null) {
-                            val originalBw = bwMatch.groupValues[1]
-                            // If this is the target stream, make it appear incredibly low-bandwidth so VLC's
-                            // ABR (Adaptive Bitrate) algorithm safely selects it first.
-                            // For all other variants, make them appear impossibly high-bandwidth so VLC never switches to them.
-                            val newBw = if (streamUrl == targetVariantUrl) "1" else "999999999"
-                            modifiedInfLine = currentVariantInfLine.replace("BANDWIDTH=$originalBw", "BANDWIDTH=$newBw")
-                        }
-
-                        filteredLines.add(modifiedInfLine)
-                        filteredLines.add(streamUrl)
-                        currentVariantInfLine = ""
-                    } else if (trimmed.startsWith("#EXT-X-MEDIA:")) {
-                        // For MEDIA tags (like AUDIO), make sure the URI is absolute so VLC can find it
-                        val uriMatch = Regex("""URI="([^"]+)"""").find(trimmed)
-                        val originalUri = uriMatch?.groupValues?.get(1)
-                        if (originalUri != null) {
-                            val absoluteUri = try {
-                                val parsedUri = URI(originalUri)
-                                if (parsedUri.isAbsolute) originalUri else URI(url).resolve(parsedUri).toString()
-                            } catch (e: Exception) {
-                                originalUri
-                            }
-                            val modifiedLine = trimmed.replace("URI=\"$originalUri\"", "URI=\"$absoluteUri\"")
-                            filteredLines.add(modifiedLine)
-                        } else {
-                            filteredLines.add(trimmed)
-                        }
-                    } else if (trimmed.isNotEmpty() && currentVariantInfLine.isEmpty()) {
-                        // Other tags (like EXTM3U, VERSION, INDEPENDENT-SEGMENTS)
-                        filteredLines.add(trimmed)
-                    }
-
-                    line = reader.readLine()
-                }
-            }
-
-            val payload = filteredLines.joinToString("\n")
-            return@withContext startLocalServer(payload)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error generating filtered master playlist", e)
             return@withContext null
         }
     }
