@@ -540,6 +540,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     onAudioTrackSelected = { id ->
                         player.audioTrack = id
                         liveCurrentAudioTrack = id
+                        // Force decoder flush/resync to prevent video from getting stuck
+                        player.time = player.time
                     },
                     onSubtitleTrackSelected = { id ->
                         player.spuTrack = id
