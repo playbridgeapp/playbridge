@@ -28,7 +28,9 @@ class VlcControlsManager(
     private val onShowSettings: () -> Unit,
     private val onError: () -> Unit,
     private val onSeekForwardRequested: () -> Unit,
-    private val onSeekBackwardRequested: () -> Unit
+    private val onSeekBackwardRequested: () -> Unit,
+    private val onPrevious: () -> Unit,
+    private val onNext: () -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var isControlsVisible = false
@@ -100,8 +102,27 @@ class VlcControlsManager(
             onShowSettings()
         }
 
+        prevButton.setOnClickListener {
+            onPrevious()
+        }
+
+        nextButton.setOnClickListener {
+            onNext()
+        }
+
         // Initially hide controls
         hideControls()
+    }
+
+    fun setPlaylistVisible(visible: Boolean) {
+        val vis = if (visible) View.VISIBLE else View.GONE
+        playlistButton.visibility = vis
+        prevButton.visibility = vis
+        nextButton.visibility = vis
+    }
+
+    fun getTitle(): String? {
+        return titleText.text.toString()
     }
 
     fun setPendingSeekTime(time: Long?) {

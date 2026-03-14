@@ -58,6 +58,7 @@ class ExoPlayerActivity : PlayerActivity() {
     override fun getMediaDuration(): Long = player?.duration ?: 0L
     override fun getCurrentPosition(): Long = player?.currentPosition ?: 0L
     override fun seekTo(position: Long) { player?.seekTo(position) }
+    override fun getVideoSurfaceView(): android.view.SurfaceView? = playerView.videoSurfaceView as? android.view.SurfaceView
     private var audioDiscontinuityRetryCount = 0
     private var videoDecoderRetryCount = 0
 
@@ -204,9 +205,8 @@ class ExoPlayerActivity : PlayerActivity() {
         progressManager = ProgressManager(
             context = this,
             historyStore = historyStore,
-            playerView = playerView,
             lifecycleScope = lifecycleScope,
-            playerProvider = { player }
+            playerActivity = this
         )
 
         inputHandler = InputHandler(
