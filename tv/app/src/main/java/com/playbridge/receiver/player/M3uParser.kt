@@ -14,7 +14,8 @@ data class HlsVariant(
     val url: String,
     val resolution: String?,
     val bandwidth: Int?,
-    val codecs: String?
+    val codecs: String?,
+    val audioUrl: String? = null
 )
 
 object M3uParser {
@@ -45,6 +46,9 @@ object M3uParser {
             var currentResolution: String? = null
             var currentBandwidth: Int? = null
             var currentCodecs: String? = null
+            var currentAudioGroup: String? = null
+
+            val audioGroups = mutableMapOf<String, String>() // GROUP-ID to URI mapping
 
             BufferedReader(InputStreamReader(body.byteStream())).use { reader ->
                 var line: String? = reader.readLine()
@@ -63,7 +67,26 @@ object M3uParser {
                         continue
                     }
 
-                    if (trimmed.startsWith("#EXT-X-STREAM-INF")) {
+                    if (trimmed.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
+                        // Parse audio groups
+                        isMasterPlaylist = true
+                        val groupIdMatch = Regex("""GROUP-ID="([^"]+)"""").find(trimmed)
+                        val uriMatch = Regex("""URI="([^"]+)"""").find(trimmed)
+
+                        val groupId = groupIdMatch?.groupValues?.get(1)
+                        val uri = uriMatch?.groupValues?.get(1)
+
+                        if (groupId != null && uri != null) {
+                            val absoluteUri = try {
+                                val parsedUri = URI(uri)
+                                if (parsedUri.isAbsolute) uri else URI(url).resolve(parsedUri).toString()
+                            } catch (e: Exception) {
+                                uri
+                            }
+                            // Store mapping of group id to the absolute audio stream URL
+                            audioGroups[groupId] = absoluteUri
+                        }
+                    } else if (trimmed.startsWith("#EXT-X-STREAM-INF")) {
                         isMasterPlaylist = true
 
                         // Parse attributes
@@ -75,6 +98,10 @@ object M3uParser {
 
                         val codecsMatch = Regex("""CODECS="([^"]+)"""").find(trimmed)
                         currentCodecs = codecsMatch?.groupValues?.get(1)
+
+                        val audioMatch = Regex("""AUDIO="([^"]+)"""").find(trimmed)
+                        currentAudioGroup = audioMatch?.groupValues?.get(1)
+
                     } else if (!trimmed.startsWith("#") && currentBandwidth != null) {
                         // It's a URI for the stream inf
                         val streamUrl = try {
@@ -88,12 +115,15 @@ object M3uParser {
                             trimmed
                         }
 
+                        val resolvedAudioUrl = currentAudioGroup?.let { audioGroups[it] }
+
                         variants.add(
                             HlsVariant(
                                 url = streamUrl,
                                 resolution = currentResolution,
                                 bandwidth = currentBandwidth,
-                                codecs = currentCodecs
+                                codecs = currentCodecs,
+                                audioUrl = resolvedAudioUrl
                             )
                         )
 
@@ -101,6 +131,7 @@ object M3uParser {
                         currentResolution = null
                         currentBandwidth = null
                         currentCodecs = null
+                        currentAudioGroup = null
                     }
                     line = reader.readLine()
                 }

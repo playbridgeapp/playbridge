@@ -255,9 +255,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
+    private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false, audioUrl: String? = null) {
         val media = Media(libVLC, Uri.parse(url)).apply {
             setHWDecoderEnabled(true, false)
+
+            if (audioUrl != null) {
+                addOption(":input-slave=$audioUrl")
+            }
 
             // Apply headers to VLC
             headers?.forEach { (key, value) ->
@@ -359,7 +363,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                         if (newUrl != null) {
                             val time = player.time
-                            playVideo(newUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                            val variant = hlsVariants.find { it.url == newUrl }
+                            playVideo(newUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying, audioUrl = variant?.audioUrl)
                         }
                     },
                     onAudioTrackSelected = { id ->
