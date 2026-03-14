@@ -45,6 +45,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var currentSubtitleUrl: String? = null
     private var currentPlaybackSpeed: Float = 1.0f
     private var currentVideoScalingMode: String = "Fit"
+    private var preferredAudioTrackId: String? = null
+    private var preferredVideoTrackId: String? = null
+    private var preferredSubtitleTrackId: String? = null
 
     // Settings state
     private var originalM3u8Url: String? = null
@@ -399,7 +402,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             headers = headers,
             playlistJson = plistJson,
             playlistIndex = playlistIndex,
-            preferredAudioLanguage = null, // Vlc uses track ID internally, not lang directly in UI
+            preferredAudioLanguage = preferredAudioTrackId?.toString(), // Use the audio property to pass track ID for history if needed
             preferredSubtitleLanguage = null,
             externalSubtitleUrl = currentSubtitleUrl,
             playbackSpeed = currentPlaybackSpeed,
@@ -437,6 +440,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 }
             }
 
+            // Read stored track id from history if present and we haven't overridden it this session
+            if (preferredAudioTrackId == null && historyItem?.preferredAudioLanguage != null) {
+                preferredAudioTrackId = historyItem.preferredAudioLanguage
+            }
+
+            // For VLC media options, we can optionally pass audio track, but passing it directly
+            // via media option `:audio-track` requires the internal index (starting at 0), not VLC's internal ID
+            // So setting player.audioTrack after playback starts is generally safer,
+            // but `:audio-track` works if the ID is known. Let's just set it dynamically.
+
             mediaPlayer?.stop()
             mediaPlayer?.media = media
             media.release()
@@ -472,6 +485,18 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             if (startPaused) {
                 mediaPlayer?.pause()
             }
+
+            // Wait briefly for tracks to be available to set preferred tracks
+            if (preferredAudioTrackId != null || preferredVideoTrackId != null || preferredSubtitleTrackId != null) {
+                // Delay slightly so track info populates
+                kotlinx.coroutines.delay(100)
+                preferredAudioTrackId?.let { mediaPlayer?.selectTrack(it) }
+                preferredVideoTrackId?.let { mediaPlayer?.selectTrack(it) }
+
+                if (preferredSubtitleTrackId != null) {
+                    mediaPlayer?.selectTrack(preferredSubtitleTrackId)
+                }
+            }
         }
     }
 
@@ -493,14 +518,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val wasPlaying = player.isPlaying
         if (wasPlaying) player.pause()
 
-        val videoTracks = player.videoTracks?.toList() ?: emptyList()
-        val currentVideoTrack = player.videoTrack
+        val videoTracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)?.toList() ?: emptyList()
+        val currentVideoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)?.id
 
-        val audioTracks = player.audioTracks?.toList() ?: emptyList()
-        val currentAudioTrack = player.audioTrack
+        val audioTracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)?.toList() ?: emptyList()
+        val currentAudioTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)?.id
 
-        val subtitleTracks = player.spuTracks?.toList() ?: emptyList()
-        val currentSubtitleTrack = player.spuTrack
+        val subtitleTracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.toList() ?: emptyList()
+        val currentSubtitleTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.id
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
         activeDialog = dialog
@@ -534,19 +559,28 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         dialog.dismiss()
                     },
                     onVideoTrackSelected = { id ->
-                        player.videoTrack = id
+                        preferredVideoTrackId = id
+                        if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video) else player.selectTrack(id)
                         liveCurrentVideoTrack = id
                     },
                     onAudioTrackSelected = { id ->
-                        player.audioTrack = id
+                        preferredAudioTrackId = id
                         liveCurrentAudioTrack = id
-                        // Force decoder flush/resync to prevent video from getting stuck
-                        player.time = player.time
+
+                        // Restart playback completely to avoid video freezing on Android LibVLC
+                        val currentTime = player.time
+                        val wasPlaying = player.isPlaying
+                        player.stop()
+
+                        originalM3u8Url?.let { url ->
+                            playVideo(url, currentHeaders, resumeTime = currentTime, startPaused = !wasPlaying)
+                        }
                     },
                     onSubtitleTrackSelected = { id ->
-                        player.spuTrack = id
+                        preferredSubtitleTrackId = id
+                        if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) else player.selectTrack(id)
                         liveCurrentSubtitleTrack = id
-                        if (id != -1) {
+                        if (id != null) {
                             currentSubtitleUrl = null
                             liveCurrentSubtitleUrl = null
                         }
@@ -555,8 +589,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         currentSubtitleUrl = url
                         liveCurrentSubtitleUrl = url
                         if (url != null) {
-                            player.spuTrack = -1 // Disable embedded
-                            liveCurrentSubtitleTrack = -1
+                            player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) // Disable embedded
+                            liveCurrentSubtitleTrack = null
                             // In LibVLC Android bindings, the enum is IMedia.Slave.Type
                             player.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, android.net.Uri.parse(url), true)
                         }
