@@ -232,21 +232,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         @Suppress("UNCHECKED_CAST")
         val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
 
-        // Parse playlist if present
-        val playlistJson = intent.getStringExtra(ServerService.EXTRA_PLAYLIST)
-        if (playlistJson != null) {
-            try {
-                val itemsList = com.playbridge.protocol.protocolJson.decodeFromString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
-                    playlistJson
-                )
-                playlistItems = itemsList.toMutableList()
-                playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
-                controlsManager.setPlaylistVisible(true)
-            } catch (e: Exception) {
-                playlistItems = mutableListOf()
-                controlsManager.setPlaylistVisible(false)
-            }
+        // Read playlist if present
+        val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
+        val inMemoryPlaylist = PlaylistStore.currentPlaylist
+        if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
+            playlistItems = inMemoryPlaylist.toMutableList()
+            playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
+            controlsManager.setPlaylistVisible(true)
         } else {
             playlistItems = mutableListOf()
             controlsManager.setPlaylistVisible(false)

@@ -254,21 +254,15 @@ class ExoPlayerActivity : PlayerActivity() {
 
         val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
 
-        // Parse playlist if present
-        val playlistJson = intent?.getStringExtra(ServerService.EXTRA_PLAYLIST)
-        if (playlistJson != null) {
-            try {
-                val itemsList = com.playbridge.protocol.protocolJson.decodeFromString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
-                    playlistJson
-                )
-                playlistItems = itemsList.toMutableList()
-                playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
-                FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Failed to parse playlist", e)
-                playlistItems = mutableListOf()
-            }
+        // Read playlist if present
+        val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
+        val inMemoryPlaylist = PlaylistStore.currentPlaylist
+        if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
+            playlistItems = inMemoryPlaylist.toMutableList()
+            playlistIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
+            FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
+        } else {
+            playlistItems = mutableListOf()
         }
 
         // Restore saved selections from history
