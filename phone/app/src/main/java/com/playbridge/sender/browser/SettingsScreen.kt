@@ -41,6 +41,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+import com.playbridge.sender.data.history.BookmarkEntity
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.library.AddonRepository
 import org.mozilla.geckoview.GeckoSession
@@ -81,6 +82,7 @@ fun SettingsScreen(
     var exportUiPrefs by remember { mutableStateOf(true) }
     var exportAddons by remember { mutableStateOf(true) }
     var exportTabs by remember { mutableStateOf(true) }
+    var exportBookmarks by remember { mutableStateOf(true) }
     var pendingExportJson by remember { mutableStateOf("") }
     var showImportTabsDialog by remember { mutableStateOf(false) }
     var importedTabsToRestore by remember { mutableStateOf<List<ExportedTab>?>(null) }
@@ -159,6 +161,19 @@ fun SettingsScreen(
                     }
                 }
 
+                // Import Bookmarks
+                if (imported.bookmarks != null && imported.bookmarks.isNotEmpty()) {
+                    val bookmarkDao = DatabaseProvider.getDatabase(context).bookmarkDao()
+                    imported.bookmarks.forEach { bookmark ->
+                        bookmarkDao.insert(
+                            BookmarkEntity(
+                                url = bookmark.url,
+                                title = bookmark.title
+                            )
+                        )
+                    }
+                }
+
                 withContext(Dispatchers.Main) {
                     if (imported.tabs != null && imported.tabs.isNotEmpty() && Components.isEngineInitialized()) {
                         val currentUrls = Components.store.state.tabs.map { it.content.url }
@@ -222,6 +237,15 @@ fun SettingsScreen(
                 val addonUrls = addons.map { it.manifestUrl }
                 val database = DatabaseProvider.getDatabase(context)
 
+                val currentBookmarks = if (exportBookmarks) {
+                    database.bookmarkDao().getAllSync().map { entity ->
+                        ExportedBookmark(
+                            url = entity.url,
+                            title = entity.title
+                        )
+                    }
+                } else null
+
                 val currentTabs = if (exportTabs) {
                     database.tabDao().getAll().map { entity ->
                         ExportedTab(
@@ -241,7 +265,8 @@ fun SettingsScreen(
                     tvPlayerMode = if (exportTvDefaults) prefs.getString("tv_player_mode", "tv") else null,
                     tvBrowserMode = if (exportTvDefaults) prefs.getString("tv_browser_mode", "tv") else null,
                     addonUrls = if (exportAddons) addonUrls else emptyList(),
-                    tabs = currentTabs
+                    tabs = currentTabs,
+                    bookmarks = currentBookmarks
                 )
 
                 val jsonString = Json {
@@ -766,6 +791,10 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = exportTabs, onCheckedChange = { exportTabs = it })
                         Text("Current Open Tabs")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportBookmarks, onCheckedChange = { exportBookmarks = it })
+                        Text("Bookmarks")
                     }
                 }
             },

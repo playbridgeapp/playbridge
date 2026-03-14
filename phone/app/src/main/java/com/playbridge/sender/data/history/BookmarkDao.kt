@@ -15,6 +15,9 @@ interface BookmarkDao {
     @Query("SELECT * FROM bookmarks ORDER BY timestamp DESC")
     fun getAll(): Flow<List<BookmarkEntity>>
 
+    @Query("SELECT * FROM bookmarks ORDER BY timestamp DESC")
+    suspend fun getAllSync(): List<BookmarkEntity>
+
     @Query("SELECT EXISTS(SELECT 1 FROM bookmarks WHERE url = :url)")
     fun exists(url: String): Flow<Boolean>
 

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.playbridge.sender.browser.DownloadManagerSingleton
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadCursor
 import java.io.IOException
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+@androidx.annotation.OptIn(UnstableApi::class)
 data class DownloadItem(
     val id: Long,
     val title: String,
@@ -49,6 +51,7 @@ data class DownloadItem(
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun DownloadsScreen(
     onBack: () -> Unit,
@@ -309,6 +312,7 @@ fun getSystemDownloads(downloadManager: DownloadManager): List<DownloadItem> {
     return downloads
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 fun getExoDownloads(downloadManager: androidx.media3.exoplayer.offline.DownloadManager): List<DownloadItem> {
     val downloads = mutableListOf<DownloadItem>()
     try {
