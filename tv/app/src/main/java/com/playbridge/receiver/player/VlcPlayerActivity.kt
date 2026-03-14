@@ -421,6 +421,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             val media = Media(libVLC, Uri.parse(url)).apply {
                 setHWDecoderEnabled(true, false)
 
+                if (finalResumeTime != null && finalResumeTime > 0) {
+                    addOption(":start-time=${finalResumeTime / 1000f}")
+                }
+
                 // Apply headers to VLC
                 headers?.forEach { (key, value) ->
                     when (key.lowercase()) {
@@ -477,10 +481,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
             // VLC needs to be playing to reliably accept seek commands for a new media source
             mediaPlayer?.play()
-
-            if (finalResumeTime != null && finalResumeTime > 0) {
-                mediaPlayer?.time = finalResumeTime
-            }
 
             if (startPaused) {
                 mediaPlayer?.pause()
