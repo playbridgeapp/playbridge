@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.GlobalScope
 import java.io.OutputStreamWriter
 import java.io.BufferedWriter
+import java.net.InetAddress
 
 private const val TAG = "M3uParser"
 
@@ -30,7 +31,7 @@ object M3uParser {
     private fun startLocalServer(payload: String): String {
         localServerSocket?.close()
         try {
-            val serverSocket = ServerSocket(0)
+            val serverSocket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
             localServerSocket = serverSocket
             val port = serverSocket.localPort
 
@@ -44,6 +45,12 @@ object M3uParser {
                                 val requestLine = reader.readLine()
 
                                 if (requestLine != null && requestLine.startsWith("GET")) {
+                                    // Read and discard remaining HTTP headers to avoid TCP RST on close
+                                    var headerLine = reader.readLine()
+                                    while (!headerLine.isNullOrEmpty()) {
+                                        headerLine = reader.readLine()
+                                    }
+
                                     val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream()))
                                     writer.write("HTTP/1.1 200 OK\r\n")
                                     writer.write("Content-Type: application/vnd.apple.mpegurl\r\n")
@@ -185,7 +192,6 @@ object M3uParser {
             }
 
             val filteredLines = mutableListOf<String>()
-            var keepingVariant = false
             var currentVariantInfLine = ""
 
             BufferedReader(InputStreamReader(body.byteStream())).use { reader ->
@@ -204,10 +210,21 @@ object M3uParser {
                             trimmed
                         }
 
-                        if (streamUrl == targetVariantUrl) {
-                            filteredLines.add(currentVariantInfLine)
-                            filteredLines.add(streamUrl)
+                        // Modify the BANDWIDTH to trick VLC's adaptive selector
+                        val bwMatch = Regex("""\bBANDWIDTH=(\d+)""").find(currentVariantInfLine)
+                        var modifiedInfLine = currentVariantInfLine
+
+                        if (bwMatch != null) {
+                            val originalBw = bwMatch.groupValues[1]
+                            // If this is the target stream, make it appear incredibly low-bandwidth so VLC's
+                            // ABR (Adaptive Bitrate) algorithm safely selects it first.
+                            // For all other variants, make them appear impossibly high-bandwidth so VLC never switches to them.
+                            val newBw = if (streamUrl == targetVariantUrl) "1" else "999999999"
+                            modifiedInfLine = currentVariantInfLine.replace("BANDWIDTH=$originalBw", "BANDWIDTH=$newBw")
                         }
+
+                        filteredLines.add(modifiedInfLine)
+                        filteredLines.add(streamUrl)
                         currentVariantInfLine = ""
                     } else if (trimmed.startsWith("#EXT-X-MEDIA:")) {
                         // For MEDIA tags (like AUDIO), make sure the URI is absolute so VLC can find it

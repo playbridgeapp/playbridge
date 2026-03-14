@@ -377,6 +377,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                                     playVideo(url, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
                                 }
                             }
+                        } else {
+                            // Safe fallback if originalM3u8Url is somehow null
+                            playVideo(url, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
                         }
                     },
                     onAudioTrackSelected = { id ->
