@@ -5,8 +5,6 @@ import android.graphics.Bitmap
 import android.util.Log
 import android.view.TextureView
 import androidx.lifecycle.LifecycleCoroutineScope
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import com.playbridge.receiver.data.HistoryStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -24,9 +22,8 @@ private const val TAG = "ProgressManager"
 class ProgressManager(
     private val context: Context,
     private val historyStore: HistoryStore,
-    private val playerView: PlayerView,
     private val lifecycleScope: LifecycleCoroutineScope,
-    private val playerProvider: () -> ExoPlayer?
+    private val playerActivity: PlayerActivity
 ) {
     private var currentUrl: String? = null
     private var currentTitle: String? = null
@@ -106,7 +103,7 @@ class ProgressManager(
             val item = history.find { it.url == url }
             if (item != null && item.position > 5000 && item.position < (item.duration - 5000)) {
                 Log.i(TAG, "Resuming from history: ${item.position}ms")
-                playerProvider()?.seekTo(item.position)
+                playerActivity.seekTo(item.position)
                 withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(context, "Resuming playback", android.widget.Toast.LENGTH_SHORT).show()
                 }
@@ -122,12 +119,11 @@ class ProgressManager(
      * Persist current playback position and optional thumbnail to history.
      */
     fun saveProgress(thumbnailBitmap: Bitmap? = null) {
-        val player = playerProvider() ?: return
+        val duration = playerActivity.getMediaDuration()
+        val position = playerActivity.getCurrentPosition()
         val url = currentUrl
         Log.d(TAG, "Attempting to save progress for $url")
-        if (url != null && player.duration > 0 && player.currentPosition > 0) {
-            val position = player.currentPosition
-            val duration = player.duration
+        if (url != null && duration > 0 && position > 0) {
             val title = currentTitle
             val contentType = currentContentType
             val headers = currentHeaders
@@ -160,7 +156,7 @@ class ProgressManager(
                 }
             }
         } else {
-            Log.d(TAG, "Not saving: URL=$url, Duration=${player.duration}, Pos=${player.currentPosition}")
+            Log.d(TAG, "Not saving: URL=$url, Duration=${duration}, Pos=${position}")
         }
     }
 
@@ -168,7 +164,7 @@ class ProgressManager(
      * Capture a bitmap from the PlayerView's SurfaceView asynchronously.
      */
     suspend fun captureBitmapSuspend(): Bitmap? {
-        val surfaceView = playerView.videoSurfaceView as? android.view.SurfaceView ?: return null
+        val surfaceView = playerActivity.getVideoSurfaceView() ?: return null
         val width = surfaceView.width
         val height = surfaceView.height
 

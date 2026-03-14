@@ -24,6 +24,7 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.playbridge.receiver.R
 import com.playbridge.receiver.server.ServerService
+import com.playbridge.receiver.data.HistoryStore
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import com.playbridge.receiver.ui.theme.PlayBridgeTVTheme
@@ -51,8 +52,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var originalM3u8Url: String? = null
     private var currentHeaders: Map<String, String>? = null
 
+    // Playlist state
+    private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
+    private var playlistIndex: Int = 0
+
     // Settings dialog state
     private var activeDialog: android.app.Dialog? = null
+
+    private lateinit var progressManager: ProgressManager
+    private lateinit var historyStore: HistoryStore
 
     // Seek buffering
     private var pendingSeekTime: Long? = null
@@ -75,6 +83,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         pendingSeekTime = null
         seekHandler.removeCallbacks(performSeekRunnable)
     }
+    override fun getVideoSurfaceView(): android.view.SurfaceView? = if (this::surfaceView.isInitialized) surfaceView else null
 
     private val remoteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -125,6 +134,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         setContentView(R.layout.activity_vlc_player)
         surfaceView = findViewById(R.id.surface_view)
 
+        historyStore = HistoryStore(this)
+        progressManager = ProgressManager(
+            context = this,
+            historyStore = historyStore,
+            lifecycleScope = lifecycleScope,
+            playerActivity = this
+        )
+
         // Setup VLC
         val args = ArrayList<String>().apply {
             add("-vvv") // Verbosity
@@ -138,6 +155,21 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             setVideoView(surfaceView)
             addCallback(this@VlcPlayerActivity)
             attachViews()
+        }
+
+        // Listen for end of playback to advance playlist
+        mediaPlayer?.setEventListener { event ->
+            if (event.type == MediaPlayer.Event.EndReached) {
+                if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
+                    runOnUiThread {
+                        playNextInPlaylist()
+                    }
+                } else {
+                    runOnUiThread {
+                        finish()
+                    }
+                }
+            }
         }
 
         // Set video scale to 0 (fit to screen)
@@ -162,7 +194,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             onShowSettings = { showSettingsDialog() },
             onError = { handleVlcError() },
             onSeekForwardRequested = { handleSeek(1) },
-            onSeekBackwardRequested = { handleSeek(-1) }
+            onSeekBackwardRequested = { handleSeek(-1) },
+            onPrevious = { playPreviousInPlaylist() },
+            onNext = { playNextInPlaylist() }
         )
 
         controlsManager.attachPlayer()
@@ -199,6 +233,26 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         @Suppress("UNCHECKED_CAST")
         val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
 
+        // Parse playlist if present
+        val playlistJson = intent.getStringExtra(ServerService.EXTRA_PLAYLIST)
+        if (playlistJson != null) {
+            try {
+                val itemsList = com.playbridge.protocol.protocolJson.decodeFromString(
+                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                    playlistJson
+                )
+                playlistItems = itemsList.toMutableList()
+                playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
+                controlsManager.setPlaylistVisible(true)
+            } catch (e: Exception) {
+                playlistItems = mutableListOf()
+                controlsManager.setPlaylistVisible(false)
+            }
+        } else {
+            playlistItems = mutableListOf()
+            controlsManager.setPlaylistVisible(false)
+        }
+
         if (url == null) {
             Toast.makeText(this, "No URL provided", Toast.LENGTH_SHORT).show()
             finish()
@@ -224,6 +278,46 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             }
         } else {
             playVideo(url, headers)
+        }
+    }
+
+    private fun playNextInPlaylist() {
+        if (playlistItems.isEmpty() || playlistIndex >= playlistItems.size - 1) return
+        playlistIndex++
+        val nextItem = playlistItems[playlistIndex]
+        playPlaylistItem(nextItem)
+    }
+
+    private fun playPreviousInPlaylist() {
+        if (playlistItems.isEmpty() || playlistIndex <= 0) return
+        playlistIndex--
+        val prevItem = playlistItems[playlistIndex]
+        playPlaylistItem(prevItem)
+    }
+
+    private fun playPlaylistItem(item: com.playbridge.protocol.PlayPayload) {
+        syncSelectionsToProgressManager()
+        progressManager.saveProgress()
+
+        controlsManager.setTitle(item.title)
+        originalM3u8Url = item.url
+        currentHeaders = item.headers
+        subtitleUrls = item.subtitles ?: emptyList()
+        currentSubtitleUrl = null
+
+        if (item.url.contains(".m3u8", ignoreCase = true)) {
+            lifecycleScope.launch {
+                val variants = M3uParser.parseMasterPlaylist(item.url, item.headers)
+                if (variants != null && variants.isNotEmpty()) {
+                    hlsVariants = variants
+                } else {
+                    hlsVariants = emptyList()
+                }
+                playVideo(item.url, item.headers)
+            }
+        } else {
+            hlsVariants = emptyList()
+            playVideo(item.url, item.headers)
         }
     }
 
@@ -259,42 +353,112 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
-        val media = Media(libVLC, Uri.parse(url)).apply {
-            setHWDecoderEnabled(true, false)
+        val title = controlsManager.getTitle()
 
-            // Apply headers to VLC
-            headers?.forEach { (key, value) ->
-                when (key.lowercase()) {
-                    "user-agent" -> addOption(":http-user-agent=$value")
-                    "referer" -> addOption(":http-referrer=$value")
+        // Build playlist JSON for history persistence
+        val plistJson = if (playlistItems.isNotEmpty()) {
+            try {
+                com.playbridge.protocol.protocolJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                    playlistItems
+                )
+            } catch (e: Exception) { null }
+        } else null
+
+        progressManager.setCurrentMedia(
+            url = url,
+            title = title,
+            contentType = null,
+            headers = headers,
+            playlistJson = plistJson,
+            playlistIndex = playlistIndex,
+            preferredAudioLanguage = null, // Vlc uses track ID internally, not lang directly in UI
+            preferredSubtitleLanguage = null,
+            externalSubtitleUrl = currentSubtitleUrl,
+            playbackSpeed = currentPlaybackSpeed,
+            videoScalingMode = when (currentVideoScalingMode) {
+                "Fit" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                "Fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+                "Center" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                else -> null
+            }
+        )
+
+        lifecycleScope.launch {
+            val historyItem = progressManager.restoreProgress(url)
+            val finalResumeTime = resumeTime ?: historyItem?.position
+
+            val media = Media(libVLC, Uri.parse(url)).apply {
+                setHWDecoderEnabled(true, false)
+
+                // Apply headers to VLC
+                headers?.forEach { (key, value) ->
+                    when (key.lowercase()) {
+                        "user-agent" -> addOption(":http-user-agent=$value")
+                        "referer" -> addOption(":http-referrer=$value")
+                    }
+                }
+
+                // Reconstruct remaining custom headers to VLC's format if they are not agent/referer
+                val customHeaders = headers?.filter { entry ->
+                    val lowerKey = entry.key.lowercase()
+                    lowerKey != "user-agent" && lowerKey != "referer"
+                }?.map { "${it.key}: ${it.value}" }?.joinToString("\r\n")
+
+                if (!customHeaders.isNullOrBlank()) {
+                    addOption(":http-custom-headers=$customHeaders")
                 }
             }
 
-            // Reconstruct remaining custom headers to VLC's format if they are not agent/referer
-            val customHeaders = headers?.filter { entry ->
-                val lowerKey = entry.key.lowercase()
-                lowerKey != "user-agent" && lowerKey != "referer"
-            }?.map { "${it.key}: ${it.value}" }?.joinToString("\r\n")
+            mediaPlayer?.stop()
+            mediaPlayer?.media = media
+            media.release()
 
-            if (!customHeaders.isNullOrBlank()) {
-                addOption(":http-custom-headers=$customHeaders")
+            // Restore settings from history if present
+            historyItem?.playbackSpeed?.let {
+                currentPlaybackSpeed = it
+                mediaPlayer?.rate = it
+            }
+            historyItem?.videoScalingMode?.let {
+                currentVideoScalingMode = when (it) {
+                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT -> "Fit"
+                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Fill"
+                    else -> "Fit"
+                }
+                when (currentVideoScalingMode) {
+                    "Fit" -> { mediaPlayer?.scale = 0f; mediaPlayer?.aspectRatio = null }
+                    "Fill" -> { mediaPlayer?.scale = 0f; mediaPlayer?.aspectRatio = null }
+                }
+            }
+            historyItem?.externalSubtitleUrl?.let {
+                currentSubtitleUrl = it
+                mediaPlayer?.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, android.net.Uri.parse(it), true)
+            }
+
+            // VLC needs to be playing to reliably accept seek commands for a new media source
+            mediaPlayer?.play()
+
+            if (finalResumeTime != null && finalResumeTime > 0) {
+                mediaPlayer?.time = finalResumeTime
+            }
+
+            if (startPaused) {
+                mediaPlayer?.pause()
             }
         }
+    }
 
-        mediaPlayer?.stop()
-        mediaPlayer?.media = media
-        media.release()
-
-        // VLC needs to be playing to reliably accept seek commands for a new media source
-        mediaPlayer?.play()
-
-        if (resumeTime != null && resumeTime > 0) {
-            mediaPlayer?.time = resumeTime
-        }
-
-        if (startPaused) {
-            mediaPlayer?.pause()
-        }
+    private fun syncSelectionsToProgressManager() {
+        progressManager.updateSelections(
+            externalSubtitleUrl = currentSubtitleUrl,
+            playbackSpeed = currentPlaybackSpeed,
+            videoScalingMode = when (currentVideoScalingMode) {
+                "Fit" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                "Fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+                "Center" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                else -> null
+            }
+        )
     }
 
     private fun showSettingsDialog() {
@@ -451,6 +615,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onDestroy() {
         activeDialog?.dismiss()
+        syncSelectionsToProgressManager()
+        progressManager.saveProgress()
         super.onDestroy()
         unregisterReceiver(remoteReceiver)
         controlsManager.detachPlayer()
@@ -570,6 +736,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
+
+    override fun onPause() {
+        super.onPause()
+        mediaPlayer?.pause()
+        syncSelectionsToProgressManager()
+        lifecycleScope.launch {
+            val bitmap = progressManager.captureBitmapSuspend()
+            progressManager.saveProgress(bitmap)
+        }
+    }
 
     override fun onResume() {
         super.onResume()

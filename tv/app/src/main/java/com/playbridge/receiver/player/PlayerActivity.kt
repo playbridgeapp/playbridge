@@ -20,6 +20,7 @@ abstract class PlayerActivity : ComponentActivity() {
     abstract fun getMediaDuration(): Long
     abstract fun getCurrentPosition(): Long
     abstract fun seekTo(position: Long)
+    abstract fun getVideoSurfaceView(): android.view.SurfaceView?
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
