@@ -57,8 +57,20 @@ fun LibraryScreen(
 
     // Data state
     var popularMovies by remember { mutableStateOf<List<TmdbMovie>>(emptyList()) }
+    var popularMoviesPage by remember { mutableStateOf(1) }
+    var isLoadingMorePopularMovies by remember { mutableStateOf(false) }
+    var hasMorePopularMovies by remember { mutableStateOf(true) }
+
     var popularTvShows by remember { mutableStateOf<List<TmdbTvShow>>(emptyList()) }
+    var popularTvShowsPage by remember { mutableStateOf(1) }
+    var isLoadingMorePopularTvShows by remember { mutableStateOf(false) }
+    var hasMorePopularTvShows by remember { mutableStateOf(true) }
+
     var trending by remember { mutableStateOf<List<TmdbMultiSearchResult>>(emptyList()) }
+    var trendingPage by remember { mutableStateOf(1) }
+    var isLoadingMoreTrending by remember { mutableStateOf(false) }
+    var hasMoreTrending by remember { mutableStateOf(true) }
+
     var isLoading by remember { mutableStateOf(true) }
 
     // Search state
@@ -70,8 +82,17 @@ fun LibraryScreen(
     // Discovery state
     var selectedGenres by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var matchAllGenres by remember { mutableStateOf(false) }
+
     var discoveredMovies by remember { mutableStateOf<List<TmdbMovie>>(emptyList()) }
+    var discoveredMoviesPage by remember { mutableStateOf(1) }
+    var isLoadingMoreDiscoveredMovies by remember { mutableStateOf(false) }
+    var hasMoreDiscoveredMovies by remember { mutableStateOf(true) }
+
     var discoveredTvShows by remember { mutableStateOf<List<TmdbTvShow>>(emptyList()) }
+    var discoveredTvShowsPage by remember { mutableStateOf(1) }
+    var isLoadingMoreDiscoveredTvShows by remember { mutableStateOf(false) }
+    var hasMoreDiscoveredTvShows by remember { mutableStateOf(true) }
+
     var isDiscoveryLoading by remember { mutableStateOf(false) }
 
     // Load discovery data when genres or match type changes
@@ -79,15 +100,23 @@ fun LibraryScreen(
         if (selectedGenres.isEmpty()) {
             discoveredMovies = emptyList()
             discoveredTvShows = emptyList()
+            discoveredMoviesPage = 1
+            discoveredTvShowsPage = 1
+            hasMoreDiscoveredMovies = true
+            hasMoreDiscoveredTvShows = true
             return@LaunchedEffect
         }
 
         isDiscoveryLoading = true
+        discoveredMoviesPage = 1
+        discoveredTvShowsPage = 1
+        hasMoreDiscoveredMovies = true
+        hasMoreDiscoveredTvShows = true
         val separator = if (matchAllGenres) "," else "|"
         val genreString = selectedGenres.joinToString(separator)
 
-        val movies = tmdb.discoverMovies(withGenres = genreString)
-        val tv = tmdb.discoverTvShows(withGenres = genreString)
+        val movies = tmdb.discoverMovies(page = 1, withGenres = genreString)
+        val tv = tmdb.discoverTvShows(page = 1, withGenres = genreString)
 
         discoveredMovies = movies.results
         discoveredTvShows = tv.results
@@ -96,16 +125,22 @@ fun LibraryScreen(
 
     // Load initial data
     LaunchedEffect(isConfigured) {
-        if (isConfigured) {
+        if (isConfigured && popularMovies.isEmpty() && trending.isEmpty()) {
             isLoading = true
-            val movies = tmdb.getPopularMovies()
-            val tvShows = tmdb.getPopularTvShows()
-            val trend = tmdb.getTrending()
+            val movies = tmdb.getPopularMovies(page = 1)
+            val tvShows = tmdb.getPopularTvShows(page = 1)
+            val trend = tmdb.getTrending(page = 1)
             popularMovies = movies.results
+            popularMoviesPage = 1
+
             popularTvShows = tvShows.results
+            popularTvShowsPage = 1
+
             trending = trend.results.filter { it.isMovie || it.isTvShow }
+            trendingPage = 1
+
             isLoading = false
-        } else {
+        } else if (!isConfigured) {
             isLoading = false
         }
     }
@@ -301,7 +336,27 @@ fun LibraryScreen(
                                         posterUrl = { it.posterUrl },
                                         displayTitle = { it.title },
                                         year = { it.year },
-                                        rating = { it.rating }
+                                        rating = { it.rating },
+                                        onLoadMore = {
+                                            if (!isLoadingMoreDiscoveredMovies && hasMoreDiscoveredMovies) {
+                                                scope.launch {
+                                                    isLoadingMoreDiscoveredMovies = true
+                                                    val separator = if (matchAllGenres) "," else "|"
+                                                    val genreString = selectedGenres.joinToString(separator)
+                                                    val nextPage = discoveredMoviesPage + 1
+                                                    val newMovies = tmdb.discoverMovies(page = nextPage, withGenres = genreString)
+                                                    if (newMovies.results.isNotEmpty()) {
+                                                        discoveredMovies = discoveredMovies + newMovies.results
+                                                        discoveredMoviesPage = nextPage
+                                                    } else {
+                                                        hasMoreDiscoveredMovies = false
+                                                    }
+                                                    isLoadingMoreDiscoveredMovies = false
+                                                }
+                                            }
+                                        },
+                                        isLoadingMore = isLoadingMoreDiscoveredMovies,
+                                        hasMore = hasMoreDiscoveredMovies
                                     )
                                 }
                             }
@@ -314,7 +369,27 @@ fun LibraryScreen(
                                         posterUrl = { it.posterUrl },
                                         displayTitle = { it.name },
                                         year = { it.year },
-                                        rating = { it.rating }
+                                        rating = { it.rating },
+                                        onLoadMore = {
+                                            if (!isLoadingMoreDiscoveredTvShows && hasMoreDiscoveredTvShows) {
+                                                scope.launch {
+                                                    isLoadingMoreDiscoveredTvShows = true
+                                                    val separator = if (matchAllGenres) "," else "|"
+                                                    val genreString = selectedGenres.joinToString(separator)
+                                                    val nextPage = discoveredTvShowsPage + 1
+                                                    val newTvShows = tmdb.discoverTvShows(page = nextPage, withGenres = genreString)
+                                                    if (newTvShows.results.isNotEmpty()) {
+                                                        discoveredTvShows = discoveredTvShows + newTvShows.results
+                                                        discoveredTvShowsPage = nextPage
+                                                    } else {
+                                                        hasMoreDiscoveredTvShows = false
+                                                    }
+                                                    isLoadingMoreDiscoveredTvShows = false
+                                                }
+                                            }
+                                        },
+                                        isLoadingMore = isLoadingMoreDiscoveredTvShows,
+                                        hasMore = hasMoreDiscoveredTvShows
                                     )
                                 }
                             }
@@ -346,7 +421,25 @@ fun LibraryScreen(
                                 posterUrl = { it.posterUrl },
                                 displayTitle = { it.displayTitle },
                                 year = { it.year },
-                                rating = { String.format("%.1f", it.voteAverage) }
+                                rating = { String.format("%.1f", it.voteAverage) },
+                                onLoadMore = {
+                                    if (!isLoadingMoreTrending && hasMoreTrending) {
+                                        scope.launch {
+                                            isLoadingMoreTrending = true
+                                            val nextPage = trendingPage + 1
+                                            val newTrending = tmdb.getTrending(page = nextPage)
+                                            if (newTrending.results.isNotEmpty()) {
+                                                trending = trending + newTrending.results.filter { it.isMovie || it.isTvShow }
+                                                trendingPage = nextPage
+                                            } else {
+                                                hasMoreTrending = false
+                                            }
+                                            isLoadingMoreTrending = false
+                                        }
+                                    }
+                                },
+                                isLoadingMore = isLoadingMoreTrending,
+                                hasMore = hasMoreTrending
                             )
                         }
                     }
@@ -361,7 +454,25 @@ fun LibraryScreen(
                                 posterUrl = { it.posterUrl },
                                 displayTitle = { it.title },
                                 year = { it.year },
-                                rating = { it.rating }
+                                rating = { it.rating },
+                                onLoadMore = {
+                                    if (!isLoadingMorePopularMovies && hasMorePopularMovies) {
+                                        scope.launch {
+                                            isLoadingMorePopularMovies = true
+                                            val nextPage = popularMoviesPage + 1
+                                            val newMovies = tmdb.getPopularMovies(page = nextPage)
+                                            if (newMovies.results.isNotEmpty()) {
+                                                popularMovies = popularMovies + newMovies.results
+                                                popularMoviesPage = nextPage
+                                            } else {
+                                                hasMorePopularMovies = false
+                                            }
+                                            isLoadingMorePopularMovies = false
+                                        }
+                                    }
+                                },
+                                isLoadingMore = isLoadingMorePopularMovies,
+                                hasMore = hasMorePopularMovies
                             )
                         }
                     }
@@ -376,7 +487,25 @@ fun LibraryScreen(
                                 posterUrl = { it.posterUrl },
                                 displayTitle = { it.name },
                                 year = { it.year },
-                                rating = { it.rating }
+                                rating = { it.rating },
+                                onLoadMore = {
+                                    if (!isLoadingMorePopularTvShows && hasMorePopularTvShows) {
+                                        scope.launch {
+                                            isLoadingMorePopularTvShows = true
+                                            val nextPage = popularTvShowsPage + 1
+                                            val newTvShows = tmdb.getPopularTvShows(page = nextPage)
+                                            if (newTvShows.results.isNotEmpty()) {
+                                                popularTvShows = popularTvShows + newTvShows.results
+                                                popularTvShowsPage = nextPage
+                                            } else {
+                                                hasMorePopularTvShows = false
+                                            }
+                                            isLoadingMorePopularTvShows = false
+                                        }
+                                    }
+                                },
+                                isLoadingMore = isLoadingMorePopularTvShows,
+                                hasMore = hasMorePopularTvShows
                             )
                         }
                     }
@@ -397,8 +526,28 @@ private fun <T> MediaRow(
     posterUrl: (T) -> String?,
     displayTitle: (T) -> String,
     year: (T) -> String,
-    rating: (T) -> String
+    rating: (T) -> String,
+    onLoadMore: () -> Unit = {},
+    isLoadingMore: Boolean = false,
+    hasMore: Boolean = true
 ) {
+    val listState = rememberLazyListState()
+
+    val isNearEnd by remember {
+        derivedStateOf {
+            val totalItems = listState.layoutInfo.totalItemsCount
+            val lastVisibleItemIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            totalItems > 0 && lastVisibleItemIndex >= totalItems - 3
+        }
+    }
+
+    // Trigger load more when scrolling near the end
+    LaunchedEffect(isNearEnd, isLoadingMore, hasMore) {
+        if (isNearEnd && !isLoadingMore && hasMore) {
+            onLoadMore()
+        }
+    }
+
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         Text(
             text = title,
@@ -408,6 +557,7 @@ private fun <T> MediaRow(
         )
 
         LazyRow(
+            state = listState,
             contentPadding = PaddingValues(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -419,6 +569,18 @@ private fun <T> MediaRow(
                     rating = rating(item),
                     onClick = { onItemClick(item) }
                 )
+            }
+            if (isLoadingMore && hasMore) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .width(60.dp)
+                            .height(195.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                    }
+                }
             }
         }
     }
