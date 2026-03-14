@@ -51,6 +51,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var originalM3u8Url: String? = null
     private var currentHeaders: Map<String, String>? = null
 
+    // Settings dialog state
+    private var activeDialog: android.app.Dialog? = null
+
     // Seek buffering
     private var pendingSeekTime: Long? = null
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -310,6 +313,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val currentSubtitleTrack = player.spuTrack
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
         val composeView = androidx.compose.ui.platform.ComposeView(this)
 
         composeView.setViewTreeLifecycleOwner(this)
@@ -364,8 +368,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                                 val filteredMasterUrl = M3uParser.generateFilteredMasterPlaylist(
                                     originalM3u8Url!!,
                                     currentHeaders,
-                                    url,
-                                    cacheDir
+                                    url
                                 )
                                 if (filteredMasterUrl != null) {
                                     playVideo(filteredMasterUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
@@ -439,6 +442,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setContentView(composeView)
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener {
+            activeDialog = null
             if (wasPlaying) player.play()
             controlsManager.showControls()
         }
@@ -446,6 +450,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     override fun onDestroy() {
+        activeDialog?.dismiss()
         super.onDestroy()
         unregisterReceiver(remoteReceiver)
         controlsManager.detachPlayer()

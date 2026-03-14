@@ -7,6 +7,11 @@ import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.URI
+import java.net.ServerSocket
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.GlobalScope
+import java.io.OutputStreamWriter
+import java.io.BufferedWriter
 
 private const val TAG = "M3uParser"
 
@@ -18,6 +23,53 @@ data class HlsVariant(
 )
 
 object M3uParser {
+
+    private var localServerSocket: ServerSocket? = null
+
+    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+    private fun startLocalServer(payload: String): String {
+        localServerSocket?.close()
+        try {
+            val serverSocket = ServerSocket(0)
+            localServerSocket = serverSocket
+            val port = serverSocket.localPort
+
+            GlobalScope.launch(Dispatchers.IO) {
+                try {
+                    while (!serverSocket.isClosed) {
+                        val socket = serverSocket.accept()
+                        launch(Dispatchers.IO) {
+                            try {
+                                val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+                                val requestLine = reader.readLine()
+
+                                if (requestLine != null && requestLine.startsWith("GET")) {
+                                    val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream()))
+                                    writer.write("HTTP/1.1 200 OK\r\n")
+                                    writer.write("Content-Type: application/vnd.apple.mpegurl\r\n")
+                                    writer.write("Connection: close\r\n")
+                                    writer.write("Content-Length: ${payload.toByteArray().size}\r\n")
+                                    writer.write("\r\n")
+                                    writer.write(payload)
+                                    writer.flush()
+                                }
+                            } catch (e: Exception) {
+                                // Ignore client disconnects
+                            } finally {
+                                socket.close()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Server closed
+                }
+            }
+            return "http://127.0.0.1:$port/master.m3u8"
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start local server", e)
+            throw e
+        }
+    }
 
     suspend fun parseMasterPlaylist(url: String, headers: Map<String, String>?): List<HlsVariant>? = withContext(Dispatchers.IO) {
         try {
@@ -113,7 +165,7 @@ object M3uParser {
         }
     }
 
-    suspend fun generateFilteredMasterPlaylist(url: String, headers: Map<String, String>?, targetVariantUrl: String, cacheDir: java.io.File): String? = withContext(Dispatchers.IO) {
+    suspend fun generateFilteredMasterPlaylist(url: String, headers: Map<String, String>?, targetVariantUrl: String): String? = withContext(Dispatchers.IO) {
         try {
             val sniffer = ContentSniffer()
             val client = sniffer.getUnsafeOkHttpClient(headers)
@@ -182,9 +234,8 @@ object M3uParser {
                 }
             }
 
-            val tempFile = java.io.File(cacheDir, "filtered_master.m3u8")
-            tempFile.writeText(filteredLines.joinToString("\n"))
-            return@withContext tempFile.toURI().toString()
+            val payload = filteredLines.joinToString("\n")
+            return@withContext startLocalServer(payload)
 
         } catch (e: Exception) {
             Log.e(TAG, "Error generating filtered master playlist", e)
