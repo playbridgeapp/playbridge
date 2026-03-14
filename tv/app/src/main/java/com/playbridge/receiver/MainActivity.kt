@@ -189,8 +189,19 @@ fun MainContent(
                         }
                         // Restore playlist context if this item was part of a playlist
                         if (item.playlistJson != null) {
-                            putExtra(ServerService.EXTRA_PLAYLIST, item.playlistJson)
-                            putExtra(ServerService.EXTRA_PLAYLIST_INDEX, item.playlistIndex)
+                            try {
+                                val decoded = com.playbridge.protocol.protocolJson.decodeFromString(
+                                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                                    item.playlistJson
+                                )
+                                com.playbridge.receiver.player.PlaylistStore.currentPlaylist = decoded
+                                putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
+                                putExtra(ServerService.EXTRA_PLAYLIST_INDEX, item.playlistIndex)
+                            } catch (e: Exception) {
+                                com.playbridge.receiver.player.PlaylistStore.currentPlaylist = null
+                            }
+                        } else {
+                            com.playbridge.receiver.player.PlaylistStore.currentPlaylist = null
                         }
                         // Restore saved selections
                         item.preferredAudioLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG, it) }

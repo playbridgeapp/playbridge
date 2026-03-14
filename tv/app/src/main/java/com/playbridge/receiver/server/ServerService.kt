@@ -186,6 +186,8 @@ class ServerService : Service() {
             is Command.Play -> {
                 FileLogger.i(TAG, "=== PLAY COMMAND ===")
 
+                com.playbridge.receiver.player.PlaylistStore.currentPlaylist = null
+
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val tvPref = if (prefs.contains("player_mode")) {
                     prefs.getString("player_mode", "phone") ?: "phone"
@@ -329,10 +331,7 @@ class ServerService : Service() {
                 broadcastContext()
 
                 // Serialize playlist items as JSON for the intent
-                val itemsJson = com.playbridge.protocol.protocolJson.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
-                    command.items
-                )
+                com.playbridge.receiver.player.PlaylistStore.currentPlaylist = command.items
 
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
@@ -350,7 +349,7 @@ class ServerService : Service() {
                         putExtra(EXTRA_TITLE, firstItem.title)
                         putExtra(EXTRA_CONTENT_TYPE, firstItem.contentType)
                     }
-                    putExtra(EXTRA_PLAYLIST, itemsJson)
+                    putExtra(EXTRA_IS_PLAYLIST, true)
                     putExtra(EXTRA_PLAYLIST_INDEX, command.startIndex)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
@@ -527,6 +526,7 @@ class ServerService : Service() {
         const val ACTION_BROWSER_CONTROL = "com.playbridge.receiver.ACTION_BROWSER_CONTROL"
         const val EXTRA_BROWSER_ACTION = "browser_action"
         const val EXTRA_PLAYLIST = "playlist"
+        const val EXTRA_IS_PLAYLIST = "is_playlist"
         const val EXTRA_PLAYLIST_INDEX = "playlist_index"
         const val EXTRA_PREFERRED_AUDIO_LANG = "preferred_audio_lang"
         const val EXTRA_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_lang"

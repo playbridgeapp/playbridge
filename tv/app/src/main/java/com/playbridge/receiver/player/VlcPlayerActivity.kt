@@ -232,21 +232,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         @Suppress("UNCHECKED_CAST")
         val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
 
-        // Parse playlist if present
-        val playlistJson = intent.getStringExtra(ServerService.EXTRA_PLAYLIST)
-        if (playlistJson != null) {
-            try {
-                val itemsList = com.playbridge.protocol.protocolJson.decodeFromString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
-                    playlistJson
-                )
-                playlistItems = itemsList.toMutableList()
-                playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
-                controlsManager.setPlaylistVisible(true)
-            } catch (e: Exception) {
-                playlistItems = mutableListOf()
-                controlsManager.setPlaylistVisible(false)
-            }
+        // Read playlist if present
+        val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
+        val inMemoryPlaylist = PlaylistStore.currentPlaylist
+        if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
+            playlistItems = inMemoryPlaylist.toMutableList()
+            playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
+            controlsManager.setPlaylistVisible(true)
         } else {
             playlistItems = mutableListOf()
             controlsManager.setPlaylistVisible(false)
@@ -266,7 +258,36 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         originalM3u8Url = url
         currentHeaders = headers
 
-        playVideo(url, headers)
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+            val urlWithoutQuery = url.substringBefore("?")
+            if (urlWithoutQuery.endsWith(".m3u")) {
+                try {
+                    val parsedPlaylist = M3uParser.fetchAndParseM3u(url, headers)
+                    if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
+                        playlistItems = parsedPlaylist.toMutableList()
+                        PlaylistStore.currentPlaylist = parsedPlaylist
+                        playlistIndex = 0
+                        controlsManager.setPlaylistVisible(true)
+
+                        val firstItem = parsedPlaylist[0]
+                        controlsManager.setTitle(firstItem.title ?: title)
+                        originalM3u8Url = firstItem.url
+                        currentHeaders = firstItem.headers
+                        subtitleUrls = firstItem.subtitles ?: emptyList()
+                        currentSubtitleUrl = null
+
+                        if (firstItem.url.contains(".m3u8", ignoreCase = true)) {
+                            M3uParser.parseMasterPlaylist(firstItem.url, firstItem.headers)
+                        }
+                        playVideo(firstItem.url, firstItem.headers)
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("VlcPlayerActivity", "Error parsing M3U", e)
+                }
+            }
+            playVideo(url, headers)
+        }
     }
 
     private fun playNextInPlaylist() {
@@ -350,32 +371,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun handleVlcError() {
-        val currentUrl = intent.getStringExtra(ServerService.EXTRA_URL) ?: ""
-        val currentTitle = intent.getStringExtra(ServerService.EXTRA_TITLE)
-
         runOnUiThread {
-            android.widget.Toast.makeText(this, "VLC encountered an error. Trying external player...", android.widget.Toast.LENGTH_SHORT).show()
-            launchExternalPlayer(currentUrl, currentTitle)
-            finish()
-        }
-    }
-
-    private fun launchExternalPlayer(url: String, title: String?) {
-        try {
-            val launchIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(android.net.Uri.parse(url), "video/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
-                title?.let {
-                    putExtra(Intent.EXTRA_TITLE, it)
-                    putExtra("title", it)
-                }
-            }
-            val chooser = Intent.createChooser(launchIntent, "Play with...")
-            startActivity(chooser)
-        } catch (e: Exception) {
-            runOnUiThread {
-                android.widget.Toast.makeText(this, "Could not find an external player", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(this, "VLC encountered an error", android.widget.Toast.LENGTH_SHORT).show()
+            if (playlistItems.isEmpty()) {
+                finish()
             }
         }
     }
