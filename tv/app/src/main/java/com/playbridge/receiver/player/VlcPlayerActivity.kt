@@ -190,6 +190,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             nextButton = findViewById(R.id.btn_next),
             filterButton = findViewById(R.id.btn_filter),
             onShowSettings = { showSettingsDialog() },
+            onShowPlaylist = { showPlaylistPicker() },
             onError = { handleVlcError() },
             onSeekForwardRequested = { handleSeek(1) },
             onSeekBackwardRequested = { handleSeek(-1) },
@@ -280,6 +281,52 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         playlistIndex--
         val prevItem = playlistItems[playlistIndex]
         playPlaylistItem(prevItem)
+    }
+
+    private fun playItemAtIndex(index: Int) {
+        if (playlistItems.isEmpty() || index < 0 || index >= playlistItems.size) return
+        playlistIndex = index
+        playPlaylistItem(playlistItems[index])
+    }
+
+    private fun showPlaylistPicker() {
+        if (playlistItems.isEmpty()) return
+
+        val player = mediaPlayer ?: return
+        val wasPlaying = player.isPlaying
+        if (wasPlaying) player.pause()
+
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
+        val composeView = androidx.compose.ui.platform.ComposeView(this)
+
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+
+        composeView.setContent {
+            com.playbridge.receiver.ui.theme.PlayBridgeTVTheme {
+                PlaylistPickerDialog(
+                    items = playlistItems,
+                    currentIndex = playlistIndex,
+                    onItemSelected = { index ->
+                        dialog.dismiss()
+                        playItemAtIndex(index)
+                    },
+                    onDismiss = {
+                        dialog.dismiss()
+                    }
+                )
+            }
+        }
+
+        dialog.setContentView(composeView)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener {
+            activeDialog = null
+            if (wasPlaying) player.play()
+            controlsManager.showControls()
+        }
+        dialog.show()
     }
 
     private fun playPlaylistItem(item: com.playbridge.protocol.PlayPayload) {
