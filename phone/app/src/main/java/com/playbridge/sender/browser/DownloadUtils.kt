@@ -8,9 +8,11 @@ import android.view.Gravity
 import android.widget.Toast
 import java.io.File
 import android.webkit.MimeTypeMap
+import androidx.media3.common.util.UnstableApi
 
 object DownloadUtils {
 
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun enqueueDownload(
         context: Context,
         url: String,
