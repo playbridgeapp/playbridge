@@ -136,7 +136,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] `CONTRIBUTING.md` created with contribution guidelines
 - [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
 - [x] `.gitignore` properly configured (34 entries covering build, IDE, keystore, OS files)
-- [x] GitHub Actions CI exists for separated projects (`phone_build.yml`, `tv_build.yml`, `extension_build.yml`)
+- [x] GitHub Actions CI exists for separated projects (`android_build.yml`)
 - [x] Clean package structure with clear separation
 - [x] Well-documented protocol messages with KDoc
 - [x] Sealed class pattern for type-safe command handling (shared protocol module)
@@ -200,10 +200,11 @@ PlayBridge/
 ├── CONTRIBUTING.md              # NEW
 ├── .github/
 │   ├── workflows/
-│   │   ├── phone_build.yml
-│   │   ├── tv_build.yml
-│   │   └── extension_build.yml
+│   │   ├── android_build.yml
 │   └── ISSUE_TEMPLATE/          # NEW
+├── publish_releases.sh          # Script to automate GitHub releases using gh CLI
+├── update_ublock.sh             # Script to update uBlock Origin assets in TV GeckoView
+├── test_script.sh               # General testing utility script
 ├── extension/                   # Standalone Desktop Web Extension (Firefox native)
 │   └── src/                     # Extension source code (manifest.json, background.js, etc.)
 ├── protocol/                    # Shared module
