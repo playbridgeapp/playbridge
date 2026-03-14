@@ -258,7 +258,36 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         originalM3u8Url = url
         currentHeaders = headers
 
-        playVideo(url, headers)
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+            val urlWithoutQuery = url.substringBefore("?")
+            if (urlWithoutQuery.endsWith(".m3u")) {
+                try {
+                    val parsedPlaylist = M3uParser.fetchAndParseM3u(url, headers)
+                    if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
+                        playlistItems = parsedPlaylist.toMutableList()
+                        PlaylistStore.currentPlaylist = parsedPlaylist
+                        playlistIndex = 0
+                        controlsManager.setPlaylistVisible(true)
+
+                        val firstItem = parsedPlaylist[0]
+                        controlsManager.setTitle(firstItem.title ?: title)
+                        originalM3u8Url = firstItem.url
+                        currentHeaders = firstItem.headers
+                        subtitleUrls = firstItem.subtitles ?: emptyList()
+                        currentSubtitleUrl = null
+
+                        if (firstItem.url.contains(".m3u8", ignoreCase = true)) {
+                            M3uParser.parseMasterPlaylist(firstItem.url, firstItem.headers)
+                        }
+                        playVideo(firstItem.url, firstItem.headers)
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("VlcPlayerActivity", "Error parsing M3U", e)
+                }
+            }
+            playVideo(url, headers)
+        }
     }
 
     private fun playNextInPlaylist() {
