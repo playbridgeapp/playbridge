@@ -51,6 +51,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var originalM3u8Url: String? = null
     private var currentHeaders: Map<String, String>? = null
 
+    // Settings dialog state
+    private var activeDialog: android.app.Dialog? = null
+
     // Seek buffering
     private var pendingSeekTime: Long? = null
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -310,6 +313,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val currentSubtitleTrack = player.spuTrack
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
         val composeView = androidx.compose.ui.platform.ComposeView(this)
 
         composeView.setViewTreeLifecycleOwner(this)
@@ -348,7 +352,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     },
                     onHlsVariantSelected = { url ->
                         val wasHlsAuto = currentHlsVariantUrl == null
-                        val newUrl = if (url == "AUTO") originalM3u8Url else url
 
                         // Avoid unnecessary restarts
                         if (url != "AUTO" && currentHlsVariantUrl == url) return@VlcTrackSelectionDialog
@@ -357,9 +360,23 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         currentHlsVariantUrl = if (url == "AUTO") null else url
                         liveCurrentHlsVariant = currentHlsVariantUrl
 
-                        if (newUrl != null) {
-                            val time = player.time
-                            playVideo(newUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                        val time = player.time
+                        if (url == "AUTO" && originalM3u8Url != null) {
+                            playVideo(originalM3u8Url!!, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                        } else if (originalM3u8Url != null) {
+                            lifecycleScope.launch {
+                                val filteredMasterUrl = M3uParser.generateFilteredMasterPlaylist(
+                                    originalM3u8Url!!,
+                                    currentHeaders,
+                                    url
+                                )
+                                if (filteredMasterUrl != null) {
+                                    playVideo(filteredMasterUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                                } else {
+                                    // Fallback to playing the direct variant URL if filtering fails
+                                    playVideo(url, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                                }
+                            }
                         }
                     },
                     onAudioTrackSelected = { id ->
@@ -425,6 +442,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setContentView(composeView)
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener {
+            activeDialog = null
             if (wasPlaying) player.play()
             controlsManager.showControls()
         }
@@ -432,6 +450,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     override fun onDestroy() {
+        activeDialog?.dismiss()
         super.onDestroy()
         unregisterReceiver(remoteReceiver)
         controlsManager.detachPlayer()
