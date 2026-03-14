@@ -341,16 +341,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         if (item.url.contains(".m3u8", ignoreCase = true)) {
             lifecycleScope.launch {
-                val variants = M3uParser.parseMasterPlaylist(item.url, item.headers)
-                if (variants != null && variants.isNotEmpty()) {
-                    hlsVariants = variants
-                } else {
-                    hlsVariants = emptyList()
-                }
+                M3uParser.parseMasterPlaylist(item.url, item.headers)
                 playVideo(item.url, item.headers)
             }
         } else {
-            hlsVariants = emptyList()
             playVideo(item.url, item.headers)
         }
     }
