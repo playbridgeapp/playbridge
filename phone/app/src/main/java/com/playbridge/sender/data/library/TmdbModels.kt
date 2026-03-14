@@ -192,3 +192,35 @@ data class TmdbMultiSearchResult(
     val isMovie: Boolean get() = mediaType == "movie"
     val isTvShow: Boolean get() = mediaType == "tv"
 }
+
+
+// ==================== Common Genres ====================
+
+/**
+ * Predefined list of common TMDB genres for the Discovery UI.
+ * Note: TV and Movie sometimes use different IDs for certain genres (e.g. Sci-Fi & Fantasy),
+ * but these are generally safe for both or at least movies.
+ */
+object TmdbCommonGenres {
+    val list = listOf(
+        TmdbGenre(28, "Action"),
+        TmdbGenre(12, "Adventure"),
+        TmdbGenre(16, "Animation"),
+        TmdbGenre(35, "Comedy"),
+        TmdbGenre(80, "Crime"),
+        TmdbGenre(99, "Documentary"),
+        TmdbGenre(18, "Drama"),
+        TmdbGenre(10751, "Family"),
+        TmdbGenre(14, "Fantasy"),
+        TmdbGenre(36, "History"),
+        TmdbGenre(27, "Horror"),
+        TmdbGenre(10402, "Music"),
+        TmdbGenre(9648, "Mystery"),
+        TmdbGenre(10749, "Romance"),
+        TmdbGenre(878, "Science Fiction"),
+        TmdbGenre(10770, "TV Movie"),
+        TmdbGenre(53, "Thriller"),
+        TmdbGenre(10752, "War"),
+        TmdbGenre(37, "Western")
+    )
+}
