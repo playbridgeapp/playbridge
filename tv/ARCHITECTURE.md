@@ -44,7 +44,6 @@ com.playbridge.receiver/
 │   ├── ServerService.kt           (foreground service + command routing, external player intents, ~544 lines)
 │   └── WebSocketServer.kt         (Ktor-based WebSocket server)
 └── ui/                            # Compose TV UI screens
-    ├── HistoryScreen.kt
     ├── HomeScreen.kt
     ├── LibraryScreen.kt
     ├── PairingScreen.kt
@@ -159,7 +158,7 @@ com.playbridge.receiver/
 
 #### Build Configuration (Code)
 - [ ] Switch from APK to AAB (Android App Bundle) — **required for new apps since Aug 2021**
-  - Change `tv_build.yml`: `assembleRelease` → `bundleRelease`
+  - Change `android_build.yml`: `assembleRelease` → `bundleRelease`
   - Update artifact path: `app/build/outputs/bundle/release/`
 - [ ] Enroll in Play App Signing (upload signing key or let Google manage)
 - [ ] Consider enabling R8 minification with proper ProGuard keep rules
