@@ -45,9 +45,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var currentSubtitleUrl: String? = null
     private var currentPlaybackSpeed: Float = 1.0f
     private var currentVideoScalingMode: String = "Fit"
-    private var preferredAudioTrackId: String? = null
-    private var preferredVideoTrackId: String? = null
-    private var preferredSubtitleTrackId: String? = null
 
     // Settings state
     private var originalM3u8Url: String? = null
@@ -402,7 +399,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             headers = headers,
             playlistJson = plistJson,
             playlistIndex = playlistIndex,
-            preferredAudioLanguage = preferredAudioTrackId?.toString(), // Use the audio property to pass track ID for history if needed
+            preferredAudioLanguage = null, // Vlc uses track ID internally, not lang directly in UI
             preferredSubtitleLanguage = null,
             externalSubtitleUrl = currentSubtitleUrl,
             playbackSpeed = currentPlaybackSpeed,
@@ -420,10 +417,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
             val media = Media(libVLC, Uri.parse(url)).apply {
                 setHWDecoderEnabled(true, false)
-
-                if (finalResumeTime != null && finalResumeTime > 0) {
-                    addOption(":start-time=${finalResumeTime / 1000f}")
-                }
 
                 // Apply headers to VLC
                 headers?.forEach { (key, value) ->
@@ -443,16 +436,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     addOption(":http-custom-headers=$customHeaders")
                 }
             }
-
-            // Read stored track id from history if present and we haven't overridden it this session
-            if (preferredAudioTrackId == null && historyItem?.preferredAudioLanguage != null) {
-                preferredAudioTrackId = historyItem.preferredAudioLanguage
-            }
-
-            // For VLC media options, we can optionally pass audio track, but passing it directly
-            // via media option `:audio-track` requires the internal index (starting at 0), not VLC's internal ID
-            // So setting player.audioTrack after playback starts is generally safer,
-            // but `:audio-track` works if the ID is known. Let's just set it dynamically.
 
             mediaPlayer?.stop()
             mediaPlayer?.media = media
@@ -482,20 +465,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             // VLC needs to be playing to reliably accept seek commands for a new media source
             mediaPlayer?.play()
 
-            if (startPaused) {
-                mediaPlayer?.pause()
+            if (finalResumeTime != null && finalResumeTime > 0) {
+                mediaPlayer?.time = finalResumeTime
             }
 
-            // Wait briefly for tracks to be available to set preferred tracks
-            if (preferredAudioTrackId != null || preferredVideoTrackId != null || preferredSubtitleTrackId != null) {
-                // Delay slightly so track info populates
-                kotlinx.coroutines.delay(100)
-                preferredAudioTrackId?.let { mediaPlayer?.selectTrack(it) }
-                preferredVideoTrackId?.let { mediaPlayer?.selectTrack(it) }
-
-                if (preferredSubtitleTrackId != null) {
-                    mediaPlayer?.selectTrack(preferredSubtitleTrackId)
-                }
+            if (startPaused) {
+                mediaPlayer?.pause()
             }
         }
     }
@@ -559,25 +534,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         dialog.dismiss()
                     },
                     onVideoTrackSelected = { id ->
-                        preferredVideoTrackId = id
                         if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video) else player.selectTrack(id)
                         liveCurrentVideoTrack = id
                     },
                     onAudioTrackSelected = { id ->
-                        preferredAudioTrackId = id
+                        if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio) else player.selectTrack(id)
                         liveCurrentAudioTrack = id
-
-                        // Restart playback completely to avoid video freezing on Android LibVLC
-                        val currentTime = player.time
-                        val wasPlaying = player.isPlaying
-                        player.stop()
-
-                        originalM3u8Url?.let { url ->
-                            playVideo(url, currentHeaders, resumeTime = currentTime, startPaused = !wasPlaying)
-                        }
                     },
                     onSubtitleTrackSelected = { id ->
-                        preferredSubtitleTrackId = id
                         if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) else player.selectTrack(id)
                         liveCurrentSubtitleTrack = id
                         if (id != null) {
