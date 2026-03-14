@@ -18,7 +18,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
-import org.videolan.libvlc.MediaPlayer.TrackDescription
+import org.videolan.libvlc.interfaces.IMedia.Track
 
 const val VLC_TAB_VIDEO = 0
 const val VLC_TAB_AUDIO = 1
@@ -29,20 +29,20 @@ const val VLC_TAB_SCALING = 101
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun VlcTrackSelectionDialog(
-    videoTracks: List<TrackDescription>,
-    currentVideoTrack: Int,
-    audioTracks: List<TrackDescription>,
-    currentAudioTrack: Int,
-    subtitleTracks: List<TrackDescription>,
-    currentSubtitleTrack: Int,
+    videoTracks: List<Track>,
+    currentVideoTrack: String?,
+    audioTracks: List<Track>,
+    currentAudioTrack: String?,
+    subtitleTracks: List<Track>,
+    currentSubtitleTrack: String?,
     externalSubtitleUrls: List<String> = emptyList(),
     currentExternalSubtitleUrl: String? = null,
     currentPlaybackSpeed: Float = 1.0f,
     currentVideoScalingMode: String = "Fit", // e.g. "Fit", "Fill", "16:9", "4:3", "Center"
     onDismiss: () -> Unit,
-    onVideoTrackSelected: (Int) -> Unit,
-    onAudioTrackSelected: (Int) -> Unit,
-    onSubtitleTrackSelected: (Int) -> Unit,
+    onVideoTrackSelected: (String?) -> Unit,
+    onAudioTrackSelected: (String?) -> Unit,
+    onSubtitleTrackSelected: (String?) -> Unit,
     onExternalSubtitleSelected: (String?) -> Unit,
     onPlaybackSpeedSelected: (Float) -> Unit = {},
     onVideoScalingSelected: (String) -> Unit = {}
@@ -159,9 +159,9 @@ fun VlcTrackSelectionDialog(
 
 @Composable
 fun VlcTrackList(
-    tracks: List<TrackDescription>,
-    currentTrackId: Int,
-    onTrackSelected: (Int) -> Unit
+    tracks: List<Track>,
+    currentTrackId: String?,
+    onTrackSelected: (String?) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier
@@ -193,11 +193,11 @@ fun VlcTrackList(
 
 @Composable
 fun VlcSubtitleTrackList(
-    tracks: List<TrackDescription>,
-    currentTrackId: Int,
+    tracks: List<Track>,
+    currentTrackId: String?,
     subtitleUrls: List<String>,
     currentSubtitleUrl: String?,
-    onTrackSelected: (Int) -> Unit,
+    onTrackSelected: (String?) -> Unit,
     onExternalSubtitleSelected: (String?) -> Unit
 ) {
     LazyColumn(
@@ -206,15 +206,15 @@ fun VlcSubtitleTrackList(
             .padding(start = 8.dp),
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
-        // "Off" Option (VLC usually uses ID -1 for off)
+        // "Off" Option
         item {
-            val isOffSelected = currentTrackId == -1 && currentSubtitleUrl == null
+            val isOffSelected = currentTrackId == null && currentSubtitleUrl == null
             TrackItem(
                 name = "Off",
                 isSelected = isOffSelected,
                 onClick = {
                     onExternalSubtitleSelected(null)
-                    onTrackSelected(-1)
+                    onTrackSelected(null)
                 }
             )
         }
@@ -226,18 +226,15 @@ fun VlcSubtitleTrackList(
                     modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp))
             }
             items(tracks) { track ->
-                // Skip the "Disable" track as we handle it above, usually it has ID -1
-                if (track.id != -1) {
-                    val isSelected = track.id == currentTrackId && currentSubtitleUrl == null
-                    TrackItem(
-                        name = track.name ?: "Subtitle ${track.id}",
-                        isSelected = isSelected,
-                        onClick = {
-                            onExternalSubtitleSelected(null)
-                            onTrackSelected(track.id)
-                        }
-                    )
-                }
+                val isSelected = track.id == currentTrackId && currentSubtitleUrl == null
+                TrackItem(
+                    name = track.name ?: "Subtitle ${track.id}",
+                    isSelected = isSelected,
+                    onClick = {
+                        onExternalSubtitleSelected(null)
+                        onTrackSelected(track.id)
+                    }
+                )
             }
         }
 
@@ -262,7 +259,7 @@ fun VlcSubtitleTrackList(
                     name = filename,
                     isSelected = isSelected,
                     onClick = {
-                        onTrackSelected(-1) // Disable embedded
+                        onTrackSelected(null) // Disable embedded
                         onExternalSubtitleSelected(url)
                     }
                 )
