@@ -45,7 +45,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var currentPlaybackSpeed: Float = 1.0f
     private var currentVideoScalingMode: String = "Fit"
 
-    // Settings state
+    // HLS Variant state
+    private var hlsVariants: List<HlsVariant> = emptyList()
+    private var currentHlsVariantUrl: String? = null
     private var originalM3u8Url: String? = null
     private var currentHeaders: Map<String, String>? = null
 
@@ -211,7 +213,18 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         originalM3u8Url = url
         currentHeaders = headers
 
-        playVideo(url, headers)
+        // Check if it's an m3u8 playlist that we can parse for multiple variants
+        if (url.contains(".m3u8", ignoreCase = true)) {
+            lifecycleScope.launch {
+                val variants = M3uParser.parseMasterPlaylist(url, headers)
+                if (variants != null && variants.isNotEmpty()) {
+                    hlsVariants = variants
+                }
+                playVideo(url, headers)
+            }
+        } else {
+            playVideo(url, headers)
+        }
     }
 
     private fun handleVlcError() {
@@ -291,6 +304,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         val videoTracks = player.videoTracks?.toList() ?: emptyList()
         val currentVideoTrack = player.videoTrack
+        val isHlsVariantsAvailable = hlsVariants.isNotEmpty()
 
         val audioTracks = player.audioTracks?.toList() ?: emptyList()
         val currentAudioTrack = player.audioTrack
@@ -309,6 +323,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             PlayBridgeTVTheme {
                 // Reactive state for UI updates
                 var liveCurrentVideoTrack by remember { mutableStateOf(currentVideoTrack) }
+                var liveCurrentHlsVariant by remember { mutableStateOf(currentHlsVariantUrl) }
                 var liveCurrentAudioTrack by remember { mutableStateOf(currentAudioTrack) }
                 var liveCurrentSubtitleTrack by remember { mutableStateOf(currentSubtitleTrack) }
                 var liveCurrentSubtitleUrl by remember { mutableStateOf(currentSubtitleUrl) }
@@ -318,6 +333,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 VlcTrackSelectionDialog(
                     videoTracks = videoTracks,
                     currentVideoTrack = liveCurrentVideoTrack,
+                    hlsVariants = hlsVariants,
+                    currentHlsVariantUrl = liveCurrentHlsVariant,
                     audioTracks = audioTracks,
                     currentAudioTrack = liveCurrentAudioTrack,
                     subtitleTracks = subtitleTracks,
@@ -332,6 +349,38 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     onVideoTrackSelected = { id ->
                         player.videoTrack = id
                         liveCurrentVideoTrack = id
+                    },
+                    onHlsVariantSelected = { url ->
+                        val wasHlsAuto = currentHlsVariantUrl == null
+
+                        // Avoid unnecessary restarts
+                        if (url != "AUTO" && currentHlsVariantUrl == url) return@VlcTrackSelectionDialog
+                        if (url == "AUTO" && wasHlsAuto) return@VlcTrackSelectionDialog
+
+                        currentHlsVariantUrl = if (url == "AUTO") null else url
+                        liveCurrentHlsVariant = currentHlsVariantUrl
+
+                        val time = player.time
+                        if (url == "AUTO" && originalM3u8Url != null) {
+                            playVideo(originalM3u8Url!!, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                        } else if (originalM3u8Url != null) {
+                            lifecycleScope.launch {
+                                val filteredMasterUrl = M3uParser.generateFilteredMasterPlaylist(
+                                    originalM3u8Url!!,
+                                    currentHeaders,
+                                    url
+                                )
+                                if (filteredMasterUrl != null) {
+                                    playVideo(filteredMasterUrl, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                                } else {
+                                    // Fallback to playing the direct variant URL if filtering fails
+                                    playVideo(url, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                                }
+                            }
+                        } else {
+                            // Safe fallback if originalM3u8Url is somehow null
+                            playVideo(url, currentHeaders, resumeTime = time, startPaused = !wasPlaying)
+                        }
                     },
                     onAudioTrackSelected = { id ->
                         player.audioTrack = id

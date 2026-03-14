@@ -31,6 +31,8 @@ const val VLC_TAB_SCALING = 101
 fun VlcTrackSelectionDialog(
     videoTracks: List<TrackDescription>,
     currentVideoTrack: Int,
+    hlsVariants: List<HlsVariant> = emptyList(),
+    currentHlsVariantUrl: String? = null,
     audioTracks: List<TrackDescription>,
     currentAudioTrack: Int,
     subtitleTracks: List<TrackDescription>,
@@ -41,6 +43,7 @@ fun VlcTrackSelectionDialog(
     currentVideoScalingMode: String = "Fit", // e.g. "Fit", "Fill", "16:9", "4:3", "Center"
     onDismiss: () -> Unit,
     onVideoTrackSelected: (Int) -> Unit,
+    onHlsVariantSelected: (String) -> Unit = {},
     onAudioTrackSelected: (Int) -> Unit,
     onSubtitleTrackSelected: (Int) -> Unit,
     onExternalSubtitleSelected: (String?) -> Unit,
@@ -115,11 +118,19 @@ fun VlcTrackSelectionDialog(
             // Track List
             when (selectedTab) {
                 VLC_TAB_VIDEO -> {
-                    VlcTrackList(
-                        tracks = videoTracks,
-                        currentTrackId = currentVideoTrack,
-                        onTrackSelected = onVideoTrackSelected
-                    )
+                    if (hlsVariants.isNotEmpty()) {
+                        VlcHlsVariantList(
+                            variants = hlsVariants,
+                            currentVariantUrl = currentHlsVariantUrl,
+                            onVariantSelected = onHlsVariantSelected
+                        )
+                    } else {
+                        VlcTrackList(
+                            tracks = videoTracks,
+                            currentTrackId = currentVideoTrack,
+                            onTrackSelected = onVideoTrackSelected
+                        )
+                    }
                 }
                 VLC_TAB_AUDIO -> {
                     VlcTrackList(
@@ -155,6 +166,40 @@ fun VlcTrackSelectionDialog(
     }
 
     androidx.activity.compose.BackHandler { onDismiss() }
+}
+
+@Composable
+fun VlcHlsVariantList(
+    variants: List<HlsVariant>,
+    currentVariantUrl: String?,
+    onVariantSelected: (String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(start = 8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp)
+    ) {
+        item {
+            TrackItem(
+                name = "Auto",
+                isSelected = currentVariantUrl == null,
+                onClick = { onVariantSelected("AUTO") }
+            )
+        }
+        items(variants) { variant ->
+            val isSelected = variant.url == currentVariantUrl
+            val resolutionText = variant.resolution?.let { "${it}p " } ?: ""
+            val bandwidthText = variant.bandwidth?.let { "${it / 1000} kbps" } ?: ""
+            val name = if (resolutionText.isEmpty() && bandwidthText.isEmpty()) "Variant" else "$resolutionText$bandwidthText"
+
+            TrackItem(
+                name = name.trim(),
+                isSelected = isSelected,
+                onClick = { onVariantSelected(variant.url) }
+            )
+        }
+    }
 }
 
 @Composable
