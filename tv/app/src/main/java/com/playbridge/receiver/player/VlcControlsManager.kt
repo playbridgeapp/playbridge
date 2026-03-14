@@ -26,6 +26,7 @@ class VlcControlsManager(
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
     private val onShowSettings: () -> Unit,
+    private val onShowPlaylist: () -> Unit,
     private val onError: () -> Unit,
     private val onSeekForwardRequested: () -> Unit,
     private val onSeekBackwardRequested: () -> Unit,
@@ -100,6 +101,10 @@ class VlcControlsManager(
         // Set up Settings/Tracks button
         tracksButton.setOnClickListener {
             onShowSettings()
+        }
+
+        playlistButton.setOnClickListener {
+            onShowPlaylist()
         }
 
         prevButton.setOnClickListener {
