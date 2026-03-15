@@ -77,6 +77,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.withContext
 import com.playbridge.sender.data.history.TabEntity
 import com.playbridge.sender.data.history.HistoryDatabase
+import androidx.activity.viewModels
 
 @Composable
 fun AnimatedMenuItem(
@@ -193,6 +194,8 @@ class BrowserActivity : ComponentActivity() {
         Components.installBundledExtension()
 
         database = DatabaseProvider.getDatabase(applicationContext)
+
+        val libraryViewModel: LibraryViewModel by viewModels()
 
         // Restore tabs
         // Track whether tab restoration is complete to avoid blank screen
@@ -1406,6 +1409,7 @@ class BrowserActivity : ComponentActivity() {
                                         Screen.Library -> {
                                             BackHandler { currentScreen = Screen.Browser }
                                             LibraryScreen(
+                                                viewModel = libraryViewModel,
                                                 onBack = { currentScreen = Screen.Browser },
                                                 onMovieClick = { movieId ->
                                                     currentScreen = Screen.MovieDetail(movieId)
