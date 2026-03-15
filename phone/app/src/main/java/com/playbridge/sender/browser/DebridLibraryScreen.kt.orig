@@ -29,16 +29,16 @@ fun DebridLibraryScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { DebridRepository(context) }
-    
+
     var torrents by remember { mutableStateOf<List<DebridTorrentInfo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    
+
     var selectedTorrent by remember { mutableStateOf<DebridTorrentInfo?>(null) }
     var torrentDetails by remember { mutableStateOf<DebridTorrentInfo?>(null) }
     var isLoadingDetails by remember { mutableStateOf(false) }
     var unrestrictError by remember { mutableStateOf<String?>(null) }
-    
+
     var showBottomSheet by remember { mutableStateOf(false) }
 
     fun loadTorrents() {
@@ -69,8 +69,8 @@ fun DebridLibraryScreen(
             TopAppBar(
                 title = { Text("Debrid Library") },
                 navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(Icons.Default.Menu, "Menu")
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
                 },
                 actions = {
@@ -150,8 +150,8 @@ fun DebridLibraryScreen(
     if (showBottomSheet && selectedTorrent != null) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
-            onDismissRequest = { 
-                showBottomSheet = false 
+            onDismissRequest = {
+                showBottomSheet = false
                 selectedTorrent = null
                 torrentDetails = null
             },
@@ -160,7 +160,7 @@ fun DebridLibraryScreen(
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text(selectedTorrent!!.filename, style = MaterialTheme.typography.titleMedium, maxLines = 2)
                 Spacer(Modifier.height(8.dp))
-                
+
                 if (isLoadingDetails) {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp))
                 } else if (unrestrictError != null) {
@@ -178,9 +178,9 @@ fun DebridLibraryScreen(
                                             Toast.makeText(context, "Resolving all links, please wait...", Toast.LENGTH_SHORT).show()
                                             val provider = repository.getActiveProvider() ?: return@launch
                                             val configName = repository.getConfiguredProviderName()
-                                            
+
                                             val playlistItems = mutableListOf<com.playbridge.protocol.PlayPayload>()
-                                            
+
                                             for (file in files) {
                                                 val linkToUnrestrict = when (configName) {
                                                     DebridRepository.PROVIDER_PREMIUMIZE -> file.id
@@ -196,7 +196,7 @@ fun DebridLibraryScreen(
                                                     )
                                                 )
                                             }
-                                            
+
                                             onPlayPlaylistOnTv(playlistItems)
                                             showBottomSheet = false
                                         } catch (e: Exception) {
@@ -211,7 +211,7 @@ fun DebridLibraryScreen(
                                 Text("Play All on TV (${files.size} items)")
                             }
                         }
-                        
+
                         LazyColumn(modifier = Modifier.fillMaxWidth()) {
                             items(files) { file ->
                                 ListItem(
@@ -226,7 +226,7 @@ fun DebridLibraryScreen(
                                                         Toast.makeText(context, "Resolving link...", Toast.LENGTH_SHORT).show()
                                                         val provider = repository.getActiveProvider() ?: return@launch
                                                         val configName = repository.getConfiguredProviderName()
-                                                        
+
                                                         val linkToUnrestrict = when (configName) {
                                                             DebridRepository.PROVIDER_PREMIUMIZE -> file.id
                                                             else -> {
@@ -250,7 +250,7 @@ fun DebridLibraryScreen(
                                                         Toast.makeText(context, "Resolving link...", Toast.LENGTH_SHORT).show()
                                                         val provider = repository.getActiveProvider() ?: return@launch
                                                         val configName = repository.getConfiguredProviderName()
-                                                        
+
                                                         val linkToUnrestrict = when (configName) {
                                                             DebridRepository.PROVIDER_PREMIUMIZE -> file.id
                                                             else -> {
