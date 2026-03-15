@@ -164,6 +164,7 @@ fun ConnectionScreen(
         PinEntryDialog(
             ip = ip,
             port = port,
+            uuid = uuid,
             onDismiss = { showPinDialog = null },
             onConfirm = { pin ->
                 showPinDialog = null
@@ -267,6 +268,7 @@ fun DeviceItem(
 fun PinEntryDialog(
     ip: String,
     port: Int,
+    uuid: String = "",
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
@@ -277,7 +279,18 @@ fun PinEntryDialog(
         title = { Text("Enter PIN") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("Enter the 4-digit PIN displayed on the TV at $ip")
+                Text(
+                    text = "Enter the 4-digit PIN displayed on the TV at $ip",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                if (uuid.isNotEmpty()) {
+                    Text(
+                        text = "Device ID: $uuid",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 
                 OutlinedTextField(
                     value = pin,

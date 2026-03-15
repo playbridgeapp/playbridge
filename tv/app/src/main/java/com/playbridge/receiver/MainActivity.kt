@@ -135,10 +135,12 @@ fun MainContent(
     
     // Load initial values
     LaunchedEffect(Unit) {
-        authToken = pairingStore.getOrCreateToken()
-        deviceId = pairingStore.getOrCreateDeviceId()
-        serverPort = pairingStore.serverPort.first()
-        serverIp = getLocalIpAddress()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            authToken = pairingStore.getOrCreateToken()
+            deviceId = pairingStore.getOrCreateDeviceId()
+            serverPort = pairingStore.serverPort.first()
+            serverIp = getLocalIpAddress()
+        }
         pairingStore.deviceName.collect { name ->
             deviceName = name
         }

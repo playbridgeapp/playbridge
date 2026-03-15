@@ -82,7 +82,7 @@ class ServerService : Service() {
         
         val deviceName = android.provider.Settings.Global.getString(contentResolver, android.provider.Settings.Global.DEVICE_NAME) ?: Build.MODEL
         
-        scope.launch {
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val deviceId = pairingStore.getOrCreateDeviceId()
             
             val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
@@ -120,7 +120,7 @@ class ServerService : Service() {
     
     private fun startServer() {
         if (webSocketServer != null) return  // Already running from a previous onStartCommand
-        scope.launch {
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val token = pairingStore.getOrCreateToken()
             val port = pairingStore.serverPort.first()
             val ip = getLocalIpAddress() ?: "unknown"
