@@ -84,12 +84,17 @@ class ServerService : Service() {
         
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val deviceId = pairingStore.getOrCreateDeviceId()
+            val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+            val preferredIp = prefs.getString("preferred_ip", "auto")
             
             val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
                 serviceName = deviceName
                 serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
                 setPort(port)
                 setAttribute("uuid", deviceId)
+                if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
+                    setAttribute("custom_ip", preferredIp)
+                }
             }
             
             registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {

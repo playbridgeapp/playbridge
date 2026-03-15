@@ -51,16 +51,25 @@ class NsdHelper(context: Context) {
                             Log.d(TAG, "Resolve Succeeded. ${serviceInfo}")
                             
                             val host = serviceInfo.host ?: return
-                            val ip = host.hostAddress ?: return
+                            var ip = host.hostAddress ?: return
                             val port = serviceInfo.port
                             val name = serviceInfo.serviceName.replace("\\\\032", " ") // Fix space encoding if present
                             
-                            // Extract UUID if present
+                            // Extract UUID and custom IP if present
                             var uuid = ""
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                                 val uuidBytes = serviceInfo.attributes["uuid"]
                                 if (uuidBytes != null) {
                                     uuid = String(uuidBytes)
+                                }
+
+                                val customIpBytes = serviceInfo.attributes["custom_ip"]
+                                if (customIpBytes != null) {
+                                    val customIp = String(customIpBytes)
+                                    if (customIp.isNotEmpty() && customIp != "auto") {
+                                        ip = customIp
+                                        Log.d(TAG, "Using custom IP from NSD attributes: $ip")
+                                    }
                                 }
                             }
 
