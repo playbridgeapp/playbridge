@@ -42,6 +42,12 @@ fun SettingsScreen(
         mutableStateOf(prefs.getString("browser_mode", "phone") ?: "phone")
     }
 
+    // Custom IP setting for emulator port forwarding
+    var customIp by remember {
+        mutableStateOf(prefs.getString("preferred_ip", "") ?: "")
+    }
+    var showIpDialog by remember { mutableStateOf(false) }
+
     // Migrate old boolean prefs to new mode strings on first load
     LaunchedEffect(Unit) {
         if (!prefs.contains("player_mode")) {
@@ -127,6 +133,51 @@ fun SettingsScreen(
                 }
             )
 
+            // ── Custom Network IP Address ──
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Custom Network IP Address",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.LightGray
+                )
+
+                var isFocused by remember { mutableStateOf(false) }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isFocused) Color(0xFF2A2A4A) else Color(0xFF1E1E38))
+                        .border(
+                            if (isFocused) 1.5.dp else 1.dp,
+                            if (isFocused) Color(0xFF00D9FF).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f),
+                            RoundedCornerShape(10.dp)
+                        )
+                        .onKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionCenter) {
+                                showIpDialog = true; true
+                            } else false
+                        }
+                        .onFocusChanged { isFocused = it.isFocused }
+                        .focusable()
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Text(
+                        text = if (customIp.isEmpty() || customIp == "auto") "Automatic (Recommended)" else customIp,
+                        color = if (isFocused) Color(0xFF00D9FF) else Color.White,
+                        fontSize = 14.sp
+                    )
+                }
+
+                Text(
+                    text = "Set a custom IP to advertise. Useful for emulator port forwarding (e.g. adb forward). Leave empty for Automatic. (Changes apply on next connection restart)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
 
             // Version
@@ -144,6 +195,59 @@ fun SettingsScreen(
 
             Button(onClick = onBack) {
                 Text("Back")
+            }
+        }
+    }
+
+    // IP Entry Dialog
+    if (showIpDialog) {
+        var tempIp by remember { mutableStateOf(if (customIp == "auto") "" else customIp) }
+
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .background(Color(0xFF1E1E38), RoundedCornerShape(16.dp))
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text("Enter Custom IP", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Useful for emulator port forwarding (e.g. adb forward). Leave empty for Automatic. (Changes apply on next connection restart)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.LightGray
+                )
+
+                // We use basic compose text field, but we need to ensure the standard foundation is available
+                androidx.compose.foundation.text.BasicTextField(
+                    value = tempIp,
+                    onValueChange = { tempIp = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.White, RoundedCornerShape(8.dp))
+                        .padding(16.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.Black, fontSize = 16.sp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(onClick = { showIpDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
+                        Text("Cancel")
+                    }
+                    Button(onClick = {
+                        val finalIp = tempIp.trim().ifEmpty { "auto" }
+                        customIp = finalIp
+                        prefs.edit().putString("preferred_ip", finalIp).apply()
+                        showIpDialog = false
+                    }) {
+                        Text("Save")
+                    }
+                }
             }
         }
     }

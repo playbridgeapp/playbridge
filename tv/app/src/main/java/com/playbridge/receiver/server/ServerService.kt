@@ -123,7 +123,7 @@ class ServerService : Service() {
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val token = pairingStore.getOrCreateToken()
             val port = pairingStore.serverPort.first()
-            val ip = getLocalIpAddress() ?: "unknown"
+            val ip = getLocalIpAddress(applicationContext) ?: "unknown"
             
             webSocketServer = WebSocketServer(port = port, authToken = token).also { server ->
                 server.start()
@@ -469,7 +469,12 @@ class ServerService : Service() {
         manager.notify(NOTIFICATION_ID, createNotification(status))
     }
     
-    private fun getLocalIpAddress(): String? {
+    private fun getLocalIpAddress(context: android.content.Context): String? {
+        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        val preferredIp = prefs.getString("preferred_ip", "auto")
+        val allIps = mutableListOf<String>()
+        var backupIp: String? = null
+
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
             while (interfaces.hasMoreElements()) {
@@ -480,14 +485,27 @@ class ServerService : Service() {
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
                     if (address is Inet4Address && !address.isLoopbackAddress) {
-                        return address.hostAddress
+                        val hostAddress = address.hostAddress
+                        if (hostAddress != null) {
+                            allIps.add(hostAddress)
+                            if (hostAddress.startsWith("192.168.")) {
+                                backupIp = hostAddress // Prefer 192.168 if auto
+                            } else if (backupIp == null) {
+                                backupIp = hostAddress
+                            }
+                        }
                     }
                 }
             }
         } catch (e: Exception) {
             FileLogger.e(TAG, "Failed to get IP address", e)
         }
-        return null
+
+        return if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
+            preferredIp
+        } else {
+            backupIp
+        }
     }
     
     override fun onBind(intent: Intent?): IBinder? = null
