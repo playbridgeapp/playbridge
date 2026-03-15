@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,106 +44,54 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
+    viewModel: LibraryViewModel,
     onBack: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit
 ) {
-    val context = LocalContext.current
-    val tmdb = remember { TmdbRepository(context) }
-    val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
 
     // Check if API key is configured
-    val isConfigured = remember { tmdb.isConfigured() }
+    val isConfigured by viewModel.isConfigured.collectAsState()
 
     // Data state
-    var popularMovies by remember { mutableStateOf<List<TmdbMovie>>(emptyList()) }
-    var popularMoviesPage by remember { mutableStateOf(1) }
-    var isLoadingMorePopularMovies by remember { mutableStateOf(false) }
-    var hasMorePopularMovies by remember { mutableStateOf(true) }
+    val popularMovies by viewModel.popularMovies.collectAsState()
+    val isLoadingMorePopularMovies by viewModel.isLoadingMorePopularMovies.collectAsState()
+    val hasMorePopularMovies by viewModel.hasMorePopularMovies.collectAsState()
 
-    var popularTvShows by remember { mutableStateOf<List<TmdbTvShow>>(emptyList()) }
-    var popularTvShowsPage by remember { mutableStateOf(1) }
-    var isLoadingMorePopularTvShows by remember { mutableStateOf(false) }
-    var hasMorePopularTvShows by remember { mutableStateOf(true) }
+    val popularTvShows by viewModel.popularTvShows.collectAsState()
+    val isLoadingMorePopularTvShows by viewModel.isLoadingMorePopularTvShows.collectAsState()
+    val hasMorePopularTvShows by viewModel.hasMorePopularTvShows.collectAsState()
 
-    var trending by remember { mutableStateOf<List<TmdbMultiSearchResult>>(emptyList()) }
-    var trendingPage by remember { mutableStateOf(1) }
-    var isLoadingMoreTrending by remember { mutableStateOf(false) }
-    var hasMoreTrending by remember { mutableStateOf(true) }
+    val trending by viewModel.trending.collectAsState()
+    val isLoadingMoreTrending by viewModel.isLoadingMoreTrending.collectAsState()
+    val hasMoreTrending by viewModel.hasMoreTrending.collectAsState()
 
-    var isLoading by remember { mutableStateOf(true) }
+    val isLoading by viewModel.isLoading.collectAsState()
 
     // Search state
-    var searchQuery by remember { mutableStateOf("") }
-    var isSearching by remember { mutableStateOf(false) }
-    var searchResults by remember { mutableStateOf<List<TmdbMultiSearchResult>>(emptyList()) }
-    var isSearchLoading by remember { mutableStateOf(false) }
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val isSearching by viewModel.isSearching.collectAsState()
+    val searchResults by viewModel.searchResults.collectAsState()
+    val isSearchLoading by viewModel.isSearchLoading.collectAsState()
 
     // Discovery state
-    var selectedGenres by remember { mutableStateOf<Set<Int>>(emptySet()) }
-    var matchAllGenres by remember { mutableStateOf(false) }
+    val selectedGenres by viewModel.selectedGenres.collectAsState()
+    val matchAllGenres by viewModel.matchAllGenres.collectAsState()
 
-    var discoveredMovies by remember { mutableStateOf<List<TmdbMovie>>(emptyList()) }
-    var discoveredMoviesPage by remember { mutableStateOf(1) }
-    var isLoadingMoreDiscoveredMovies by remember { mutableStateOf(false) }
-    var hasMoreDiscoveredMovies by remember { mutableStateOf(true) }
+    val discoveredMovies by viewModel.discoveredMovies.collectAsState()
+    val isLoadingMoreDiscoveredMovies by viewModel.isLoadingMoreDiscoveredMovies.collectAsState()
+    val hasMoreDiscoveredMovies by viewModel.hasMoreDiscoveredMovies.collectAsState()
 
-    var discoveredTvShows by remember { mutableStateOf<List<TmdbTvShow>>(emptyList()) }
-    var discoveredTvShowsPage by remember { mutableStateOf(1) }
-    var isLoadingMoreDiscoveredTvShows by remember { mutableStateOf(false) }
-    var hasMoreDiscoveredTvShows by remember { mutableStateOf(true) }
+    val discoveredTvShows by viewModel.discoveredTvShows.collectAsState()
+    val isLoadingMoreDiscoveredTvShows by viewModel.isLoadingMoreDiscoveredTvShows.collectAsState()
+    val hasMoreDiscoveredTvShows by viewModel.hasMoreDiscoveredTvShows.collectAsState()
 
-    var isDiscoveryLoading by remember { mutableStateOf(false) }
-
-    // Load discovery data when genres or match type changes
-    LaunchedEffect(selectedGenres, matchAllGenres) {
-        if (selectedGenres.isEmpty()) {
-            discoveredMovies = emptyList()
-            discoveredTvShows = emptyList()
-            discoveredMoviesPage = 1
-            discoveredTvShowsPage = 1
-            hasMoreDiscoveredMovies = true
-            hasMoreDiscoveredTvShows = true
-            return@LaunchedEffect
-        }
-
-        isDiscoveryLoading = true
-        discoveredMoviesPage = 1
-        discoveredTvShowsPage = 1
-        hasMoreDiscoveredMovies = true
-        hasMoreDiscoveredTvShows = true
-        val separator = if (matchAllGenres) "," else "|"
-        val genreString = selectedGenres.joinToString(separator)
-
-        val movies = tmdb.discoverMovies(page = 1, withGenres = genreString)
-        val tv = tmdb.discoverTvShows(page = 1, withGenres = genreString)
-
-        discoveredMovies = movies.results
-        discoveredTvShows = tv.results
-        isDiscoveryLoading = false
-    }
+    val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
 
     // Load initial data
-    LaunchedEffect(isConfigured) {
-        if (isConfigured && popularMovies.isEmpty() && trending.isEmpty()) {
-            isLoading = true
-            val movies = tmdb.getPopularMovies(page = 1)
-            val tvShows = tmdb.getPopularTvShows(page = 1)
-            val trend = tmdb.getTrending(page = 1)
-            popularMovies = movies.results
-            popularMoviesPage = 1
-
-            popularTvShows = tvShows.results
-            popularTvShowsPage = 1
-
-            trending = trend.results.filter { it.isMovie || it.isTvShow }
-            trendingPage = 1
-
-            isLoading = false
-        } else if (!isConfigured) {
-            isLoading = false
-        }
+    LaunchedEffect(Unit) {
+        viewModel.checkConfigAndLoadInitialData()
     }
 
     Scaffold(
@@ -153,21 +102,14 @@ fun LibraryScreen(
                     if (isSearching) {
                         TextField(
                             value = searchQuery,
-                            onValueChange = { searchQuery = it },
+                            onValueChange = { viewModel.setSearchQuery(it) },
                             placeholder = { Text("Search movies & TV shows...") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(
                                 onSearch = {
                                     keyboardController?.hide()
-                                    if (searchQuery.isNotBlank()) {
-                                        scope.launch {
-                                            isSearchLoading = true
-                                            val results = tmdb.searchMulti(searchQuery)
-                                            searchResults = results.results.filter { it.isMovie || it.isTvShow }
-                                            isSearchLoading = false
-                                        }
-                                    }
+                                    viewModel.performSearch()
                                 }
                             ),
                             colors = TextFieldDefaults.colors(
@@ -185,9 +127,7 @@ fun LibraryScreen(
                 navigationIcon = {
                     IconButton(onClick = {
                         if (isSearching) {
-                            isSearching = false
-                            searchQuery = ""
-                            searchResults = emptyList()
+                            viewModel.setIsSearching(false)
                         } else {
                             onBack()
                         }
@@ -197,7 +137,7 @@ fun LibraryScreen(
                 },
                 actions = {
                     if (!isSearching) {
-                        IconButton(onClick = { isSearching = true }) {
+                        IconButton(onClick = { viewModel.setIsSearching(true) }) {
                             Icon(Icons.Default.Search, "Search")
                         }
                     }
@@ -278,7 +218,7 @@ fun LibraryScreen(
                                         )
                                         Switch(
                                             checked = matchAllGenres,
-                                            onCheckedChange = { matchAllGenres = it },
+                                            onCheckedChange = { viewModel.setMatchAllGenres(it) },
                                             modifier = Modifier.scale(0.8f)
                                         )
                                     }
@@ -293,13 +233,7 @@ fun LibraryScreen(
                                     val isSelected = selectedGenres.contains(genre.id)
                                     FilterChip(
                                         selected = isSelected,
-                                        onClick = {
-                                            selectedGenres = if (isSelected) {
-                                                selectedGenres - genre.id
-                                            } else {
-                                                selectedGenres + genre.id
-                                            }
-                                        },
+                                        onClick = { viewModel.toggleGenre(genre.id) },
                                         label = { Text(genre.name) },
                                         leadingIcon = if (isSelected) {
                                             {
@@ -337,24 +271,7 @@ fun LibraryScreen(
                                         displayTitle = { it.title },
                                         year = { it.year },
                                         rating = { it.rating },
-                                        onLoadMore = {
-                                            if (!isLoadingMoreDiscoveredMovies && hasMoreDiscoveredMovies) {
-                                                scope.launch {
-                                                    isLoadingMoreDiscoveredMovies = true
-                                                    val separator = if (matchAllGenres) "," else "|"
-                                                    val genreString = selectedGenres.joinToString(separator)
-                                                    val nextPage = discoveredMoviesPage + 1
-                                                    val newMovies = tmdb.discoverMovies(page = nextPage, withGenres = genreString)
-                                                    if (newMovies.results.isNotEmpty()) {
-                                                        discoveredMovies = discoveredMovies + newMovies.results
-                                                        discoveredMoviesPage = nextPage
-                                                    } else {
-                                                        hasMoreDiscoveredMovies = false
-                                                    }
-                                                    isLoadingMoreDiscoveredMovies = false
-                                                }
-                                            }
-                                        },
+                                        onLoadMore = { viewModel.loadMoreDiscoveredMovies() },
                                         isLoadingMore = isLoadingMoreDiscoveredMovies,
                                         hasMore = hasMoreDiscoveredMovies
                                     )
@@ -370,24 +287,7 @@ fun LibraryScreen(
                                         displayTitle = { it.name },
                                         year = { it.year },
                                         rating = { it.rating },
-                                        onLoadMore = {
-                                            if (!isLoadingMoreDiscoveredTvShows && hasMoreDiscoveredTvShows) {
-                                                scope.launch {
-                                                    isLoadingMoreDiscoveredTvShows = true
-                                                    val separator = if (matchAllGenres) "," else "|"
-                                                    val genreString = selectedGenres.joinToString(separator)
-                                                    val nextPage = discoveredTvShowsPage + 1
-                                                    val newTvShows = tmdb.discoverTvShows(page = nextPage, withGenres = genreString)
-                                                    if (newTvShows.results.isNotEmpty()) {
-                                                        discoveredTvShows = discoveredTvShows + newTvShows.results
-                                                        discoveredTvShowsPage = nextPage
-                                                    } else {
-                                                        hasMoreDiscoveredTvShows = false
-                                                    }
-                                                    isLoadingMoreDiscoveredTvShows = false
-                                                }
-                                            }
-                                        },
+                                        onLoadMore = { viewModel.loadMoreDiscoveredTvShows() },
                                         isLoadingMore = isLoadingMoreDiscoveredTvShows,
                                         hasMore = hasMoreDiscoveredTvShows
                                     )
@@ -422,22 +322,7 @@ fun LibraryScreen(
                                 displayTitle = { it.displayTitle },
                                 year = { it.year },
                                 rating = { String.format("%.1f", it.voteAverage) },
-                                onLoadMore = {
-                                    if (!isLoadingMoreTrending && hasMoreTrending) {
-                                        scope.launch {
-                                            isLoadingMoreTrending = true
-                                            val nextPage = trendingPage + 1
-                                            val newTrending = tmdb.getTrending(page = nextPage)
-                                            if (newTrending.results.isNotEmpty()) {
-                                                trending = trending + newTrending.results.filter { it.isMovie || it.isTvShow }
-                                                trendingPage = nextPage
-                                            } else {
-                                                hasMoreTrending = false
-                                            }
-                                            isLoadingMoreTrending = false
-                                        }
-                                    }
-                                },
+                                onLoadMore = { viewModel.loadMoreTrending() },
                                 isLoadingMore = isLoadingMoreTrending,
                                 hasMore = hasMoreTrending
                             )
@@ -455,22 +340,7 @@ fun LibraryScreen(
                                 displayTitle = { it.title },
                                 year = { it.year },
                                 rating = { it.rating },
-                                onLoadMore = {
-                                    if (!isLoadingMorePopularMovies && hasMorePopularMovies) {
-                                        scope.launch {
-                                            isLoadingMorePopularMovies = true
-                                            val nextPage = popularMoviesPage + 1
-                                            val newMovies = tmdb.getPopularMovies(page = nextPage)
-                                            if (newMovies.results.isNotEmpty()) {
-                                                popularMovies = popularMovies + newMovies.results
-                                                popularMoviesPage = nextPage
-                                            } else {
-                                                hasMorePopularMovies = false
-                                            }
-                                            isLoadingMorePopularMovies = false
-                                        }
-                                    }
-                                },
+                                onLoadMore = { viewModel.loadMorePopularMovies() },
                                 isLoadingMore = isLoadingMorePopularMovies,
                                 hasMore = hasMorePopularMovies
                             )
@@ -488,22 +358,7 @@ fun LibraryScreen(
                                 displayTitle = { it.name },
                                 year = { it.year },
                                 rating = { it.rating },
-                                onLoadMore = {
-                                    if (!isLoadingMorePopularTvShows && hasMorePopularTvShows) {
-                                        scope.launch {
-                                            isLoadingMorePopularTvShows = true
-                                            val nextPage = popularTvShowsPage + 1
-                                            val newTvShows = tmdb.getPopularTvShows(page = nextPage)
-                                            if (newTvShows.results.isNotEmpty()) {
-                                                popularTvShows = popularTvShows + newTvShows.results
-                                                popularTvShowsPage = nextPage
-                                            } else {
-                                                hasMorePopularTvShows = false
-                                            }
-                                            isLoadingMorePopularTvShows = false
-                                        }
-                                    }
-                                },
+                                onLoadMore = { viewModel.loadMorePopularTvShows() },
                                 isLoadingMore = isLoadingMorePopularTvShows,
                                 hasMore = hasMorePopularTvShows
                             )
