@@ -147,9 +147,12 @@ class BrowserActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // Ensure sessions are synced when coming back from background (e.g., lock screen)
-        // to prevent black/blank screens.
+        // to prevent black/blank screens. We launch on Main thread to avoid blocking the initial
+        // layout pass, letting the UI draw before heavy session creation begins.
         val state = Components.store.state
-        tabManager.syncSessions(state.tabs, state.selectedTabId)
+        lifecycleScope.launch(Dispatchers.Main) {
+            tabManager.syncSessions(state.tabs, state.selectedTabId)
+        }
     }
 
     override fun onPause() {
@@ -273,6 +276,8 @@ class BrowserActivity : ComponentActivity() {
             
             // Sync sessions with tabs
             LaunchedEffect(browserState.tabs, browserState.selectedTabId) {
+                // LaunchedEffect already runs on the main dispatcher, we just yield or let it run
+                // deferring it slightly is okay, but it should run on Main.
                 tabManager.syncSessions(browserState.tabs, browserState.selectedTabId)
             }
             
