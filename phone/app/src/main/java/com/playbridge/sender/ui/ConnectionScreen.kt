@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,25 +21,28 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
-import com.playbridge.sender.connection.NsdHelper
+import com.playbridge.sender.connection.ConnectionViewModel
+import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.model.TvDevice
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectionScreen(
-    nsdHelper: NsdHelper,
-    history: List<TvDevice>,
-    onConnect: (TvDevice) -> Unit,
-    onRemove: (TvDevice) -> Unit,
+    viewModel: ConnectionViewModel,
+    onMenuClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val discoveredDevices by nsdHelper.discoveredDevices.collectAsState()
+    val discoveredDevices by viewModel.discoveredDevices.collectAsState()
+    val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
+    val connectionState by viewModel.connectionState.collectAsState()
+    val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
+    val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
     
     // Start discovery when screen is visible
     DisposableEffect(Unit) {
-        nsdHelper.startDiscovery()
+        viewModel.startDiscovery()
         onDispose {
-            nsdHelper.stopDiscovery()
+            viewModel.stopDiscovery()
         }
     }
 
@@ -56,7 +60,7 @@ fun ConnectionScreen(
         
         if (existing != null && existing.token.isNotEmpty()) {
             // Already have token, connect directly. Update IP and name if changed.
-            onConnect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
+            viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
         } else {
             // New device or token missing/invalid, ask for PIN
             showPinDialog = Triple(ip, port, uuid)
@@ -64,6 +68,16 @@ fun ConnectionScreen(
     }
 
     Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("TV Connection") },
+                navigationIcon = {
+                    IconButton(onClick = onMenuClick) {
+                        Icon(Icons.Default.Menu, "Menu")
+                    }
+                }
+            )
+        },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showManualDialog = true },
@@ -79,6 +93,116 @@ fun ConnectionScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+
+            // Connected TV Section
+            if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                val serverName = (connectionState as WebSocketClient.ConnectionState.Connected).serverName
+                item {
+                    Text(
+                        text = "Connected TV",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tv,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = serverName,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    if (tvDevice != null) {
+                                        Text(
+                                            text = "${tvDevice?.ip}:${tvDevice?.port}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = autoConnectEnabled,
+                                        onCheckedChange = { viewModel.setAutoConnectEnabled(it) }
+                                    )
+                                    Text("Auto-connect to this TV", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                }
+
+                                Button(
+                                    onClick = { viewModel.disconnect() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Disconnect")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            } else if (connectionState is WebSocketClient.ConnectionState.Connecting) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("Connecting to TV...", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Discovered Devices Section
             item {
                 Text(
@@ -151,8 +275,8 @@ fun ConnectionScreen(
                         port = device.port,
                         icon = Icons.Default.History,
                         uuid = device.uuid,
-                        onClick = { onConnect(device) },
-                        onRemove = { onRemove(device) }
+                        onClick = { viewModel.connect(device) },
+                        onRemove = { viewModel.removeDeviceFromHistory(device) }
                     )
                 }
             }
@@ -168,7 +292,7 @@ fun ConnectionScreen(
             onDismiss = { showPinDialog = null },
             onConfirm = { pin ->
                 showPinDialog = null
-                onConnect(TvDevice(
+                viewModel.connect(TvDevice(
                     ip = ip,
                     port = port,
                     token = pin, // Use PIN as initial token
