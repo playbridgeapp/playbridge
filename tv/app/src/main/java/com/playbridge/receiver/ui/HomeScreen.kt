@@ -24,6 +24,7 @@ fun HomeScreen(
     serverIp: String?,
     serverPort: Int?,
     connectedCount: Int,
+    deviceId: String,
     onShowPairing: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -91,12 +92,23 @@ fun HomeScreen(
             
             // Server Info
             if (serverIp != null && serverPort != null) {
-                Text(
-                    text = "Server: $serverIp:$serverPort",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF00D9FF),
-                    fontSize = 16.sp
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Server: $serverIp:$serverPort",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF00D9FF),
+                        fontSize = 16.sp
+                    )
+                    if (deviceId.isNotEmpty()) {
+                        Text(
+                            text = "ID: $deviceId",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF888888),
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
             }
             
             Spacer(modifier = Modifier.height(32.dp))

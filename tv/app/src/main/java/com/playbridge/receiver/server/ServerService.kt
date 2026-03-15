@@ -82,43 +82,53 @@ class ServerService : Service() {
         
         val deviceName = android.provider.Settings.Global.getString(contentResolver, android.provider.Settings.Global.DEVICE_NAME) ?: Build.MODEL
         
-        val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
-            serviceName = deviceName
-            serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
-            setPort(port)
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val deviceId = pairingStore.getOrCreateDeviceId()
+            val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+            val preferredIp = prefs.getString("preferred_ip", "auto")
+            
+            val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
+                serviceName = deviceName
+                serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
+                setPort(port)
+                setAttribute("uuid", deviceId)
+                if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
+                    setAttribute("custom_ip", preferredIp)
+                }
+            }
+            
+            registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
+                override fun onServiceRegistered(NsdServiceInfo: android.net.nsd.NsdServiceInfo) {
+                    FileLogger.d(TAG, "Service registered: ${NsdServiceInfo.serviceName}")
+                }
+
+                override fun onRegistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                    FileLogger.e(TAG, "Registration failed: $errorCode")
+                }
+
+                override fun onServiceUnregistered(arg0: android.net.nsd.NsdServiceInfo) {
+                    FileLogger.d(TAG, "Service unregistered")
+                }
+
+                override fun onUnregistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                    FileLogger.e(TAG, "Unregistration failed: $errorCode")
+                }
+            }
+            
+            nsdManager.registerService(
+                serviceInfo,
+                android.net.nsd.NsdManager.PROTOCOL_DNS_SD,
+                registrationListener
+            )
         }
-        
-        registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
-            override fun onServiceRegistered(NsdServiceInfo: android.net.nsd.NsdServiceInfo) {
-                FileLogger.d(TAG, "Service registered: ${NsdServiceInfo.serviceName}")
-            }
-            
-            override fun onRegistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                FileLogger.e(TAG, "Registration failed: $errorCode")
-            }
-            
-            override fun onServiceUnregistered(arg0: android.net.nsd.NsdServiceInfo) {
-                FileLogger.d(TAG, "Service unregistered")
-            }
-            
-            override fun onUnregistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                FileLogger.e(TAG, "Unregistration failed: $errorCode")
-            }
-        }
-        
-        nsdManager.registerService(
-            serviceInfo,
-            android.net.nsd.NsdManager.PROTOCOL_DNS_SD,
-            registrationListener
-        )
     }
     
     private fun startServer() {
         if (webSocketServer != null) return  // Already running from a previous onStartCommand
-        scope.launch {
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val token = pairingStore.getOrCreateToken()
             val port = pairingStore.serverPort.first()
-            val ip = getLocalIpAddress() ?: "unknown"
+            val ip = getLocalIpAddress(applicationContext) ?: "unknown"
             
             webSocketServer = WebSocketServer(port = port, authToken = token).also { server ->
                 server.start()
@@ -464,7 +474,12 @@ class ServerService : Service() {
         manager.notify(NOTIFICATION_ID, createNotification(status))
     }
     
-    private fun getLocalIpAddress(): String? {
+    private fun getLocalIpAddress(context: android.content.Context): String? {
+        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        val preferredIp = prefs.getString("preferred_ip", "auto")
+        val allIps = mutableListOf<String>()
+        var backupIp: String? = null
+
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
             while (interfaces.hasMoreElements()) {
@@ -475,14 +490,27 @@ class ServerService : Service() {
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
                     if (address is Inet4Address && !address.isLoopbackAddress) {
-                        return address.hostAddress
+                        val hostAddress = address.hostAddress
+                        if (hostAddress != null) {
+                            allIps.add(hostAddress)
+                            if (hostAddress.startsWith("192.168.")) {
+                                backupIp = hostAddress // Prefer 192.168 if auto
+                            } else if (backupIp == null) {
+                                backupIp = hostAddress
+                            }
+                        }
                     }
                 }
             }
         } catch (e: Exception) {
             FileLogger.e(TAG, "Failed to get IP address", e)
         }
-        return null
+
+        return if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
+            preferredIp
+        } else {
+            backupIp
+        }
     }
     
     override fun onBind(intent: Intent?): IBinder? = null

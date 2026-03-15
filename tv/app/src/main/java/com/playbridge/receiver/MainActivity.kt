@@ -131,12 +131,19 @@ fun MainContent(
     var serverPort by remember { mutableStateOf<Int?>(null) }
     var authToken by remember { mutableStateOf("") }
     var deviceName by remember { mutableStateOf("Android TV") }
+    var deviceId by remember { mutableStateOf("") }
+
+    val currentContext = androidx.compose.ui.platform.LocalContext.current
     
     // Load initial values
     LaunchedEffect(Unit) {
-        authToken = pairingStore.getOrCreateToken()
-        serverPort = pairingStore.serverPort.first()
-        serverIp = getLocalIpAddress()
+        val appCtx = currentContext.applicationContext ?: currentContext
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            authToken = pairingStore.getOrCreateToken()
+            deviceId = pairingStore.getOrCreateDeviceId()
+            serverPort = pairingStore.serverPort.first()
+            serverIp = getLocalIpAddress(appCtx)
+        }
         pairingStore.deviceName.collect { name ->
             deviceName = name
         }
@@ -152,8 +159,6 @@ fun MainContent(
         }
     }
     
-    val context = androidx.compose.ui.platform.LocalContext.current
-    
     when (currentScreen) {
         Screen.Home -> {
             HomeScreen(
@@ -161,6 +166,7 @@ fun MainContent(
                 serverIp = serverIp,
                 serverPort = serverPort,
                 connectedCount = connectedCount,
+                deviceId = deviceId,
                 onShowPairing = { currentScreen = Screen.Pairing }
             )
         }
@@ -172,7 +178,7 @@ fun MainContent(
                 onNavigateToPairing = { currentScreen = Screen.Pairing },
                 onNavigateToSettings = { currentScreen = Screen.Settings },
                 onPlayItem = { item ->
-                    val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                    val prefs = currentContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
                     val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
                     val activityClass = if (tvPref == "internal_vlc") {
                         com.playbridge.receiver.player.VlcPlayerActivity::class.java
@@ -180,7 +186,7 @@ fun MainContent(
                         com.playbridge.receiver.player.ExoPlayerActivity::class.java
                     }
 
-                    val intent = android.content.Intent(context, activityClass).apply {
+                    val intent = android.content.Intent(currentContext, activityClass).apply {
                         putExtra(ServerService.EXTRA_URL, item.url)
                         putExtra(ServerService.EXTRA_TITLE, item.title)
                         putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)
@@ -212,7 +218,7 @@ fun MainContent(
                             putExtra(ServerService.EXTRA_CUSTOM_FILTER_VALUES, floatArrayOf(vals[0], vals[1], vals[2]))
                         }
                     }
-                    context.startActivity(intent)
+                    currentContext.startActivity(intent)
                 }
             )
         }
@@ -222,6 +228,7 @@ fun MainContent(
                 port = serverPort ?: 8765,
                 token = authToken,
                 deviceName = deviceName,
+                deviceId = deviceId,
                 connectionState = connectionState,
                 connectedCount = connectedCount
             )
@@ -247,7 +254,13 @@ fun MainContent(
     }
 }
 
-private fun getLocalIpAddress(): String? {
+private fun getLocalIpAddress(context: android.content.Context): String? {
+    val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+    val preferredIp = prefs.getString("preferred_ip", "auto")
+
+    val allIps = mutableListOf<String>()
+
+    var backupIp: String? = null
     try {
         val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
         while (interfaces.hasMoreElements()) {
@@ -258,12 +271,26 @@ private fun getLocalIpAddress(): String? {
             while (addresses.hasMoreElements()) {
                 val address = addresses.nextElement()
                 if (address is java.net.Inet4Address && !address.isLoopbackAddress) {
-                    return address.hostAddress
+                    val hostAddress = address.hostAddress
+                    if (hostAddress != null) {
+                        allIps.add(hostAddress)
+                        if (hostAddress.startsWith("192.168.")) {
+                            backupIp = hostAddress // Prefer 192.168 if auto
+                        } else if (backupIp == null) {
+                            backupIp = hostAddress
+                        }
+                    }
                 }
             }
         }
     } catch (e: Exception) {
         // Ignore
     }
-    return null
+
+    // Use preferred custom IP if set, otherwise use auto-selected IP
+    return if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
+        preferredIp
+    } else {
+        backupIp
+    }
 }

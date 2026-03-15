@@ -33,6 +33,7 @@ fun PairingScreen(
     port: Int,
     token: String,
     deviceName: String,
+    deviceId: String,
     connectionState: WebSocketServer.ConnectionState = WebSocketServer.ConnectionState.Stopped,
     connectedCount: Int = 0,
     modifier: Modifier = Modifier
@@ -130,6 +131,16 @@ fun PairingScreen(
                     fontSize = 24.sp
                 )
                 
+                if (deviceId.isNotEmpty()) {
+                    Text(
+                        text = "ID: $deviceId",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(32.dp))
                 
                 Text(

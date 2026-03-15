@@ -23,7 +23,8 @@ class NsdHelper(context: Context) {
     data class DiscoveredDevice(
         val ip: String,
         val port: Int,
-        val name: String
+        val name: String,
+        val uuid: String = ""
     )
     
     fun startDiscovery() {
@@ -50,11 +51,29 @@ class NsdHelper(context: Context) {
                             Log.d(TAG, "Resolve Succeeded. ${serviceInfo}")
                             
                             val host = serviceInfo.host ?: return
-                            val ip = host.hostAddress ?: return
+                            var ip = host.hostAddress ?: return
                             val port = serviceInfo.port
                             val name = serviceInfo.serviceName.replace("\\\\032", " ") // Fix space encoding if present
                             
-                            val device = DiscoveredDevice(ip, port, name)
+                            // Extract UUID and custom IP if present
+                            var uuid = ""
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                                val uuidBytes = serviceInfo.attributes["uuid"]
+                                if (uuidBytes != null) {
+                                    uuid = String(uuidBytes)
+                                }
+
+                                val customIpBytes = serviceInfo.attributes["custom_ip"]
+                                if (customIpBytes != null) {
+                                    val customIp = String(customIpBytes)
+                                    if (customIp.isNotEmpty() && customIp != "auto") {
+                                        ip = customIp
+                                        Log.d(TAG, "Using custom IP from NSD attributes: $ip")
+                                    }
+                                }
+                            }
+
+                            val device = DiscoveredDevice(ip, port, name, uuid)
                             
                             // Update list
                             val currentList = _discoveredDevices.value.toMutableList()

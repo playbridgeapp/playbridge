@@ -42,20 +42,24 @@ fun ConnectionScreen(
         }
     }
 
-    var showPinDialog by remember { mutableStateOf<Pair<String, Int>?>(null) } // IP, Port
+    var showPinDialog by remember { mutableStateOf<Triple<String, Int, String>?>(null) } // IP, Port, UUID
     var showManualDialog by remember { mutableStateOf(false) }
     
     // When a device is selected, check history for token
-    fun onDeviceSelected(ip: String, port: Int, name: String) {
-        // Find if we have a token for this device
-        val existing = history.find { it.ip == ip && it.port == port }
+    fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") {
+        // Find if we have a token for this device by uuid or ip/port
+        val existing = if (uuid.isNotEmpty()) {
+            history.find { it.uuid == uuid } ?: history.find { it.ip == ip && it.port == port }
+        } else {
+            history.find { it.ip == ip && it.port == port }
+        }
         
         if (existing != null && existing.token.isNotEmpty()) {
-            // Already have token, connect directly
-            onConnect(existing.copy(name = name)) // Use discovered name if available
+            // Already have token, connect directly. Update IP and name if changed.
+            onConnect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
         } else {
             // New device or token missing/invalid, ask for PIN
-            showPinDialog = ip to port
+            showPinDialog = Triple(ip, port, uuid)
         }
     }
 
@@ -117,7 +121,8 @@ fun ConnectionScreen(
                         ip = device.ip,
                         port = device.port,
                         icon = Icons.Default.Tv,
-                        onClick = { onDeviceSelected(device.ip, device.port, device.name) }
+                        uuid = device.uuid,
+                        onClick = { onDeviceSelected(device.ip, device.port, device.name, device.uuid) }
                     )
                 }
             }
@@ -145,6 +150,7 @@ fun ConnectionScreen(
                         ip = device.ip,
                         port = device.port,
                         icon = Icons.Default.History,
+                        uuid = device.uuid,
                         onClick = { onConnect(device) },
                         onRemove = { onRemove(device) }
                     )
@@ -154,10 +160,11 @@ fun ConnectionScreen(
     }
     
     // PIN Dialog
-    showPinDialog?.let { (ip, port) ->
+    showPinDialog?.let { (ip, port, uuid) ->
         PinEntryDialog(
             ip = ip,
             port = port,
+            uuid = uuid,
             onDismiss = { showPinDialog = null },
             onConfirm = { pin ->
                 showPinDialog = null
@@ -165,7 +172,8 @@ fun ConnectionScreen(
                     ip = ip,
                     port = port,
                     token = pin, // Use PIN as initial token
-                    name = "TV ($ip)" // Temp name, will update on connect
+                    name = "TV ($ip)", // Temp name, will update on connect
+                    uuid = uuid
                 ))
             }
         )
@@ -190,6 +198,7 @@ fun DeviceItem(
     ip: String,
     port: Int,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
+    uuid: String = "",
     onClick: () -> Unit,
     onRemove: (() -> Unit)? = null
 ) {
@@ -231,6 +240,14 @@ fun DeviceItem(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (uuid.isNotEmpty()) {
+                        Text(
+                            text = "ID: $uuid",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            fontSize = 10.sp
+                        )
+                    }
                 }
             }
             
@@ -251,6 +268,7 @@ fun DeviceItem(
 fun PinEntryDialog(
     ip: String,
     port: Int,
+    uuid: String = "",
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
@@ -261,7 +279,18 @@ fun PinEntryDialog(
         title = { Text("Enter PIN") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("Enter the 4-digit PIN displayed on the TV at $ip")
+                Text(
+                    text = "Enter the 4-digit PIN displayed on the TV at $ip",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                if (uuid.isNotEmpty()) {
+                    Text(
+                        text = "Device ID: $uuid",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 
                 OutlinedTextField(
                     value = pin,
