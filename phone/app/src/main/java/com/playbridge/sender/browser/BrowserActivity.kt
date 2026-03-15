@@ -1093,11 +1093,11 @@ class BrowserActivity : ComponentActivity() {
                                         slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
                                     } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.MovieDetail || targetState is Screen.TvShowDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary)) {
-                                         slideInVertically { height -> height } + fadeIn() togetherWith
-                                                slideOutVertically { height -> -height } + fadeOut()
+                                         androidx.compose.animation.slideInHorizontally { width -> width } + fadeIn() togetherWith
+                                                androidx.compose.animation.slideOutHorizontally { width -> -width } + fadeOut()
                                     } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.MovieDetail || initialState is Screen.TvShowDetail)) {
-                                         slideInVertically { height -> -height } + fadeIn() togetherWith
-                                                slideOutVertically { height -> height } + fadeOut()
+                                         androidx.compose.animation.slideInHorizontally { width -> -width } + fadeIn() togetherWith
+                                                androidx.compose.animation.slideOutHorizontally { width -> width } + fadeOut()
                                     } else {
                                         // Default fade for other transitions (e.g. settings)
                                         fadeIn() togetherWith fadeOut()
