@@ -137,7 +137,7 @@ fun LibraryScreen(
                 Text("Media Type", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     FilterChip(
                         selected = selectedMediaType == LibraryMediaType.ALL,
@@ -165,13 +165,22 @@ fun LibraryScreen(
 
                     OutlinedTextField(
                         value = yearInput,
-                        onValueChange = { yearInput = it },
-                        placeholder = { Text("Year (e.g. 2025)") },
+                        onValueChange = {
+                            if (it.length <= 4) yearInput = it.filter { char -> char.isDigit() }
+                        },
+                        placeholder = { Text("YYYY") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number, imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
-                        modifier = Modifier.width(150.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium
+                        modifier = Modifier.width(100.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary
+                        )
                     )
                 }
 
@@ -221,9 +230,9 @@ fun LibraryScreen(
 
                 LazyHorizontalGrid(
                     rows = GridCells.Fixed(2),
-                    modifier = Modifier.height(110.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.height(100.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     items(TmdbCommonGenres.list) { genre ->
                         val isSelected = selectedGenres.contains(genre.id)
