@@ -10,6 +10,9 @@ import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.EngineSession
 import org.mozilla.geckoview.GeckoSession
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 /**
  * Manages browser tab lifecycle and engine sessions.
@@ -94,7 +97,10 @@ class TabManager {
      * Create engine sessions for tabs that don't have one yet and
      * clean up sessions whose tabs have been closed or hiberated.
      */
-    fun syncSessions(tabs: List<TabSessionState>, selectedTabId: String? = null) {
+    suspend fun syncSessions(tabs: List<TabSessionState>, selectedTabId: String? = null) {
+        // Yield to allow UI to draw first frame
+        delay(10)
+
         val allValidTabIds = tabs.map { it.id }.toSet()
 
         // 1. Maintain LRU tracker
@@ -119,6 +125,14 @@ class TabManager {
         // 3. Create sessions for tabs that are active but have no EngineSession yet
         tabs.forEach { tab ->
             if (activeTabIds.contains(tab.id) && !sessions.containsKey(tab.id)) {
+                // Give a short breather to the main thread between session creations
+                delay(10)
+
+                // Re-check after suspension to prevent double-creation if another coroutine created it during delay
+                if (sessions.containsKey(tab.id)) {
+                    return@forEach
+                }
+
                 val newSession = Components.engine.createSession()
                 val url = tab.content.url.ifEmpty { "about:blank" }
                 if (url != "about:blank") {
