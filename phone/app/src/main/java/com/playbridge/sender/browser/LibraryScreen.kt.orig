@@ -130,10 +130,10 @@ fun LibraryScreen(
                         if (isSearching) {
                             viewModel.setIsSearching(false)
                         } else {
-                            onMenuClick()
+                            onBack()
                         }
                     }) {
-                        if (isSearching) Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") else Icon(Icons.Default.Menu, "Menu")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
                 },
                 actions = {
