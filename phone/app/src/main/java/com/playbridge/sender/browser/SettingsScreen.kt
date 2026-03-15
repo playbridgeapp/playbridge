@@ -143,6 +143,12 @@ fun SettingsScreen(
                     tmdbTrigger++
                 }
 
+                // Update OMDB key
+                if (imported.omdbApiKey != null) {
+                    tmdbPrefs.edit().putString("omdb_api_key", imported.omdbApiKey).apply()
+                    tmdbTrigger++
+                }
+
                 // Update Debrid settings
                         val tmdbEdit = tmdbPrefs.edit()
                 if (imported.debridProvider != null) {
@@ -262,6 +268,7 @@ fun SettingsScreen(
                     debridProvider = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) else null,
                     debridApiKey = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") else null,
                     tmdbApiKey = if (exportTmdb) tmdbPrefs.getString("tmdb_api_key", "") else null,
+                    omdbApiKey = if (exportTmdb) tmdbPrefs.getString("omdb_api_key", "") else null,
                     tvPlayerMode = if (exportTvDefaults) prefs.getString("tv_player_mode", "tv") else null,
                     tvBrowserMode = if (exportTvDefaults) prefs.getString("tv_browser_mode", "tv") else null,
                     addonUrls = if (exportAddons) addonUrls else emptyList(),
@@ -440,6 +447,33 @@ fun SettingsScreen(
                         Icon(
                             if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                             contentDescription = if (showApiKey) "Hide key" else "Show key"
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            )
+
+            var omdbApiKey by remember(tmdbTrigger) {
+                mutableStateOf(tmdbPrefs.getString("omdb_api_key", "") ?: "")
+            }
+            var showOmdbKey by remember { mutableStateOf(false) }
+
+            OutlinedTextField(
+                value = omdbApiKey,
+                onValueChange = { newKey ->
+                    omdbApiKey = newKey
+                    tmdbPrefs.edit().putString("omdb_api_key", newKey.trim()).apply()
+                },
+                label = { Text("OMDB API Key (Optional)") },
+                placeholder = { Text("Enter your OMDB API key") },
+                supportingText = { Text("Free at omdbapi.com (For IMDb/Rotten Tomatoes Ratings)") },
+                singleLine = true,
+                visualTransformation = if (showOmdbKey) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { showOmdbKey = !showOmdbKey }) {
+                        Icon(
+                            if (showOmdbKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (showOmdbKey) "Hide key" else "Show key"
                         )
                     }
                 },

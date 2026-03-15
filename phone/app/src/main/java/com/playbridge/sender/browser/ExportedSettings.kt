@@ -22,6 +22,7 @@ data class ExportedSettings(
     val debridProvider: String? = null,
     val debridApiKey: String? = null,
     val tmdbApiKey: String? = null,
+    val omdbApiKey: String? = null,
     val tvPlayerMode: String? = null,
     val tvBrowserMode: String? = null,
     val addonUrls: List<String> = emptyList(),

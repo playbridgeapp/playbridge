@@ -41,9 +41,11 @@ fun MovieDetailScreen(
 ) {
     val context = LocalContext.current
     val tmdb = remember { TmdbRepository(context) }
+    val omdb = remember { OmdbRepository(context) }
     val scope = rememberCoroutineScope()
 
     var details by remember { mutableStateOf<TmdbMovieDetails?>(null) }
+    var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
 
     // Stream resolution state
@@ -53,7 +55,12 @@ fun MovieDetailScreen(
 
     LaunchedEffect(movieId) {
         isLoading = true
-        details = tmdb.getMovieDetails(movieId)
+        val movieDetails = tmdb.getMovieDetails(movieId)
+        details = movieDetails
+        val imdbId = movieDetails?.imdbId
+        if (imdbId != null && omdb.isConfigured()) {
+            omdbDetails = omdb.getDetailsByImdbId(imdbId)
+        }
         isLoading = false
     }
 
@@ -116,7 +123,8 @@ fun MovieDetailScreen(
                         year = movie.year,
                         rating = movie.rating,
                         runtime = movie.runtimeFormatted,
-                        genres = movie.genres.map { it.name }
+                        genres = movie.genres.map { it.name },
+                        omdbDetails = omdbDetails
                     )
                 }
 
@@ -223,9 +231,11 @@ fun TvShowDetailScreen(
 ) {
     val context = LocalContext.current
     val tmdb = remember { TmdbRepository(context) }
+    val omdb = remember { OmdbRepository(context) }
     val scope = rememberCoroutineScope()
     
     var details by remember { mutableStateOf<TmdbTvDetails?>(null) }
+    var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var selectedSeason by remember { mutableIntStateOf(1) }
     var seasonDetails by remember { mutableStateOf<TmdbSeason?>(null) }
@@ -244,7 +254,12 @@ fun TvShowDetailScreen(
 
     LaunchedEffect(tvId) {
         isLoading = true
-        details = tmdb.getTvDetails(tvId)
+        val tvDetails = tmdb.getTvDetails(tvId)
+        details = tvDetails
+        val imdbId = tvDetails?.imdbId
+        if (imdbId != null && omdb.isConfigured()) {
+            omdbDetails = omdb.getDetailsByImdbId(imdbId)
+        }
         isLoading = false
 
         // Auto-load first season (skip specials if possible)
@@ -391,7 +406,8 @@ fun TvShowDetailScreen(
                         year = show.year,
                         rating = show.rating,
                         runtime = "${show.numberOfSeasons} Season${if (show.numberOfSeasons != 1) "s" else ""}",
-                        genres = show.genres.map { it.name }
+                        genres = show.genres.map { it.name },
+                        omdbDetails = omdbDetails
                     )
                 }
 
@@ -521,7 +537,8 @@ private fun BackdropSection(
     year: String,
     rating: String,
     runtime: String,
-    genres: List<String>
+    genres: List<String>,
+    omdbDetails: OmdbResponse? = null
 ) {
     Box(
         modifier = Modifier
@@ -601,6 +618,34 @@ private fun BackdropSection(
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
+                }
+                if (omdbDetails?.imdbRating != null && omdbDetails.imdbRating != "N/A") {
+                    Surface(
+                        color = Color(0xFFF5C518),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "IMDb ${omdbDetails.imdbRating}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Black,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                if (omdbDetails?.rottenTomatoesRating != null && omdbDetails.rottenTomatoesRating != "N/A") {
+                    Surface(
+                        color = Color(0xFFFA320A),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "🍅 ${omdbDetails.rottenTomatoesRating}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                         )
                     }
                 }

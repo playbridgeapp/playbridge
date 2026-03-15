@@ -72,6 +72,15 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val isSearchLoading: StateFlow<Boolean> = _isSearchLoading.asStateFlow()
 
     // Discovery state
+    private val _selectedMediaType = MutableStateFlow(LibraryMediaType.ALL)
+    val selectedMediaType: StateFlow<LibraryMediaType> = _selectedMediaType.asStateFlow()
+
+    private val _selectedSortBy = MutableStateFlow(LibrarySortBy.POPULARITY_DESC)
+    val selectedSortBy: StateFlow<LibrarySortBy> = _selectedSortBy.asStateFlow()
+
+    private val _selectedYear = MutableStateFlow("")
+    val selectedYear: StateFlow<String> = _selectedYear.asStateFlow()
+
     private val _selectedGenres = MutableStateFlow<Set<Int>>(emptySet())
     val selectedGenres: StateFlow<Set<Int>> = _selectedGenres.asStateFlow()
 
@@ -240,9 +249,26 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         triggerDiscovery()
     }
 
+    fun setMediaType(mediaType: LibraryMediaType) {
+        _selectedMediaType.value = mediaType
+        triggerDiscovery()
+    }
+
+    fun setSortBy(sortBy: LibrarySortBy) {
+        _selectedSortBy.value = sortBy
+        triggerDiscovery()
+    }
+
+    fun setYear(year: String) {
+        _selectedYear.value = year
+        triggerDiscovery()
+    }
+
     private fun triggerDiscovery() {
         val genres = _selectedGenres.value
-        if (genres.isEmpty()) {
+        val mediaType = _selectedMediaType.value
+        val year = _selectedYear.value
+        if (genres.isEmpty() && mediaType == LibraryMediaType.ALL && _selectedSortBy.value == LibrarySortBy.POPULARITY_DESC && year.isBlank()) {
             _discoveredMovies.value = emptyList()
             _discoveredTvShows.value = emptyList()
             discoveredMoviesPage = 1
@@ -261,13 +287,25 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 _hasMoreDiscoveredTvShows.value = true
 
                 val separator = if (_matchAllGenres.value) "," else "|"
-                val genreString = genres.joinToString(separator)
+                val genreString = if (genres.isNotEmpty()) genres.joinToString(separator) else null
+                val sortBy = _selectedSortBy.value.apiValue
+                val yearParam = if (year.isNotBlank()) year else null
 
-                val movies = tmdb.discoverMovies(page = 1, withGenres = genreString)
-                val tv = tmdb.discoverTvShows(page = 1, withGenres = genreString)
+                if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.MOVIE) {
+                    val movies = tmdb.discoverMovies(page = 1, withGenres = genreString, sortBy = sortBy, year = yearParam)
+                    _discoveredMovies.value = movies.results
+                } else {
+                    _discoveredMovies.value = emptyList()
+                    _hasMoreDiscoveredMovies.value = false
+                }
 
-                _discoveredMovies.value = movies.results
-                _discoveredTvShows.value = tv.results
+                if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.TV_SHOW) {
+                    val tv = tmdb.discoverTvShows(page = 1, withGenres = genreString, sortBy = sortBy, year = yearParam)
+                    _discoveredTvShows.value = tv.results
+                } else {
+                    _discoveredTvShows.value = emptyList()
+                    _hasMoreDiscoveredTvShows.value = false
+                }
             } finally {
                 _isDiscoveryLoading.value = false
             }
@@ -280,10 +318,13 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _isLoadingMoreDiscoveredMovies.value = true
             try {
+                if (_selectedMediaType.value == LibraryMediaType.TV_SHOW) return@launch
                 val separator = if (_matchAllGenres.value) "," else "|"
-                val genreString = _selectedGenres.value.joinToString(separator)
+                val genreString = if (_selectedGenres.value.isNotEmpty()) _selectedGenres.value.joinToString(separator) else null
+                val sortBy = _selectedSortBy.value.apiValue
+                val yearParam = if (_selectedYear.value.isNotBlank()) _selectedYear.value else null
                 val nextPage = discoveredMoviesPage + 1
-                val newMovies = tmdb.discoverMovies(page = nextPage, withGenres = genreString)
+                val newMovies = tmdb.discoverMovies(page = nextPage, withGenres = genreString, sortBy = sortBy, year = yearParam)
                 if (newMovies.results.isNotEmpty()) {
                     _discoveredMovies.value = _discoveredMovies.value + newMovies.results
                     discoveredMoviesPage = nextPage
@@ -302,10 +343,13 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _isLoadingMoreDiscoveredTvShows.value = true
             try {
+                if (_selectedMediaType.value == LibraryMediaType.MOVIE) return@launch
                 val separator = if (_matchAllGenres.value) "," else "|"
-                val genreString = _selectedGenres.value.joinToString(separator)
+                val genreString = if (_selectedGenres.value.isNotEmpty()) _selectedGenres.value.joinToString(separator) else null
+                val sortBy = _selectedSortBy.value.apiValue
+                val yearParam = if (_selectedYear.value.isNotBlank()) _selectedYear.value else null
                 val nextPage = discoveredTvShowsPage + 1
-                val newTvShows = tmdb.discoverTvShows(page = nextPage, withGenres = genreString)
+                val newTvShows = tmdb.discoverTvShows(page = nextPage, withGenres = genreString, sortBy = sortBy, year = yearParam)
                 if (newTvShows.results.isNotEmpty()) {
                     _discoveredTvShows.value = _discoveredTvShows.value + newTvShows.results
                     discoveredTvShowsPage = nextPage
