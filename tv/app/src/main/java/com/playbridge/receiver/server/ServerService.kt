@@ -82,35 +82,40 @@ class ServerService : Service() {
         
         val deviceName = android.provider.Settings.Global.getString(contentResolver, android.provider.Settings.Global.DEVICE_NAME) ?: Build.MODEL
         
-        val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
-            serviceName = deviceName
-            serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
-            setPort(port)
+        scope.launch {
+            val deviceId = pairingStore.getOrCreateDeviceId()
+            
+            val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
+                serviceName = deviceName
+                serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
+                setPort(port)
+                setAttribute("uuid", deviceId)
+            }
+            
+            registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
+                override fun onServiceRegistered(NsdServiceInfo: android.net.nsd.NsdServiceInfo) {
+                    FileLogger.d(TAG, "Service registered: ${NsdServiceInfo.serviceName}")
+                }
+
+                override fun onRegistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                    FileLogger.e(TAG, "Registration failed: $errorCode")
+                }
+
+                override fun onServiceUnregistered(arg0: android.net.nsd.NsdServiceInfo) {
+                    FileLogger.d(TAG, "Service unregistered")
+                }
+
+                override fun onUnregistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                    FileLogger.e(TAG, "Unregistration failed: $errorCode")
+                }
+            }
+            
+            nsdManager.registerService(
+                serviceInfo,
+                android.net.nsd.NsdManager.PROTOCOL_DNS_SD,
+                registrationListener
+            )
         }
-        
-        registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
-            override fun onServiceRegistered(NsdServiceInfo: android.net.nsd.NsdServiceInfo) {
-                FileLogger.d(TAG, "Service registered: ${NsdServiceInfo.serviceName}")
-            }
-            
-            override fun onRegistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                FileLogger.e(TAG, "Registration failed: $errorCode")
-            }
-            
-            override fun onServiceUnregistered(arg0: android.net.nsd.NsdServiceInfo) {
-                FileLogger.d(TAG, "Service unregistered")
-            }
-            
-            override fun onUnregistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                FileLogger.e(TAG, "Unregistration failed: $errorCode")
-            }
-        }
-        
-        nsdManager.registerService(
-            serviceInfo,
-            android.net.nsd.NsdManager.PROTOCOL_DNS_SD,
-            registrationListener
-        )
     }
     
     private fun startServer() {

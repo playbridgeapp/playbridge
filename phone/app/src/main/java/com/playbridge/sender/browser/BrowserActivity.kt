@@ -244,12 +244,42 @@ class BrowserActivity : ComponentActivity() {
             val suggestions by historyDao.search(editUrl).collectAsState(initial = emptyList())
             val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
             
-            // Auto-connect to stored TV device
-            LaunchedEffect(Unit) {
-                connectionStore.tvDevice.collect { device ->
-                    if (device != null && connectionState is WebSocketClient.ConnectionState.Disconnected) {
-                        Log.d(TAG, "Auto-connecting to TV: ${device.name} at ${device.ip}:${device.port}")
-                        webSocketClient.connect(device.ip, device.port, device.token, device.name)
+            // Dynamic Auto-connect & NSD Discovery logic
+            val tvDevice by connectionStore.tvDevice.collectAsState(initial = null)
+            val discoveredDevices by nsdHelper.discoveredDevices.collectAsState()
+
+            // Try initial connection to saved device
+            LaunchedEffect(tvDevice) {
+                if (tvDevice != null && connectionState is WebSocketClient.ConnectionState.Disconnected) {
+                    Log.d(TAG, "Auto-connecting to saved TV: ${tvDevice?.name} at ${tvDevice?.ip}:${tvDevice?.port}")
+                    webSocketClient.connect(tvDevice!!.ip, tvDevice!!.port, tvDevice!!.token, tvDevice!!.name)
+                }
+            }
+
+            // Manage background NSD discovery
+            LaunchedEffect(connectionState) {
+                if (connectionState !is WebSocketClient.ConnectionState.Connected &&
+                    connectionState !is WebSocketClient.ConnectionState.Connecting) {
+                    nsdHelper.startDiscovery()
+                } else {
+                    nsdHelper.stopDiscovery()
+                }
+            }
+
+            // If we find our TV on a NEW IP via NSD, update and reconnect immediately.
+            LaunchedEffect(discoveredDevices) {
+                if (tvDevice != null && tvDevice?.uuid?.isNotEmpty() == true) {
+                    val matchedDevice = discoveredDevices.find { it.uuid == tvDevice?.uuid }
+                    if (matchedDevice != null && (matchedDevice.ip != tvDevice?.ip || matchedDevice.port != tvDevice?.port)) {
+                        Log.d(TAG, "NSD discovered saved TV at new IP: ${matchedDevice.ip}:${matchedDevice.port}. Updating and reconnecting.")
+                        val updatedDevice = tvDevice!!.copy(
+                            ip = matchedDevice.ip,
+                            port = matchedDevice.port,
+                            name = matchedDevice.name
+                        )
+                        connectionStore.saveTvDevice(updatedDevice)
+                        connectionStore.addToHistory(updatedDevice)
+                        webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name)
                     }
                 }
             }
@@ -1336,7 +1366,6 @@ class BrowserActivity : ComponentActivity() {
                                         }
                                         Screen.Settings -> {
                                             BackHandler { currentScreen = Screen.Browser }
-                                            val tvDevice by connectionStore.tvDevice.collectAsState(initial = null)
                                             SettingsScreen(
                                                 onBack = { currentScreen = Screen.Browser },
                                                 onAddonSettings = { currentScreen = Screen.AddonSettings },

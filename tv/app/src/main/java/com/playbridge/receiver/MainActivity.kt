@@ -131,10 +131,12 @@ fun MainContent(
     var serverPort by remember { mutableStateOf<Int?>(null) }
     var authToken by remember { mutableStateOf("") }
     var deviceName by remember { mutableStateOf("Android TV") }
+    var deviceId by remember { mutableStateOf("") }
     
     // Load initial values
     LaunchedEffect(Unit) {
         authToken = pairingStore.getOrCreateToken()
+        deviceId = pairingStore.getOrCreateDeviceId()
         serverPort = pairingStore.serverPort.first()
         serverIp = getLocalIpAddress()
         pairingStore.deviceName.collect { name ->
@@ -161,6 +163,7 @@ fun MainContent(
                 serverIp = serverIp,
                 serverPort = serverPort,
                 connectedCount = connectedCount,
+                deviceId = deviceId,
                 onShowPairing = { currentScreen = Screen.Pairing }
             )
         }

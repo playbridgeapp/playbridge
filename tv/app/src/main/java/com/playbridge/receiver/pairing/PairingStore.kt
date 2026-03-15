@@ -23,10 +23,32 @@ class PairingStore(private val context: Context) {
         private val SERVER_PORT = intPreferencesKey("server_port")
         private val DEVICE_NAME = stringPreferencesKey("device_name")
         private val PAIRED_DEVICES = stringPreferencesKey("paired_devices")
+        private val DEVICE_ID = stringPreferencesKey("device_id")
         
         const val DEFAULT_PORT = 8765
     }
     
+    /**
+     * Get the current device ID (UUID), or create a new one if none exists
+     */
+    suspend fun getOrCreateDeviceId(): String {
+        val current = context.dataStore.data.first()[DEVICE_ID]
+        if (current != null) return current
+
+        val newId = UUID.randomUUID().toString()
+        context.dataStore.edit { prefs ->
+            prefs[DEVICE_ID] = newId
+        }
+        return newId
+    }
+
+    /**
+     * Device ID flow
+     */
+    val deviceId: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[DEVICE_ID] ?: getOrCreateDeviceId()
+    }
+
     /**
      * Get the current auth token, or create a new one if none exists
      */

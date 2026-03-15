@@ -11,5 +11,6 @@ data class TvDevice(
     val port: Int,
     val token: String,
     val name: String,
+    val uuid: String = "",
     val lastConnected: Long = System.currentTimeMillis()
 )
