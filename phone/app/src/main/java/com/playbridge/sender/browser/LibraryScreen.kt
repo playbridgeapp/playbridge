@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -183,6 +184,7 @@ fun LibraryScreen(
                     }
                 } else {
                     SearchResultsList(
+                        listState = viewModel.searchResultsListState,
                         results = searchResults,
                         onMovieClick = onMovieClick,
                         onTvShowClick = onTvShowClick
@@ -191,6 +193,7 @@ fun LibraryScreen(
             } else {
                 // Main catalog
                 LazyColumn(
+                    state = viewModel.mainListState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
@@ -266,6 +269,7 @@ fun LibraryScreen(
                                     MediaRow(
                                         title = "✨ Discovered Movies",
                                         items = discoveredMovies,
+                                        listState = viewModel.discoveredMoviesListState,
                                         onItemClick = { onMovieClick(it.id) },
                                         posterUrl = { it.posterUrl },
                                         displayTitle = { it.title },
@@ -282,6 +286,7 @@ fun LibraryScreen(
                                     MediaRow(
                                         title = "✨ Discovered TV Shows",
                                         items = discoveredTvShows,
+                                        listState = viewModel.discoveredTvShowsListState,
                                         onItemClick = { onTvShowClick(it.id) },
                                         posterUrl = { it.posterUrl },
                                         displayTitle = { it.name },
@@ -314,6 +319,7 @@ fun LibraryScreen(
                             MediaRow(
                                 title = "🔥 Trending Today",
                                 items = trending,
+                                listState = viewModel.trendingListState,
                                 onItemClick = { item ->
                                     if (item.isMovie) onMovieClick(item.id)
                                     else onTvShowClick(item.id)
@@ -335,6 +341,7 @@ fun LibraryScreen(
                             MediaRow(
                                 title = "🎬 Popular Movies",
                                 items = popularMovies,
+                                listState = viewModel.popularMoviesListState,
                                 onItemClick = { onMovieClick(it.id) },
                                 posterUrl = { it.posterUrl },
                                 displayTitle = { it.title },
@@ -353,6 +360,7 @@ fun LibraryScreen(
                             MediaRow(
                                 title = "📺 Popular TV Shows",
                                 items = popularTvShows,
+                                listState = viewModel.popularTvShowsListState,
                                 onItemClick = { onTvShowClick(it.id) },
                                 posterUrl = { it.posterUrl },
                                 displayTitle = { it.name },
@@ -377,6 +385,7 @@ fun LibraryScreen(
 private fun <T> MediaRow(
     title: String,
     items: List<T>,
+    listState: LazyListState = rememberLazyListState(),
     onItemClick: (T) -> Unit,
     posterUrl: (T) -> String?,
     displayTitle: (T) -> String,
@@ -386,7 +395,6 @@ private fun <T> MediaRow(
     isLoadingMore: Boolean = false,
     hasMore: Boolean = true
 ) {
-    val listState = rememberLazyListState()
 
     val isNearEnd by remember {
         derivedStateOf {
@@ -544,11 +552,13 @@ private fun PosterCard(
 
 @Composable
 private fun SearchResultsList(
+    listState: LazyListState = rememberLazyListState(),
     results: List<TmdbMultiSearchResult>,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit
 ) {
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)

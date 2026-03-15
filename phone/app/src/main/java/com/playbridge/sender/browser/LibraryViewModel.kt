@@ -7,6 +7,7 @@ import com.playbridge.sender.data.library.TmdbMovie
 import com.playbridge.sender.data.library.TmdbMultiSearchResult
 import com.playbridge.sender.data.library.TmdbRepository
 import com.playbridge.sender.data.library.TmdbTvShow
+import androidx.compose.foundation.lazy.LazyListState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +15,15 @@ import kotlinx.coroutines.launch
 
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdb = TmdbRepository(application)
+
+    // UI Scroll States
+    val mainListState = LazyListState()
+    val trendingListState = LazyListState()
+    val popularMoviesListState = LazyListState()
+    val popularTvShowsListState = LazyListState()
+    val discoveredMoviesListState = LazyListState()
+    val discoveredTvShowsListState = LazyListState()
+    val searchResultsListState = LazyListState()
 
     private val _isConfigured = MutableStateFlow(tmdb.isConfigured())
     val isConfigured: StateFlow<Boolean> = _isConfigured.asStateFlow()
