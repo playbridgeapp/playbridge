@@ -254,13 +254,12 @@ object VideoDetector {
                             video.subtitlePreview = previewText
                         } else {
                             // Fallback if parsing failed but we got text
-                            val lines = content.lines()
-                            val fallbackLines = lines.map { it.trim() }.filter { trimmed ->
+                            val fallbackLines = content.lineSequence().map { it.trim() }.filter { trimmed ->
                                 trimmed.isNotEmpty() &&
                                 !trimmed.contains("WEBVTT", ignoreCase = true) &&
                                 !trimmed.contains("-->") &&
                                 trimmed.toIntOrNull() == null
-                            }.take(2)
+                            }.take(2).toList()
                             video.subtitlePreview = fallbackLines.joinToString(" • ")
                         }
                         
