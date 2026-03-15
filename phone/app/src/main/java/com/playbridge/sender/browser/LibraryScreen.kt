@@ -9,6 +9,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -88,11 +91,130 @@ fun LibraryScreen(
     val isLoadingMoreDiscoveredTvShows by viewModel.isLoadingMoreDiscoveredTvShows.collectAsState()
     val hasMoreDiscoveredTvShows by viewModel.hasMoreDiscoveredTvShows.collectAsState()
 
+    val selectedMediaType by viewModel.selectedMediaType.collectAsState()
+    val selectedSortBy by viewModel.selectedSortBy.collectAsState()
+
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
+
+    var showFilterSheet by remember { mutableStateOf(false) }
 
     // Load initial data
     LaunchedEffect(Unit) {
         viewModel.checkConfigAndLoadInitialData()
+    }
+
+    if (showFilterSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showFilterSheet = false }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(bottom = 16.dp)
+            ) {
+                Text(
+                    "Filters & Sorting",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                // Type Filter
+                Text("Media Type", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedMediaType == LibraryMediaType.ALL,
+                        onClick = { viewModel.setMediaType(LibraryMediaType.ALL) },
+                        label = { Text("All") }
+                    )
+                    FilterChip(
+                        selected = selectedMediaType == LibraryMediaType.MOVIE,
+                        onClick = { viewModel.setMediaType(LibraryMediaType.MOVIE) },
+                        label = { Text("Movies") }
+                    )
+                    FilterChip(
+                        selected = selectedMediaType == LibraryMediaType.TV_SHOW,
+                        onClick = { viewModel.setMediaType(LibraryMediaType.TV_SHOW) },
+                        label = { Text("TV Shows") }
+                    )
+                }
+
+                // Sort By
+                Text("Sort By", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedSortBy == LibrarySortBy.POPULARITY_DESC,
+                        onClick = { viewModel.setSortBy(LibrarySortBy.POPULARITY_DESC) },
+                        label = { Text("Popularity") }
+                    )
+                    FilterChip(
+                        selected = selectedSortBy == LibrarySortBy.VOTE_AVERAGE_DESC,
+                        onClick = { viewModel.setSortBy(LibrarySortBy.VOTE_AVERAGE_DESC) },
+                        label = { Text("Rating") }
+                    )
+                    FilterChip(
+                        selected = selectedSortBy == LibrarySortBy.PRIMARY_RELEASE_DATE_DESC,
+                        onClick = { viewModel.setSortBy(LibrarySortBy.PRIMARY_RELEASE_DATE_DESC) },
+                        label = { Text("Release Date") }
+                    )
+                }
+
+                // Discovery by Genre
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Genres", style = MaterialTheme.typography.titleMedium)
+                    if (selectedGenres.size > 1) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (matchAllGenres) "Match All" else "Match Any",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            Switch(
+                                checked = matchAllGenres,
+                                onCheckedChange = { viewModel.setMatchAllGenres(it) },
+                                modifier = Modifier.scale(0.8f)
+                            )
+                        }
+                    }
+                }
+
+                LazyHorizontalGrid(
+                    rows = GridCells.Fixed(2),
+                    modifier = Modifier.height(110.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(TmdbCommonGenres.list) { genre ->
+                        val isSelected = selectedGenres.contains(genre.id)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { viewModel.toggleGenre(genre.id) },
+                            label = { Text(genre.name) },
+                            leadingIcon = if (isSelected) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(FilterChipDefaults.IconSize)
+                                    )
+                                }
+                            } else null
+                        )
+                    }
+                }
+            }
+        }
     }
 
     Scaffold(
@@ -138,6 +260,9 @@ fun LibraryScreen(
                 },
                 actions = {
                     if (!isSearching) {
+                        IconButton(onClick = { showFilterSheet = true }) {
+                            Icon(Icons.Default.FilterList, "Filter")
+                        }
                         IconButton(onClick = { viewModel.setIsSearching(true) }) {
                             Icon(Icons.Default.Search, "Search")
                         }
@@ -197,63 +322,9 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    // Discovery Filters
-                    item {
-                        Column(modifier = Modifier.padding(bottom = 8.dp)) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "Discover by Genre",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                if (selectedGenres.size > 1) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            if (matchAllGenres) "Match All" else "Match Any",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            modifier = Modifier.padding(end = 8.dp)
-                                        )
-                                        Switch(
-                                            checked = matchAllGenres,
-                                            onCheckedChange = { viewModel.setMatchAllGenres(it) },
-                                            modifier = Modifier.scale(0.8f)
-                                        )
-                                    }
-                                }
-                            }
+                    val isFiltering = selectedGenres.isNotEmpty() || selectedMediaType != LibraryMediaType.ALL || selectedSortBy != LibrarySortBy.POPULARITY_DESC
 
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(TmdbCommonGenres.list) { genre ->
-                                    val isSelected = selectedGenres.contains(genre.id)
-                                    FilterChip(
-                                        selected = isSelected,
-                                        onClick = { viewModel.toggleGenre(genre.id) },
-                                        label = { Text(genre.name) },
-                                        leadingIcon = if (isSelected) {
-                                            {
-                                                Icon(
-                                                    imageVector = Icons.Default.Check,
-                                                    contentDescription = "Selected",
-                                                    modifier = Modifier.size(FilterChipDefaults.IconSize)
-                                                )
-                                            }
-                                        } else null
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    if (selectedGenres.isNotEmpty()) {
+                    if (isFiltering) {
                         if (isDiscoveryLoading) {
                             item {
                                 Box(
@@ -305,7 +376,7 @@ fun LibraryScreen(
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
-                                            "No results found for selected genres.",
+                                            "No results found for selected filters.",
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
