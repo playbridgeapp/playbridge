@@ -22,6 +22,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
@@ -40,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.playbridge.sender.data.library.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -93,10 +96,20 @@ fun LibraryScreen(
 
     val selectedMediaType by viewModel.selectedMediaType.collectAsState()
     val selectedSortBy by viewModel.selectedSortBy.collectAsState()
+    val selectedYear by viewModel.selectedYear.collectAsState()
 
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
 
     var showFilterSheet by remember { mutableStateOf(false) }
+    var yearInput by remember(selectedYear) { mutableStateOf(selectedYear) }
+
+    // Debounce year input
+    LaunchedEffect(yearInput) {
+        if (yearInput != selectedYear) {
+            delay(500)
+            viewModel.setYear(yearInput)
+        }
+    }
 
     // Load initial data
     LaunchedEffect(Unit) {
@@ -143,8 +156,25 @@ fun LibraryScreen(
                     )
                 }
 
-                // Sort By
-                Text("Sort By", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Sort By", style = MaterialTheme.typography.titleMedium)
+
+                    OutlinedTextField(
+                        value = yearInput,
+                        onValueChange = { yearInput = it },
+                        placeholder = { Text("Year (e.g. 2025)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
+                        modifier = Modifier.width(150.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -322,7 +352,7 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    val isFiltering = selectedGenres.isNotEmpty() || selectedMediaType != LibraryMediaType.ALL || selectedSortBy != LibrarySortBy.POPULARITY_DESC
+                    val isFiltering = selectedGenres.isNotEmpty() || selectedMediaType != LibraryMediaType.ALL || selectedSortBy != LibrarySortBy.POPULARITY_DESC || selectedYear.isNotBlank()
 
                     if (isFiltering) {
                         if (isDiscoveryLoading) {

@@ -48,9 +48,10 @@ class TmdbRepository(private val context: Context) {
 
     // ==================== Movies ====================
 
-    suspend fun discoverMovies(page: Int = 1, withGenres: String? = null, sortBy: String = "popularity.desc"): TmdbPagedResponse<TmdbMovie> {
+    suspend fun discoverMovies(page: Int = 1, withGenres: String? = null, sortBy: String = "popularity.desc", year: String? = null): TmdbPagedResponse<TmdbMovie> {
         val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
-        return fetchPaged("$BASE_URL/discover/movie?language=en-US&page=$page&sort_by=$sortBy$genresParam")
+        val yearParam = year?.let { "&primary_release_year=$it" } ?: ""
+        return fetchPaged("$BASE_URL/discover/movie?language=en-US&page=$page&sort_by=$sortBy$genresParam$yearParam")
     }
 
     suspend fun getPopularMovies(page: Int = 1): TmdbPagedResponse<TmdbMovie> {
@@ -63,9 +64,11 @@ class TmdbRepository(private val context: Context) {
 
     // ==================== TV Shows ====================
 
-    suspend fun discoverTvShows(page: Int = 1, withGenres: String? = null, sortBy: String = "popularity.desc"): TmdbPagedResponse<TmdbTvShow> {
+    suspend fun discoverTvShows(page: Int = 1, withGenres: String? = null, sortBy: String = "popularity.desc", year: String? = null): TmdbPagedResponse<TmdbTvShow> {
         val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
-        return fetchPaged("$BASE_URL/discover/tv?language=en-US&page=$page&sort_by=$sortBy$genresParam")
+        val yearParam = year?.let { "&first_air_date_year=$it" } ?: ""
+        val tvSortBy = if (sortBy == "primary_release_date.desc") "first_air_date.desc" else sortBy
+        return fetchPaged("$BASE_URL/discover/tv?language=en-US&page=$page&sort_by=$tvSortBy$genresParam$yearParam")
     }
 
     suspend fun getPopularTvShows(page: Int = 1): TmdbPagedResponse<TmdbTvShow> {
