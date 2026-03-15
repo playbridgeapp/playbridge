@@ -78,6 +78,7 @@ import kotlinx.coroutines.withContext
 import com.playbridge.sender.data.history.TabEntity
 import com.playbridge.sender.data.history.HistoryDatabase
 import androidx.activity.viewModels
+import com.playbridge.sender.connection.ConnectionViewModel
 
 @Composable
 fun AnimatedMenuItem(
@@ -138,10 +139,8 @@ class BrowserActivity : ComponentActivity() {
         private const val TAG = "BrowserActivity"
     }
     
-    private val webSocketClient = WebSocketClient()
+    private val connectionViewModel: ConnectionViewModel by viewModels()
     private val tabManager = TabManager()
-    private lateinit var connectionStore: ConnectionStore
-    private lateinit var nsdHelper: NsdHelper
     private lateinit var database: HistoryDatabase
 
     override fun onResume() {
@@ -183,8 +182,7 @@ class BrowserActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        connectionStore = ConnectionStore(applicationContext)
-        nsdHelper = NsdHelper(applicationContext)
+
         
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
@@ -229,8 +227,7 @@ class BrowserActivity : ComponentActivity() {
         setContent {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Browser) }
             val clipboardManager = LocalClipboardManager.current
-            val connectionState by webSocketClient.connectionState.collectAsState()
-            val history by connectionStore.deviceHistory.collectAsState(initial = emptyList())
+            val connectionState by connectionViewModel.connectionState.collectAsState()
             val scope = rememberCoroutineScope()
             
             // Database and History
@@ -247,45 +244,12 @@ class BrowserActivity : ComponentActivity() {
             val suggestions by historyDao.search(editUrl).collectAsState(initial = emptyList())
             val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
             
-            // Dynamic Auto-connect & NSD Discovery logic
-            val tvDevice by connectionStore.tvDevice.collectAsState(initial = null)
-            val discoveredDevices by nsdHelper.discoveredDevices.collectAsState()
+            // Connection ViewModel State
+            val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
+            val discoveredDevices by connectionViewModel.discoveredDevices.collectAsState()
+            val history by connectionViewModel.deviceHistory.collectAsState(initial = emptyList())
 
-            // Try initial connection to saved device
-            LaunchedEffect(tvDevice) {
-                if (tvDevice != null && connectionState is WebSocketClient.ConnectionState.Disconnected) {
-                    Log.d(TAG, "Auto-connecting to saved TV: ${tvDevice?.name} at ${tvDevice?.ip}:${tvDevice?.port}")
-                    webSocketClient.connect(tvDevice!!.ip, tvDevice!!.port, tvDevice!!.token, tvDevice!!.name)
-                }
-            }
-
-            // Manage background NSD discovery
-            LaunchedEffect(connectionState) {
-                if (connectionState !is WebSocketClient.ConnectionState.Connected &&
-                    connectionState !is WebSocketClient.ConnectionState.Connecting) {
-                    nsdHelper.startDiscovery()
-                } else {
-                    nsdHelper.stopDiscovery()
-                }
-            }
-
-            // If we find our TV on a NEW IP via NSD, update and reconnect immediately.
-            LaunchedEffect(discoveredDevices) {
-                if (tvDevice != null && tvDevice?.uuid?.isNotEmpty() == true) {
-                    val matchedDevice = discoveredDevices.find { it.uuid == tvDevice?.uuid }
-                    if (matchedDevice != null && (matchedDevice.ip != tvDevice?.ip || matchedDevice.port != tvDevice?.port)) {
-                        Log.d(TAG, "NSD discovered saved TV at new IP: ${matchedDevice.ip}:${matchedDevice.port}. Updating and reconnecting.")
-                        val updatedDevice = tvDevice!!.copy(
-                            ip = matchedDevice.ip,
-                            port = matchedDevice.port,
-                            name = matchedDevice.name
-                        )
-                        connectionStore.saveTvDevice(updatedDevice)
-                        connectionStore.addToHistory(updatedDevice)
-                        webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name)
-                    }
-                }
-            }
+            // Connection logic is now handled in ConnectionViewModel
             
             // Session and navigation state from BrowserStore
             val store = Components.store
@@ -436,7 +400,7 @@ class BrowserActivity : ComponentActivity() {
             // Listen for context messages from TV
             LaunchedEffect(Unit) {
                 launch {
-                    webSocketClient.messages.collect { message ->
+                    connectionViewModel.webSocketClient.messages.collect { message ->
                         try {
                             val json = org.json.JSONObject(message)
                             if (json.optString("type") == "context") {
@@ -446,18 +410,7 @@ class BrowserActivity : ComponentActivity() {
                     }
                 }
                 
-                // Listen for new auth tokens (e.g. after PIN exchange)
-                launch {
-                    webSocketClient.newToken.collect { token ->
-                        val currentDevice = connectionStore.tvDevice.first()
-                        if (currentDevice != null) {
-                            Log.i(TAG, "Updating stored token for ${currentDevice.ip}")
-                            val updatedDevice = currentDevice.copy(token = token)
-                            connectionStore.saveTvDevice(updatedDevice)
-                            connectionStore.addToHistory(updatedDevice)
-                        }
-                    }
-                }
+                // Token listening is now handled in ConnectionViewModel
             }
             
             // Track previous URL to avoid clearing on hash changes
@@ -511,7 +464,7 @@ class BrowserActivity : ComponentActivity() {
                         url = linkUrl, 
                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                     )
-                    webSocketClient.send(cmd)
+                    connectionViewModel.webSocketClient.send(cmd)
                     Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                     contextMenuUrl = null
                     contextMenuUrlState.value = null
@@ -662,7 +615,7 @@ class BrowserActivity : ComponentActivity() {
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Language, contentDescription = null) },
                                 label = { Text("Browser") },
-                                selected = currentScreen == Screen.Browser || currentScreen == Screen.Tabs || currentScreen == Screen.History || currentScreen == Screen.Downloads || currentScreen == Screen.Settings || currentScreen == Screen.Bookmarks || currentScreen == Screen.Remote || currentScreen == Screen.Extensions || currentScreen == Screen.Connection || currentScreen == Screen.Home,
+                                selected = currentScreen == Screen.Browser || currentScreen == Screen.Tabs || currentScreen == Screen.History || currentScreen == Screen.Downloads || currentScreen == Screen.Settings || currentScreen == Screen.Bookmarks || currentScreen == Screen.Remote || currentScreen == Screen.Extensions || currentScreen == Screen.Home,
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.Browser
@@ -686,6 +639,22 @@ class BrowserActivity : ComponentActivity() {
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.DebridLibrary
+                                },
+                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
+                            NavigationDrawerItem(
+                                icon = {
+                                    if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
+                                        Icon(Icons.Default.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        Icon(Icons.Default.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                },
+                                label = { Text("TV Connection") },
+                                selected = currentScreen == Screen.Connection,
+                                onClick = {
+                                    scope.launch { drawerState.close() }
+                                    currentScreen = Screen.Connection
                                 },
                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                             )
@@ -799,7 +768,7 @@ class BrowserActivity : ComponentActivity() {
                                                         index = 1,
                                                         onClick = {
                                                             menuExpanded = false
-                                                            webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
+                                                            connectionViewModel.webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
                                                             currentScreen = Screen.Remote
                                                         }
                                                     ) { onClick ->
@@ -820,7 +789,7 @@ class BrowserActivity : ComponentActivity() {
                                                                 currentUrl, 
                                                                 browserMode = prefs.getString("tv_browser_mode", "tv")?.takeIf { it != "tv" }
                                                             )
-                                                            webSocketClient.send(cmd)
+                                                            connectionViewModel.webSocketClient.send(cmd)
                                                             Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                         }
                                                     ) { onClick ->
@@ -912,40 +881,6 @@ class BrowserActivity : ComponentActivity() {
                                                     DropdownMenuItem(
                                                         text = { Text("Extensions", style = MaterialTheme.typography.bodyLarge) },
                                                         leadingIcon = { Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.primary) },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-                                                
-                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                                                // Connection Status
-                                                val (connectText, connectIcon, connectColor) = when (connectionState) {
-                                                    is WebSocketClient.ConnectionState.Connected -> {
-                                                        val serverName = (connectionState as WebSocketClient.ConnectionState.Connected).serverName
-                                                        Triple("Connected: $serverName", Icons.Default.CheckCircle, MaterialTheme.colorScheme.primary)
-                                                    }
-                                                    is WebSocketClient.ConnectionState.Connecting -> {
-                                                        Triple("Connecting to TV...", Icons.Default.Refresh, MaterialTheme.colorScheme.tertiary)
-                                                    }
-                                                    is WebSocketClient.ConnectionState.Error -> {
-                                                        Triple("Connection Error - Tap to Retry", Icons.Default.Warning, MaterialTheme.colorScheme.error)
-                                                    }
-                                                    else -> {
-                                                        Triple("Connect to TV", Icons.Default.Settings, MaterialTheme.colorScheme.onSurface)
-                                                    }
-                                                }
-                                                
-                                                AnimatedMenuItem(
-                                                    index = 6,
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        currentScreen = Screen.Connection
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text(connectText, style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(connectIcon, null, tint = connectColor) },
                                                         onClick = onClick,
                                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                     )
@@ -1073,15 +1008,7 @@ class BrowserActivity : ComponentActivity() {
                                 )
                             }
                             Screen.Connection -> {
-                                @OptIn(ExperimentalMaterial3Api::class)
-                                TopAppBar(
-                                    title = { Text("Connect to TV") },
-                                    navigationIcon = {
-                                        IconButton(onClick = { currentScreen = Screen.Browser }) {
-                                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                                        }
-                                    }
-                                )
+                                // No TopAppBar here as ConnectionScreen has its own now
                             }
                             Screen.History -> {
                                 // No TopAppBar here as HistoryScreen has its own
@@ -1127,10 +1054,10 @@ class BrowserActivity : ComponentActivity() {
                                     } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
                                         slideInVertically { height -> -height } + fadeIn() togetherWith
                                                 slideOutVertically { height -> height } + fadeOut()
-                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.MovieDetail || targetState is Screen.TvShowDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary)) {
+                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.MovieDetail || targetState is Screen.TvShowDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary || initialState == Screen.Connection)) {
                                          androidx.compose.animation.slideInHorizontally { width -> width } + fadeIn() togetherWith
                                                 androidx.compose.animation.slideOutHorizontally { width -> -width } + fadeOut()
-                                    } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.MovieDetail || initialState is Screen.TvShowDetail)) {
+                                    } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary || targetState == Screen.Connection) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.MovieDetail || initialState is Screen.TvShowDetail)) {
                                          androidx.compose.animation.slideInHorizontally { width -> -width } + fadeIn() togetherWith
                                                 androidx.compose.animation.slideOutHorizontally { width -> width } + fadeOut()
                                     } else {
@@ -1308,46 +1235,22 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Connection -> {
-                                            BackHandler { currentScreen = Screen.Browser }
-                                            ConnectionScreen(
-                                                nsdHelper = nsdHelper,
-                                                history = history,
-                                                onConnect = { device ->
-                                                    scope.launch {
-                                                        Log.d(TAG, "Connecting to: ${device.name} at ${device.ip}:${device.port}")
-                                                        
-                                                        // Save TV device
-                                                        connectionStore.saveTvDevice(device)
-                                                        connectionStore.addToHistory(device)
-                                                        Log.d(TAG, "TV device saved")
-                                                        
-                                                        // Connect
-                                                        webSocketClient.connect(
-                                                            device.ip,
-                                                            device.port,
-                                                            device.token,
-                                                            device.name
-                                                        )
-                                                        Log.d(TAG, "Connecting to TV...")
-                                                        
-                                                        // Show toast
-                                                        runOnUiThread {
-                                                            Toast.makeText(
-                                                                this@BrowserActivity,
-                                                                "Connecting to ${device.name}...",
-                                                                Toast.LENGTH_SHORT
-                                                            ).show()
-                                                        }
-                                                        
-                                                        // Return to browser
-                                                        currentScreen = Screen.Browser
-                                                    }
-                                                },
-                                                onRemove = { device ->
-                                                    scope.launch {
-                                                        connectionStore.removeFromHistory(device)
-                                                    }
+                                            BackHandler {
+                                                val currentTime = System.currentTimeMillis()
+                                                if (currentTime - backPressedTime > 2000) {
+                                                    backPressedTime = currentTime
+                                                    Toast.makeText(
+                                                        this@BrowserActivity,
+                                                        "Press back again to exit",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                } else {
+                                                    finish()
                                                 }
+                                            }
+                                            ConnectionScreen(
+                                                viewModel = connectionViewModel,
+                                                onMenuClick = { scope.launch { drawerState.open() } }
                                             )
                                         }
                                         Screen.Downloads -> {
@@ -1361,7 +1264,7 @@ class BrowserActivity : ComponentActivity() {
                                                             title = "From Downloads",
                                                             contentType = type
                                                         )
-                                                        webSocketClient.send(cmd)
+                                                        connectionViewModel.webSocketClient.send(cmd)
                                                         Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                     } else {
                                                         Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
@@ -1396,27 +1299,27 @@ class BrowserActivity : ComponentActivity() {
                                                 onBack = { currentScreen = Screen.Browser },
                                                 onRemoteKey = { key ->
                                                     val cmd = com.playbridge.protocol.createRemoteCommandJson(key)
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onMouseMove = { dx, dy ->
                                                     val cmd = com.playbridge.protocol.createMouseCommandJson("move", dx, dy)
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onMouseClick = {
                                                     val cmd = com.playbridge.protocol.createMouseCommandJson("click")
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onMouseScroll = { dx, dy ->
                                                     val cmd = com.playbridge.protocol.createMouseCommandJson("scroll", dx, dy)
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onBrowserControl = { action ->
                                                     val cmd = com.playbridge.protocol.createBrowserControlCommandJson(action)
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onPlayerControl = { command ->
                                                     val cmd = com.playbridge.protocol.createControlCommandJson(command)
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                     if (command == "stop") {
                                                         tvActiveContext = "idle"
                                                     }
@@ -1465,7 +1368,7 @@ class BrowserActivity : ComponentActivity() {
                                                         title = title,
                                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                     )
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onBack = { currentScreen = Screen.Library }
                                             )
@@ -1482,7 +1385,7 @@ class BrowserActivity : ComponentActivity() {
                                                         title = title,
                                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                     )
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onPlayPlaylist = { items ->
                                                     // The items (PlayPayloads) already need playerMode injected beforehand. 
@@ -1491,7 +1394,7 @@ class BrowserActivity : ComponentActivity() {
                                                     val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                     val itemsWithMode = items.map { it.copy(playerMode = playerMode) }
                                                     val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode)
-                                                    webSocketClient.send(cmd)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onBack = { currentScreen = Screen.Library }
                                             )
@@ -1519,7 +1422,7 @@ class BrowserActivity : ComponentActivity() {
                                                             title = title,
                                                             playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                         )
-                                                        webSocketClient.send(cmd)
+                                                        connectionViewModel.webSocketClient.send(cmd)
                                                         Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                     } else {
                                                         Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
@@ -1530,7 +1433,7 @@ class BrowserActivity : ComponentActivity() {
                                                         val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                         val itemsWithMode = items.map { it.copy(playerMode = playerMode) }
                                                         val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode)
-                                                        webSocketClient.send(cmd)
+                                                        connectionViewModel.webSocketClient.send(cmd)
                                                         Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
                                                     } else {
                                                         Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
@@ -1583,7 +1486,7 @@ class BrowserActivity : ComponentActivity() {
                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                     )
                                     Log.d(TAG, "Sending play command: $commandJson")
-                                    val sent = webSocketClient.send(commandJson)
+                                    val sent = connectionViewModel.webSocketClient.send(commandJson)
                                     Log.d(TAG, "Command sent: $sent")
                                     
                                     if (sent) {
@@ -1687,7 +1590,7 @@ class BrowserActivity : ComponentActivity() {
                                     detectedBy = "download",
                                     playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                 )
-                                val sent = webSocketClient.send(commandJson)
+                                val sent = connectionViewModel.webSocketClient.send(commandJson)
                                 if (sent) {
                                     tvActiveContext = "player"
                                     Toast.makeText(this@BrowserActivity, "Playing on ${state.serverName}", Toast.LENGTH_SHORT).show()
@@ -1729,7 +1632,7 @@ class BrowserActivity : ComponentActivity() {
                                         title = links.first().filename,
                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                     )
-                                    webSocketClient.send(commandJson)
+                                    connectionViewModel.webSocketClient.send(commandJson)
                                     tvActiveContext = "player"
                                     Toast.makeText(this@BrowserActivity, "Playing on TV", Toast.LENGTH_SHORT).show()
                                 } else if (links.size > 1) {
@@ -1741,7 +1644,7 @@ class BrowserActivity : ComponentActivity() {
                                         )
                                     }
                                     val playlistCmd = com.playbridge.protocol.createPlaylistCommandJson(items = videos)
-                                    webSocketClient.send(playlistCmd)
+                                    connectionViewModel.webSocketClient.send(playlistCmd)
                                     tvActiveContext = "player"
                                     Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
                                 }
@@ -1762,7 +1665,7 @@ class BrowserActivity : ComponentActivity() {
 
 
     override fun onDestroy() {
-        webSocketClient.destroy()
+        // webSocketClient destruction is now handled by ConnectionViewModel's onCleared
         super.onDestroy()
     }
     
