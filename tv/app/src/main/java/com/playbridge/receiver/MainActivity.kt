@@ -225,6 +225,7 @@ fun MainContent(
                 port = serverPort ?: 8765,
                 token = authToken,
                 deviceName = deviceName,
+                deviceId = deviceId,
                 connectionState = connectionState,
                 connectedCount = connectedCount
             )
@@ -251,6 +252,7 @@ fun MainContent(
 }
 
 private fun getLocalIpAddress(): String? {
+    var backupIp: String? = null
     try {
         val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
         while (interfaces.hasMoreElements()) {
@@ -261,12 +263,19 @@ private fun getLocalIpAddress(): String? {
             while (addresses.hasMoreElements()) {
                 val address = addresses.nextElement()
                 if (address is java.net.Inet4Address && !address.isLoopbackAddress) {
-                    return address.hostAddress
+                    val hostAddress = address.hostAddress
+                    if (hostAddress?.startsWith("192.168.") == true) {
+                        return hostAddress
+                    } else if (hostAddress?.startsWith("10.") == true || hostAddress?.startsWith("172.") == true) {
+                        if (backupIp == null) backupIp = hostAddress
+                    } else {
+                        if (backupIp == null) backupIp = hostAddress
+                    }
                 }
             }
         }
     } catch (e: Exception) {
         // Ignore
     }
-    return null
+    return backupIp
 }
