@@ -25,6 +25,7 @@ com.playbridge.sender/
 │   ├── HomeScreen.kt               (browser home page with bookmarks)
 │   ├── LibraryDetailScreen.kt      (movie/TV details with stream resolution)
 │   ├── LibraryScreen.kt            (TMDB popular/trending/search UI)
+│   ├── LibraryViewModel.kt         (ViewModel managing TMDB API calls and state)
 │   ├── LinkContextMenu.kt          (long-press link context menu dialog)
 │   ├── MagnetParsingSheet.kt       (bottom sheet UI for Debrid magnet and .torrent parsing)
 │   ├── MediaDownloadService.kt     (foreground service for HLS/media downloads)
@@ -82,6 +83,7 @@ com.playbridge.sender/
 | Browser UI | BrowserActivity.kt | Main browser activity (~1685 lines) with UI composition, target routing, toolbar, dropdown menu |
 | Browser Toolbar | BrowserToolbar.kt | Custom Compose toolbar with navigation, URL bar, SSL lock indicator, desktop mode toggle |
 | Library View | LibraryScreen.kt | Main Library screen for TMDB browsing and multi-search |
+| Library ViewModel | LibraryViewModel.kt | ViewModel managing TMDB API calls and pagination |
 | Library Details | LibraryDetailScreen.kt | Movie/TV Details with stream resolution integration |
 | Addon Manager | AddonRepository.kt | Installs Stremio addons and resolves video streams via IMDB ID |
 | TMDB Client | TmdbRepository.kt | Coroutine-based client for TMDB API v3 |

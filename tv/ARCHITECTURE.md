@@ -30,6 +30,7 @@ com.playbridge.receiver/
 │   ├── PlayerActivity.kt          (~1322 lines, abstract base class for players, playlist queue, filter persistence)
 │   ├── PlayerControlsManager.kt   (custom controls overlay, seekbar, prev/next buttons, dynamic scrubbing)
 │   ├── PlaylistPickerDialog.kt    (Compose compact side-panel playlist picker overlay)
+│   ├── PlaylistStore.kt           (In-memory singleton for playlist queue)
 │   ├── ProgressManager.kt         (progress save/restore, thumbnail capture)
 │   ├── SubtitleManager.kt         (SRT/VTT subtitle parser + sync engine)
 │   ├── TrackSelectionDialog.kt    (Compose compact side-panel for audio/video/subtitle track selection)
@@ -73,6 +74,7 @@ com.playbridge.receiver/
 | Track Selection | TrackSelectionDialog.kt | Compact side-panel overlay for selecting audio, video, subtitle tracks; shows preferred language auto-selections |
 | VLC Track Selection | VlcTrackSelectionDialog.kt | Compact side-panel overlay for selecting VLC audio, video, subtitle tracks |
 | Playlist Picker | PlaylistPickerDialog.kt | Compact side-panel overlay listing playlist episodes with current/watched indicators |
+| Playlist Store | PlaylistStore.kt | In-memory singleton `currentPlaylist` passed to player activities |
 | Video Filters | VideoFilter.kt | 9 preset filters (HDR, Night, Movie, Cinema, Action, Deep Black, Grayscale, Vivid) + Custom with brightness/contrast/saturation |
 | Video Filter Manager | VideoFilterManager.kt | Applies ColorMatrix filters to PlayerView hardware layer (GPU-accelerated, zero decode overhead) |
 | Video Filter Dialog | VideoFilterDialog.kt | Compact bottom-panel filter picker with live preview on focus, D-pad custom sliders |

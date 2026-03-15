@@ -222,10 +222,12 @@ PlayBridge/
 │   │       │   │   ├── TabManager.kt           (tab/session lifecycle)
 │   │       │   │   ├── SessionObserverSetup.kt (observer + delegates)
 │   │       │   │   ├── DownloadConfirmDialog.kt
+│   │       │   │   ├── DownloadManagerSingleton.kt
+│   │       │   │   ├── MediaDownloadService.kt
 │   │       │   │   ├── LinkContextMenu.kt
 │   │       │   │   ├── TabsScreen.kt
 │   │       │   │   ├── ExtensionsScreen.kt
-│   │       │   │   ├── RemoteControlSheet.kt
+│   │       │   │   ├── RemoteControlScreen.kt
 │   │       │   │   ├── DownloadsScreen.kt
 │   │       │   │   ├── HistoryScreen.kt
 │   │       │   │   ├── SettingsScreen.kt
@@ -233,6 +235,7 @@ PlayBridge/
 │   │       │   │   ├── HlsParser.kt
 │   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
 │   │       │   │   ├── MagnetParsingSheet.kt   (Debrid integration)
+│   │       │   │   ├── LibraryViewModel.kt
 │   │       │   │   └── ...
 │   │       │   ├── connection/
 │   │       │   ├── data/
@@ -255,15 +258,21 @@ PlayBridge/
     │       │   │   ├── PlayerActivity.kt   (~1322 lines, slimmed down)
     │       │   │   ├── ColorMatrixEffect.kt
     │       │   │   ├── ContentSniffer.kt
+    │       │   │   ├── ExoPlayerActivity.kt
     │       │   │   ├── M3uParser.kt
     │       │   │   ├── PlayerControlsManager.kt
+    │       │   │   ├── PlaylistPickerDialog.kt
+    │       │   │   ├── PlaylistStore.kt
     │       │   │   ├── ProgressManager.kt
     │       │   │   ├── InputHandler.kt
     │       │   │   ├── SubtitleManager.kt
     │       │   │   ├── TrackSelectionDialog.kt
     │       │   │   ├── VideoFilter.kt
     │       │   │   ├── VideoFilterDialog.kt
-    │       │   │   └── VideoFilterManager.kt
+    │       │   │   ├── VideoFilterManager.kt
+    │       │   │   ├── VlcControlsManager.kt
+    │       │   │   ├── VlcPlayerActivity.kt
+    │       │   │   └── VlcTrackSelectionDialog.kt
     │       │   ├── server/
     │       │   │   ├── ServerService.kt    (~544 lines)
     │       │   ├── ui/
