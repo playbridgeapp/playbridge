@@ -5,6 +5,9 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.playbridge.sender.data.history.DatabaseProvider
+import kotlinx.coroutines.Dispatchers
+import com.playbridge.sender.data.history.CommandHistoryEntity
 import com.playbridge.sender.model.TvDevice
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -17,6 +20,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val connectionStore = ConnectionStore(application)
     private val nsdHelper = NsdHelper(application)
     private val prefs = application.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+    private val commandHistoryDb = DatabaseProvider.getDatabase(application)
 
     // Exposed Flows
     val connectionState: StateFlow<WebSocketClient.ConnectionState> = webSocketClient.connectionState
@@ -139,6 +143,21 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+
+
+    fun sendCommandAndRecord(commandJson: String, type: String, url: String, title: String?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            commandHistoryDb.commandHistoryDao().insert(
+                CommandHistoryEntity(
+                    commandType = type,
+                    url = url,
+                    title = title,
+                    payloadJson = commandJson
+                )
+            )
+        }
+        webSocketClient.send(commandJson)
+    }
     fun startDiscovery() {
         nsdHelper.startDiscovery()
     }

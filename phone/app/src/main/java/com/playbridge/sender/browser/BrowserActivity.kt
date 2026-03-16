@@ -464,7 +464,7 @@ class BrowserActivity : ComponentActivity() {
                         url = linkUrl, 
                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                     )
-                    connectionViewModel.webSocketClient.send(cmd)
+                    connectionViewModel.sendCommandAndRecord(cmd, "play", linkUrl, "Video Link")
                     Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                     contextMenuUrl = null
                     contextMenuUrlState.value = null
@@ -658,6 +658,16 @@ class BrowserActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                             )
+                            NavigationDrawerItem(
+                                icon = { Icon(Icons.Default.History, contentDescription = null) },
+                                label = { Text("Command History") },
+                                selected = currentScreen == Screen.CommandHistory,
+                                onClick = {
+                                    scope.launch { drawerState.close() }
+                                    currentScreen = Screen.CommandHistory
+                                },
+                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
                         }
                     }
                 ) {
@@ -789,7 +799,7 @@ class BrowserActivity : ComponentActivity() {
                                                                 currentUrl, 
                                                                 browserMode = prefs.getString("tv_browser_mode", "tv")?.takeIf { it != "tv" }
                                                             )
-                                                            connectionViewModel.webSocketClient.send(cmd)
+                                                            connectionViewModel.sendCommandAndRecord(cmd, "browser", currentUrl, "Browser Page")
                                                             Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                         }
                                                     ) { onClick ->
@@ -1013,6 +1023,9 @@ class BrowserActivity : ComponentActivity() {
                             Screen.History -> {
                                 // No TopAppBar here as HistoryScreen has its own
                             }
+                            Screen.CommandHistory -> {
+                                // No TopAppBar here as CommandHistoryScreen has its own
+                            }
                             Screen.Bookmarks -> {}
                             Screen.Home -> {}
                             Screen.Remote -> {
@@ -1207,6 +1220,35 @@ class BrowserActivity : ComponentActivity() {
                                                 onBack = { currentScreen = Screen.Browser }
                                             )
                                         }
+                                        Screen.CommandHistory -> {
+                                            val db = com.playbridge.sender.data.history.DatabaseProvider.getDatabase(androidx.compose.ui.platform.LocalContext.current)
+                                            val commandHistoryFlow = remember { db.commandHistoryDao().getAll() }
+                                            val commandHistory by commandHistoryFlow.collectAsState(initial = emptyList())
+                                            CommandHistoryScreen(
+                                                historyItems = commandHistory,
+                                                onSendToTv = { item ->
+                                                    if (connectionViewModel.webSocketClient.isConnected()) {
+                                                        item.payloadJson?.let {
+                                                            connectionViewModel.webSocketClient.send(it)
+                                                        }
+                                                        Toast.makeText(this@BrowserActivity, "Command sent", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                },
+                                                onOpenLocally = { url ->
+                                                    session.loadUrl(url)
+                                                    currentScreen = Screen.Browser
+                                                },
+                                                onDelete = { item ->
+                                                    lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { db.commandHistoryDao().delete(item) }
+                                                },
+                                                onClearHistory = {
+                                                    lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { db.commandHistoryDao().clear() }
+                                                },
+                                                onBack = { currentScreen = Screen.Browser }
+                                            )
+                                        }
                                         Screen.Tabs -> {
                                             BackHandler { currentScreen = Screen.Browser }
                                             TabsScreen(
@@ -1264,7 +1306,7 @@ class BrowserActivity : ComponentActivity() {
                                                             title = "From Downloads",
                                                             contentType = type
                                                         )
-                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                        connectionViewModel.sendCommandAndRecord(cmd, "play", url, "From Downloads")
                                                         Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                     } else {
                                                         Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
@@ -1368,7 +1410,7 @@ class BrowserActivity : ComponentActivity() {
                                                         title = title,
                                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                     )
-                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    connectionViewModel.sendCommandAndRecord(cmd, "play", url, title ?: "Video")
                                                 },
                                                 onBack = { currentScreen = Screen.Library }
                                             )
@@ -1385,7 +1427,7 @@ class BrowserActivity : ComponentActivity() {
                                                         title = title,
                                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                     )
-                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    connectionViewModel.sendCommandAndRecord(cmd, "play", url, title ?: "Video")
                                                 },
                                                 onPlayPlaylist = { items ->
                                                     // The items (PlayPayloads) already need playerMode injected beforehand. 
@@ -1422,7 +1464,7 @@ class BrowserActivity : ComponentActivity() {
                                                             title = title,
                                                             playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                         )
-                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                        connectionViewModel.sendCommandAndRecord(cmd, "play", playUrl, title ?: "Video")
                                                         Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                     } else {
                                                         Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
@@ -1632,7 +1674,7 @@ class BrowserActivity : ComponentActivity() {
                                         title = links.first().filename,
                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                     )
-                                    connectionViewModel.webSocketClient.send(commandJson)
+                                    connectionViewModel.sendCommandAndRecord(commandJson, "play", links.first().downloadUrl, links.first().filename)
                                     tvActiveContext = "player"
                                     Toast.makeText(this@BrowserActivity, "Playing on TV", Toast.LENGTH_SHORT).show()
                                 } else if (links.size > 1) {
@@ -1710,6 +1752,7 @@ sealed class Screen {
     object Downloads : Screen()
     object Settings : Screen()
     object History : Screen()
+    object CommandHistory : Screen()
     object Bookmarks : Screen()
     object Home : Screen()
     object Remote : Screen()
