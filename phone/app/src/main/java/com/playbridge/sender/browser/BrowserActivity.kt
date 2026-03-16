@@ -1528,6 +1528,7 @@ class BrowserActivity : ComponentActivity() {
                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                     )
                                     Log.d(TAG, "Sending play command: $commandJson")
+                                    connectionViewModel.sendCommandAndRecord(commandJson, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
                                     val sent = connectionViewModel.webSocketClient.send(commandJson)
                                     Log.d(TAG, "Command sent: $sent")
                                     
@@ -1632,6 +1633,7 @@ class BrowserActivity : ComponentActivity() {
                                     detectedBy = "download",
                                     playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                 )
+                                connectionViewModel.sendCommandAndRecord(commandJson, "play", download.url, selectedTab?.content?.title ?: download.fileName ?: "Video from browser")
                                 val sent = connectionViewModel.webSocketClient.send(commandJson)
                                 if (sent) {
                                     tvActiveContext = "player"
