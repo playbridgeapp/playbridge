@@ -7,7 +7,7 @@ com.playbridge.sender/
 │    ├── AddonInstallDialog.kt       (extension install confirmation dialog)
 │   ├── AddonSettingsScreen.kt      (Stremio addon management UI)
 │   ├── BookmarksScreen.kt          (bookmarks list UI with add/remove)
-│   ├── BrowserActivity.kt          (main browser activity, ~1685 lines)
+│   ├── BrowserActivity.kt          (main browser activity, ~1721 lines)
 │   ├── BrowserToolbar.kt           (custom Compose toolbar with URL bar, navigation, SSL lock, menu)
 │   ├── Components.kt               (singleton DI container for GeckoRuntime, BrowserStore)
 │   ├── DebridLibraryScreen.kt      (Debrid torrent/magnet management and resolution UI)
@@ -24,6 +24,7 @@ com.playbridge.sender/
 │   ├── HlsParser.kt               (HLS manifest parsing for quality selection with audio tracks)
 │   ├── HomeScreen.kt               (browser home page with bookmarks)
 │   ├── LibraryDetailScreen.kt      (movie/TV details with stream resolution)
+│   ├── LibraryEnums.kt             (Enums used in Library UI like Type, Tab)
 │   ├── LibraryScreen.kt            (TMDB popular/trending/search UI)
 │   ├── LibraryViewModel.kt         (ViewModel managing TMDB API calls and state)
 │   ├── LinkContextMenu.kt          (long-press link context menu dialog)
@@ -38,6 +39,7 @@ com.playbridge.sender/
 │   └── VideoDetector.kt            (video content type detection via request interception)
 ├── connection/             # WebSocket client + service discovery
 │   ├── ConnectionStore.kt          (DataStore persistence for connection history)
+│   ├── ConnectionViewModel.kt      (ViewModel managing WebSocket + NSD state)
 │   ├── NsdHelper.kt                (Network Service Discovery to find TV services)
 │   └── WebSocketClient.kt          (OkHttp-based client with auto-retry)
 ├── data/                   # Local data persistence
@@ -61,6 +63,8 @@ com.playbridge.sender/
 │       ├── AddonDao.kt              (Room DAO for installed Stremio addons)
 │       ├── AddonModels.kt           (Stremio manifest and stream models)
 │       ├── AddonRepository.kt       (Stremio addon config and stream resolution)
+│       ├── OmdbModels.kt            (OMDB API data models)
+│       ├── OmdbRepository.kt        (OMDB API client for movie ratings/metadata)
 │       ├── TmdbModels.kt            (TMDB API data models)
 │       └── TmdbRepository.kt        (TMDB API client for movies/TV shows)
 ├── model/                  # App-specific models
@@ -87,6 +91,7 @@ com.playbridge.sender/
 | Library Details | LibraryDetailScreen.kt | Movie/TV Details with stream resolution integration |
 | Addon Manager | AddonRepository.kt | Installs Stremio addons and resolves video streams via IMDB ID |
 | TMDB Client | TmdbRepository.kt | Coroutine-based client for TMDB API v3 |
+| OMDB Client | OmdbRepository.kt | Client for OMDB API (ratings and metadata) |
 | Stream Selection | StreamPickerSheet.kt | Bottom sheet displaying resolved Debrid/Addon streams |
 | Debrid Integration | DebridProvider.kt | Abstract interface for Debrid magnet and `.torrent` parsing |
 | Debrid Clients | RealDebrid, AllDebrid, Premiumize | API implementations for major Debrid services |
@@ -112,6 +117,7 @@ com.playbridge.sender/
 | Database | DatabaseProvider.kt | Room database singleton with History, Bookmark, and Tab DAOs |
 | Tab Persistence | TabDao.kt | Room DAO for saving/restoring tab state across sessions |
 | Find on Page | FindOnPageBar.kt | UI for finding text within web pages |
+| Connection VM | ConnectionViewModel.kt | Centralized logic for WebSocket + NSD discovery, TV commands, state |
 | WebSocket | WebSocketClient.kt | OkHttp-based client with auto-retry (60 attempts, 5s intervals) |
 | Connection | ConnectionScreen.kt | NSD auto-discovery, QR scanning, manual IP entry, PIN authentication |
 | Service Discovery | NsdHelper.kt | Network Service Discovery to find TV services on local network |

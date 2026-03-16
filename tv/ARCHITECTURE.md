@@ -4,11 +4,11 @@
 ```
 com.playbridge.receiver/
 ├── BootReceiver.kt                (broadcast receiver for starting the app on boot)
-├── MainActivity.kt                # Compose navigation + screen state management + AdBlocker preload (~226 lines)
+├── MainActivity.kt                # Compose navigation + screen state management + AdBlocker preload (~295 lines)
 ├── PlayBridgeApplication.kt       (application class for coil image loader initialization)
 ├── browser/                       # Dual-engine TV browser
-│   ├── AdBlocker.kt               (Singleton ad blocker: EasyList, EasyPrivacy, cosmetic filtering, popup blocking, ~649 lines)
-│   ├── BrowserActivity.kt         (TV browser activity with remote input, video maximize/restore, ~704 lines)
+│   ├── AdBlocker.kt               (Singleton ad blocker: EasyList, EasyPrivacy, cosmetic filtering, popup blocking, ~662 lines)
+│   ├── BrowserActivity.kt         (TV browser activity with remote input, video maximize/restore, ~728 lines)
 │   ├── BrowserEngine.kt           (Browser engine interface: loadUrl, reload, goBack, evaluateJavascript, etc.)
 │   ├── GeckoViewEngine.kt         (GeckoView engine with bundled uBlock Origin)
 │   └── SystemWebViewEngine.kt     (Android WebView engine with JS popup/redirect blocking, cosmetic CSS injection)
@@ -24,10 +24,10 @@ com.playbridge.receiver/
 ├── player/                        # Video playback
 │   ├── ColorMatrixEffect.kt       (Media3 GlEffect applying custom ColorMatrix for filters)
 │   ├── ContentSniffer.kt          (SSL-bypass OkHttpClient + content type sniffing)
-│   ├── ExoPlayerActivity.kt       (ExoPlayer implementation with HLS/DASH/RTSP)
+│   ├── ExoPlayerActivity.kt       (ExoPlayer implementation with HLS/DASH/RTSP, ~1385 lines)
 │   ├── InputHandler.kt            (D-pad, phone remote, control command handling)
 │   ├── M3uParser.kt               (custom IPTV M3U playlist parser bypassing default HLS parser)
-│   ├── PlayerActivity.kt          (~1322 lines, abstract base class for players, playlist queue, filter persistence)
+│   ├── PlayerActivity.kt          (~33 lines, abstract base class for players, playlist queue, filter persistence)
 │   ├── PlayerControlsManager.kt   (custom controls overlay, seekbar, prev/next buttons, dynamic scrubbing)
 │   ├── PlaylistPickerDialog.kt    (Compose compact side-panel playlist picker overlay)
 │   ├── PlaylistStore.kt           (In-memory singleton for playlist queue)
@@ -38,11 +38,11 @@ com.playbridge.receiver/
 │   ├── VideoFilterDialog.kt       (Compose compact bottom-panel filter picker with custom sliders)
 │   ├── VideoFilterManager.kt      (applies ColorMatrix filters to PlayerView hardware layer)
 │   ├── VlcControlsManager.kt      (custom controls overlay for VLC player)
-│   ├── VlcPlayerActivity.kt       (LibVLC implementation for unsupported ExoPlayer formats)
+│   ├── VlcPlayerActivity.kt       (LibVLC implementation for unsupported ExoPlayer formats, ~753 lines)
 │   └── VlcTrackSelectionDialog.kt (Compose compact side-panel for VLC audio/video/subtitle track selection)
 ├── server/                        # WebSocket server
 │   ├── OverlayWindowHelper.kt     (helper for drawing invisible overlay to keep WebView active in background)
-│   ├── ServerService.kt           (foreground service + command routing, external player intents, ~544 lines)
+│   ├── ServerService.kt           (foreground service + command routing, external player intents, ~586 lines)
 │   └── WebSocketServer.kt         (Ktor-based WebSocket server)
 └── ui/                            # Compose TV UI screens
     ├── HomeScreen.kt
@@ -84,7 +84,7 @@ com.playbridge.receiver/
 | SystemWebView Engine | SystemWebViewEngine.kt | Android WebView engine with JS-based popup/redirect blocking, cosmetic CSS injection, ad request interception |
 | GeckoView Engine | GeckoViewEngine.kt | GeckoView engine with bundled uBlock Origin for advanced ad blocking |
 | Ad Blocker | AdBlocker.kt (~662 lines) | Singleton ad blocker preloaded at app startup; EasyList + EasyPrivacy + Adblock Warning Removal List, cosmetic filtering, popup/document blocking |
-| TV Browser | BrowserActivity.kt (~722 lines) | TV browser with dual-engine switching, remote input, fullscreen handling, JS-based video maximize/restore, cursor control |
+| TV Browser | BrowserActivity.kt (~728 lines) | TV browser with dual-engine switching, remote input, fullscreen handling, JS-based video maximize/restore, cursor control |
 | QR Generator | QRGenerator.kt | ZXing-based QR code generation for pairing (includes IP, port, token, name) |
 | Settings | SettingsScreen.kt | TV app settings UI (including external player selection) |
 | File Logger | FileLogger.kt | Mirrored Android Log that persists entries to a rolling file in internal storage |

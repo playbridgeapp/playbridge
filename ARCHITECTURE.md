@@ -157,6 +157,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] `SECURITY.md` finalized with security considerations (SSL bypass, local network)
 - [x] Resolved SettingsScreen.kt version mismatch by dynamically reading `packageManager` info (TV app)
 - [x] Custom M3U parser for IPTV playlists bypassing default HLS parser (TV app)
+- [x] Extracted PlayerActivity logic into abstract base class with ExoPlayerActivity and VlcPlayerActivity implementations (TV app)
 
 ### ❌ Missing for Open-Source
 
@@ -217,7 +218,7 @@ PlayBridge/
 │   │   └── src/main/
 │   │       ├── java/com/playbridge/sender/
 │   │       │   ├── browser/
-│   │       │   │   ├── BrowserActivity.kt    (~1685 lines, slimmed down)
+│   │       │   │   ├── BrowserActivity.kt    (~1721 lines, slimmed down)
 │   │       │   │   ├── BrowserToolbar.kt
 │   │       │   │   ├── TabManager.kt           (tab/session lifecycle)
 │   │       │   │   ├── SessionObserverSetup.kt (observer + delegates)
@@ -238,10 +239,13 @@ PlayBridge/
 │   │       │   │   ├── LibraryViewModel.kt
 │   │       │   │   └── ...
 │   │       │   ├── connection/
+│   │       │   │   ├── ConnectionViewModel.kt
 │   │       │   ├── data/
 │   │       │   │   ├── debrid/                 (Debrid integration clients/providers)
 │   │       │   │   ├── history/
 │   │       │   │   └── library/
+│   │       │   │       ├── OmdbModels.kt
+│   │       │   │       └── OmdbRepository.kt
 │   │       │   ├── model/
 │   │       │   └── ui/
 │   │       └── assets/extensions/video_detector/  # Embedded legacy phone extension
@@ -255,10 +259,10 @@ PlayBridge/
     │       │   │   └── FileLogger.kt
     │       │   ├── pairing/
     │       │   ├── player/
-    │       │   │   ├── PlayerActivity.kt   (~1322 lines, slimmed down)
+    │       │   │   ├── PlayerActivity.kt   (~33 lines, slimmed down base class)
     │       │   │   ├── ColorMatrixEffect.kt
     │       │   │   ├── ContentSniffer.kt
-    │       │   │   ├── ExoPlayerActivity.kt
+    │       │   │   ├── ExoPlayerActivity.kt (~1385 lines)
     │       │   │   ├── M3uParser.kt
     │       │   │   ├── PlayerControlsManager.kt
     │       │   │   ├── PlaylistPickerDialog.kt
@@ -271,10 +275,10 @@ PlayBridge/
     │       │   │   ├── VideoFilterDialog.kt
     │       │   │   ├── VideoFilterManager.kt
     │       │   │   ├── VlcControlsManager.kt
-    │       │   │   ├── VlcPlayerActivity.kt
+    │       │   │   ├── VlcPlayerActivity.kt (~753 lines)
     │       │   │   └── VlcTrackSelectionDialog.kt
     │       │   ├── server/
-    │       │   │   ├── ServerService.kt    (~544 lines)
+    │       │   │   ├── ServerService.kt    (~586 lines)
     │       │   ├── ui/
     │       │   └── model/
     │       └── res/layout/
