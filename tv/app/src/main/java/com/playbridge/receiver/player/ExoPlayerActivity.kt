@@ -631,45 +631,30 @@ class ExoPlayerActivity : PlayerActivity() {
         videoDecoderRetryCount = 0
     }
 
-    private var playbackTimeoutJob: kotlinx.coroutines.Job? = null
-
     private fun createPlayerListener() = object : androidx.media3.common.Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
                 androidx.media3.common.Player.STATE_BUFFERING -> {
                     FileLogger.d(TAG, "Buffering...")
                     controlsManager.showBuffering()
-                    // Start or reset the 15-second timeout for buffering
-                    playbackTimeoutJob?.cancel()
-                    playbackTimeoutJob = lifecycleScope.launch {
-                        kotlinx.coroutines.delay(15000L)
-                        FileLogger.w(TAG, "Playback timed out after 15 seconds of buffering")
-                        handlePlaybackError(androidx.media3.common.PlaybackException(
-                            "Playback timed out", null, androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
-                        ))
-                    }
                 }
                 androidx.media3.common.Player.STATE_READY -> {
                     FileLogger.i(TAG, "Playback ready")
                     controlsManager.hideBuffering()
-                    playbackTimeoutJob?.cancel()
                     audioDiscontinuityRetryCount = 0
                     videoDecoderRetryCount = 0
                 }
                 androidx.media3.common.Player.STATE_ENDED -> {
                     FileLogger.i(TAG, "Playback ended")
                     controlsManager.hideBuffering()
-                    playbackTimeoutJob?.cancel()
                     playNextInPlaylist()
                 }
                 androidx.media3.common.Player.STATE_IDLE -> {
-                    playbackTimeoutJob?.cancel()
                 }
             }
         }
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            playbackTimeoutJob?.cancel()
             handlePlaybackError(error)
         }
 
