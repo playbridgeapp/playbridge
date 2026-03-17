@@ -133,6 +133,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 ## Open-Source Preparation Checklist
 
 ### ✅ Already Good
+- [x] Build pipeline uses AAB (Android App Bundle) for TV release
 - [x] `CONTRIBUTING.md` created with contribution guidelines
 - [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
 - [x] `.gitignore` properly configured (34 entries covering build, IDE, keystore, OS files)
@@ -187,7 +188,6 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [ ] Prepare SYSTEM_ALERT_WINDOW justification for manual review
 
 #### 3. Build Pipeline
-- [ ] Switch from APK to AAB (Android App Bundle) — required for new Play Store apps
 - [ ] Enroll in Play App Signing
 
 ---
@@ -294,7 +294,6 @@ PlayBridge/
 | 🔴 High | Fix SSL bypass for Play Store (scope to private IPs) | 1-2 hours |
 | 🔴 High | Fix network_security_config.xml (remove global cleartext) | 30 min |
 | 🔴 High | Remove unused CAMERA/RECORD_AUDIO permissions | 15 min |
-| 🔴 High | Switch TV build to AAB format | 1-2 hours |
 | 🟡 Medium | Create & host Privacy Policy | 2-4 hours |
 | 🟡 Medium | Fill out Play Console (data safety, content rating, listing) | 2-3 hours |
 | 🟢 Low | Enable ProGuard for release | 2-4 hours |
@@ -321,8 +320,7 @@ PlayBridge/
 1. Fix SSL certificate bypass in `ContentSniffer.kt` (auto-rejection risk)
 2. Remove global cleartext traffic permission
 3. Remove unused CAMERA/RECORD_AUDIO permissions
-4. Switch build pipeline from APK to AAB
-5. Create and host a Privacy Policy
-6. Complete Play Console setup (data safety, content rating, store listing)
+4. Create and host a Privacy Policy
+5. Complete Play Console setup (data safety, content rating, store listing)
 
 The codebase is in good shape for open-sourcing with relatively minor documentation additions. Play Store publishing requires addressing several security policy items first — see `tv/ARCHITECTURE.md` for the full readiness checklist.
