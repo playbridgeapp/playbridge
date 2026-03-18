@@ -116,40 +116,48 @@ class SubtitleManager(
 
     private fun parseSrt(content: String): List<Cue> {
         val parsedCues = ArrayList<Cue>()
-        // Normalize line endings
-        val normalizedContent = content.replace("\r\n", "\n").replace("\r", "\n")
-        val blocks = normalizedContent.split("\n\n")
+        var currentStart = -1L
+        var currentEnd = -1L
+        val currentText = StringBuilder()
         
-        for (block in blocks) {
-            val lines = block.lines().filter { it.isNotBlank() }
-            if (lines.size >= 2) {
-                // Try to find timestamp line (contains -->)
-                val timeLineIndex = lines.indexOfFirst { it.contains("-->") }
-                if (timeLineIndex != -1) {
-                     val timeLine = lines[timeLineIndex]
-                     val textLines = lines.subList(timeLineIndex + 1, lines.size)
-                     val text = textLines.joinToString("\n")
-                     
-                     val times = timeLine.split("-->")
-                     if (times.size == 2) {
-                         val start = parseTimestamp(times[0].trim().replace(',', '.'))
-                         val end = parseTimestamp(times[1].trim().replace(',', '.'))
-                         if (start != -1L && end != -1L) {
-                             parsedCues.add(Cue(start, end, text))
-                         }
-                     }
+        // Use lineSequence() for O(1) memory parsing
+        val iterator = content.lineSequence().iterator()
+        while (iterator.hasNext()) {
+            val rawLine = iterator.next()
+            val trimmedLine = rawLine.trim()
+
+            if (trimmedLine.isEmpty()) {
+                if (currentStart != -1L && currentEnd != -1L && currentText.isNotEmpty()) {
+                    parsedCues.add(Cue(currentStart, currentEnd, currentText.toString().trimEnd()))
                 }
+                currentStart = -1L
+                currentEnd = -1L
+                currentText.clear()
+            } else if (trimmedLine.contains("-->")) {
+                val times = trimmedLine.split("-->")
+                if (times.size == 2) {
+                    currentStart = parseTimestamp(times[0].trim().replace(',', '.'))
+                    currentEnd = parseTimestamp(times[1].trim().replace(',', '.'))
+                }
+            } else if (currentStart != -1L) {
+                // If we have a start time, any subsequent non-empty line is part of the text
+                currentText.append(rawLine).append("\n")
             }
+        }
+        // Add final cue if file doesn't end with blank line
+        if (currentStart != -1L && currentEnd != -1L && currentText.isNotEmpty()) {
+            parsedCues.add(Cue(currentStart, currentEnd, currentText.toString().trimEnd()))
         }
         return parsedCues
     }
 
     private fun parseVtt(content: String): List<Cue> {
         val parsedCues = ArrayList<Cue>()
-        val lines = content.lines()
-        var i = 0
-        while (i < lines.size) {
-            val line = lines[i].trim()
+
+        // Use lineSequence() for O(1) memory parsing
+        val iterator = content.lineSequence().iterator()
+        while (iterator.hasNext()) {
+            val line = iterator.next().trim()
             if (line.contains("-->")) {
                 val times = line.split("-->")
                 if (times.size == 2) {
@@ -157,20 +165,18 @@ class SubtitleManager(
                     val end = parseTimestamp(times[1].trim())
                     
                     val textBuilder = StringBuilder()
-                    i++
-                    while (i < lines.size && lines[i].isNotBlank()) {
-                         textBuilder.append(lines[i]).append("\n")
-                         i++
+                    while (iterator.hasNext()) {
+                        val textLine = iterator.next()
+                        if (textLine.trim().isEmpty()) break
+                        textBuilder.append(textLine).append("\n")
                     }
                     val text = textBuilder.toString().trim()
                     
                     if (start != -1L && end != -1L && text.isNotEmpty()) {
                         parsedCues.add(Cue(start, end, text))
                     }
-                    continue
                 }
             }
-            i++
         }
         return parsedCues
     }
