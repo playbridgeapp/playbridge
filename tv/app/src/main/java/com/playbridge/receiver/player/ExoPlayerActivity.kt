@@ -265,7 +265,7 @@ class ExoPlayerActivity : PlayerActivity() {
             playlistItems = mutableListOf()
         }
 
-        // Restore saved selections from history
+        // Restore saved selections from history or incoming intent preferences
         intent?.getStringExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG)?.let {
             preferredAudioLanguage = it
             FileLogger.i(TAG, "Restored preferred audio language: $it")

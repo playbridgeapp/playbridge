@@ -330,6 +330,11 @@ class BrowserActivity : ComponentActivity() {
             
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+
+            val preferredAudioLang by remember { mutableStateOf(prefs.getString("preferred_audio_lang", "") ?: "") }
+            val preferredSubLang by remember { mutableStateOf(prefs.getString("preferred_subtitle_lang", "") ?: "") }
+            val defaultVideoQuality by remember { mutableStateOf(prefs.getString("default_video_quality", "Auto") ?: "Auto") }
+
             var detectVideosEnabled by remember { mutableStateOf(prefs.getBoolean("detect_videos", true)) }
             var isDesktopMode by remember { mutableStateOf(false) }
             var isSecureConnection by remember { mutableStateOf(false) }
@@ -373,8 +378,14 @@ class BrowserActivity : ComponentActivity() {
             
             // Video detection state — per-tab
             var showVideoSheet by remember { mutableStateOf(false) }
-            val detectedVideos by remember(selectedTabId) {
-                derivedStateOf { VideoDetector.getVideosForTab(selectedTabId ?: "").toList() }
+            var forcePlaylistSheet by remember { mutableStateOf<DetectedVideo?>(null) }
+            var forcedVideos by remember { mutableStateOf<List<DetectedVideo>?>(null) }
+            val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
+                derivedStateOf {
+                    if (forcedVideos != null) forcedVideos!!
+                    else if (forcePlaylistSheet != null) listOf(forcePlaylistSheet!!)
+                    else VideoDetector.getVideosForTab(selectedTabId ?: "").toList()
+                }
             }
             val videoCount by remember(selectedTabId) {
                 derivedStateOf { detectedVideos.count { !it.isSubtitle } }
@@ -462,7 +473,10 @@ class BrowserActivity : ComponentActivity() {
                 onPlayOnTv = { linkUrl ->
                     val cmd = com.playbridge.protocol.createPlayCommandJson(
                         url = linkUrl, 
-                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                        preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                        preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
                     )
                     connectionViewModel.sendCommandAndRecord(cmd, "play", linkUrl, "Video Link")
                     Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
@@ -1304,7 +1318,10 @@ class BrowserActivity : ComponentActivity() {
                                                         val cmd = com.playbridge.protocol.createPlayCommandJson(
                                                             url = url,
                                                             title = "From Downloads",
-                                                            contentType = type
+                                                            contentType = type,
+                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
                                                         )
                                                         connectionViewModel.sendCommandAndRecord(cmd, "play", url, "From Downloads")
                                                         Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
@@ -1404,13 +1421,30 @@ class BrowserActivity : ComponentActivity() {
                                             MovieDetailScreen(
                                                 movieId = movieId,
                                                 addonRepository = addonRepository,
-                                                onPlayStream = { url, title ->
-                                                    val cmd = com.playbridge.protocol.createPlayCommandJson(
-                                                        url = url, 
+                                                onPlayStream = { url, title, subtitles ->
+                                                    val mainVideo = DetectedVideo(
+                                                        url = url,
                                                         title = title,
-                                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                        tabId = -1,
+                                                        timestamp = System.currentTimeMillis(),
+                                                        isPlayable = true,
+                                                        detectedBy = "library"
                                                     )
-                                                    connectionViewModel.sendCommandAndRecord(cmd, "play", url, title ?: "Video")
+
+                                                    val subVideos = subtitles?.map { subUrl ->
+                                                        DetectedVideo(
+                                                            url = subUrl,
+                                                            tabId = -1,
+                                                            timestamp = System.currentTimeMillis(),
+                                                            contentType = "text/vtt",
+                                                            detectedBy = "library_subtitle"
+                                                        )
+                                                    } ?: emptyList()
+
+                                                    scope.launch {
+                                                        forcedVideos = listOf(mainVideo) + subVideos
+                                                        showVideoSheet = true
+                                                    }
                                                 },
                                                 onBack = { currentScreen = Screen.Library }
                                             )
@@ -1421,22 +1455,55 @@ class BrowserActivity : ComponentActivity() {
                                             TvShowDetailScreen(
                                                 tvId = tvId,
                                                 addonRepository = addonRepository,
-                                                onPlayStream = { url, title ->
-                                                    val cmd = com.playbridge.protocol.createPlayCommandJson(
-                                                        url = url, 
+                                                onPlayStream = { url, title, subtitles ->
+                                                    val mainVideo = DetectedVideo(
+                                                        url = url,
                                                         title = title,
-                                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                        tabId = -1,
+                                                        timestamp = System.currentTimeMillis(),
+                                                        isPlayable = true,
+                                                        detectedBy = "library"
                                                     )
-                                                    connectionViewModel.sendCommandAndRecord(cmd, "play", url, title ?: "Video")
+
+                                                    val subVideos = subtitles?.map { subUrl ->
+                                                        DetectedVideo(
+                                                            url = subUrl,
+                                                            tabId = -1,
+                                                            timestamp = System.currentTimeMillis(),
+                                                            contentType = "text/vtt",
+                                                            detectedBy = "library_subtitle"
+                                                        )
+                                                    } ?: emptyList()
+
+                                                    scope.launch {
+                                                        forcedVideos = listOf(mainVideo) + subVideos
+                                                        showVideoSheet = true
+                                                    }
                                                 },
                                                 onPlayPlaylist = { items ->
-                                                    // The items (PlayPayloads) already need playerMode injected beforehand. 
-                                                    // Let's modify the onPlayPlaylist lambda caller if needed, or inject here. Wait, onPlayPlaylist passes List<PlayPayload>.
-                                                    // We can map over them to inject playerMode.
                                                     val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
-                                                    val itemsWithMode = items.map { it.copy(playerMode = playerMode) }
-                                                    val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode)
-                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    val itemsWithMode = items.map {
+                                                        it.copy(
+                                                            playerMode = playerMode,
+                                                            preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
+                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
+                                                            defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" }
+                                                        )
+                                                    }
+
+                                                    val detectedVideo = DetectedVideo(
+                                                        url = "playlist://library",
+                                                        tabId = -1,
+                                                        timestamp = System.currentTimeMillis(),
+                                                        isPlayable = true,
+                                                        detectedBy = "library_playlist",
+                                                        playlistPayload = itemsWithMode
+                                                    )
+
+                                                    scope.launch {
+                                                        forcePlaylistSheet = detectedVideo
+                                                        showVideoSheet = true
+                                                    }
                                                 },
                                                 onBack = { currentScreen = Screen.Library }
                                             )
@@ -1457,12 +1524,16 @@ class BrowserActivity : ComponentActivity() {
                                                     clipboardManager.setText(AnnotatedString(linkUrl))
                                                     Toast.makeText(this@BrowserActivity, "Link copied", Toast.LENGTH_SHORT).show()
                                                 },
-                                                onPlayOnTv = { playUrl, title ->
+                                                onPlayOnTv = { playUrl, title, subtitles ->
                                                     if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                                         val cmd = com.playbridge.protocol.createPlayCommandJson(
                                                             url = playUrl,
                                                             title = title,
-                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                            subtitles = subtitles,
+                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
                                                         )
                                                         connectionViewModel.sendCommandAndRecord(cmd, "play", playUrl, title ?: "Video")
                                                         Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
@@ -1471,14 +1542,28 @@ class BrowserActivity : ComponentActivity() {
                                                     }
                                                 },
                                                 onPlayPlaylistOnTv = { items ->
-                                                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                                        val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
-                                                        val itemsWithMode = items.map { it.copy(playerMode = playerMode) }
-                                                        val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode)
-                                                        connectionViewModel.webSocketClient.send(cmd)
-                                                        Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
+                                                    val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                    val itemsWithMode = items.map {
+                                                        it.copy(
+                                                            playerMode = playerMode,
+                                                            preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
+                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
+                                                            defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" }
+                                                        )
+                                                    }
+
+                                                    val detectedVideo = DetectedVideo(
+                                                        url = "playlist://debrid",
+                                                        tabId = -1,
+                                                        timestamp = System.currentTimeMillis(),
+                                                        isPlayable = true,
+                                                        detectedBy = "debrid_playlist",
+                                                        playlistPayload = itemsWithMode
+                                                    )
+
+                                                    scope.launch {
+                                                        forcePlaylistSheet = detectedVideo
+                                                        showVideoSheet = true
                                                     }
                                                 }
                                             )
@@ -1493,7 +1578,11 @@ class BrowserActivity : ComponentActivity() {
                 if (showVideoSheet) {
                     DetectedVideosSheet(
                         videos = detectedVideos,
-                        onDismiss = { showVideoSheet = false },
+                        onDismiss = {
+                            showVideoSheet = false
+                            forcePlaylistSheet = null
+                            forcedVideos = null
+                        },
                         onVideoClick = { video, subtitles ->
                             Log.d(TAG, "=== PLAY ON TV CLICKED ===")
                             Log.d(TAG, "Video URL: ${video.url}")
@@ -1504,41 +1593,57 @@ class BrowserActivity : ComponentActivity() {
                                 is WebSocketClient.ConnectionState.Connected -> {
                                     Log.d(TAG, "Connected to: ${state.serverName}")
                                     
-                                    val headers = mutableMapOf<String, String>()
-                                    // Default UA
-                                    headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                                    
-                                    // Default Referer from originUrl
-                                    if (!video.originUrl.isNullOrEmpty()) {
-                                        headers["Referer"] = video.originUrl
-                                    }
-                                    
-                                    // Apply captured headers (these take precedence and include Cookies)
-                                    video.headers?.forEach { (k, v) -> 
-                                        headers[k] = v 
-                                    }
-                                    
-                                    val commandJson = com.playbridge.protocol.createPlayCommandJson(
-                                        url = video.url,
-                                        title = selectedTab?.content?.title ?: "Video from browser",
-                                        headers = headers,
-                                        contentType = video.contentType,
-                                        subtitles = subtitles,
-                                        detectedBy = video.detectedBy,
-                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
-                                    )
-                                    Log.d(TAG, "Sending play command: $commandJson")
-                                    connectionViewModel.sendCommandAndRecord(commandJson, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
-                                    val sent = connectionViewModel.webSocketClient.send(commandJson)
-                                    Log.d(TAG, "Command sent: $sent")
-                                    
-                                    if (sent) {
-                                        tvActiveContext = "player"
-                                        Toast.makeText(
-                                            this@BrowserActivity,
-                                            "Playing on ${state.serverName}",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                                    if (video.playlistPayload != null) {
+                                        val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = video.playlistPayload)
+                                        val sent = connectionViewModel.webSocketClient.send(cmd)
+                                        if (sent) {
+                                            tvActiveContext = "player"
+                                            Toast.makeText(
+                                                this@BrowserActivity,
+                                                "Playlist sent to ${state.serverName}",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    } else {
+                                        val headers = mutableMapOf<String, String>()
+                                        // Default UA
+                                        headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+                                        // Default Referer from originUrl
+                                        if (!video.originUrl.isNullOrEmpty()) {
+                                            headers["Referer"] = video.originUrl
+                                        }
+
+                                        // Apply captured headers (these take precedence and include Cookies)
+                                        video.headers?.forEach { (k, v) ->
+                                            headers[k] = v
+                                        }
+
+                                        val commandJson = com.playbridge.protocol.createPlayCommandJson(
+                                            url = video.url,
+                                            title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                            headers = headers,
+                                            contentType = video.contentType,
+                                            subtitles = subtitles,
+                                            detectedBy = video.detectedBy,
+                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
+                                        )
+                                        Log.d(TAG, "Sending play command: $commandJson")
+                                        connectionViewModel.sendCommandAndRecord(commandJson, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
+                                        val sent = connectionViewModel.webSocketClient.send(commandJson)
+                                        Log.d(TAG, "Command sent: $sent")
+
+                                        if (sent) {
+                                            tvActiveContext = "player"
+                                            Toast.makeText(
+                                                this@BrowserActivity,
+                                                "Playing on ${state.serverName}",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                     }
                                 }
                                 is WebSocketClient.ConnectionState.Connecting,
@@ -1557,7 +1662,8 @@ class BrowserActivity : ComponentActivity() {
                                     ).show()
                                 }
                             }
-
+                            showVideoSheet = false
+                            forcePlaylistSheet = null
                         },
                         onClear = {
                             VideoDetector.clearTab(selectedTabId ?: "")
@@ -1631,7 +1737,10 @@ class BrowserActivity : ComponentActivity() {
                                     contentType = download.contentType,
                                     subtitles = null,
                                     detectedBy = "download",
-                                    playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                    playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                    preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                    preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                    defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
                                 )
                                 connectionViewModel.sendCommandAndRecord(commandJson, "play", download.url, selectedTab?.content?.title ?: download.fileName ?: "Video from browser")
                                 val sent = connectionViewModel.webSocketClient.send(commandJson)
@@ -1670,28 +1779,31 @@ class BrowserActivity : ComponentActivity() {
                                 interceptedTorrentBytes = null
                             },
                             onPlayLinks = { links ->
-                                if (links.size == 1) {
-                                    val commandJson = com.playbridge.protocol.createPlayCommandJson(
-                                        url = links.first().downloadUrl,
-                                        title = links.first().filename,
-                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                val videos = links.map { link ->
+                                    com.playbridge.protocol.PlayPayload(
+                                        url = link.downloadUrl,
+                                        title = link.filename,
+                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                        preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                        preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
                                     )
-                                    connectionViewModel.sendCommandAndRecord(commandJson, "play", links.first().downloadUrl, links.first().filename)
-                                    tvActiveContext = "player"
-                                    Toast.makeText(this@BrowserActivity, "Playing on TV", Toast.LENGTH_SHORT).show()
-                                } else if (links.size > 1) {
-                                    val videos = links.map { link ->
-                                        com.playbridge.protocol.PlayPayload(
-                                            url = link.downloadUrl,
-                                            title = link.filename,
-                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
-                                        )
-                                    }
-                                    val playlistCmd = com.playbridge.protocol.createPlaylistCommandJson(items = videos)
-                                    connectionViewModel.webSocketClient.send(playlistCmd)
-                                    tvActiveContext = "player"
-                                    Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
                                 }
+
+                                val detectedVideo = DetectedVideo(
+                                    url = if (links.size == 1) links.first().downloadUrl else "playlist://magnet",
+                                    tabId = -1,
+                                    timestamp = System.currentTimeMillis(),
+                                    isPlayable = true,
+                                    detectedBy = "magnet_playlist",
+                                    playlistPayload = if (links.size > 1) videos else null
+                                )
+
+                                scope.launch {
+                                    forcePlaylistSheet = detectedVideo
+                                    showVideoSheet = true
+                                }
+
                                 interceptedMagnet = null
                                 interceptedTorrentBytes = null
                             }

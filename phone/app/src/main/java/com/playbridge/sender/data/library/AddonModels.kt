@@ -43,7 +43,8 @@ data class StremioResource(
 
 @Serializable
 data class StremioStreamResponse(
-    val streams: List<StremioStream> = emptyList()
+    val streams: List<StremioStream>? = null,
+    val subtitles: List<StremioStream>? = null
 )
 
 @Serializable

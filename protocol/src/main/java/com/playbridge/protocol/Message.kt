@@ -43,7 +43,10 @@ data class PlayPayload(
     val contentType: String? = null,
     val subtitles: List<String>? = null,
     val detectedBy: String? = null,
-    val playerMode: String? = null
+    val playerMode: String? = null,
+    val preferredAudioLanguage: String? = null,
+    val preferredSubtitleLanguage: String? = null,
+    val defaultVideoQuality: String? = null
 )
 
 /**
@@ -229,7 +232,18 @@ data class PongMessage(val type: String = "pong")
 // ==================== Sealed Command Class (for parsing) ====================
 
 sealed class Command {
-    data class Play(val url: String, val title: String?, val headers: Map<String, String>?, val contentType: String?, val subtitles: List<String>?, val detectedBy: String?, val playerMode: String?) : Command()
+    data class Play(
+        val url: String,
+        val title: String?,
+        val headers: Map<String, String>?,
+        val contentType: String?,
+        val subtitles: List<String>?,
+        val detectedBy: String?,
+        val playerMode: String?,
+        val preferredAudioLanguage: String? = null,
+        val preferredSubtitleLanguage: String? = null,
+        val defaultVideoQuality: String? = null
+    ) : Command()
     data class Browser(val url: String, val browserMode: String?) : Command()
     data class Control(val command: String) : Command()
     data class Remote(val key: String) : Command()
@@ -265,7 +279,10 @@ fun parseCommand(jsonString: String): Command {
                             contentType = payload?.contentType,
                             subtitles = payload?.subtitles,
                             detectedBy = payload?.detectedBy,
-                            playerMode = payload?.playerMode
+                            playerMode = payload?.playerMode,
+                            preferredAudioLanguage = payload?.preferredAudioLanguage,
+                            preferredSubtitleLanguage = payload?.preferredSubtitleLanguage,
+                            defaultVideoQuality = payload?.defaultVideoQuality
                         )
                     }
                     "browser" -> {
@@ -334,11 +351,25 @@ fun createPlayCommandJson(
     contentType: String? = null,
     subtitles: List<String>? = null,
     detectedBy: String? = null,
-    playerMode: String? = null
+    playerMode: String? = null,
+    preferredAudioLanguage: String? = null,
+    preferredSubtitleLanguage: String? = null,
+    defaultVideoQuality: String? = null
 ): String {
     return protocolJson.encodeToString(
         PlayCommand.serializer(),
-        PlayCommand(payload = PlayPayload(url, title, headers, contentType, subtitles, detectedBy, playerMode))
+        PlayCommand(payload = PlayPayload(
+            url = url,
+            title = title,
+            headers = headers,
+            contentType = contentType,
+            subtitles = subtitles,
+            detectedBy = detectedBy,
+            playerMode = playerMode,
+            preferredAudioLanguage = preferredAudioLanguage,
+            preferredSubtitleLanguage = preferredSubtitleLanguage,
+            defaultVideoQuality = defaultVideoQuality
+        ))
     )
 }
 

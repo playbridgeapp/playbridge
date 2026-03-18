@@ -259,7 +259,7 @@ class AddonRepository(private val addonDao: AddonDao) {
                 val body = response.body?.string() ?: return@withContext emptyList()
                 val streamResponse = json.decodeFromString<StremioStreamResponse>(body)
 
-                streamResponse.streams
+                (streamResponse.streams ?: emptyList())
                     .filter { it.isDirectUrl }  // Only include directly playable HTTP streams
                     .map { stream ->
                         ResolvedStream(
