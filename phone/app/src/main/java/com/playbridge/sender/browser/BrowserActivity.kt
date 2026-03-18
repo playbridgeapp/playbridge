@@ -625,16 +625,30 @@ class BrowserActivity : ComponentActivity() {
                             )
                             HorizontalDivider()
                             Spacer(Modifier.height(8.dp))
-                            
+
+                            Text(
+                                text = "Browser",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
+                            )
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Language, contentDescription = null) },
                                 label = { Text("Browser") },
-                                selected = currentScreen == Screen.Browser || currentScreen == Screen.Tabs || currentScreen == Screen.History || currentScreen == Screen.Downloads || currentScreen == Screen.Settings || currentScreen == Screen.Bookmarks || currentScreen == Screen.Remote || currentScreen == Screen.Extensions || currentScreen == Screen.Home,
+                                selected = currentScreen == Screen.Browser || currentScreen == Screen.Tabs || currentScreen == Screen.History || currentScreen == Screen.Downloads || currentScreen == Screen.Bookmarks || currentScreen == Screen.Remote || currentScreen == Screen.Extensions || currentScreen == Screen.Home,
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.Browser
                                 },
                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            Text(
+                                text = "Library",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
                             )
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = null) },
@@ -646,6 +660,14 @@ class BrowserActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                             )
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            Text(
+                                text = "Debrid",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
+                            )
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Cloud, contentDescription = null) },
                                 label = { Text("Debrid Library") },
@@ -655,6 +677,14 @@ class BrowserActivity : ComponentActivity() {
                                     currentScreen = Screen.DebridLibrary
                                 },
                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            Text(
+                                text = "Connection",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
                             )
                             NavigationDrawerItem(
                                 icon = {
@@ -679,6 +709,24 @@ class BrowserActivity : ComponentActivity() {
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.CommandHistory
+                                },
+                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            Text(
+                                text = "System",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
+                            )
+                            NavigationDrawerItem(
+                                icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                                label = { Text("Settings") },
+                                selected = currentScreen == Screen.Settings || currentScreen == Screen.AddonSettings,
+                                onClick = {
+                                    scope.launch { drawerState.close() }
+                                    currentScreen = Screen.Settings
                                 },
                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                             )
@@ -909,24 +957,7 @@ class BrowserActivity : ComponentActivity() {
                                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                     )
                                                 }
-                                                
-                                                AnimatedMenuItem(
-                                                    index = 7,
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        currentScreen = Screen.Settings
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("Settings", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.onSurface) },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-                                                
 
-                                                
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                                 
                                                 // Bookmarks
