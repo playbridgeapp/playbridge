@@ -151,6 +151,8 @@ fun DebridLibraryScreen(
 
     if (showBottomSheet && selectedTorrent != null) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        var isResolvingAll by remember { mutableStateOf(false) }
+
         ModalBottomSheet(
             onDismissRequest = { 
                 showBottomSheet = false 
@@ -175,7 +177,9 @@ fun DebridLibraryScreen(
                         if (files.size > 1) {
                             Button(
                                 onClick = {
+                                    if (isResolvingAll) return@Button
                                     scope.launch {
+                                        isResolvingAll = true
                                         try {
                                             Toast.makeText(context, "Resolving all links, please wait...", Toast.LENGTH_SHORT).show()
                                             val provider = repository.getActiveProvider() ?: return@launch
@@ -212,14 +216,27 @@ fun DebridLibraryScreen(
                                             showDetectedVideosSheet = true
                                         } catch (e: Exception) {
                                             Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_LONG).show()
+                                        } finally {
+                                            isResolvingAll = false
                                         }
                                     }
                                 },
+                                enabled = !isResolvingAll,
                                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                             ) {
-                                Icon(Icons.Default.List, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Play All on TV (${files.size} items)")
+                                if (isResolvingAll) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Resolving...")
+                                } else {
+                                    Icon(Icons.Default.List, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Play All on TV (${files.size} items)")
+                                }
                             }
                         }
                         
