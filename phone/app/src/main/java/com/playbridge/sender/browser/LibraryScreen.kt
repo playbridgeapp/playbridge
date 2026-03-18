@@ -257,7 +257,6 @@ fun LibraryScreen(
     }
 
     Scaffold(
-        contentWindowInsets = WindowInsets(0.dp),
         topBar = {
             TopAppBar(
                 title = {
@@ -306,8 +305,7 @@ fun LibraryScreen(
                             Icon(Icons.Default.Search, "Search")
                         }
                     }
-                },
-                windowInsets = WindowInsets(0.dp)
+                }
             )
         }
     ) { innerPadding ->

@@ -616,76 +616,50 @@ class BrowserActivity : ComponentActivity() {
                     drawerState = drawerState,
                     gesturesEnabled = drawerState.isOpen, // Only swipe to close, not to open
                     drawerContent = {
-                        ModalDrawerSheet(modifier = Modifier.width(280.dp)) {
-                            Spacer(Modifier.height(16.dp))
+                        ModalDrawerSheet(modifier = Modifier.width(260.dp)) {
                             Text(
                                 "PlayBridge",
                                 style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 16.dp)
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                             )
                             HorizontalDivider()
-                            Spacer(Modifier.height(8.dp))
 
-                            Text(
-                                text = "Browser",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
-                            )
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Language, contentDescription = null) },
-                                label = { Text("Browser") },
+                                label = { Text("Browser", style = MaterialTheme.typography.titleMedium) },
                                 selected = currentScreen == Screen.Browser || currentScreen == Screen.Tabs || currentScreen == Screen.History || currentScreen == Screen.Downloads || currentScreen == Screen.Bookmarks || currentScreen == Screen.Remote || currentScreen == Screen.Extensions || currentScreen == Screen.Home,
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.Browser
                                 },
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                shape = androidx.compose.ui.graphics.RectangleShape,
+                                modifier = Modifier.height(48.dp)
                             )
 
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Text(
-                                text = "Library",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
-                            )
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = null) },
-                                label = { Text("Library") },
+                                label = { Text("Library", style = MaterialTheme.typography.titleMedium) },
                                 selected = currentScreen == Screen.Library,
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.Library
                                 },
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                shape = androidx.compose.ui.graphics.RectangleShape,
+                                modifier = Modifier.height(48.dp)
                             )
 
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Text(
-                                text = "Debrid",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
-                            )
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Cloud, contentDescription = null) },
-                                label = { Text("Debrid Library") },
+                                label = { Text("Debrid Library", style = MaterialTheme.typography.titleMedium) },
                                 selected = currentScreen == Screen.DebridLibrary,
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.DebridLibrary
                                 },
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                shape = androidx.compose.ui.graphics.RectangleShape,
+                                modifier = Modifier.height(48.dp)
                             )
 
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Text(
-                                text = "Connection",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
-                            )
                             NavigationDrawerItem(
                                 icon = {
                                     if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
@@ -694,42 +668,42 @@ class BrowserActivity : ComponentActivity() {
                                         Icon(Icons.Default.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 },
-                                label = { Text("TV Connection") },
+                                label = { Text("TV Connection", style = MaterialTheme.typography.titleMedium) },
                                 selected = currentScreen == Screen.Connection,
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.Connection
                                 },
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                shape = androidx.compose.ui.graphics.RectangleShape,
+                                modifier = Modifier.height(48.dp)
                             )
+
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.History, contentDescription = null) },
-                                label = { Text("Command History") },
+                                label = { Text("Command History", style = MaterialTheme.typography.titleMedium) },
                                 selected = currentScreen == Screen.CommandHistory,
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.CommandHistory
                                 },
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                shape = androidx.compose.ui.graphics.RectangleShape,
+                                modifier = Modifier.height(48.dp)
                             )
 
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Text(
-                                text = "System",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
-                            )
+                            Spacer(modifier = Modifier.weight(1f))
+
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                                label = { Text("Settings") },
+                                label = { Text("Settings", style = MaterialTheme.typography.titleMedium) },
                                 selected = currentScreen == Screen.Settings || currentScreen == Screen.AddonSettings,
                                 onClick = {
                                     scope.launch { drawerState.close() }
                                     currentScreen = Screen.Settings
                                 },
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                shape = androidx.compose.ui.graphics.RectangleShape,
+                                modifier = Modifier.height(48.dp)
                             )
+                            Spacer(Modifier.height(8.dp))
                         }
                     }
                 ) {
@@ -1101,7 +1075,19 @@ class BrowserActivity : ComponentActivity() {
                         }
                     }
                 ) { innerPadding ->
-                    Box(modifier = Modifier.padding(innerPadding)) {
+                    val isOwnTopBar = currentScreen !in listOf(Screen.Browser, Screen.Tabs, Screen.Extensions)
+                    val resolvedPadding = if (isOwnTopBar) {
+                        PaddingValues(
+                            start = innerPadding.calculateStartPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                            top = 0.dp,
+                            end = innerPadding.calculateEndPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                            bottom = innerPadding.calculateBottomPadding()
+                        )
+                    } else {
+                        innerPadding
+                    }
+
+                    Box(modifier = Modifier.padding(resolvedPadding)) {
                             // content
                             AnimatedContent(
                                 targetState = currentScreen,

@@ -43,7 +43,6 @@ fun AddonSettingsScreen(
     var isInstalling by remember { mutableStateOf(false) }
 
     Scaffold(
-        contentWindowInsets = WindowInsets(0.dp),
         topBar = {
             TopAppBar(
                 title = { Text("Stremio Addons") },
@@ -51,8 +50,7 @@ fun AddonSettingsScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
-                },
-                windowInsets = WindowInsets(0.dp)
+                }
             )
         }
     ) { innerPadding ->
