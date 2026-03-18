@@ -217,8 +217,41 @@ class ServerService : Service() {
                 }
 
                 val useExternalPlayer = finalMode == "external"
+                val useExternalMpv = finalMode == "external_mpv"
 
-                if (useExternalPlayer) {
+                if (useExternalMpv) {
+                    activeContext = "external_player"
+                    broadcastContext()
+
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setClassName("is.xyz.mpv", "is.xyz.mpv.MPVActivity")
+                        data = android.net.Uri.parse(command.url)
+
+                        command.title?.let { title ->
+                            putExtra(Intent.EXTRA_TITLE, title)
+                            putExtra("title", title)
+                        }
+
+                        val subs = command.subtitles
+                        if (!subs.isNullOrEmpty()) {
+                            val subFilesStr = subs.joinToString(":")
+                            putExtra("sub-files", subFilesStr)
+                        }
+
+                        val hdrs = command.headers
+                        if (!hdrs.isNullOrEmpty()) {
+                            val headersStr = hdrs.map { (key, value) ->
+                                val escapedValue = value.replace(",", "\\,")
+                                "$key: $escapedValue"
+                            }.joinToString(",")
+                            putExtra("http-header-fields", headersStr)
+                        }
+
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+
+                    launchActivityFromBackground(intent, "Playing media in MPV")
+                } else if (useExternalPlayer) {
                     activeContext = "external_player"
                     broadcastContext()
 
