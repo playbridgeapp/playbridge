@@ -35,3 +35,5 @@ tv/app/release
 phone/app/release
 
 extension/dist
+
+.kotlin
