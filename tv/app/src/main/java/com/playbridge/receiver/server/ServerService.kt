@@ -274,6 +274,15 @@ class ServerService : Service() {
                         if (command.headers != null) {
                             putExtra(EXTRA_HEADERS, HashMap(command.headers))
                         }
+                        if (command.preferredAudioLanguage != null) {
+                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, command.preferredAudioLanguage)
+                        }
+                        if (command.preferredSubtitleLanguage != null) {
+                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, command.preferredSubtitleLanguage)
+                        }
+                        if (command.defaultVideoQuality != null) {
+                            putExtra("default_video_quality", command.defaultVideoQuality)
+                        }
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                     }
                     launchActivityFromBackground(playerIntent, "Playing media")
@@ -358,6 +367,15 @@ class ServerService : Service() {
                         putExtra(EXTRA_URL, firstItem.url)
                         putExtra(EXTRA_TITLE, firstItem.title)
                         putExtra(EXTRA_CONTENT_TYPE, firstItem.contentType)
+                        if (firstItem.preferredAudioLanguage != null) {
+                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, firstItem.preferredAudioLanguage)
+                        }
+                        if (firstItem.preferredSubtitleLanguage != null) {
+                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, firstItem.preferredSubtitleLanguage)
+                        }
+                        if (firstItem.defaultVideoQuality != null) {
+                            putExtra("default_video_quality", firstItem.defaultVideoQuality)
+                        }
                     }
                     putExtra(EXTRA_IS_PLAYLIST, true)
                     putExtra(EXTRA_PLAYLIST_INDEX, command.startIndex)

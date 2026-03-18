@@ -575,6 +575,152 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // Playback Preferences Section
+            Text(
+                text = "Playback Preferences",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            // Preferred Audio Language
+            var audioLangTrigger by remember { mutableStateOf(0) }
+            var preferredAudioLang by remember(audioLangTrigger) {
+                mutableStateOf(prefs.getString("preferred_audio_lang", "") ?: "")
+            }
+            var audioExpanded by remember { mutableStateOf(false) }
+
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    readOnly = true,
+                    value = SubtitlePreferences.audioLanguages.find { it.second == preferredAudioLang }?.first ?: "Auto",
+                    onValueChange = { },
+                    label = { Text("Preferred Audio Language") },
+                    trailingIcon = {
+                        IconButton(onClick = { audioExpanded = !audioExpanded }) {
+                            Icon(
+                                if (audioExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                                contentDescription = if (audioExpanded) "Collapse" else "Expand"
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { audioExpanded = !audioExpanded }
+                )
+                DropdownMenu(
+                    expanded = audioExpanded,
+                    onDismissRequest = { audioExpanded = false },
+                    modifier = Modifier.fillMaxWidth(0.9f)
+                ) {
+                    SubtitlePreferences.audioLanguages.forEach { (label, code) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                preferredAudioLang = code
+                                audioExpanded = false
+                                prefs.edit().putString("preferred_audio_lang", code).apply()
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Preferred Subtitle Language
+            var subLangTrigger by remember { mutableStateOf(0) }
+            var preferredSubLang by remember(subLangTrigger) {
+                mutableStateOf(prefs.getString("preferred_subtitle_lang", "") ?: "")
+            }
+            var subExpanded by remember { mutableStateOf(false) }
+
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    readOnly = true,
+                    value = SubtitlePreferences.subtitleLanguages.find { it.second == preferredSubLang }?.first ?: "None",
+                    onValueChange = { },
+                    label = { Text("Preferred Subtitle Language") },
+                    trailingIcon = {
+                        IconButton(onClick = { subExpanded = !subExpanded }) {
+                            Icon(
+                                if (subExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                                contentDescription = if (subExpanded) "Collapse" else "Expand"
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { subExpanded = !subExpanded }
+                )
+                DropdownMenu(
+                    expanded = subExpanded,
+                    onDismissRequest = { subExpanded = false },
+                    modifier = Modifier.fillMaxWidth(0.9f)
+                ) {
+                    SubtitlePreferences.subtitleLanguages.forEach { (label, code) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                preferredSubLang = code
+                                subExpanded = false
+                                prefs.edit().putString("preferred_subtitle_lang", code).apply()
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Default Video Quality
+            var videoQualityTrigger by remember { mutableStateOf(0) }
+            var defaultVideoQuality by remember(videoQualityTrigger) {
+                mutableStateOf(prefs.getString("default_video_quality", "Auto") ?: "Auto")
+            }
+            var qualityExpanded by remember { mutableStateOf(false) }
+
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    readOnly = true,
+                    value = SubtitlePreferences.videoQualities.find { it.second == defaultVideoQuality }?.first ?: "Auto",
+                    onValueChange = { },
+                    label = { Text("Default Video Quality") },
+                    trailingIcon = {
+                        IconButton(onClick = { qualityExpanded = !qualityExpanded }) {
+                            Icon(
+                                if (qualityExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                                contentDescription = if (qualityExpanded) "Collapse" else "Expand"
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { qualityExpanded = !qualityExpanded }
+                )
+                DropdownMenu(
+                    expanded = qualityExpanded,
+                    onDismissRequest = { qualityExpanded = false },
+                    modifier = Modifier.fillMaxWidth(0.9f)
+                ) {
+                    SubtitlePreferences.videoQualities.forEach { (label, code) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                defaultVideoQuality = code
+                                qualityExpanded = false
+                                prefs.edit().putString("default_video_quality", code).apply()
+                            }
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
             // TV Settings Section
             Text(
                 text = "TV Defaults",

@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
 fun DebridLibraryScreen(
     onMenuClick: () -> Unit,
     onCopyUrl: (String) -> Unit,
-    onPlayOnTv: (String, String) -> Unit, // url, title
+    onPlayOnTv: (String, String, List<String>?) -> Unit, // url, title, subtitles
     onPlayPlaylistOnTv: (List<com.playbridge.protocol.PlayPayload>) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -40,6 +40,8 @@ fun DebridLibraryScreen(
     var unrestrictError by remember { mutableStateOf<String?>(null) }
     
     var showBottomSheet by remember { mutableStateOf(false) }
+    var showDetectedVideosSheet by remember { mutableStateOf(false) }
+    var detectedVideoForSheet by remember { mutableStateOf<DetectedVideo?>(null) }
 
     fun loadTorrents() {
         scope.launch {
@@ -197,8 +199,17 @@ fun DebridLibraryScreen(
                                                 )
                                             }
                                             
-                                            onPlayPlaylistOnTv(playlistItems)
+                                            detectedVideoForSheet = DetectedVideo(
+                                                url = "playlist://debrid", // Dummy URL
+                                                tabId = -1,
+                                                timestamp = System.currentTimeMillis(),
+                                                isPlayable = true,
+                                                contentType = null,
+                                                detectedBy = "debrid_playlist",
+                                                playlistPayload = playlistItems
+                                            )
                                             showBottomSheet = false
+                                            showDetectedVideosSheet = true
                                         } catch (e: Exception) {
                                             Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_LONG).show()
                                         }
@@ -259,8 +270,17 @@ fun DebridLibraryScreen(
                                                         }
 
                                                         val unrestrictResponse = provider.unrestrictLink(linkToUnrestrict)
-                                                        onPlayOnTv(unrestrictResponse.downloadUrl, file.path)
+                                                        detectedVideoForSheet = DetectedVideo(
+                                                            url = unrestrictResponse.downloadUrl,
+                                                            tabId = -1,
+                                                            timestamp = System.currentTimeMillis(),
+                                                            isPlayable = true,
+                                                            contentType = null, // Let TV guess
+                                                            detectedBy = "debrid_library",
+                                                            originalMessage = null
+                                                        )
                                                         showBottomSheet = false
+                                                        showDetectedVideosSheet = true
                                                     } catch (e: Exception) {
                                                         Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_LONG).show()
                                                     }
@@ -279,5 +299,33 @@ fun DebridLibraryScreen(
                 Spacer(Modifier.height(16.dp))
             }
         }
+    }
+
+    if (showDetectedVideosSheet && detectedVideoForSheet != null) {
+        DetectedVideosSheet(
+            videos = listOf(detectedVideoForSheet!!),
+            onDismiss = {
+                showDetectedVideosSheet = false
+                detectedVideoForSheet = null
+            },
+            onVideoClick = { video, subtitles ->
+                if (video.playlistPayload != null) {
+                    onPlayPlaylistOnTv(video.playlistPayload)
+                } else {
+                    onPlayOnTv(video.url, selectedTorrent?.filename ?: "Debrid Stream", subtitles)
+                }
+                showDetectedVideosSheet = false
+                detectedVideoForSheet = null
+            },
+            onDownload = { video ->
+                onCopyUrl(video.url)
+                Toast.makeText(context, "URL copied for download", Toast.LENGTH_SHORT).show()
+                showDetectedVideosSheet = false
+            },
+            onClear = {
+                showDetectedVideosSheet = false
+                detectedVideoForSheet = null
+            }
+        )
     }
 }

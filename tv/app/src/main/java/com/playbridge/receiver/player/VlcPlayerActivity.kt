@@ -235,6 +235,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Read playlist if present
         val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
         val inMemoryPlaylist = PlaylistStore.currentPlaylist
+
+        // Restore saved selections from history or incoming intent preferences
+        intent.getStringExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG)?.let {
+            // VlcPlayerActivity doesn't track these top-level currently like ExoPlayerActivity
+            // We can just log or store them if needed later.
+            // FileLogger.i(TAG, "Restored preferred audio language: $it")
+        }
+        intent.getStringExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG)?.let {
+            // preferredSubtitleLanguage = it
+            // FileLogger.i(TAG, "Restored preferred subtitle language: $it")
+        }
         if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
             playlistItems = inMemoryPlaylist.toMutableList()
             playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)

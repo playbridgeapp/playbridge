@@ -36,12 +36,13 @@ import kotlinx.coroutines.launch
 fun MovieDetailScreen(
     movieId: Int,
     addonRepository: AddonRepository,
-    onPlayStream: (url: String, title: String) -> Unit,
+    onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val tmdb = remember { TmdbRepository(context) }
     val omdb = remember { OmdbRepository(context) }
+    val subtitleService = remember { StremioSubtitleService() }
     val scope = rememberCoroutineScope()
 
     var details by remember { mutableStateOf<TmdbMovieDetails?>(null) }
@@ -73,8 +74,30 @@ fun MovieDetailScreen(
             onStreamSelected = { resolved ->
                 showStreamPicker = false
                 val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
-                onPlayStream(streamUrl, details?.title ?: "Movie")
-                Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+
+                scope.launch {
+                    val subtitles = details?.imdbId?.let { imdbId ->
+                        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                        val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
+                        if (prefLang.isNotEmpty()) {
+                            try {
+                                val allSubs = subtitleService.getSubtitlesForMovie(imdbId)
+                                // We can either filter by language or just pass all and let the player select it
+                                // OpenSubtitles v3 addon doesn't expose language info easily without parsing,
+                                // but Stremio player usually handles it. Actually, it does expose language in the 'id' or url sometimes,
+                                // but just passing all detected subs from the addon is safest.
+                                allSubs.mapNotNull { it.url }
+                            } catch (e: Exception) {
+                                emptyList()
+                            }
+                        } else {
+                            emptyList()
+                        }
+                    } ?: emptyList()
+
+                    onPlayStream(streamUrl, details?.title ?: "Movie", subtitles.ifEmpty { null })
+                    Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+                }
             },
             onDismiss = { showStreamPicker = false }
         )
@@ -225,13 +248,14 @@ fun MovieDetailScreen(
 fun TvShowDetailScreen(
     tvId: Int,
     addonRepository: AddonRepository,
-    onPlayStream: (url: String, title: String) -> Unit,
+    onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
     onPlayPlaylist: (items: List<com.playbridge.protocol.PlayPayload>) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val tmdb = remember { TmdbRepository(context) }
     val omdb = remember { OmdbRepository(context) }
+    val subtitleService = remember { StremioSubtitleService() }
     val scope = rememberCoroutineScope()
     
     var details by remember { mutableStateOf<TmdbTvDetails?>(null) }
@@ -310,10 +334,25 @@ fun TvShowDetailScreen(
                                         return@launch
                                     }
 
+                                    val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                                    val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
+
                                     val playlistItems = episodeStreams.map { ep ->
+                                        val subtitles = if (prefLang.isNotEmpty()) {
+                                            try {
+                                                val allSubs = subtitleService.getSubtitlesForEpisode(imdbId, selectedSeason, ep.episode)
+                                                allSubs.mapNotNull { it.url }
+                                            } catch (e: Exception) {
+                                                emptyList()
+                                            }
+                                        } else {
+                                            emptyList()
+                                        }
+
                                         com.playbridge.protocol.PlayPayload(
                                             url = ep.stream.stream.url ?: "",
-                                            title = ep.title
+                                            title = ep.title,
+                                            subtitles = subtitles.ifEmpty { null }
                                         )
                                     }.filter { it.url.isNotBlank() }
 
@@ -322,8 +361,12 @@ fun TvShowDetailScreen(
                                         return@launch
                                     }
 
+                                    // Instead of directly calling onPlayPlaylist, wrap it in a DetectedVideo
+                                    // and trigger DetectedVideosSheet (which we will handle by calling onPlayPlaylist in BrowserActivity via a special trigger,
+                                    // or just execute directly here via another sheet).
+                                    // Wait, it is cleaner if BrowserActivity handles DetectedVideosSheet rendering.
+                                    // But LibraryDetailScreen is a child of BrowserActivity and can just pass the List<PlayPayload> back.
                                     onPlayPlaylist(playlistItems)
-                                    Toast.makeText(context, "Sent ${playlistItems.size} episodes to TV", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             modifier = Modifier.fillMaxWidth()
@@ -345,6 +388,9 @@ fun TvShowDetailScreen(
         )
     }
 
+    // State to keep track of selected episode to fetch specific subtitles
+    var currentEpisodeSelection by remember { mutableStateOf<TmdbEpisode?>(null) }
+
     // Stream picker sheet
     if (showStreamPicker) {
         StreamPickerSheet(
@@ -354,8 +400,29 @@ fun TvShowDetailScreen(
             onStreamSelected = { resolved ->
                 showStreamPicker = false
                 val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
-                onPlayStream(streamUrl, streamPickerTitle)
-                Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+
+                scope.launch {
+                    val subtitles = if (details?.imdbId != null && currentEpisodeSelection != null) {
+                        val imdbId = details!!.imdbId!!
+                        val episode = currentEpisodeSelection!!
+                        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                        val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
+
+                        if (prefLang.isNotEmpty()) {
+                            try {
+                                val allSubs = subtitleService.getSubtitlesForEpisode(imdbId, episode.seasonNumber, episode.episodeNumber)
+                                allSubs.mapNotNull { it.url }
+                            } catch (e: Exception) {
+                                emptyList()
+                            }
+                        } else {
+                            emptyList()
+                        }
+                    } else emptyList()
+
+                    onPlayStream(streamUrl, streamPickerTitle, subtitles.ifEmpty { null })
+                    Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+                }
             },
             onDismiss = { showStreamPicker = false }
         )
@@ -505,6 +572,7 @@ fun TvShowDetailScreen(
                         hasAddon = imdbId != null,
                         onPlay = {
                             if (imdbId != null) {
+                                currentEpisodeSelection = episode
                                 streamPickerTitle = "${show.name} S${episode.seasonNumber}E${episode.episodeNumber}"
                                 resolvedStreams = emptyList()
                                 showStreamPicker = true

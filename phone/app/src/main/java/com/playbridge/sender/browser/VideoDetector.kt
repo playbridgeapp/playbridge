@@ -34,7 +34,9 @@ data class DetectedVideo(
     var hlsPlaylist: HlsPlaylist? = null,
     var subtitlePreview: String? = null,
     var subtitlePreviewChecked: Boolean = false,
-    var isPlayable: Boolean? = null
+    var isPlayable: Boolean? = null,
+    val playlistPayload: List<com.playbridge.protocol.PlayPayload>? = null,
+    val title: String? = null
 ) {
     val isSubtitle: Boolean
         get() = contentType?.contains("vtt", ignoreCase = true) == true ||

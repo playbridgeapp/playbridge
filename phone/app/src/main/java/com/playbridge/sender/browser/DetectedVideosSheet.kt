@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,6 +37,9 @@ import java.net.URI
 import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.coroutines.launch
+import com.playbridge.sender.data.library.TmdbRepository
+import com.playbridge.sender.data.library.StremioSubtitleService
 
 /**
  * Bottom sheet displaying detected video sources with detailed info like 1DM.
@@ -54,153 +59,464 @@ fun DetectedVideosSheet(
     // Separate distinct videos and subtitles, and sort videos by priority
     val playableVideos = remember(videos) { 
         videos.filter { !it.isSubtitle }
-              .sortedByDescending { video ->
-                  when {
-                      // Score 5: HLS with multiple variants (Master Playlist)
-                      video.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
-                      // Score 4: Playable stream (HLS/DASH)
-                      video.isPlayable == true && (video.url.contains(".m3u8", ignoreCase = true) || video.url.contains(".mpd", ignoreCase = true)) -> 4
-                      // Score 3: Playable normal video
-                      video.isPlayable == true -> 3
-                      // Score 2: Unchecked status
-                      video.isPlayable == null -> 2
-                      // Score 1: Verified unplayable (dead link, 403, etc)
-                      else -> 1
-                  }
-              }
+              .sortedWith(
+                  compareByDescending<DetectedVideo> { video ->
+                      when {
+                          // Score 5: HLS with multiple variants (Master Playlist)
+                          video.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
+                          // Score 4: Playable stream (HLS/DASH)
+                          video.isPlayable == true && (video.url.contains(".m3u8", ignoreCase = true) || video.url.contains(".mpd", ignoreCase = true)) -> 4
+                          // Score 3: Playable normal video
+                          video.isPlayable == true -> 3
+                          // Score 2: Unchecked status
+                          video.isPlayable == null -> 2
+                          // Score 1: Verified unplayable (dead link, 403, etc)
+                          else -> 1
+                      }
+                  }.thenByDescending { it.timestamp }
+              )
     }
     val allSubtitles = remember(videos) { videos.filter { it.isSubtitle } }
     
+    val isPlaylistMode = remember(playableVideos) {
+        playableVideos.firstOrNull()?.playlistPayload != null
+    }
+
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = if (isPlaylistMode) listOf("Playlist Bundle") else listOf("Videos", "Subtitles")
+
+    // State for subtitle search dialog
+    var showSubtitleSearchDialog by remember { mutableStateOf(false) }
+    var subtitleSearchQuery by remember { mutableStateOf("") }
+    var isSearchingSubtitles by remember { mutableStateOf(false) }
+    var subtitleSearchResults by remember { mutableStateOf<List<com.playbridge.sender.data.library.TmdbMultiSearchResult>>(emptyList()) }
+    var extraSubtitles by remember { mutableStateOf<List<DetectedVideo>>(emptyList()) }
+    var showSubtitleResults by remember { mutableStateOf(false) }
+
+    val tmdbRepository = remember { TmdbRepository(context) }
+    val subtitleService = remember { StremioSubtitleService() }
+    val scope = rememberCoroutineScope()
+
+    // Global selection state
+    var selectedVideo by remember { mutableStateOf<DetectedVideo?>(playableVideos.firstOrNull()) }
+    var selectedQualityUrl by remember { mutableStateOf<String?>(null) }
+    var selectedSubtitles by remember { mutableStateOf<Set<String>>(emptySet()) }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 32.dp)
-        ) {
-            // Header
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 80.dp) // Provide padding so FAB doesn't cover content
+            ) {
+                // Header
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Detected Videos (${playableVideos.size})",
+                    text = "Detected Media",
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 
-                if (videos.isNotEmpty()) {
-                    TextButton(onClick = onClear) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Clear",
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("Clear")
-                    }
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            if (playableVideos.isEmpty()) {
-                // Empty state
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 48.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "No videos detected yet",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Browse a page with video content",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-            } else {
-                // Video list
-                val subtitlesByTabId = remember(allSubtitles) {
-                    allSubtitles.groupBy { it.tabId }
-                }
+                    if (videos.isNotEmpty()) {
+                        IconButton(onClick = onClear) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Clear",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
 
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(playableVideos) { video ->
-                        // Get pre-computed subtitles for this tab
-                        val relevantSubtitles = subtitlesByTabId[video.tabId] ?: emptyList()
-                        
-                        VideoItemDetailed(
-                            video = video,
-                            availableSubtitles = relevantSubtitles,
-                            onPlayClick = { specificUrl, subtitles -> 
-                                if (specificUrl != null) {
-                                    // If we have a playlist and this is one of the qualities, try to generate a filtered playlist
-                                    // We need to find the specific quality object first
-                                    val selectedQuality = video.qualities.find { it.url == specificUrl }
-                                    val playlist = video.hlsPlaylist
-                                    
-                                    if (playlist != null && selectedQuality != null) {
-                                        // Generate filtered playlist
-                                        val filteredContent = HlsParser.generateFilteredPlaylist(playlist, selectedQuality)
-                                        
-                                        // Encode as Data URI
-                                        val base64Content = android.util.Base64.encodeToString(filteredContent.toByteArray(), android.util.Base64.NO_WRAP)
-                                        val dataUri = "data:application/x-mpegurl;base64,$base64Content"
-                                        
-                                        // Send Data URI with a title hint of the resolution
-                                        onVideoClick(video.copy(
-                                            url = dataUri,
-                                            contentType = "application/x-mpegurl" // Force MIME type
-                                        ), subtitles)
-                                    } else {
-                                        onVideoClick(video.copy(url = specificUrl), subtitles)
-                                    }
+                    IconButton(
+                        onClick = {
+                            val specificUrl = selectedQualityUrl
+                            if (specificUrl != null) {
+                                val selectedQuality = selectedVideo!!.qualities.find { it.url == specificUrl }
+                                val playlist = selectedVideo!!.hlsPlaylist
+
+                                if (playlist != null && selectedQuality != null) {
+                                    // Generate filtered playlist
+                                    val filteredContent = HlsParser.generateFilteredPlaylist(playlist, selectedQuality)
+                                    val base64Content = android.util.Base64.encodeToString(filteredContent.toByteArray(), android.util.Base64.NO_WRAP)
+                                    val dataUri = "data:application/x-mpegurl;base64,$base64Content"
+
+                                    onVideoClick(selectedVideo!!.copy(
+                                        url = dataUri,
+                                        contentType = "application/x-mpegurl"
+                                    ), selectedSubtitles.toList())
                                 } else {
-                                    onVideoClick(video, subtitles)
+                                    onVideoClick(selectedVideo!!.copy(url = specificUrl), selectedSubtitles.toList())
                                 }
-                            },
-                            onDownloadClick = { onDownload(video) },
-                            onCopyClick = {
-                                copyToClipboard(context, video.url)
-                                Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
-                            },
-                            onOpenWithClick = {
-                                openInExternalPlayer(context, video.url, video.contentType, video.headers)
+                            } else {
+                                onVideoClick(selectedVideo!!, selectedSubtitles.toList())
                             }
+                        },
+                        enabled = selectedVideo != null
+                    ) {
+                        Icon(
+                            Icons.Default.Send,
+                            contentDescription = "Play on TV",
+                            tint = if (selectedVideo != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                         )
                     }
                 }
             }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+
+            TabRow(selectedTabIndex = selectedTab) {
+                tabs.forEachIndexed { index, title ->
+                    val count = if (isPlaylistMode) {
+                        playableVideos.firstOrNull()?.playlistPayload?.size ?: 0
+                    } else {
+                        if (index == 0) playableVideos.size else (allSubtitles.size + extraSubtitles.size)
+                    }
+
+                    Tab(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        text = {
+                            if (isPlaylistMode) {
+                                Text(title)
+                            } else {
+                                Text("$title ($count)")
+                            }
+                        }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (selectedTab == 0) {
+                if (playableVideos.isEmpty()) {
+                    // Empty state
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.outline
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "No videos detected yet",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Browse a page with video content",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                } else {
+                    // Video list
+                    val combinedSubtitles = remember(allSubtitles, extraSubtitles) { allSubtitles + extraSubtitles }
+                    val subtitlesByTabId = remember(combinedSubtitles) {
+                        combinedSubtitles.groupBy { it.tabId }
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(playableVideos) { video ->
+                            VideoItemDetailed(
+                                video = video,
+                                isSelected = selectedVideo?.url == video.url,
+                                selectedQualityUrl = if (selectedVideo?.url == video.url) selectedQualityUrl else null,
+                                onClick = {
+                                    selectedVideo = video
+                                    selectedQualityUrl = null
+                                },
+                                onQualityClick = { specificUrl ->
+                                    selectedVideo = video
+                                    selectedQualityUrl = specificUrl
+                                },
+                                onDownloadClick = { onDownload(video) },
+                                onCopyClick = {
+                                    copyToClipboard(context, video.url)
+                                    Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                                },
+                                onOpenWithClick = {
+                                    openInExternalPlayer(context, video.url, video.contentType, video.headers)
+                                }
+                            )
+                        }
+                    }
+                }
+            } else if (selectedTab == 1) {
+                // Subtitles Tab
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Button(
+                        onClick = { showSubtitleSearchDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Search for Subtitles")
+                    }
+                    Spacer(Modifier.height(16.dp))
+
+                    val combinedSubtitles = remember(allSubtitles, extraSubtitles) { allSubtitles + extraSubtitles }
+                    if (combinedSubtitles.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 48.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                "No subtitles detected or downloaded.",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(combinedSubtitles) { subtitle ->
+                                var previewText by remember(subtitle.url) { mutableStateOf(subtitle.subtitlePreview) }
+                                var isLoadingPreview by remember(subtitle.url) { mutableStateOf(!subtitle.subtitlePreviewChecked) }
+
+                                LaunchedEffect(subtitle.url) {
+                                    if (!subtitle.subtitlePreviewChecked) {
+                                        isLoadingPreview = true
+                                        previewText = VideoDetector.fetchSubtitlePreview(subtitle)
+                                        isLoadingPreview = false
+                                    }
+                                }
+
+                                val subInfo = parseUrlInfo(subtitle.url)
+                                val isSelected = selectedSubtitles.contains(subtitle.url)
+
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedSubtitles = if (isSelected) {
+                                                selectedSubtitles - subtitle.url
+                                            } else {
+                                                selectedSubtitles + subtitle.url
+                                            }
+                                        },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                    border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
+                                ) {
+                                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Checkbox(
+                                                checked = isSelected,
+                                                onCheckedChange = { checked ->
+                                                    selectedSubtitles = if (checked) {
+                                                        selectedSubtitles + subtitle.url
+                                                    } else {
+                                                        selectedSubtitles - subtitle.url
+                                                    }
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = subInfo.extension?.uppercase() ?: "SUB",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                    Text(
+                                                        text = formatTimestamp(subtitle.timestamp),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.outline
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = subtitle.title ?: subInfo.filename ?: (subInfo.host + subInfo.path),
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+
+                                                if (isLoadingPreview) {
+                                                    Text(
+                                                        text = "Loading preview...",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.outline,
+                                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                                    )
+                                                } else if (!previewText.isNullOrEmpty()) {
+                                                    Text(
+                                                        text = previewText!!,
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = MaterialTheme.colorScheme.secondary,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
         }
+    }
+}
+
+    if (showSubtitleSearchDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showSubtitleSearchDialog = false
+                showSubtitleResults = false
+                subtitleSearchResults = emptyList()
+            },
+            title = { Text("Search Subtitles") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = subtitleSearchQuery,
+                        onValueChange = { subtitleSearchQuery = it },
+                        label = { Text("Movie / TV Show Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        trailingIcon = {
+                            if (isSearchingSubtitles) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                IconButton(onClick = {
+                                    if (subtitleSearchQuery.isNotBlank()) {
+                                        isSearchingSubtitles = true
+                                        showSubtitleResults = true
+                                        scope.launch {
+                                            val response = tmdbRepository.searchMulti(subtitleSearchQuery)
+                                            subtitleSearchResults = response.results.filter { it.isMovie || it.isTvShow }
+                                            isSearchingSubtitles = false
+                                        }
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Search, contentDescription = "Search")
+                                }
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (showSubtitleResults) {
+                        LazyColumn(modifier = Modifier.heightIn(max = 250.dp)) {
+                            items(subtitleSearchResults) { item ->
+                                ListItem(
+                                    headlineContent = { Text(item.displayTitle) },
+                                    supportingContent = { Text("${item.mediaType.uppercase()} • ${item.year}") },
+                                    modifier = Modifier.clickable {
+                                        isSearchingSubtitles = true
+                                        scope.launch {
+                                            var imdbIdToUse: String? = null
+                                            if (item.isMovie) {
+                                                val details = tmdbRepository.getMovieDetails(item.id)
+                                                imdbIdToUse = details?.imdbId
+                                            } else {
+                                                val details = tmdbRepository.getTvDetails(item.id)
+                                                imdbIdToUse = details?.imdbId
+                                            }
+
+                                            if (imdbIdToUse != null) {
+                                                val streams = if (item.isMovie) {
+                                                    subtitleService.getSubtitlesForMovie(imdbIdToUse)
+                                                } else {
+                                                    // For series, just try season 1 episode 1 by default, or we'd need more UI.
+                                                    // For now, let's just query S01E01 if it's a TV show.
+                                                    subtitleService.getSubtitlesForEpisode(imdbIdToUse, 1, 1)
+                                                }
+
+                                                if (streams.isNotEmpty()) {
+                                                    val newSubs = streams.mapNotNull { stream ->
+                                                        stream.url?.let { url ->
+                                                            DetectedVideo(
+                                                                url = url,
+                                                                tabId = -1, // Global
+                                                                timestamp = System.currentTimeMillis(),
+                                                                contentType = "text/vtt",
+                                                                detectedBy = "stremio_addon"
+                                                            )
+                                                        }
+                                                    }
+                                                    extraSubtitles = extraSubtitles + newSubs
+                                                    Toast.makeText(context, "Added ${newSubs.size} subtitles", Toast.LENGTH_SHORT).show()
+                                                    showSubtitleSearchDialog = false
+                                                } else {
+                                                    Toast.makeText(context, "No subtitles found", Toast.LENGTH_SHORT).show()
+                                                }
+                                            } else {
+                                                Toast.makeText(context, "Could not find IMDB ID", Toast.LENGTH_SHORT).show()
+                                            }
+                                            isSearchingSubtitles = false
+                                        }
+                                    }
+                                )
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSubtitleSearchDialog = false
+                    showSubtitleResults = false
+                    subtitleSearchResults = emptyList()
+                }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 }
 
 @Composable
 private fun VideoItemDetailed(
     video: DetectedVideo,
-    availableSubtitles: List<DetectedVideo>,
-    onPlayClick: (String?, List<String>?) -> Unit,
+    isSelected: Boolean,
+    selectedQualityUrl: String?,
+    onClick: () -> Unit,
+    onQualityClick: (String) -> Unit,
     onDownloadClick: () -> Unit,
     onCopyClick: () -> Unit,
     onOpenWithClick: () -> Unit
@@ -219,11 +535,6 @@ private fun VideoItemDetailed(
     var qualities by remember { mutableStateOf(video.qualities) }
     var isLoadingQualities by remember { mutableStateOf(isHls && !video.qualitiesChecked) }
     
-    // Subtitle selection state
-    var showSubtitleDialog by remember { mutableStateOf(false) }
-    var pendingPlayUrl by remember { mutableStateOf<String?>(null) }
-    var selectedSubtitles by remember { mutableStateOf(setOf<String>()) }
-    
     LaunchedEffect(video.url) {
         if (!video.fileSizeChecked) {
             isLoadingSize = true
@@ -238,22 +549,14 @@ private fun VideoItemDetailed(
         }
     }
     
-    // Helper to start play (either directly or via dialog)
-    fun initiatePlay(url: String?) {
-        if (availableSubtitles.isNotEmpty()) {
-            pendingPlayUrl = url
-            selectedSubtitles = emptySet() // Reset selection when dialog opens
-            showSubtitleDialog = true
-        } else {
-            onPlayClick(url, null)
-        }
-    }
-    
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+        ),
+        border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
     ) {
         Column(
             modifier = Modifier
@@ -301,72 +604,85 @@ private fun VideoItemDetailed(
             
             Spacer(modifier = Modifier.height(8.dp))
             
-            // URL domain/host
-            Text(
-                text = urlInfo.host,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.Medium
-            )
-            
-            Spacer(modifier = Modifier.height(4.dp))
-            
-            // Full URL (truncated)
-            Text(
-                text = video.url,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            
-            // Additional info row
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Content type
-                if (video.contentType != null) {
-                    InfoChip(
-                        icon = Icons.Default.Info,
-                        text = video.contentType
-                    )
-                }
-                
-                // File extension if present
-                urlInfo.extension?.let { ext ->
-                    InfoChip(
-                        icon = Icons.Default.Info,
-                        text = ext.uppercase()
-                    )
-                }
-                
-                // Detection method
-                InfoChip(
-                    icon = Icons.Default.Search,
-                    text = video.detectedBy ?: "auto"
+            // Content Information
+            if (video.playlistPayload != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "${video.playlistPayload.size} Items in Playlist",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                // Title / Filename
+                Text(
+                    text = video.title ?: urlInfo.filename ?: urlInfo.host,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 
-                // File size
-                if (isLoadingSize) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            strokeWidth = 1.dp
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            text = "Checking...",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                // Full URL (truncated)
+                Text(
+                    text = video.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                // Additional info row
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Content type
+                    if (video.contentType != null) {
+                        InfoChip(
+                            icon = Icons.Default.Info,
+                            text = video.contentType
                         )
                     }
-                } else if (fileSize != null) {
+
+                    // File extension if present
+                    urlInfo.extension?.let { ext ->
+                        InfoChip(
+                            icon = Icons.Default.Info,
+                            text = ext.uppercase()
+                        )
+                    }
+
+                    // Detection method
                     InfoChip(
-                        icon = Icons.Default.ArrowDropDown,
-                        text = formatFileSize(fileSize!!)
+                        icon = Icons.Default.Search,
+                        text = video.detectedBy
                     )
+
+                    // File size
+                    if (isLoadingSize) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.dp
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "Checking...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    } else if (fileSize != null) {
+                        InfoChip(
+                            icon = Icons.Default.ArrowDropDown,
+                            text = formatFileSize(fileSize!!)
+                        )
+                    }
                 }
             }
             
@@ -430,16 +746,15 @@ private fun VideoItemDetailed(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(qualities) { quality ->
-                            AssistChip(
-                                onClick = { initiatePlay(quality.url) },
+                            val isQualitySelected = isSelected && selectedQualityUrl == quality.url
+                            FilterChip(
+                                selected = isQualitySelected,
+                                onClick = { onQualityClick(quality.url) },
                                 label = { 
                                     Text(
                                         text = quality.resolution,
                                         style = MaterialTheme.typography.labelMedium
                                     ) 
-                                },
-                                leadingIcon = {
-                                     Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(12.dp))
                                 }
                             )
                         }
@@ -454,244 +769,54 @@ private fun VideoItemDetailed(
                 }
             }
 
-            // Action buttons
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-            Spacer(modifier = Modifier.height(16.dp))
+            if (video.playlistPayload == null) {
+                // Compact Action Row
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Download button
-                OutlinedButton(
-                    onClick = onDownloadClick,
-                    modifier = Modifier.weight(1f)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Default.Download,
-                        contentDescription = "Download",
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text("Download")
-                }
-
-                // Play/Send button
-                Button(
-                    onClick = { initiatePlay(null) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        Icons.Default.Send,
-                        contentDescription = "Play on TV",
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text("Play on TV")
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // Copy URL button (Secondary)
-            OutlinedButton(
-                onClick = onCopyClick,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                 Icon(
-                    Icons.Default.Share,
-                    contentDescription = "Copy URL",
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(4.dp))
-                Text("Copy URL")
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // Open With button (Secondary)
-            OutlinedButton(
-                onClick = onOpenWithClick,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                 Icon(
-                    Icons.Default.OpenInNew,
-                    contentDescription = "Open With",
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(4.dp))
-                Text("Open With")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // Show Raw button
-            if (video.originalMessage != null) {
-                TextButton(
-                    onClick = { showRaw = !showRaw },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (showRaw) "Hide Raw Data" else "Show Raw Data")
+                    if (video.originalMessage != null) {
+                        IconButton(onClick = { showRaw = !showRaw }) {
+                            Icon(
+                                Icons.Default.Code,
+                                contentDescription = if (showRaw) "Hide Raw Data" else "Show Raw Data",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    IconButton(onClick = onOpenWithClick) {
+                        Icon(
+                            Icons.Default.OpenInNew,
+                            contentDescription = "Open With",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    IconButton(onClick = onCopyClick) {
+                        Icon(
+                            Icons.Default.Share,
+                            contentDescription = "Copy URL",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    IconButton(onClick = onDownloadClick) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Download",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }
     }
-    
-    // Subtitle Selection Dialog
-    if (showSubtitleDialog) {
-        val allSelected = selectedSubtitles.size == availableSubtitles.size && availableSubtitles.isNotEmpty()
-        
-        AlertDialog(
-            onDismissRequest = { showSubtitleDialog = false },
-            title = { Text("Select Subtitles") },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Found ${availableSubtitles.size} subtitle tracks. Select the ones you want to send to TV.")
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    // Select All Row
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                selectedSubtitles = if (allSelected) emptySet() else availableSubtitles.map { it.url }.toSet()
-                            }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = allSelected,
-                            onCheckedChange = { checked ->
-                                selectedSubtitles = if (checked) availableSubtitles.map { it.url }.toSet() else emptySet()
-                            }
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Select All",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    
-                    // List of subtitles
-                    LazyColumn(
-                        modifier = Modifier.heightIn(max = 300.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(availableSubtitles) { subtitle ->
-                            var previewText by remember(subtitle.url) { mutableStateOf(subtitle.subtitlePreview) }
-                            var isLoadingPreview by remember(subtitle.url) { mutableStateOf(!subtitle.subtitlePreviewChecked) }
-                            
-                            LaunchedEffect(subtitle.url) {
-                                if (!subtitle.subtitlePreviewChecked) {
-                                    isLoadingPreview = true
-                                    previewText = VideoDetector.fetchSubtitlePreview(subtitle)
-                                    isLoadingPreview = false
-                                }
-                            }
-                            
-                            val subInfo = parseUrlInfo(subtitle.url)
-                            val isSelected = selectedSubtitles.contains(subtitle.url)
-                            
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        selectedSubtitles = if (isSelected) {
-                                            selectedSubtitles - subtitle.url
-                                        } else {
-                                            selectedSubtitles + subtitle.url
-                                        }
-                                    }
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = { checked ->
-                                        selectedSubtitles = if (checked) {
-                                            selectedSubtitles + subtitle.url
-                                        } else {
-                                            selectedSubtitles - subtitle.url
-                                        }
-                                    }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = subInfo.extension?.uppercase() ?: "SUB",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Text(
-                                        text = subInfo.filename ?: (subInfo.host + subInfo.path),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    if (subInfo.filename != null) {
-                                         Text(
-                                            text = subInfo.host + subInfo.path,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.outline,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    
-                                    if (isLoadingPreview) {
-                                        Text(
-                                            text = "Loading preview...",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.outline,
-                                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                                        )
-                                    } else if (!previewText.isNullOrEmpty()) {
-                                        Text(
-                                            text = previewText!!,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.secondary,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                                        )
-                                    }
-                                }
-                            }
-                            HorizontalDivider(modifier = Modifier.padding(start = 48.dp))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showSubtitleDialog = false
-                        onPlayClick(pendingPlayUrl, selectedSubtitles.toList())
-                    }
-                ) {
-                    val countText = if (selectedSubtitles.isNotEmpty()) " (${selectedSubtitles.size})" else ""
-                    Text("Play$countText")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSubtitleDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 }
 
 @Composable
-private fun InfoChip(
+fun InfoChip(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     text: String
 ) {
@@ -715,14 +840,14 @@ private fun InfoChip(
     }
 }
 
-private data class UrlInfo(
+data class UrlInfo(
     val host: String,
     val path: String,
     val extension: String?,
     val filename: String?
 )
 
-private fun parseUrlInfo(url: String): UrlInfo {
+fun parseUrlInfo(url: String): UrlInfo {
     return try {
         val uri = URI(url)
         val host = uri.host ?: "Unknown"
@@ -742,7 +867,8 @@ private fun parseUrlInfo(url: String): UrlInfo {
     }
 }
 
-private fun getVideoType(video: DetectedVideo): String {
+fun getVideoType(video: DetectedVideo): String {
+    if (video.playlistPayload != null) return "Playlist"
     val url = video.url.lowercase()
     return when {
         url.contains(".m3u8") -> "HLS"
@@ -764,25 +890,27 @@ private fun getVideoType(video: DetectedVideo): String {
 }
 
 @Composable
-private fun getTypeColor(type: String): androidx.compose.ui.graphics.Color {
+fun getTypeColor(type: String): androidx.compose.ui.graphics.Color {
     return when (type) {
         "HLS" -> MaterialTheme.colorScheme.primary
         "DASH" -> MaterialTheme.colorScheme.secondary
+        "Playlist" -> MaterialTheme.colorScheme.secondary
         "YouTube" -> MaterialTheme.colorScheme.error
         "MP4", "MKV", "WebM", "WMV", "AVI", "FLV", "MOV", "3GP" -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.primary
     }
 }
 
-private fun getTypeIcon(type: String): androidx.compose.ui.graphics.vector.ImageVector {
+fun getTypeIcon(type: String): androidx.compose.ui.graphics.vector.ImageVector {
     return when (type) {
         "HLS", "DASH" -> Icons.Default.Settings
+        "Playlist" -> Icons.Default.List
         "YouTube" -> Icons.Default.PlayArrow
         else -> Icons.Default.PlayArrow
     }
 }
 
-private fun formatTimestamp(timestamp: Long): String {
+fun formatTimestamp(timestamp: Long): String {
     return try {
         val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         sdf.format(Date(timestamp))
@@ -791,13 +919,13 @@ private fun formatTimestamp(timestamp: Long): String {
     }
 }
 
-private fun copyToClipboard(context: Context, text: String) {
+fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val clip = ClipData.newPlainText("Video URL", text)
     clipboard.setPrimaryClip(clip)
 }
 
-private fun formatFileSize(bytes: Long): String {
+fun formatFileSize(bytes: Long): String {
     return when {
         bytes >= 1_073_741_824 -> String.format("%.2f GB", bytes / 1_073_741_824.0)
         bytes >= 1_048_576 -> String.format("%.1f MB", bytes / 1_048_576.0)
@@ -806,7 +934,7 @@ private fun formatFileSize(bytes: Long): String {
     }
 }
 
-private fun openInExternalPlayer(
+fun openInExternalPlayer(
     context: Context, 
     url: String, 
     mimeType: String?, 
