@@ -89,6 +89,7 @@ data class StremioStream(
     val url: String? = null,
     val name: String? = null,
     val title: String? = null,
+    val description: String? = null,
     val infoHash: String? = null,
     val fileIdx: Int? = null,
     @SerialName("externalUrl") val externalUrl: String? = null,

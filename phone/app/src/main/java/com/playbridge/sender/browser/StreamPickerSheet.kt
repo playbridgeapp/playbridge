@@ -51,9 +51,17 @@ fun StreamPickerSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedFilter by remember { mutableStateOf(QualityFilter.ALL) }
+    var selectedProvider by remember { mutableStateOf<String?>(null) }
 
-    val filteredStreams = remember(streams, selectedFilter) {
-        streams.filter { it.matchesFilter(selectedFilter) }
+    val providers = remember(streams) {
+        streams.map { it.addonName }.distinct().sorted()
+    }
+
+    val filteredStreams = remember(streams, selectedFilter, selectedProvider) {
+        streams.filter { stream ->
+            stream.matchesFilter(selectedFilter) &&
+            (selectedProvider == null || stream.addonName == selectedProvider)
+        }
     }
 
     ModalBottomSheet(
@@ -97,6 +105,30 @@ fun StreamPickerSheet(
                         },
                         enabled = count > 0 || isLoading
                     )
+                }
+            }
+
+            // Provider filter chips (rendered below quality chips)
+            if (providers.size > 1) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedProvider == null,
+                            onClick = { selectedProvider = null },
+                            label = { Text("All Providers") }
+                        )
+                    }
+                    items(providers) { provider ->
+                        FilterChip(
+                            selected = selectedProvider == provider,
+                            onClick = { selectedProvider = provider },
+                            label = { Text(provider) }
+                        )
+                    }
                 }
             }
 
@@ -240,9 +272,7 @@ private fun StreamItem(
                 Text(
                     text = stream.displayName,
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    fontWeight = FontWeight.SemiBold
                 )
 
                 // Quality info from title field (often contains codec, resolution, size)
@@ -250,9 +280,16 @@ private fun StreamItem(
                     Text(
                         text = stream.qualityInfo,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Additional description from addons like AIOStreams
+                if (!stream.description.isNullOrBlank()) {
+                    Text(
+                        text = stream.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 

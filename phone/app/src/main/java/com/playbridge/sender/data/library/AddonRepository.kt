@@ -19,7 +19,15 @@ class AddonRepository(private val addonDao: AddonDao) {
 
     companion object {
         private const val TAG = "AddonRepository"
+        private const val CACHE_TTL_MS = 60 * 60 * 1000L // 60 minutes
     }
+
+    private data class CacheEntry(
+        val timestamp: Long,
+        val streams: List<ResolvedStream>
+    )
+
+    private val streamCache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -82,6 +90,12 @@ class AddonRepository(private val addonDao: AddonDao) {
      */
     suspend fun removeAddon(addon: InstalledAddonEntity) {
         addonDao.delete(addon)
+        
+        // Evict orphaned cache entries to free memory and prevent stale results if reinstalled
+        val prefix = "${addon.baseUrl}:"
+        streamCache.keys.filter { it.startsWith(prefix) }.forEach {
+            streamCache.remove(it)
+        }
     }
 
     // ==================== Stream Resolution ====================
@@ -172,6 +186,17 @@ class AddonRepository(private val addonDao: AddonDao) {
      * Returns a complete list (used by season play).
      */
     private suspend fun resolveStreams(type: String, id: String): List<ResolvedStream> {
+        val cacheKey = "$type:$id"
+        val cached = streamCache[cacheKey]
+        if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
+            if (cached.streams.hasRateLimitError()) {
+                streamCache.remove(cacheKey)
+            } else {
+                Log.d(TAG, "Using cached streams for $cacheKey")
+                return cached.streams
+            }
+        }
+
         val addons = addonDao.getAllSync()
         if (addons.isEmpty()) {
             Log.d(TAG, "No addons installed")
@@ -185,7 +210,11 @@ class AddonRepository(private val addonDao: AddonDao) {
                 }
             }.awaitAll()
 
-            results.flatten().sortedByDescending { it.stream.isDirectUrl }
+            val finalStreams = results.flatten().sortedByDescending { it.stream.isDirectUrl }
+            if (!finalStreams.hasRateLimitError()) {
+                streamCache[cacheKey] = CacheEntry(System.currentTimeMillis(), finalStreams)
+            }
+            finalStreams
         }
     }
 
@@ -195,6 +224,18 @@ class AddonRepository(private val addonDao: AddonDao) {
      */
     fun resolveStreamsFlow(type: String, id: String): kotlinx.coroutines.flow.Flow<List<ResolvedStream>> =
         kotlinx.coroutines.flow.flow {
+            val cacheKey = "$type:$id"
+            val cached = streamCache[cacheKey]
+            if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
+                if (cached.streams.hasRateLimitError()) {
+                    streamCache.remove(cacheKey)
+                } else {
+                    Log.d(TAG, "Using cached streams for $cacheKey flow")
+                    emit(cached.streams)
+                    return@flow
+                }
+            }
+
             val addons = addonDao.getAllSync()
             if (addons.isEmpty()) {
                 Log.d(TAG, "No addons installed")
@@ -221,6 +262,14 @@ class AddonRepository(private val addonDao: AddonDao) {
             // Final emission (even if empty) to signal completion
             if (accumulated.isEmpty()) {
                 emit(emptyList())
+            } else {
+                val finalStreams = accumulated.sortedByDescending { it.stream.isDirectUrl }.toList()
+                if (!finalStreams.hasRateLimitError()) {
+                    streamCache[cacheKey] = CacheEntry(
+                        timestamp = System.currentTimeMillis(),
+                        streams = finalStreams
+                    )
+                }
             }
         }
 
@@ -243,6 +292,17 @@ class AddonRepository(private val addonDao: AddonDao) {
         type: String,
         id: String
     ): List<ResolvedStream> {
+        val cacheKey = "${addon.baseUrl}:$type:$id"
+        val cached = streamCache[cacheKey]
+        if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
+            if (cached.streams.hasRateLimitError()) {
+                streamCache.remove(cacheKey)
+            } else {
+                Log.d(TAG, "Using cached streams for $cacheKey")
+                return cached.streams
+            }
+        }
+
         return withContext(Dispatchers.IO) {
             try {
                 val url = "${addon.baseUrl}/stream/$type/$id.json"
@@ -259,7 +319,7 @@ class AddonRepository(private val addonDao: AddonDao) {
                 val body = response.body?.string() ?: return@withContext emptyList()
                 val streamResponse = json.decodeFromString<StremioStreamResponse>(body)
 
-                (streamResponse.streams ?: emptyList())
+                val resultStreams = (streamResponse.streams ?: emptyList())
                     .filter { it.isDirectUrl }  // Only include directly playable HTTP streams
                     .map { stream ->
                         ResolvedStream(
@@ -267,6 +327,12 @@ class AddonRepository(private val addonDao: AddonDao) {
                             stream = stream
                         )
                     }
+
+                if (!resultStreams.hasRateLimitError()) {
+                    streamCache[cacheKey] = CacheEntry(System.currentTimeMillis(), resultStreams)
+                }
+
+                resultStreams
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching streams from ${addon.name}", e)
                 emptyList()
@@ -307,6 +373,13 @@ class AddonRepository(private val addonDao: AddonDao) {
 
         Log.d(TAG, "Normalized addon URL: $url -> $result")
         return result
+    }
+
+    private fun List<ResolvedStream>.hasRateLimitError(): Boolean {
+        return any { resolved ->
+            val text = "${resolved.stream.displayName} ${resolved.stream.qualityInfo}".lowercase()
+            text.contains("rate-limit") || text.contains("rate limit")
+        }
     }
 }
 
