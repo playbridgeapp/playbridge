@@ -207,7 +207,12 @@ PlayBridge/
 ├── update_ublock.sh             # Script to update uBlock Origin assets in TV GeckoView
 ├── test_script.sh               # General testing utility script
 ├── extension/                   # Standalone Desktop Web Extension (Firefox native)
-│   └── src/                     # Extension source code (manifest.json, background.js, etc.)
+│   └── src/                     # Extension source code
+│       ├── manifest.json
+│       ├── background.js
+│       ├── content.js
+│       ├── hls-parser.js        # Parses HLS manifests
+│       └── ui/
 ├── protocol/                    # Shared module
 │   ├── build.gradle.kts
 │   └── src/main/java/com/playbridge/protocol/
