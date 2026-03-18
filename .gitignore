@@ -36,4 +36,6 @@ phone/app/release
 
 extension/dist
 
+protocol/bin
+
 .kotlin

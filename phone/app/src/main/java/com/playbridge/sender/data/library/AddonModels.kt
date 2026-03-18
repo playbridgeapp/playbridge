@@ -4,6 +4,13 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 // ==================== Room Entity for Installed Addons ====================
 
@@ -32,12 +39,42 @@ data class StremioManifest(
     val catalogs: List<StremioResource> = emptyList()
 )
 
-@Serializable
+@Serializable(with = StremioResourceSerializer::class)
 data class StremioResource(
     val name: String = "",
     val types: List<String> = emptyList(),
     val idPrefixes: List<String> = emptyList()
-)
+) {
+    @Serializable
+    data class Surrogate(
+        val name: String = "",
+        val types: List<String> = emptyList(),
+        val idPrefixes: List<String> = emptyList()
+    )
+}
+
+object StremioResourceSerializer : KSerializer<StremioResource> {
+    override val descriptor: SerialDescriptor = StremioResource.Surrogate.serializer().descriptor
+
+    override fun deserialize(decoder: Decoder): StremioResource {
+        val jsonDecoder = decoder as? JsonDecoder ?: error("Only JSON is supported")
+        val element = jsonDecoder.decodeJsonElement()
+        
+        return when (element) {
+            is JsonPrimitive -> StremioResource(name = element.content)
+            is JsonObject -> {
+                val surrogate = jsonDecoder.json.decodeFromJsonElement(StremioResource.Surrogate.serializer(), element)
+                StremioResource(surrogate.name, surrogate.types, surrogate.idPrefixes)
+            }
+            else -> throw IllegalArgumentException("Unsupported JSON element for StremioResource")
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: StremioResource) {
+        val surrogate = StremioResource.Surrogate(value.name, value.types, value.idPrefixes)
+        encoder.encodeSerializableValue(StremioResource.Surrogate.serializer(), surrogate)
+    }
+}
 
 // ==================== Stremio Stream Response ====================
 
