@@ -71,8 +71,7 @@ object HlsParser {
             val audioTracks = mutableListOf<AudioTrack>()
             val segmentPrefixes = mutableSetOf<String>()
 
-            // Split by lines and process
-            val lines = content.lines()
+            // Process by lineSequence
             var currentBandwidth: Long? = null
             var currentAverageBandwidth: Long? = null
             var currentResolution: String? = null
@@ -80,8 +79,9 @@ object HlsParser {
             var currentAudioGroup: String? = null
             var currentFrameRate: String? = null
 
-            for (i in lines.indices) {
-                val line = lines[i].trim()
+            val iterator = content.lineSequence().iterator()
+            while (iterator.hasNext()) {
+                val line = iterator.next().trim()
                 
                 if (line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
                     // Parse Audio Track
