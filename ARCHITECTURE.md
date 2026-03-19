@@ -237,6 +237,8 @@ PlayBridge/
 │   │       │   │   ├── DownloadsScreen.kt
 │   │       │   │   ├── HistoryScreen.kt
 │   │       │   │   ├── SettingsScreen.kt
+│   │       │   │   ├── StreamPickerSheet.kt    (bottom sheet for resolved Stremio streams)
+│   │       │   │   ├── SubtitlePreferences.kt  (Subtitle preferences UI/logic)
 │   │       │   │   ├── ExportedSettings.kt     (serializable data models for settings import/export)
 │   │       │   │   ├── HlsParser.kt
 │   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
@@ -250,7 +252,8 @@ PlayBridge/
 │   │       │   │   ├── history/
 │   │       │   │   └── library/
 │   │       │   │       ├── OmdbModels.kt
-│   │       │   │       └── OmdbRepository.kt
+│   │       │   │       ├── OmdbRepository.kt
+│   │       │   │       ├── StremioSubtitleService.kt (Stremio subtitle fetching integration)
 │   │       │   ├── model/
 │   │       │   └── ui/
 │   │       └── assets/extensions/video_detector/  # Embedded legacy phone extension
