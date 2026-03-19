@@ -35,6 +35,7 @@ com.playbridge.sender/
 │   ├── SessionObserverSetup.kt     (session observer + GeckoSession delegate proxies)
 │   ├── SettingsScreen.kt           (browser settings: inbuilt extension visibility)
 │   ├── StreamPickerSheet.kt        (bottom sheet for resolved Stremio streams)
+│   ├── SubtitlePreferences.kt      (Subtitle preferences UI/logic)
 │   ├── TabManager.kt               (tab/session lifecycle, find-in-page helpers)
 │   ├── TabsScreen.kt               (tab management overlay)
 │   └── VideoDetector.kt            (video content type detection via request interception)
@@ -68,6 +69,7 @@ com.playbridge.sender/
 │       ├── AddonRepository.kt       (Stremio addon config and stream resolution)
 │       ├── OmdbModels.kt            (OMDB API data models)
 │       ├── OmdbRepository.kt        (OMDB API client for movie ratings/metadata)
+│       ├── StremioSubtitleService.kt (Stremio subtitle fetching integration)
 │       ├── TmdbModels.kt            (TMDB API data models)
 │       └── TmdbRepository.kt        (TMDB API client for movies/TV shows)
 ├── model/                  # App-specific models
