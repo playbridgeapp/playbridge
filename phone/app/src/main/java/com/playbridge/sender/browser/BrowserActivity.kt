@@ -663,12 +663,18 @@ class BrowserActivity : ComponentActivity() {
                             NavigationDrawerItem(
                                 icon = {
                                     if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
-                                        Icon(Icons.Default.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Icon(Icons.Default.Tv, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Green)
                                     } else {
                                         Icon(Icons.Default.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 },
-                                label = { Text("TV Connection", style = MaterialTheme.typography.titleMedium) },
+                                label = {
+                                    if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
+                                        Text("TV Connection", style = MaterialTheme.typography.titleMedium, color = androidx.compose.ui.graphics.Color.Green)
+                                    } else {
+                                        Text("TV Connection", style = MaterialTheme.typography.titleMedium)
+                                    }
+                                },
                                 selected = currentScreen == Screen.Connection,
                                 onClick = {
                                     scope.launch { drawerState.close() }
