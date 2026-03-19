@@ -64,6 +64,13 @@ fun StreamPickerSheet(
         }
     }
 
+    val filterCounts = remember(streams) {
+        QualityFilter.entries.associateWith { filter ->
+            if (filter == QualityFilter.ALL) streams.size
+            else streams.count { it.matchesFilter(filter) }
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -89,11 +96,7 @@ fun StreamPickerSheet(
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
                 items(QualityFilter.entries) { filter ->
-                    val count = if (filter == QualityFilter.ALL) {
-                        streams.size
-                    } else {
-                        streams.count { it.matchesFilter(filter) }
-                    }
+                    val count = filterCounts[filter] ?: 0
                     FilterChip(
                         selected = selectedFilter == filter,
                         onClick = { selectedFilter = filter },
