@@ -36,6 +36,7 @@ class ServerService : Service() {
     
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocketServer: WebSocketServer? = null
+    private var bluetoothServer: BluetoothServer? = null
     private lateinit var pairingStore: PairingStore
     private lateinit var overlayWindow: OverlayWindowHelper
     
@@ -130,6 +131,12 @@ class ServerService : Service() {
             val port = pairingStore.serverPort.first()
             val ip = getLocalIpAddress(applicationContext) ?: "unknown"
             
+            bluetoothServer = BluetoothServer(applicationContext) { command ->
+                handleCommand(command)
+            }.also { server ->
+                server.start()
+            }
+
             webSocketServer = WebSocketServer(port = port, authToken = token).also { server ->
                 server.start()
                 
@@ -578,6 +585,8 @@ class ServerService : Service() {
         // Stop server synchronously
         webSocketServer?.stop()
         webSocketServer = null
+        bluetoothServer?.stop()
+        bluetoothServer = null
         // Remove overlay window if still visible
         overlayWindow.hide()
         // Cancel scope after stopping server

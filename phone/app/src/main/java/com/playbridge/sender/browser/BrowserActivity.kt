@@ -6,9 +6,14 @@ import android.view.View
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.scale
@@ -1375,31 +1380,107 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Remote -> {
-                                            BackHandler { currentScreen = Screen.Browser }
+                                            val btConnectionState by connectionViewModel.bluetoothClient.connectionState.collectAsState()
+                                            var pairedDevices by remember { mutableStateOf<List<android.bluetooth.BluetoothDevice>>(emptyList()) }
+
+                                            // Handle Bluetooth permissions request for Android 12+
+                                            val btPermissionLauncher = rememberLauncherForActivityResult(
+                                                ActivityResultContracts.RequestMultiplePermissions()
+                                            ) { permissions ->
+                                                val connectGranted = permissions[Manifest.permission.BLUETOOTH_CONNECT] ?: false
+                                                val scanGranted = permissions[Manifest.permission.BLUETOOTH_SCAN] ?: false
+
+                                                if (connectGranted && scanGranted) {
+                                                    pairedDevices = connectionViewModel.bluetoothClient.getBondedDevices()
+                                                    val savedMac = connectionViewModel.getSavedBluetoothMacForTv(tvDevice?.uuid)
+                                                    if (savedMac != null) {
+                                                        connectionViewModel.bluetoothClient.connect(savedMac)
+                                                    }
+                                                } else {
+                                                    Toast.makeText(this@BrowserActivity, "Bluetooth permissions denied. Falling back to Wi-Fi.", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+
+                                            LaunchedEffect(Unit) {
+                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                                    val needsConnect = ContextCompat.checkSelfPermission(this@BrowserActivity, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+                                                    val needsScan = ContextCompat.checkSelfPermission(this@BrowserActivity, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED
+
+                                                    if (needsConnect || needsScan) {
+                                                        btPermissionLauncher.launch(
+                                                            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+                                                        )
+                                                    } else {
+                                                        pairedDevices = connectionViewModel.bluetoothClient.getBondedDevices()
+                                                        val savedMac = connectionViewModel.getSavedBluetoothMacForTv(tvDevice?.uuid)
+                                                        if (savedMac != null) {
+                                                            connectionViewModel.bluetoothClient.connect(savedMac)
+                                                        }
+                                                    }
+                                                } else {
+                                                    pairedDevices = connectionViewModel.bluetoothClient.getBondedDevices()
+                                                    val savedMac = connectionViewModel.getSavedBluetoothMacForTv(tvDevice?.uuid)
+                                                    if (savedMac != null) {
+                                                        connectionViewModel.bluetoothClient.connect(savedMac)
+                                                    }
+                                                }
+                                            }
+
+                                            BackHandler {
+                                                connectionViewModel.bluetoothClient.disconnect()
+                                                currentScreen = Screen.Browser
+                                            }
                                             RemoteControlScreen(
                                                 isMediaPlaying = tvActiveContext == "player",
-                                                onBack = { currentScreen = Screen.Browser },
+                                                btConnectionState = btConnectionState,
+                                                pairedDevices = pairedDevices,
+                                                onBluetoothDeviceSelected = { macAddress ->
+                                                    connectionViewModel.saveBluetoothMacForTv(tvDevice?.uuid, macAddress)
+                                                    connectionViewModel.bluetoothClient.connect(macAddress)
+                                                },
+                                                onBack = {
+                                                    connectionViewModel.bluetoothClient.disconnect()
+                                                    currentScreen = Screen.Browser
+                                                },
                                                 onRemoteKey = { key ->
-                                                    val cmd = com.playbridge.protocol.createRemoteCommandJson(key)
-                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
+                                                        connectionViewModel.bluetoothClient.sendRemoteCommand(key)
+                                                    } else {
+                                                        val cmd = com.playbridge.protocol.createRemoteCommandJson(key)
+                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                    }
                                                 },
                                                 onMouseMove = { dx, dy ->
-                                                    val cmd = com.playbridge.protocol.createMouseCommandJson("move", dx, dy)
-                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
+                                                        connectionViewModel.bluetoothClient.sendMouseCommand("move", dx, dy)
+                                                    } else {
+                                                        val cmd = com.playbridge.protocol.createMouseCommandJson("move", dx, dy)
+                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                    }
                                                 },
                                                 onMouseClick = {
-                                                    val cmd = com.playbridge.protocol.createMouseCommandJson("click")
-                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
+                                                        connectionViewModel.bluetoothClient.sendMouseCommand("click", 0f, 0f)
+                                                    } else {
+                                                        val cmd = com.playbridge.protocol.createMouseCommandJson("click")
+                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                    }
                                                 },
                                                 onMouseScroll = { dx, dy ->
-                                                    val cmd = com.playbridge.protocol.createMouseCommandJson("scroll", dx, dy)
-                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
+                                                        connectionViewModel.bluetoothClient.sendMouseCommand("scroll", dx, dy)
+                                                    } else {
+                                                        val cmd = com.playbridge.protocol.createMouseCommandJson("scroll", dx, dy)
+                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                    }
                                                 },
                                                 onBrowserControl = { action ->
+                                                    // Browser controls still go over websocket as they affect the TV browser, not OS mouse
                                                     val cmd = com.playbridge.protocol.createBrowserControlCommandJson(action)
                                                     connectionViewModel.webSocketClient.send(cmd)
                                                 },
                                                 onPlayerControl = { command ->
+                                                    // Player controls still go over websocket
                                                     val cmd = com.playbridge.protocol.createControlCommandJson(command)
                                                     connectionViewModel.webSocketClient.send(cmd)
                                                     if (command == "stop") {

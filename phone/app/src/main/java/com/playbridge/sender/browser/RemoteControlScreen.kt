@@ -26,6 +26,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
+import com.playbridge.sender.connection.BluetoothClient
 
 /**
  * Full-screen remote control.
@@ -37,6 +39,9 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun RemoteControlScreen(
     isMediaPlaying: Boolean,
+    btConnectionState: BluetoothClient.ConnectionState = BluetoothClient.ConnectionState.Disconnected,
+    pairedDevices: List<android.bluetooth.BluetoothDevice> = emptyList(),
+    onBluetoothDeviceSelected: (String) -> Unit,
     onBack: () -> Unit,
     onRemoteKey: (String) -> Unit,
     onMouseMove: (dx: Float, dy: Float) -> Unit,
@@ -47,11 +52,70 @@ fun RemoteControlScreen(
 ) {
     // Default to touchpad when no media playing (browser mode), D-Pad when playing (player mode)
     var isTouchpad by remember { mutableStateOf(!isMediaPlaying) }
+    var showDeviceListDialog by remember { mutableStateOf(false) }
+
+    if (showDeviceListDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeviceListDialog = false },
+            title = { Text("Select TV Bluetooth Device") },
+            text = {
+                if (pairedDevices.isEmpty()) {
+                    Text("No paired devices found. Please pair your TV in Android settings first.")
+                } else {
+                    androidx.compose.foundation.lazy.LazyColumn {
+                        items(pairedDevices.size) { index ->
+                            val device = pairedDevices[index]
+                            @android.annotation.SuppressLint("MissingPermission")
+                            val deviceName = device.name ?: device.address
+
+                            androidx.compose.material3.ListItem(
+                                headlineContent = { Text(deviceName) },
+                                supportingContent = { Text(device.address) },
+                                modifier = Modifier.clickable {
+                                    onBluetoothDeviceSelected(device.address)
+                                    showDeviceListDialog = false
+                                }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDeviceListDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Remote Control") },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clickable { showDeviceListDialog = true }
+                            .padding(4.dp)
+                    ) {
+                        Text("Remote Control")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        when (btConnectionState) {
+                            is BluetoothClient.ConnectionState.Connected -> {
+                                Icon(Icons.Default.BluetoothConnected, contentDescription = "Bluetooth Connected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                            }
+                            is BluetoothClient.ConnectionState.Connecting -> {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                            }
+                            is BluetoothClient.ConnectionState.Error -> {
+                                Icon(Icons.Default.BluetoothDisabled, contentDescription = "Bluetooth Error", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                            }
+                            is BluetoothClient.ConnectionState.Disconnected -> {
+                                Icon(Icons.Default.Bluetooth, contentDescription = "Bluetooth Disconnected", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
