@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.playbridge.sender.connection.BluetoothClient
 
 /**
  * Full-screen remote control.
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun RemoteControlScreen(
     isMediaPlaying: Boolean,
+    btConnectionState: BluetoothClient.ConnectionState = BluetoothClient.ConnectionState.Disconnected,
     onBack: () -> Unit,
     onRemoteKey: (String) -> Unit,
     onMouseMove: (dx: Float, dy: Float) -> Unit,
@@ -51,7 +53,26 @@ fun RemoteControlScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Remote Control") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Remote Control")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        when (btConnectionState) {
+                            is BluetoothClient.ConnectionState.Connected -> {
+                                Icon(Icons.Default.BluetoothConnected, contentDescription = "Bluetooth Connected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                            }
+                            is BluetoothClient.ConnectionState.Connecting -> {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                            }
+                            is BluetoothClient.ConnectionState.Error -> {
+                                Icon(Icons.Default.BluetoothDisabled, contentDescription = "Bluetooth Error", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                            }
+                            is BluetoothClient.ConnectionState.Disconnected -> {
+                                // Show nothing or a disabled icon
+                            }
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")

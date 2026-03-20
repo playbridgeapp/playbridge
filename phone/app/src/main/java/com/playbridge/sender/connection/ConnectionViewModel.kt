@@ -17,6 +17,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val TAG = "ConnectionViewModel"
 
     val webSocketClient = WebSocketClient()
+    val bluetoothClient = BluetoothClient(application)
     private val connectionStore = ConnectionStore(application)
     private val nsdHelper = NsdHelper(application)
     private val prefs = application.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
@@ -169,6 +170,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     override fun onCleared() {
         super.onCleared()
         webSocketClient.destroy()
+        bluetoothClient.destroy()
         nsdHelper.stopDiscovery()
     }
 }
