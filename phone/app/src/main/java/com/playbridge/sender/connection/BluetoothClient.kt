@@ -72,19 +72,40 @@ class BluetoothClient(private val context: Context) {
             // Try to connect to each paired device with the specific UUID
             @SuppressLint("MissingPermission")
             for (device in pairedDevices) {
+                var tempSocket: BluetoothSocket? = null
                 try {
-                    val tempSocket = device.createRfcommSocketToServiceRecord(uuid)
+                    tempSocket = device.createRfcommSocketToServiceRecord(uuid)
 
                     // Cancel discovery as it slows down the connection
                     bluetoothAdapter.cancelDiscovery()
 
                     tempSocket.connect()
                     connectedSocket = tempSocket
-                    Log.i(TAG, "Connected to Bluetooth device: ${device.name}")
+                    Log.i(TAG, "Connected securely to Bluetooth device: ${device.name}")
                     break
                 } catch (e: IOException) {
-                    // Could not connect to this device, move to next
-                    Log.d(TAG, "Failed to connect to ${device.name}", e)
+                    Log.d(TAG, "Failed secure connection to ${device.name}, trying insecure fallback...", e)
+                    try {
+                        tempSocket?.close()
+                    } catch (closeException: IOException) {
+                        Log.e(TAG, "Could not close the client socket", closeException)
+                    }
+
+                    // Fallback to insecure socket
+                    try {
+                        tempSocket = device.createInsecureRfcommSocketToServiceRecord(uuid)
+                        tempSocket.connect()
+                        connectedSocket = tempSocket
+                        Log.i(TAG, "Connected insecurely to Bluetooth device: ${device.name}")
+                        break
+                    } catch (fallbackException: IOException) {
+                        Log.d(TAG, "Failed insecure connection to ${device.name} as well", fallbackException)
+                        try {
+                            tempSocket?.close()
+                        } catch (closeException: IOException) {
+                            Log.e(TAG, "Could not close the client socket", closeException)
+                        }
+                    }
                 }
             }
 
