@@ -44,8 +44,9 @@ class BluetoothClient(private val context: Context) {
 
         scope.launch {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    _connectionState.value = ConnectionState.Error("Missing BLUETOOTH_CONNECT permission")
+                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                    androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_SCAN) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    _connectionState.value = ConnectionState.Error("Missing BLUETOOTH_CONNECT or BLUETOOTH_SCAN permission")
                     return@launch
                 }
             }

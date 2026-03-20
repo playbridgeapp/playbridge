@@ -1376,21 +1376,29 @@ class BrowserActivity : ComponentActivity() {
                                         Screen.Remote -> {
                                             val btConnectionState by connectionViewModel.bluetoothClient.connectionState.collectAsState()
 
-                                            // Handle Bluetooth Connect permission request for Android 12+
+                                            // Handle Bluetooth permissions request for Android 12+
                                             val btPermissionLauncher = rememberLauncherForActivityResult(
-                                                ActivityResultContracts.RequestPermission()
-                                            ) { isGranted ->
-                                                if (isGranted) {
+                                                ActivityResultContracts.RequestMultiplePermissions()
+                                            ) { permissions ->
+                                                val connectGranted = permissions[Manifest.permission.BLUETOOTH_CONNECT] ?: false
+                                                val scanGranted = permissions[Manifest.permission.BLUETOOTH_SCAN] ?: false
+
+                                                if (connectGranted && scanGranted) {
                                                     connectionViewModel.bluetoothClient.connect()
                                                 } else {
-                                                    Toast.makeText(this@BrowserActivity, "Bluetooth permission denied. Falling back to Wi-Fi.", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(this@BrowserActivity, "Bluetooth permissions denied. Falling back to Wi-Fi.", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
 
                                             LaunchedEffect(Unit) {
                                                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                                    if (ContextCompat.checkSelfPermission(this@BrowserActivity, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                                                        btPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                                                    val needsConnect = ContextCompat.checkSelfPermission(this@BrowserActivity, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+                                                    val needsScan = ContextCompat.checkSelfPermission(this@BrowserActivity, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED
+
+                                                    if (needsConnect || needsScan) {
+                                                        btPermissionLauncher.launch(
+                                                            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+                                                        )
                                                     } else {
                                                         connectionViewModel.bluetoothClient.connect()
                                                     }
