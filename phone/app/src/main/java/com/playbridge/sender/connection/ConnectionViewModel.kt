@@ -32,6 +32,16 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         devices.map { TvDevice(ip = it.ip, port = it.port, name = it.name, token = "", uuid = it.uuid) }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    fun getSavedBluetoothMacForTv(tvUuid: String?): String? {
+        if (tvUuid.isNullOrEmpty()) return null
+        return prefs.getString("tv_bt_mac_$tvUuid", null)
+    }
+
+    fun saveBluetoothMacForTv(tvUuid: String?, macAddress: String) {
+        if (tvUuid.isNullOrEmpty()) return
+        prefs.edit().putString("tv_bt_mac_$tvUuid", macAddress).apply()
+    }
+
     val deviceHistory: Flow<List<TvDevice>> = connectionStore.deviceHistory
 
     private val _autoConnectEnabled = MutableStateFlow(prefs.getBoolean("auto_connect_tv", true))

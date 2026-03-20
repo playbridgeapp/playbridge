@@ -35,7 +35,19 @@ class BluetoothClient(private val context: Context) {
     private var outputStream: OutputStream? = null
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
-    fun connect() {
+    @SuppressLint("MissingPermission")
+    fun getBondedDevices(): List<android.bluetooth.BluetoothDevice> {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                return emptyList()
+            }
+        }
+        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val bluetoothAdapter = bluetoothManager.adapter
+        return bluetoothAdapter?.bondedDevices?.toList() ?: emptyList()
+    }
+
+    fun connect(targetMacAddress: String) {
         if (_connectionState.value is ConnectionState.Connected || _connectionState.value is ConnectionState.Connecting) {
             return
         }
@@ -60,51 +72,47 @@ class BluetoothClient(private val context: Context) {
             }
 
             @SuppressLint("MissingPermission")
-            val pairedDevices = bluetoothAdapter.bondedDevices
-            if (pairedDevices.isNullOrEmpty()) {
-                _connectionState.value = ConnectionState.Error("No paired devices found")
+            val targetDevice = try {
+                bluetoothAdapter.getRemoteDevice(targetMacAddress)
+            } catch (e: IllegalArgumentException) {
+                _connectionState.value = ConnectionState.Error("Invalid MAC address")
                 return@launch
             }
 
             val uuid = UUID.fromString(BluetoothConstants.SERVICE_UUID_STRING)
             var connectedSocket: BluetoothSocket? = null
 
-            // Try to connect to each paired device with the specific UUID
             @SuppressLint("MissingPermission")
-            for (device in pairedDevices) {
-                var tempSocket: BluetoothSocket? = null
+            var tempSocket: BluetoothSocket? = null
+            try {
+                tempSocket = targetDevice.createRfcommSocketToServiceRecord(uuid)
+
+                // Cancel discovery as it slows down the connection
+                bluetoothAdapter.cancelDiscovery()
+
+                tempSocket.connect()
+                connectedSocket = tempSocket
+                Log.i(TAG, "Connected securely to Bluetooth device: ${targetDevice.name}")
+            } catch (e: IOException) {
+                Log.d(TAG, "Failed secure connection to ${targetDevice.name}, trying insecure fallback...", e)
                 try {
-                    tempSocket = device.createRfcommSocketToServiceRecord(uuid)
+                    tempSocket?.close()
+                } catch (closeException: IOException) {
+                    Log.e(TAG, "Could not close the client socket", closeException)
+                }
 
-                    // Cancel discovery as it slows down the connection
-                    bluetoothAdapter.cancelDiscovery()
-
+                // Fallback to insecure socket
+                try {
+                    tempSocket = targetDevice.createInsecureRfcommSocketToServiceRecord(uuid)
                     tempSocket.connect()
                     connectedSocket = tempSocket
-                    Log.i(TAG, "Connected securely to Bluetooth device: ${device.name}")
-                    break
-                } catch (e: IOException) {
-                    Log.d(TAG, "Failed secure connection to ${device.name}, trying insecure fallback...", e)
+                    Log.i(TAG, "Connected insecurely to Bluetooth device: ${targetDevice.name}")
+                } catch (fallbackException: IOException) {
+                    Log.d(TAG, "Failed insecure connection to ${targetDevice.name} as well", fallbackException)
                     try {
                         tempSocket?.close()
                     } catch (closeException: IOException) {
                         Log.e(TAG, "Could not close the client socket", closeException)
-                    }
-
-                    // Fallback to insecure socket
-                    try {
-                        tempSocket = device.createInsecureRfcommSocketToServiceRecord(uuid)
-                        tempSocket.connect()
-                        connectedSocket = tempSocket
-                        Log.i(TAG, "Connected insecurely to Bluetooth device: ${device.name}")
-                        break
-                    } catch (fallbackException: IOException) {
-                        Log.d(TAG, "Failed insecure connection to ${device.name} as well", fallbackException)
-                        try {
-                            tempSocket?.close()
-                        } catch (closeException: IOException) {
-                            Log.e(TAG, "Could not close the client socket", closeException)
-                        }
                     }
                 }
             }
@@ -120,7 +128,7 @@ class BluetoothClient(private val context: Context) {
                     _connectionState.value = ConnectionState.Error("Failed to open data stream")
                 }
             } else {
-                _connectionState.value = ConnectionState.Error("Could not connect to PlayBridge TV service on any paired device")
+                _connectionState.value = ConnectionState.Error("Could not connect to PlayBridge TV service on this device")
             }
         }
     }
