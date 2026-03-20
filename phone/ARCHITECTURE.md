@@ -3,85 +3,85 @@
 ## Package Structure
 ```
 com.playbridge.sender/
-├── browser/                # GeckoView browser, video detection, extensions, downloads
-│    ├── AddonInstallDialog.kt       (extension install confirmation dialog)
-│   ├── AddonSettingsScreen.kt      (Stremio addon management UI)
-│   ├── BookmarksScreen.kt          (bookmarks list UI with add/remove)
-│   ├── BrowserActivity.kt          (main browser activity, ~1721 lines)
-│   ├── BrowserToolbar.kt           (custom Compose toolbar with URL bar, navigation, SSL lock, menu)
-│   ├── CommandHistoryScreen.kt     (sent commands history list UI)
-│   ├── Components.kt               (singleton DI container for GeckoRuntime, BrowserStore)
-│   ├── DebridLibraryScreen.kt      (Debrid torrent/magnet management and resolution UI)
-│   ├── DetectedVideosSheet.kt      (bottom sheet for detected videos + quality selection)
-│   ├── DownloadConfirmDialog.kt    (download confirmation dialog + PendingDownload model)
-│   ├── DownloadManagerSingleton.kt  (Media3 ExoPlayer download manager for HLS)
-│   ├── DownloadsScreen.kt          (downloads list UI with progress tracking)
-│   ├── DownloadUtils.kt            (download helpers: enqueue, file size, error strings)
-│   ├── ErrorPageUtils.kt           (utility for rendering error pages)
-│   ├── ExportedSettings.kt         (serializable data models for settings import/export)
-│   ├── ExtensionsScreen.kt         (browser addon management screen)
-│   ├── FindOnPageBar.kt            (UI for in-page text search)
-│   ├── HistoryScreen.kt            (browsing history list UI)
-│   ├── HlsParser.kt               (HLS manifest parsing for quality selection with audio tracks)
-│   ├── HomeScreen.kt               (browser home page with bookmarks)
-│   ├── LibraryDetailScreen.kt      (movie/TV details with stream resolution)
-│   ├── LibraryEnums.kt             (Enums used in Library UI like Type, Tab)
-│   ├── LibraryScreen.kt            (TMDB popular/trending/search UI)
-│   ├── LibraryViewModel.kt         (ViewModel managing TMDB API calls and state)
-│   ├── LinkContextMenu.kt          (long-press link context menu dialog)
-│   ├── MagnetParsingSheet.kt       (bottom sheet UI for Debrid magnet and .torrent parsing)
-│   ├── MediaDownloadService.kt     (foreground service for HLS/media downloads)
-│   ├── RemoteControlScreen.kt      (TV remote control UI: D-pad, touchpad, player controls)
-│   ├── SessionObserverSetup.kt     (session observer + GeckoSession delegate proxies)
-│   ├── SettingsScreen.kt           (browser settings: inbuilt extension visibility)
-│   ├── StreamPickerSheet.kt        (bottom sheet for resolved Stremio streams)
-│   ├── SubtitlePreferences.kt      (Subtitle preferences UI/logic)
-│   ├── TabManager.kt               (tab/session lifecycle, find-in-page helpers)
-│   ├── TabsScreen.kt               (tab management overlay)
-│   └── VideoDetector.kt            (video content type detection via request interception)
-├── connection/             # WebSocket client + service discovery
-│   ├── ConnectionStore.kt          (DataStore persistence for connection history)
-│   ├── ConnectionViewModel.kt      (ViewModel managing WebSocket + NSD state)
-│   ├── NsdHelper.kt                (Network Service Discovery to find TV services)
-│   └── WebSocketClient.kt          (OkHttp-based client with auto-retry)
-├── data/                   # Local data persistence
+├── browser/
+│   ├── AddonInstallDialog.kt
+│   ├── AddonSettingsScreen.kt
+│   ├── BookmarksScreen.kt
+│   ├── BrowserActivity.kt
+│   ├── BrowserToolbar.kt
+│   ├── CommandHistoryScreen.kt
+│   ├── Components.kt
+│   ├── DebridLibraryScreen.kt
+│   ├── DetectedVideosSheet.kt
+│   ├── DownloadConfirmDialog.kt
+│   ├── DownloadManagerSingleton.kt
+│   ├── DownloadUtils.kt
+│   ├── DownloadsScreen.kt
+│   ├── ErrorPageUtils.kt
+│   ├── ExportedSettings.kt
+│   ├── ExtensionsScreen.kt
+│   ├── FindOnPageBar.kt
+│   ├── HistoryScreen.kt
+│   ├── HlsParser.kt
+│   ├── HomeScreen.kt
+│   ├── LibraryDetailScreen.kt
+│   ├── LibraryEnums.kt
+│   ├── LibraryScreen.kt
+│   ├── LibraryViewModel.kt
+│   ├── LinkContextMenu.kt
+│   ├── MagnetParsingSheet.kt
+│   ├── MediaDownloadService.kt
+│   ├── RemoteControlScreen.kt
+│   ├── SessionObserverSetup.kt
+│   ├── SettingsScreen.kt
+│   ├── StreamPickerSheet.kt
+│   ├── SubtitlePreferences.kt
+│   ├── TabManager.kt
+│   ├── TabsScreen.kt
+│   └── VideoDetector.kt
+├── connection/
+│   ├── ConnectionStore.kt
+│   ├── ConnectionViewModel.kt
+│   ├── NsdHelper.kt
+│   └── WebSocketClient.kt
+├── data/
 │   ├── debrid/
-│   │   ├── AllDebridClient.kt       (All-Debrid API client implementation)
-│   │   ├── DebridModels.kt          (Data models for torrents, files, links)
-│   │   ├── DebridProvider.kt        (Abstract interface for Debrid services)
-│   │   ├── DebridRepository.kt      (Factory and active provider configuration)
-│   │   ├── PremiumizeClient.kt      (Premiumize API client implementation)
-│   │   └── RealDebridClient.kt      (Real-Debrid API client implementation)
+│   │   ├── AllDebridClient.kt
+│   │   ├── DebridModels.kt
+│   │   ├── DebridProvider.kt
+│   │   ├── DebridRepository.kt
+│   │   ├── PremiumizeClient.kt
+│   │   └── RealDebridClient.kt
 │   ├── history/
-│   │   ├── BookmarkDao.kt           (Room DAO for bookmarks CRUD)
-│   │   ├── BookmarkEntity.kt        (Bookmark entry data class: url, title, timestamp)
-│   │   ├── CommandHistoryDao.kt     (Room DAO for sent TV commands CRUD)
-│   │   ├── CommandHistoryEntity.kt  (Sent command entry data class: command details, timestamp)
-│   │   ├── DatabaseProvider.kt      (Room database singleton provider)
-│   │   ├── HistoryDao.kt            (Room DAO for browsing history CRUD)
-│   │   ├── HistoryDatabase.kt       (Room database with history, bookmarks, tabs, addons, commands)
-│   │   ├── HistoryEntity.kt         (History entry data class: url, title, timestamp)
-│   │   ├── TabDao.kt                (Room DAO for tab persistence)
-│   │   └── TabEntity.kt             (Tab state data class: id, url, title, parentId, isSelected)
+│   │   ├── BookmarkDao.kt
+│   │   ├── BookmarkEntity.kt
+│   │   ├── CommandHistoryDao.kt
+│   │   ├── CommandHistoryEntity.kt
+│   │   ├── DatabaseProvider.kt
+│   │   ├── HistoryDao.kt
+│   │   ├── HistoryDatabase.kt
+│   │   ├── HistoryEntity.kt
+│   │   ├── TabDao.kt
+│   │   └── TabEntity.kt
 │   └── library/
-│       ├── AddonDao.kt              (Room DAO for installed Stremio addons)
-│       ├── AddonModels.kt           (Stremio manifest and stream models)
-│       ├── AddonRepository.kt       (Stremio addon config and stream resolution)
-│       ├── OmdbModels.kt            (OMDB API data models)
-│       ├── OmdbRepository.kt        (OMDB API client for movie ratings/metadata)
-│       ├── StremioSubtitleService.kt (Stremio subtitle fetching integration)
-│       ├── TmdbModels.kt            (TMDB API data models)
-│       └── TmdbRepository.kt        (TMDB API client for movies/TV shows)
-├── model/                  # App-specific models
-│   ├── Message.kt                   (QRCodeData + parseQRCode — phone-only)
-│   └── TvDevice.kt                  (TV device connection info)
-└── ui/                     # Compose UI screens
-    ├── ConnectionScreen.kt          (NSD discovery + QR scan + manual IP + PIN auth)
-    ├── HomeScreen.kt                (main home with device connection)
-    └── theme/
-        ├── Color.kt
-        ├── Theme.kt
-        └── Type.kt
+│       ├── AddonDao.kt
+│       ├── AddonModels.kt
+│       ├── AddonRepository.kt
+│       ├── OmdbModels.kt
+│       ├── OmdbRepository.kt
+│       ├── StremioSubtitleService.kt
+│       ├── TmdbModels.kt
+│       └── TmdbRepository.kt
+├── model/
+│   ├── Message.kt
+│   └── TvDevice.kt
+└── ui/
+    ├── theme/
+    │   ├── Color.kt
+    │   ├── Theme.kt
+    │   └── Type.kt
+    ├── ConnectionScreen.kt
+    └── HomeScreen.kt
 ```
 
 ## Key Components
