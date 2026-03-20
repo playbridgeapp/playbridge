@@ -42,6 +42,7 @@ fun LibraryScreen(
     
     val scope = rememberCoroutineScope()
     var selectedTabIndex by remember { mutableStateOf(0) }
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
     val tabs = listOf("History", "Favorites")
 
     Box(
@@ -75,11 +76,7 @@ fun LibraryScreen(
                         Text("Pair New Device")
                     }
 
-                    Button(onClick = {
-                        scope.launch {
-                            historyStore.clearHistory()
-                        }
-                    }) {
+                    Button(onClick = { showClearConfirmDialog = true }) {
                         Text("Clear History")
                     }
                     
@@ -142,6 +139,47 @@ fun LibraryScreen(
                                 }
                             }
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showClearConfirmDialog) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showClearConfirmDialog = false }) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier
+                        .background(Color(0xFF1E1E38), androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                        .padding(32.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("Clear History", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "Are you sure you want to clear your entire playback history? This action cannot be undone.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.LightGray
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(onClick = { showClearConfirmDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
+                            Text("Cancel")
+                        }
+                        Button(onClick = {
+                            showClearConfirmDialog = false
+                            scope.launch {
+                                historyStore.clearHistory()
+                            }
+                        }) {
+                            Text("Clear", color = MaterialTheme.colorScheme.error)
+                        }
                     }
                 }
             }
