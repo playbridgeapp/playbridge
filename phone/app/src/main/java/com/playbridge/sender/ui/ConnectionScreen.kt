@@ -447,7 +447,7 @@ fun ManualConnectionDialog(
     onConnect: (String, Int) -> Unit
 ) {
     var ip by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf("8765") }
+    var port by remember { mutableStateOf(com.playbridge.protocol.Config.DEFAULT_PORT.toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,

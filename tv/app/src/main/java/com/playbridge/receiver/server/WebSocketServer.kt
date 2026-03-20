@@ -29,7 +29,7 @@ private const val TAG = "WebSocketServer"
  * WebSocket server for receiving commands from the phone app
  */
 class WebSocketServer(
-    private val port: Int = 8765,
+    private val port: Int = com.playbridge.protocol.Config.DEFAULT_PORT,
     private val authToken: String
 ) {
     private var server: EmbeddedServer<*, *>? = null
