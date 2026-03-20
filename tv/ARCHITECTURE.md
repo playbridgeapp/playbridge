@@ -3,56 +3,56 @@
 ## Package Structure
 ```
 com.playbridge.receiver/
-├── BootReceiver.kt                (broadcast receiver for starting the app on boot)
-├── MainActivity.kt                # Compose navigation + screen state management + AdBlocker preload (~295 lines)
-├── PlayBridgeApplication.kt       (application class for coil image loader initialization)
-├── browser/                       # Dual-engine TV browser
-│   ├── AdBlocker.kt               (Singleton ad blocker: EasyList, EasyPrivacy, cosmetic filtering, popup blocking, ~662 lines)
-│   ├── BrowserActivity.kt         (TV browser activity with remote input, video maximize/restore, ~728 lines)
-│   ├── BrowserEngine.kt           (Browser engine interface: loadUrl, reload, goBack, evaluateJavascript, etc.)
-│   ├── GeckoViewEngine.kt         (GeckoView engine with bundled uBlock Origin)
-│   └── SystemWebViewEngine.kt     (Android WebView engine with JS popup/redirect blocking, cosmetic CSS injection)
-├── data/                          # Persistence
-│   └── HistoryStore.kt            (DataStore-based playback history)
-├── logging/                       # File-backed logging system
-│   └── FileLogger.kt              (appends logs to a rotating file in internal storage)
-├── model/                         # App-specific models
-│   └── PairedDevice.kt            (paired device info)
-├── pairing/                       # QR code display, token management
-│   ├── PairingStore.kt            (DataStore persistence for auth tokens)
-│   └── QRGenerator.kt             (ZXing QR code bitmap generation)
-├── player/                        # Video playback
-│   ├── ColorMatrixEffect.kt       (Media3 GlEffect applying custom ColorMatrix for filters)
-│   ├── ContentSniffer.kt          (SSL-bypass OkHttpClient + content type sniffing)
-│   ├── ExoPlayerActivity.kt       (ExoPlayer implementation with HLS/DASH/RTSP, ~1385 lines)
-│   ├── InputHandler.kt            (D-pad, phone remote, control command handling)
-│   ├── M3uParser.kt               (custom IPTV M3U playlist parser bypassing default HLS parser)
-│   ├── PlayerActivity.kt          (~33 lines, abstract base class for players, playlist queue, filter persistence)
-│   ├── PlayerControlsManager.kt   (custom controls overlay, seekbar, prev/next buttons, dynamic scrubbing)
-│   ├── PlaylistPickerDialog.kt    (Compose compact side-panel playlist picker overlay)
-│   ├── PlaylistStore.kt           (In-memory singleton for playlist queue)
-│   ├── ProgressManager.kt         (progress save/restore, thumbnail capture)
-│   ├── SubtitleManager.kt         (SRT/VTT subtitle parser + sync engine)
-│   ├── TrackSelectionDialog.kt    (Compose compact side-panel for audio/video/subtitle track selection)
-│   ├── VideoFilter.kt             (filter presets enum with ColorMatrix builders)
-│   ├── VideoFilterDialog.kt       (Compose compact bottom-panel filter picker with custom sliders)
-│   ├── VideoFilterManager.kt      (applies ColorMatrix filters to PlayerView hardware layer)
-│   ├── VlcControlsManager.kt      (custom controls overlay for VLC player)
-│   ├── VlcPlayerActivity.kt       (LibVLC implementation for unsupported ExoPlayer formats, ~753 lines)
-│   └── VlcTrackSelectionDialog.kt (Compose compact side-panel for VLC audio/video/subtitle track selection)
-├── server/                        # WebSocket server
-│   ├── OverlayWindowHelper.kt     (helper for drawing invisible overlay to keep WebView active in background)
-│   ├── ServerService.kt           (foreground service + command routing, external player intents, ~586 lines)
-│   └── WebSocketServer.kt         (Ktor-based WebSocket server)
-└── ui/                            # Compose TV UI screens
-    ├── HomeScreen.kt
-    ├── LibraryScreen.kt
-    ├── PairingScreen.kt
-    ├── SettingsScreen.kt
-    └── theme/
-        ├── Color.kt
-        ├── Theme.kt
-        └── Type.kt
+├── browser/
+│   ├── AdBlocker.kt
+│   ├── BrowserActivity.kt
+│   ├── BrowserEngine.kt
+│   ├── GeckoViewEngine.kt
+│   └── SystemWebViewEngine.kt
+├── data/
+│   └── HistoryStore.kt
+├── logging/
+│   └── FileLogger.kt
+├── model/
+│   └── PairedDevice.kt
+├── pairing/
+│   ├── PairingStore.kt
+│   └── QRGenerator.kt
+├── player/
+│   ├── ColorMatrixEffect.kt
+│   ├── ContentSniffer.kt
+│   ├── ExoPlayerActivity.kt
+│   ├── InputHandler.kt
+│   ├── M3uParser.kt
+│   ├── PlayerActivity.kt
+│   ├── PlayerControlsManager.kt
+│   ├── PlaylistPickerDialog.kt
+│   ├── PlaylistStore.kt
+│   ├── ProgressManager.kt
+│   ├── SubtitleManager.kt
+│   ├── TrackSelectionDialog.kt
+│   ├── VideoFilter.kt
+│   ├── VideoFilterDialog.kt
+│   ├── VideoFilterManager.kt
+│   ├── VlcControlsManager.kt
+│   ├── VlcPlayerActivity.kt
+│   └── VlcTrackSelectionDialog.kt
+├── server/
+│   ├── OverlayWindowHelper.kt
+│   ├── ServerService.kt
+│   └── WebSocketServer.kt
+├── ui/
+│   ├── theme/
+│   │   ├── Color.kt
+│   │   ├── Theme.kt
+│   │   └── Type.kt
+│   ├── HomeScreen.kt
+│   ├── LibraryScreen.kt
+│   ├── PairingScreen.kt
+│   └── SettingsScreen.kt
+├── BootReceiver.kt
+├── MainActivity.kt
+└── PlayBridgeApplication.kt
 ```
 
 ## Key Components
@@ -86,7 +86,7 @@ com.playbridge.receiver/
 | Ad Blocker | AdBlocker.kt (~662 lines) | Singleton ad blocker preloaded at app startup; EasyList + EasyPrivacy + Adblock Warning Removal List, cosmetic filtering, popup/document blocking |
 | TV Browser | BrowserActivity.kt (~728 lines) | TV browser with dual-engine switching, remote input, fullscreen handling, JS-based video maximize/restore, cursor control |
 | QR Generator | QRGenerator.kt | ZXing-based QR code generation for pairing (includes IP, port, token, name) |
-| Settings | SettingsScreen.kt | TV app settings UI (including external player selection) |
+| Settings | SettingsScreen.kt | TV app settings UI (including external player selection and dynamically reading packageManager info for version) |
 | File Logger | FileLogger.kt | Mirrored Android Log that persists entries to a rolling file in internal storage |
 | Color Matrix | ColorMatrixEffect.kt | Media3 GlEffect applying custom ColorMatrix for filters via GLSL |
 
