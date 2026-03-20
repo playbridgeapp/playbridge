@@ -225,7 +225,7 @@ fun MainContent(
         Screen.Pairing -> {
             PairingScreen(
                 ip = serverIp ?: "unknown",
-                port = serverPort ?: 8765,
+                port = serverPort ?: com.playbridge.protocol.Config.DEFAULT_PORT,
                 token = authToken,
                 deviceName = deviceName,
                 deviceId = deviceId,

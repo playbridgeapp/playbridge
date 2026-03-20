@@ -25,7 +25,7 @@ class PairingStore(private val context: Context) {
         private val PAIRED_DEVICES = stringPreferencesKey("paired_devices")
         private val DEVICE_ID = stringPreferencesKey("device_id")
         
-        const val DEFAULT_PORT = 8765
+        const val DEFAULT_PORT = com.playbridge.protocol.Config.DEFAULT_PORT
     }
     
     /**
