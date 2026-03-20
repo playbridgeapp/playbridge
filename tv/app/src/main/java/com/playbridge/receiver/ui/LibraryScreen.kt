@@ -108,10 +108,12 @@ fun LibraryScreen(
                 }
             }
 
-            val displayedHistory = if (selectedTabIndex == 1) {
-                history.filter { it.isFavorite }
-            } else {
-                history.filter { !it.isFavorite }
+            val displayedHistory = remember(history, selectedTabIndex) {
+                if (selectedTabIndex == 1) {
+                    history.filter { it.isFavorite }
+                } else {
+                    history.filter { !it.isFavorite }
+                }
             }
 
             if (displayedHistory.isEmpty()) {
