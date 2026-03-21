@@ -733,7 +733,9 @@ fun SettingsScreen(
             val playerOptions = listOf(
                 "tv" to "TV Default",
                 "internal" to "Internal (ExoPlayer)",
-                "external" to "External Player"
+                "internal_vlc" to "Internal (LibVLC)",
+                "external" to "External Player",
+                "external_mpv" to "External (MPV)"
             )
 
             Box(modifier = Modifier.fillMaxWidth()) {

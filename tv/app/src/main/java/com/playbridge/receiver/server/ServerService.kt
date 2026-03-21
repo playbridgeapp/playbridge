@@ -242,8 +242,7 @@ class ServerService : Service() {
 
                         val subs = command.subtitles
                         if (!subs.isNullOrEmpty()) {
-                            val subFilesStr = subs.joinToString(":")
-                            putExtra("sub-files", subFilesStr)
+                            putExtra("sub-files", subs.joinToString("\n"))
                         }
 
                         val hdrs = command.headers
@@ -387,15 +386,23 @@ class ServerService : Service() {
             }
             is Command.Playlist -> {
                 FileLogger.i(TAG, "=== PLAYLIST COMMAND === (${command.items.size} items, startIndex: ${command.startIndex})")
-                activeContext = "player"
-                broadcastContext()
 
                 // Serialize playlist items as JSON for the intent
                 com.playbridge.receiver.player.PlaylistStore.currentPlaylist = command.items
 
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
-                val activityClass = if (tvPref == "internal_vlc") {
+                val playlistMode = if (tvPref == "phone") {
+                    val phoneMode = command.items.firstOrNull()?.playerMode
+                    if (phoneMode != null && phoneMode != "tv") phoneMode else "internal"
+                } else {
+                    tvPref
+                }
+
+                activeContext = if (playlistMode == "external_mpv") "external_player" else "player"
+                broadcastContext()
+
+                val activityClass = if (playlistMode == "internal_vlc") {
                     com.playbridge.receiver.player.VlcPlayerActivity::class.java
                 } else {
                     com.playbridge.receiver.player.ExoPlayerActivity::class.java

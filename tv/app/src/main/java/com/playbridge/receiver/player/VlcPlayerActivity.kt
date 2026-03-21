@@ -63,11 +63,22 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     // Seek buffering
     private var pendingSeekTime: Long? = null
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val seekResyncRunnable = Runnable {
+        // Force VLC to resync video/audio after a large seek — without this, video can
+        // freeze while audio keeps playing because VLC drops "late" video frames post-seek.
+        val player = mediaPlayer ?: return@Runnable
+        if (player.isPlaying) {
+            player.pause()
+            player.play()
+        }
+    }
     private val performSeekRunnable = Runnable {
         pendingSeekTime?.let { targetTime ->
             mediaPlayer?.time = targetTime
             pendingSeekTime = null
             controlsManager.setPendingSeekTime(null)
+            seekHandler.removeCallbacks(seekResyncRunnable)
+            seekHandler.postDelayed(seekResyncRunnable, 500)
         }
     }
 
@@ -154,8 +165,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Setup VLC
         val args = ArrayList<String>().apply {
             add("-vvv") // Verbosity
-            add("--drop-late-frames")
-            add("--skip-frames")
         }
         libVLC = LibVLC(this, args)
         mediaPlayer = MediaPlayer(libVLC)
@@ -676,6 +685,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         syncSelectionsToProgressManager()
         progressManager.saveProgress()
         super.onDestroy()
+        seekHandler.removeCallbacks(performSeekRunnable)
+        seekHandler.removeCallbacks(seekResyncRunnable)
         unregisterReceiver(remoteReceiver)
         controlsManager.detachPlayer()
         mediaPlayer?.vlcVout?.apply {
@@ -709,6 +720,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         controlsManager.setPendingSeekTime(newTime)
 
         seekHandler.removeCallbacks(performSeekRunnable)
+        seekHandler.removeCallbacks(seekResyncRunnable)
         seekHandler.postDelayed(performSeekRunnable, 400)
 
         controlsManager.showSeekUI()

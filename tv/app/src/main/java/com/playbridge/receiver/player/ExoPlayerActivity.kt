@@ -339,7 +339,8 @@ class ExoPlayerActivity : PlayerActivity() {
         releasePlayer()
 
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15000, 30000, 2500, 5000)
+            .setBufferDurationsMs(15_000, 120_000, 2500, 5000)
+            .setBackBuffer(60_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -510,7 +511,8 @@ class ExoPlayerActivity : PlayerActivity() {
 
         // 3. Configure Load Control
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15000, 50000, 2500, 5000)
+            .setBufferDurationsMs(15_000, 120_000, 2500, 5000)
+            .setBackBuffer(60_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -663,7 +665,9 @@ class ExoPlayerActivity : PlayerActivity() {
             when (playbackState) {
                 androidx.media3.common.Player.STATE_BUFFERING -> {
                     FileLogger.d(TAG, "Buffering...")
-                    controlsManager.showBuffering()
+                    if (player?.playWhenReady == true) {
+                        controlsManager.showBuffering()
+                    }
                 }
                 androidx.media3.common.Player.STATE_READY -> {
                     FileLogger.i(TAG, "Playback ready")
@@ -833,6 +837,8 @@ class ExoPlayerActivity : PlayerActivity() {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             } else {
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                // Hide spinner if we paused while buffering
+                controlsManager.hideBuffering()
             }
         }
     }
