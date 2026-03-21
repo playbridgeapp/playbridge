@@ -7,10 +7,10 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
 import com.playbridge.protocol.BluetoothConstants
-import com.playbridge.protocol.Command
 import com.playbridge.protocol.createMouseCommandJson
 import com.playbridge.protocol.createRemoteCommandJson
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,6 +34,28 @@ class BluetoothClient(private val context: Context) {
     private var socket: BluetoothSocket? = null
     private var outputStream: OutputStream? = null
     private val scope = CoroutineScope(Dispatchers.IO + Job())
+
+    // Single writer channel — eliminates per-send coroutine launch overhead.
+    // All outgoing messages funnel here and are written sequentially by one coroutine.
+    private val sendChannel = Channel<String>(capacity = Channel.UNLIMITED)
+    private var writeJob: Job? = null
+
+    // Mouse delta accumulation — collapses rapid pointer events into one packet per flush
+    // interval so we're not flooding RFCOMM with a packet per display frame.
+    private var pendingDx = 0f
+    private var pendingDy = 0f
+    private var mouseFlushScheduled = false
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val mouseFlushRunnable = Runnable {
+        mouseFlushScheduled = false
+        val dx = pendingDx
+        val dy = pendingDy
+        pendingDx = 0f
+        pendingDy = 0f
+        if ((dx != 0f || dy != 0f) && _connectionState.value == ConnectionState.Connected) {
+            sendChannel.trySend(createMouseCommandJson("move", dx, dy))
+        }
+    }
 
     @SuppressLint("MissingPermission")
     fun getBondedDevices(): List<android.bluetooth.BluetoothDevice> {
@@ -122,6 +144,7 @@ class BluetoothClient(private val context: Context) {
                 try {
                     outputStream = socket?.outputStream
                     _connectionState.value = ConnectionState.Connected
+                    startWriteLoop()
                 } catch (e: IOException) {
                     Log.e(TAG, "Error creating output stream", e)
                     disconnect()
@@ -133,36 +156,60 @@ class BluetoothClient(private val context: Context) {
         }
     }
 
-    fun sendRemoteCommand(key: String) {
-        val json = createRemoteCommandJson(key)
-        send(json)
-    }
-
-    fun sendMouseCommand(event: String, dx: Float, dy: Float) {
-        val json = createMouseCommandJson(event, dx, dy)
-        send(json)
-    }
-
-    fun send(jsonCommand: String) {
-        scope.launch {
-            if (_connectionState.value != ConnectionState.Connected) {
-                Log.w(TAG, "Cannot send command: not connected to Bluetooth")
-                return@launch
-            }
-
-            try {
-                // Add a newline to separate commands in the stream
-                val message = "$jsonCommand\n"
-                outputStream?.write(message.toByteArray())
-                outputStream?.flush()
-            } catch (e: IOException) {
-                Log.e(TAG, "Failed to send command over Bluetooth", e)
-                disconnect()
+    // Single writer coroutine — drains sendChannel sequentially on the IO dispatcher.
+    // This avoids the per-send coroutine launch overhead that causes jitter at high rates.
+    private fun startWriteLoop() {
+        writeJob?.cancel()
+        writeJob = scope.launch {
+            for (message in sendChannel) {
+                try {
+                    outputStream?.write("$message\n".toByteArray())
+                    outputStream?.flush()
+                } catch (e: IOException) {
+                    Log.e(TAG, "Failed to send command over Bluetooth", e)
+                    disconnect()
+                    break
+                }
             }
         }
     }
 
+    fun sendRemoteCommand(key: String) {
+        send(createRemoteCommandJson(key))
+    }
+
+    // Mouse moves are accumulated and flushed at most once per 16ms (~60fps).
+    // Multiple pointer events between flushes are summed so no movement is lost,
+    // but we send far fewer packets — one per frame instead of one per pointer event.
+    // Must be called from the main thread (Compose pointer input callbacks satisfy this).
+    fun sendMouseCommand(event: String, dx: Float = 0f, dy: Float = 0f) {
+        if (event == "move") {
+            pendingDx += dx
+            pendingDy += dy
+            if (!mouseFlushScheduled) {
+                mouseFlushScheduled = true
+                mainHandler.postDelayed(mouseFlushRunnable, 16L)
+            }
+            return
+        }
+        send(createMouseCommandJson(event, dx, dy))
+    }
+
+    fun send(jsonCommand: String) {
+        if (_connectionState.value != ConnectionState.Connected) {
+            Log.w(TAG, "Cannot send command: not connected to Bluetooth")
+            return
+        }
+        sendChannel.trySend(jsonCommand)
+    }
+
     fun disconnect() {
+        mainHandler.removeCallbacks(mouseFlushRunnable)
+        mouseFlushScheduled = false
+        pendingDx = 0f
+        pendingDy = 0f
+        writeJob?.cancel()
+        writeJob = null
         try {
             socket?.close()
         } catch (e: IOException) {

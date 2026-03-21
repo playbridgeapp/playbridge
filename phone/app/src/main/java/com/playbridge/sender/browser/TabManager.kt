@@ -2,6 +2,7 @@ package com.playbridge.sender.browser
 
 import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import mozilla.components.browser.engine.gecko.GeckoEngineSession
 import mozilla.components.browser.state.action.TabListAction
 import mozilla.components.browser.state.state.ContentState
@@ -28,6 +29,12 @@ class TabManager {
 
     /** Map of tab-id → live EngineSession. Observable by Compose. */
     val sessions = mutableStateMapOf<String, EngineSession>()
+
+    /**
+     * Tab IDs whose sessions were just created and are performing their initial page load.
+     * Used to show a loading overlay in place of the blank GeckoEngineView.
+     */
+    val freshLoadingTabIds = mutableStateOf<Set<String>>(emptySet())
 
     /** The maximum number of EngineSessions to keep alive to prevent OOM errors. */
     private val MAX_ALIVE_SESSIONS = 5
@@ -137,6 +144,7 @@ class TabManager {
                 val url = tab.content.url.ifEmpty { "about:blank" }
                 if (url != "about:blank") {
                     newSession.loadUrl(url)
+                    freshLoadingTabIds.value = freshLoadingTabIds.value + tab.id
                 }
                 sessions[tab.id] = newSession
                 Log.d(TAG, "Created/Restored EngineSession for tab ${tab.id}")

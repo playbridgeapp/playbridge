@@ -281,10 +281,11 @@ class BrowserActivity : ComponentActivity() {
             }
             
             val sessions = tabManager.sessions
-            
+
             val selectedTabId = browserState.selectedTabId
             val selectedTab = browserState.tabs.find { it.id == selectedTabId }
             val session = if (selectedTab != null) sessions[selectedTab.id] else null
+            val freshLoadingTabIds by tabManager.freshLoadingTabIds
             
             // State for download dialog
             var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
@@ -1173,12 +1174,33 @@ class BrowserActivity : ComponentActivity() {
                                                 }
                                             }
                                             
+                                            // Clear fresh-load flag once the page finishes loading
+                                            LaunchedEffect(isLoading) {
+                                                if (!isLoading && selectedTabId != null) {
+                                                    tabManager.freshLoadingTabIds.value =
+                                                        tabManager.freshLoadingTabIds.value - selectedTabId
+                                                }
+                                            }
+
                                             // BrowserView call site
                                             Box(modifier = Modifier.fillMaxSize()) {
                                                 BrowserView(
                                                     session = session,
                                                     onLongPressLink = { url: String -> contextMenuUrl = url }
                                                 )
+
+                                                // Show loading overlay when session was freshly created (e.g. after lock screen
+                                                // forces a process restart). Hides the blank GeckoEngineView during initial load.
+                                                if (selectedTabId != null && selectedTabId in freshLoadingTabIds) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .background(MaterialTheme.colorScheme.background),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        CircularProgressIndicator()
+                                                    }
+                                                }
                                                 
                                                 // Home Screen Overlay
                                                 if (currentUrl == "about:blank") {
