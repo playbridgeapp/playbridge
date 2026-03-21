@@ -84,6 +84,8 @@ data class StremioStreamResponse(
     val subtitles: List<StremioStream>? = null
 )
 
+private val SIZE_REGEX = Regex("""💾\s*([\d.]+)\s*(TB|GB|MB|KB)""", RegexOption.IGNORE_CASE)
+
 @Serializable
 data class StremioStream(
     val url: String? = null,
@@ -103,6 +105,45 @@ data class StremioStream(
 
     /** Quality/info description parsed from the title field */
     val qualityInfo: String get() = title ?: ""
+
+    /**
+     * Effective video size in bytes: behaviorHints.videoSize if present, otherwise parsed
+     * from the 💾 emoji token in the title (e.g. Torrentio: "👤 12 💾 13.4 GB 🌐 Multi").
+     */
+    val effectiveVideoSizeBytes: Long? get() {
+        behaviorHints?.videoSize?.let { if (it > 0) return it }
+        val text = "${title.orEmpty()} ${name.orEmpty()}"
+        val match = SIZE_REGEX.find(text) ?: return null
+        val value = match.groupValues[1].toDoubleOrNull() ?: return null
+        val multiplier = when (match.groupValues[2].uppercase()) {
+            "TB" -> 1_099_511_627_776L
+            "GB" -> 1_073_741_824L
+            "MB" -> 1_048_576L
+            "KB" -> 1_024L
+            else -> return null
+        }
+        return (value * multiplier).toLong()
+    }
+
+    /** Formatted file size using effectiveVideoSizeBytes. */
+    val fileSizeFormatted: String? get() {
+        val size = effectiveVideoSizeBytes ?: return null
+        return when {
+            size >= 1_099_511_627_776L -> "%.1f TB".format(size / 1_099_511_627_776.0)
+            size >= 1_073_741_824L -> "%.1f GB".format(size / 1_073_741_824.0)
+            size >= 1_048_576L -> "%.0f MB".format(size / 1_048_576.0)
+            else -> "$size B"
+        }
+    }
+
+    /** Estimate Mbps using effectiveVideoSizeBytes and runtime. */
+    fun estimateMbps(runtimeMinutes: Int?): String? {
+        val size = effectiveVideoSizeBytes ?: return null
+        val runtime = runtimeMinutes ?: return null
+        if (runtime <= 0) return null
+        val mbps = size * 8.0 / (runtime * 60 * 1_000_000.0)
+        return "~%.1f Mbps".format(mbps)
+    }
 }
 
 @Serializable

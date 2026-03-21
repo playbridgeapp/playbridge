@@ -2,6 +2,7 @@ package com.playbridge.receiver.player
 
 import android.os.Handler
 import android.os.Looper
+import android.text.Html
 import android.util.Log
 import android.widget.TextView
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,7 @@ class SubtitleManager(
     private var syncJob: Job? = null
     private val cues = Collections.synchronizedList(ArrayList<Cue>())
     private var getPlayerPosition: (() -> Long)? = null
+    private var lastCueText: String? = null
 
     data class Cue(val startTime: Long, val endTime: Long, val text: String) : Comparable<Cue> {
         override fun compareTo(other: Cue): Int {
@@ -44,7 +46,8 @@ class SubtitleManager(
         Log.i(TAG, "Loading subtitle from: $url")
         subtitleJob?.cancel()
         syncJob?.cancel()
-        
+        lastCueText = null
+
         textView.post {
             textView.text = ""
             textView.visibility = android.view.View.GONE
@@ -87,14 +90,18 @@ class SubtitleManager(
         val activeCue = synchronized(cues) {
             cues.find { currentPos >= it.startTime && currentPos <= it.endTime }
         }
-        
+
         if (activeCue != null) {
-            if (textView.text.toString() != activeCue.text) {
-                textView.text = activeCue.text
+            if (lastCueText != activeCue.text) {
+                lastCueText = activeCue.text
+                val html = activeCue.text.replace("\n", "<br>")
+                @Suppress("DEPRECATION")
+                textView.text = Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY)
                 textView.visibility = android.view.View.VISIBLE
             }
         } else {
-            if (textView.text.isNotEmpty()) {
+            if (lastCueText != null) {
+                lastCueText = null
                 textView.text = ""
                 textView.visibility = android.view.View.GONE
             }
@@ -136,8 +143,8 @@ class SubtitleManager(
             } else if (trimmedLine.contains("-->")) {
                 val times = trimmedLine.split("-->")
                 if (times.size == 2) {
-                    currentStart = parseTimestamp(times[0].trim().replace(',', '.'))
-                    currentEnd = parseTimestamp(times[1].trim().replace(',', '.'))
+                    currentStart = parseTimestamp(times[0].trim().replace(',', '.').substringBefore(' '))
+                    currentEnd = parseTimestamp(times[1].trim().replace(',', '.').substringBefore(' '))
                 }
             } else if (currentStart != -1L) {
                 // If we have a start time, any subsequent non-empty line is part of the text
@@ -161,8 +168,8 @@ class SubtitleManager(
             if (line.contains("-->")) {
                 val times = line.split("-->")
                 if (times.size == 2) {
-                    val start = parseTimestamp(times[0].trim())
-                    val end = parseTimestamp(times[1].trim())
+                    val start = parseTimestamp(times[0].trim().substringBefore(' '))
+                    val end = parseTimestamp(times[1].trim().substringBefore(' '))
                     
                     val textBuilder = StringBuilder()
                     while (iterator.hasNext()) {
@@ -238,6 +245,7 @@ class SubtitleManager(
     fun disable() {
         subtitleJob?.cancel()
         syncJob?.cancel()
+        lastCueText = null
         textView.post {
             textView.visibility = android.view.View.GONE
             textView.text = ""

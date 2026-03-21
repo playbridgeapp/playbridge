@@ -305,7 +305,7 @@ private fun StreamItem(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // File size
-                    stream.behaviorHints?.fileSizeFormatted?.let { size ->
+                    stream.fileSizeFormatted?.let { size ->
                         Surface(
                             shape = RoundedCornerShape(4.dp),
                             color = MaterialTheme.colorScheme.secondaryContainer
@@ -319,7 +319,7 @@ private fun StreamItem(
                     }
 
                     // Estimated Mbps
-                    stream.behaviorHints?.estimateMbps(episodeRuntimeMinutes)?.let { mbps ->
+                    stream.estimateMbps(episodeRuntimeMinutes)?.let { mbps ->
                         Surface(
                             shape = RoundedCornerShape(4.dp),
                             color = MaterialTheme.colorScheme.tertiaryContainer

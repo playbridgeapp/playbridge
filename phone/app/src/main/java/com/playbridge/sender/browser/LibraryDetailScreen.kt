@@ -71,6 +71,7 @@ fun MovieDetailScreen(
             streams = resolvedStreams,
             isLoading = isResolving,
             title = details?.title ?: "Select Stream",
+            episodeRuntimeMinutes = details?.runtime,
             onStreamSelected = { resolved ->
                 showStreamPicker = false
                 val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
