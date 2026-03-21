@@ -88,6 +88,7 @@ fun SettingsScreen(
                     "phone" -> "Uses whatever the phone app requests (internal or external)."
                     "internal" -> "Always plays with the built-in ExoPlayer. Supports subtitles and remote seek."
                     "internal_vlc" -> "Always plays with the built-in LibVLC player. Useful for formats ExoPlayer struggles with."
+                    "internal_mpv" -> "Always plays with the built-in MPV player. Best format compatibility."
                     "external" -> "Always passes videos to other installed apps like VLC or MX Player."
                     "external_mpv" -> "Always passes videos directly to the MPV player. Supports headers and multiple subtitles."
                     else -> ""
@@ -96,6 +97,7 @@ fun SettingsScreen(
                     "phone" to "Use Phone Setting",
                     "internal" to "Internal (ExoPlayer)",
                     "internal_vlc" to "Internal (LibVLC)",
+                    "internal_mpv" to "Internal (MPV)",
                     "external" to "External Player",
                     "external_mpv" to "External (MPV)"
                 ),

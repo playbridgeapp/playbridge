@@ -58,6 +58,10 @@ android {
             excludes += "/META-INF/INDEX.LIST"
             excludes += "/META-INF/io.netty.versions.properties"
         }
+        jniLibs {
+            // mpv-android and libvlc both ship libc++_shared.so for every ABI; pick one copy.
+            pickFirst("lib/**/libc++_shared.so")
+        }
     }
 
     splits {
@@ -130,4 +134,9 @@ dependencies {
 
     // LibVLC
     implementation(libs.libvlc.all)
+
+    // MPV Player — prebuilt AAR from mpv-android.
+    // Download from https://github.com/mpv-android/mpv-android/releases (mpv-android-*.aar)
+    // and place the file at tv/app/libs/mpv-android.aar, then uncomment:
+    implementation(files("libs/mpv-android.aar"))
 }

@@ -312,10 +312,10 @@ class ServerService : Service() {
                     activeContext = "player"
                     broadcastContext()
 
-                    val activityClass = if (finalMode == "internal_vlc") {
-                        com.playbridge.receiver.player.VlcPlayerActivity::class.java
-                    } else {
-                        com.playbridge.receiver.player.ExoPlayerActivity::class.java
+                    val activityClass = when (finalMode) {
+                        "internal_vlc" -> com.playbridge.receiver.player.VlcPlayerActivity::class.java
+                        "internal_mpv" -> com.playbridge.receiver.player.MpvPlayerActivity::class.java
+                        else           -> com.playbridge.receiver.player.ExoPlayerActivity::class.java
                     }
 
                     val playerIntent = Intent(this, activityClass).apply {
