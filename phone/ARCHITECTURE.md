@@ -40,6 +40,7 @@ com.playbridge.sender/
 │   ├── TabsScreen.kt
 │   └── VideoDetector.kt
 ├── connection/
+│   ├── BluetoothClient.kt
 │   ├── ConnectionStore.kt
 │   ├── ConnectionViewModel.kt
 │   ├── NsdHelper.kt
@@ -124,6 +125,7 @@ com.playbridge.sender/
 | Find on Page | FindOnPageBar.kt | UI for finding text within web pages |
 | Connection VM | ConnectionViewModel.kt | Centralized logic for WebSocket + NSD discovery, TV commands, state |
 | WebSocket | WebSocketClient.kt | OkHttp-based client with auto-retry (60 attempts, 5s intervals) |
+| Bluetooth Client | BluetoothClient.kt | Bluetooth RFCOMM socket client fallback for TV connections |
 | Connection | ConnectionScreen.kt | NSD auto-discovery, QR scanning, manual IP entry, PIN authentication |
 | Service Discovery | NsdHelper.kt | Network Service Discovery to find TV services on local network |
 | Embedded Extension | `assets/extensions/video_detector` | Legacy internal extension bundled with the phone app for video detection in GeckoView |
@@ -136,6 +138,6 @@ com.playbridge.sender/
 - **Jetpack Compose** — UI (Material3)
 - **Kotlin Serialization** v1.7 — JSON protocol
 - **DataStore** v1.1 — Preferences persistence
-- **Room** — SQLite persistence for browsing history
-- **Media3 ExoPlayer** — HLS offline download support
+- **Room** v2.8.4 — SQLite persistence for browsing history
+- **Media3 ExoPlayer** v1.2.1 — HLS offline download support
 - **Coil** — Image loading

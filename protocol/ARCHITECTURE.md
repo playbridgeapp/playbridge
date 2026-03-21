@@ -5,16 +5,20 @@ The `protocol` module (`com.playbridge.protocol`) is a shared Kotlin JVM library
 ## Package Structure
 ```
 com.playbridge.protocol/
-├── Message.kt           (All shared protocol classes, sealed Command class, parseCommand, and helpers)
-└── NsdConstants.kt      (NSD service type and key constants)
+├── BluetoothConstants.kt (Bluetooth RFCOMM service UUID and name)
+├── Config.kt             (Shared network configuration variables)
+├── Message.kt            (All shared protocol classes, sealed Command class, parseCommand, and helpers)
+└── NsdConstants.kt       (NSD service type and key constants)
 ```
 
 ## Key Components
 
 | File | Contents |
 |------|----------|
-| NsdConstants.kt | NSD service type and key constants |
+| BluetoothConstants.kt | Bluetooth RFCOMM service UUID and name |
+| Config.kt | Shared network configuration variables (e.g., ports, retry delays) |
 | Message.kt | All shared protocol classes, sealed `Command` class, `parseCommand()`, and 14 helper functions |
+| NsdConstants.kt | NSD service type and key constants |
 
 **Dependencies:** Kotlin JVM, `kotlinx-serialization-json:1.7.3`
 

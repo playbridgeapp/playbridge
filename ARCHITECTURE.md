@@ -216,6 +216,8 @@ PlayBridge/
 ├── protocol/                    # Shared module
 │   ├── build.gradle.kts
 │   └── src/main/java/com/playbridge/protocol/
+│       ├── BluetoothConstants.kt
+│       ├── Config.kt
 │       ├── NsdConstants.kt
 │       └── Message.kt           # Unified protocol messages + sealed Command class
 ├── phone/
@@ -246,6 +248,7 @@ PlayBridge/
 │   │       │   │   ├── LibraryViewModel.kt
 │   │       │   │   └── ...
 │   │       │   ├── connection/
+│   │       │   │   ├── BluetoothClient.kt
 │   │       │   │   ├── ConnectionViewModel.kt
 │   │       │   ├── data/
 │   │       │   │   ├── debrid/                 (Debrid integration clients/providers)
@@ -286,6 +289,7 @@ PlayBridge/
     │       │   │   ├── VlcPlayerActivity.kt (~753 lines)
     │       │   │   └── VlcTrackSelectionDialog.kt
     │       │   ├── server/
+    │       │   │   ├── BluetoothServer.kt
     │       │   │   ├── ServerService.kt    (~586 lines)
     │       │   ├── ui/
     │       │   └── model/
