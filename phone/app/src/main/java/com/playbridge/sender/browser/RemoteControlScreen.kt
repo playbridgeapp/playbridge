@@ -41,6 +41,7 @@ fun RemoteControlScreen(
     isMediaPlaying: Boolean,
     btConnectionState: BluetoothClient.ConnectionState = BluetoothClient.ConnectionState.Disconnected,
     pairedDevices: List<android.bluetooth.BluetoothDevice> = emptyList(),
+    savedBluetoothMac: String? = null,
     onBluetoothDeviceSelected: (String) -> Unit,
     onBack: () -> Unit,
     onRemoteKey: (String) -> Unit,
@@ -55,21 +56,40 @@ fun RemoteControlScreen(
     var showDeviceListDialog by remember { mutableStateOf(false) }
 
     if (showDeviceListDialog) {
+        // Sort: saved/connected device first, rest alphabetically
+        val sortedDevices = remember(pairedDevices, savedBluetoothMac) {
+            pairedDevices.sortedWith(compareByDescending { it.address == savedBluetoothMac })
+        }
+
         AlertDialog(
             onDismissRequest = { showDeviceListDialog = false },
             title = { Text("Select TV Bluetooth Device") },
             text = {
-                if (pairedDevices.isEmpty()) {
+                if (sortedDevices.isEmpty()) {
                     Text("No paired devices found. Please pair your TV in Android settings first.")
                 } else {
                     androidx.compose.foundation.lazy.LazyColumn {
-                        items(pairedDevices.size) { index ->
-                            val device = pairedDevices[index]
+                        items(sortedDevices.size) { index ->
+                            val device = sortedDevices[index]
                             @android.annotation.SuppressLint("MissingPermission")
                             val deviceName = device.name ?: device.address
+                            val isSaved = device.address == savedBluetoothMac
 
                             androidx.compose.material3.ListItem(
-                                headlineContent = { Text(deviceName) },
+                                headlineContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(deviceName, fontWeight = if (isSaved) FontWeight.SemiBold else FontWeight.Normal)
+                                        if (isSaved) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = "Current TV",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                },
                                 supportingContent = { Text(device.address) },
                                 modifier = Modifier.clickable {
                                     onBluetoothDeviceSelected(device.address)

@@ -1425,6 +1425,28 @@ class BrowserActivity : ComponentActivity() {
                                         Screen.Remote -> {
                                             val btConnectionState by connectionViewModel.bluetoothClient.connectionState.collectAsState()
                                             var pairedDevices by remember { mutableStateOf<List<android.bluetooth.BluetoothDevice>>(emptyList()) }
+                                            var savedMac by remember { mutableStateOf<String?>(null) }
+
+                                            fun initBluetooth() {
+                                                val devices = connectionViewModel.bluetoothClient.getBondedDevices()
+                                                pairedDevices = devices
+                                                val mac = connectionViewModel.getSavedBluetoothMacForTv(tvDevice?.uuid)
+                                                savedMac = mac
+                                                when {
+                                                    mac != null -> {
+                                                        // Previously used device — auto-connect
+                                                        connectionViewModel.bluetoothClient.connect(mac)
+                                                    }
+                                                    devices.size == 1 -> {
+                                                        // Only one paired device — auto-connect and save
+                                                        val onlyMac = devices[0].address
+                                                        savedMac = onlyMac
+                                                        connectionViewModel.saveBluetoothMacForTv(tvDevice?.uuid, onlyMac)
+                                                        connectionViewModel.bluetoothClient.connect(onlyMac)
+                                                    }
+                                                    // Multiple devices and no prior selection — show dialog (user taps BT icon)
+                                                }
+                                            }
 
                                             // Handle Bluetooth permissions request for Android 12+
                                             val btPermissionLauncher = rememberLauncherForActivityResult(
@@ -1434,11 +1456,7 @@ class BrowserActivity : ComponentActivity() {
                                                 val scanGranted = permissions[Manifest.permission.BLUETOOTH_SCAN] ?: false
 
                                                 if (connectGranted && scanGranted) {
-                                                    pairedDevices = connectionViewModel.bluetoothClient.getBondedDevices()
-                                                    val savedMac = connectionViewModel.getSavedBluetoothMacForTv(tvDevice?.uuid)
-                                                    if (savedMac != null) {
-                                                        connectionViewModel.bluetoothClient.connect(savedMac)
-                                                    }
+                                                    initBluetooth()
                                                 } else {
                                                     Toast.makeText(this@BrowserActivity, "Bluetooth permissions denied. Falling back to Wi-Fi.", Toast.LENGTH_SHORT).show()
                                                 }
@@ -1454,18 +1472,10 @@ class BrowserActivity : ComponentActivity() {
                                                             arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
                                                         )
                                                     } else {
-                                                        pairedDevices = connectionViewModel.bluetoothClient.getBondedDevices()
-                                                        val savedMac = connectionViewModel.getSavedBluetoothMacForTv(tvDevice?.uuid)
-                                                        if (savedMac != null) {
-                                                            connectionViewModel.bluetoothClient.connect(savedMac)
-                                                        }
+                                                        initBluetooth()
                                                     }
                                                 } else {
-                                                    pairedDevices = connectionViewModel.bluetoothClient.getBondedDevices()
-                                                    val savedMac = connectionViewModel.getSavedBluetoothMacForTv(tvDevice?.uuid)
-                                                    if (savedMac != null) {
-                                                        connectionViewModel.bluetoothClient.connect(savedMac)
-                                                    }
+                                                    initBluetooth()
                                                 }
                                             }
 
@@ -1477,7 +1487,9 @@ class BrowserActivity : ComponentActivity() {
                                                 isMediaPlaying = tvActiveContext == "player",
                                                 btConnectionState = btConnectionState,
                                                 pairedDevices = pairedDevices,
+                                                savedBluetoothMac = savedMac,
                                                 onBluetoothDeviceSelected = { macAddress ->
+                                                    savedMac = macAddress
                                                     connectionViewModel.saveBluetoothMacForTv(tvDevice?.uuid, macAddress)
                                                     connectionViewModel.bluetoothClient.connect(macAddress)
                                                 },
