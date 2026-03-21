@@ -244,13 +244,20 @@ class BrowserActivity : ComponentActivity() {
         } else {
             Log.d(TAG, "Initializing System WebView Engine")
             SystemWebViewEngine(
-                this, 
+                this,
                 adBlocker,
                 onFullscreen = { view, callback ->
                     enterFullscreen(view, callback)
                 },
                 onExitFullscreen = {
                     exitFullscreen()
+                },
+                onEngineRecreateRequired = { url ->
+                    // The WebView render process died — the crashed instance is unusable.
+                    // Rebuild the engine from scratch and reload the last URL.
+                    Log.w(TAG, "Rebuilding SystemWebViewEngine after render process crash")
+                    initializeEngine()
+                    url?.let { engine?.loadUrl(it) }
                 }
             )
         }
@@ -261,34 +268,33 @@ class BrowserActivity : ComponentActivity() {
     
     private fun switchEngine() {
         val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-        val useGecko = prefs.getBoolean("use_gecko", false)
-        
-        // Toggle
-        prefs.edit().putBoolean("use_gecko", !useGecko).apply()
-        
-        // Re-initialize
+        // Read the resolved current mode from browser_mode (the key initializeEngine() uses).
+        val currentMode = prefs.getString("browser_mode", "webview") ?: "webview"
+        val newMode = if (currentMode == "gecko") "webview" else "gecko"
+        prefs.edit().putString("browser_mode", newMode).apply()
+
         initializeEngine()
-        
-        // Reload current URL
         currentUrl?.let { engine?.loadUrl(it) }
-        
-        val engineName = if (!useGecko) "GeckoView" else "System WebView"
+
+        val engineName = if (newMode == "gecko") "GeckoView" else "System WebView"
         android.widget.Toast.makeText(this, "Switched to $engineName", android.widget.Toast.LENGTH_SHORT).show()
     }
     
     private fun showEngineSelectionDialog() {
         val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-        val useGecko = prefs.getBoolean("use_gecko", false)
-        
+        // Use browser_mode — the same key initializeEngine() reads — so the selection actually
+        // takes effect. The old use_gecko boolean is only a legacy fallback in initializeEngine().
+        val currentMode = prefs.getString("browser_mode", "webview") ?: "webview"
+
         val options = arrayOf("System WebView", "GeckoView (Mozilla)")
-        val checkedItem = if (useGecko) 1 else 0
-        
+        val checkedItem = if (currentMode == "gecko") 1 else 0
+
         android.app.AlertDialog.Builder(this)
             .setTitle("Select Browser Engine")
             .setSingleChoiceItems(options, checkedItem) { dialog, which ->
-                val newUseGecko = which == 1
-                if (newUseGecko != useGecko) {
-                    prefs.edit().putBoolean("use_gecko", newUseGecko).apply()
+                val newMode = if (which == 1) "gecko" else "webview"
+                if (newMode != currentMode) {
+                    prefs.edit().putString("browser_mode", newMode).apply()
                     initializeEngine()
                     currentUrl?.let { engine?.loadUrl(it) }
                 }
@@ -360,7 +366,7 @@ class BrowserActivity : ComponentActivity() {
      */
     private fun simulateClickOnActiveView(x: Float, y: Float) {
         val downTime = android.os.SystemClock.uptimeMillis()
-        val eventTime = android.os.SystemClock.uptimeMillis()
+        val eventTime = downTime
 
         val downEvent = android.view.MotionEvent.obtain(
             downTime, eventTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0
@@ -630,9 +636,9 @@ class BrowserActivity : ComponentActivity() {
         cursorHideHandler.removeCallbacks(cursorHideRunnable)
         unregisterReceiver(commandReceiver)
         scope.cancel()
-        super.onDestroy()
         engine?.destroy()
         engine = null
+        super.onDestroy()
     }
     
     /**

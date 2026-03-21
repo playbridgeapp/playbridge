@@ -23,7 +23,8 @@ class SystemWebViewEngine(
     private val context: Context,
     private val adBlocker: AdBlocker,
     private val onFullscreen: (View, WebChromeClient.CustomViewCallback) -> Unit,
-    private val onExitFullscreen: () -> Unit
+    private val onExitFullscreen: () -> Unit,
+    private val onEngineRecreateRequired: (url: String?) -> Unit = {}
 ) : BrowserEngine {
 
     companion object {
@@ -84,7 +85,7 @@ class SystemWebViewEngine(
 
     override fun simulateClick(x: Float, y: Float) {
         val downTime = android.os.SystemClock.uptimeMillis()
-        val eventTime = android.os.SystemClock.uptimeMillis()
+        val eventTime = downTime
 
         val downEvent = android.view.MotionEvent.obtain(
             downTime, eventTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0
@@ -350,16 +351,19 @@ class SystemWebViewEngine(
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             super.onPageStarted(view, url, favicon)
-            // Inject anti-popup script as early as possible
-            view?.evaluateJavascript(antiPopupScript, null)
+            // Do NOT inject scripts here — evaluateJavascript runs against the OLD page's JS
+            // context until the new document is committed, so any injection here is wasted and
+            // can set window.__pbAdblockInjected on the wrong page. onPageFinished is the right
+            // place for reliable injection.
         }
-        
+
         override fun onPageFinished(view: WebView?, url: String?) {
             super.onPageFinished(view, url)
-            
-            // Re-inject anti-popup script (some sites overwrite window.open after load)
+
+            // Inject anti-popup script once the new document's JS context is ready.
+            // The __pbAdblockInjected guard prevents double-injection on soft navigations.
             view?.evaluateJavascript(antiPopupScript, null)
-            
+
             // Inject cosmetic filters (element hiding CSS)
             val cosmeticCss = adBlocker.getCosmeticFilterCss()
             if (cosmeticCss.isNotEmpty()) {
@@ -391,15 +395,13 @@ class SystemWebViewEngine(
 
         override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
             Log.e(TAG, "WebView render process crashed (didCrash=${detail?.didCrash()}, priority=${detail?.rendererPriorityAtExit()})")
-            // Reload the page to recover instead of letting the app crash
-            val url = currentUrl
-            if (url != null) {
-                view?.post {
-                    Log.d(TAG, "Recovering from render process crash — reloading: $url")
-                    view.loadUrl(url)
-                }
+            // After a render process death the WebView instance is unusable — calling loadUrl()
+            // on it has no effect. Signal the host activity to destroy this engine and create
+            // a fresh one, then reload the last known URL.
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                onEngineRecreateRequired(currentUrl)
             }
-            return true // We handled it, don't kill the app
+            return true // We handled it; don't let the system kill the app process
         }
 
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {

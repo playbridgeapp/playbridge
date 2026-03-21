@@ -51,29 +51,6 @@ class GeckoViewEngine(
         return _canGoBack
     }
 
-    // A helper method to run JS via a message delegate.
-    // We register an evaluator delegate which simply executes the code and returns the result.
-    private fun injectEvaluatorDelegate() {
-        val evaluatorScript = """
-            var port = null;
-            window.addEventListener("message", function(event) {
-                if (event.data && event.data.type === "EVALUATE_JS") {
-                    try {
-                        var result = eval(event.data.script);
-                        // GeckoView native messaging isn't directly usable here without
-                        // a proper WebExtension, so we rely on the bridge extension.
-                    } catch (e) {
-                        console.error(e);
-                    }
-                }
-            });
-        """.trimIndent()
-        // Wait, GeckoSession.messageDelegate is the right way in GeckoView 100+.
-        // Actually, GeckoSession doesn't have evaluateJavascript natively without WebExtensions.
-        // It's a known limitation of GeckoView compared to WebView. The standard way IS WebExtension.
-        // Let's improve the fallback using WebExtension's WebExtensionController or standard GeckoView APIs if we can.
-    }
-
     override fun evaluateJavascript(script: String, callback: ((String?) -> Unit)?) {
         val port = bridgePort
         if (port != null) {
@@ -117,7 +94,7 @@ class GeckoViewEngine(
     override fun simulateClick(x: Float, y: Float) {
         // Dispatch touch events to GeckoView
         val downTime = android.os.SystemClock.uptimeMillis()
-        val eventTime = android.os.SystemClock.uptimeMillis()
+        val eventTime = downTime
 
         val downEvent = MotionEvent.obtain(
             downTime, eventTime, MotionEvent.ACTION_DOWN, x, y, 0
@@ -184,24 +161,21 @@ class GeckoViewEngine(
             { e -> Log.e(TAG, "Failed to install uBlock Origin extension", e) }
         )
         
-        // Install PB Bridge extension for native JS evaluation
-        // First, try to register delegate for already-installed extension (handles app restart)
-        runtime.webExtensionController.list().accept({ extensions ->
-            val bridge = extensions?.find { it.id == "pb-bridge@playbridge.com" }
-            if (bridge != null) {
-                Log.i(TAG, "PB Bridge already installed, registering delegate")
-                registerBridgeDelegate(bridge)
-            }
-        }, { e -> Log.w(TAG, "Failed to list extensions", e) })
-        
-        // Then, ensure it's installed (handles first run + updates)
+        // Install PB Bridge extension for native JS evaluation.
+        // ensureBuiltIn() returns the extension whether this is a first install or a restart,
+        // so a separate list() pre-check is unnecessary and was causing registerBridgeDelegate()
+        // to be called twice — the second call replaced the first delegate, orphaning its port.
         runtime.webExtensionController.ensureBuiltIn(
             "resource://android/assets/extensions/pb_bridge/",
             "pb-bridge@playbridge.com"
         ).accept(
             { ext ->
-                Log.i(TAG, "PB Bridge extension ensured")
-                registerBridgeDelegate(ext!!)
+                if (ext != null) {
+                    Log.i(TAG, "PB Bridge extension ensured")
+                    registerBridgeDelegate(ext)
+                } else {
+                    Log.w(TAG, "PB Bridge ensureBuiltIn returned null — bridge unavailable")
+                }
             },
             { e -> Log.e(TAG, "Failed to install PB Bridge extension", e) }
         )
