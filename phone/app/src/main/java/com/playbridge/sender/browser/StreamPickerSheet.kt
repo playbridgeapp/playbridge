@@ -46,6 +46,7 @@ fun StreamPickerSheet(
     streams: List<ResolvedStream>,
     isLoading: Boolean,
     title: String,
+    episodeRuntimeMinutes: Int? = null,
     onStreamSelected: (ResolvedStream) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -232,6 +233,7 @@ fun StreamPickerSheet(
                     items(filteredStreams, key = { "${it.addonName}:${it.stream.url}" }) { resolved ->
                         StreamItem(
                             resolvedStream = resolved,
+                            episodeRuntimeMinutes = episodeRuntimeMinutes,
                             onClick = { onStreamSelected(resolved) }
                         )
                     }
@@ -244,6 +246,7 @@ fun StreamPickerSheet(
 @Composable
 private fun StreamItem(
     resolvedStream: ResolvedStream,
+    episodeRuntimeMinutes: Int? = null,
     onClick: () -> Unit
 ) {
     val stream = resolvedStream.stream
@@ -309,6 +312,20 @@ private fun StreamItem(
                         ) {
                             Text(
                                 text = size,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    // Estimated Mbps
+                    stream.behaviorHints?.estimateMbps(episodeRuntimeMinutes)?.let { mbps ->
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.tertiaryContainer
+                        ) {
+                            Text(
+                                text = mbps,
                                 style = MaterialTheme.typography.labelSmall,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )

@@ -57,6 +57,7 @@ class ServerService : Service() {
     
     override fun onCreate() {
         super.onCreate()
+        _staticInstance = this
         pairingStore = PairingStore(applicationContext)
         overlayWindow = OverlayWindowHelper(applicationContext)
         nsdManager = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
@@ -421,7 +422,23 @@ class ServerService : Service() {
                     putExtra(EXTRA_PLAYLIST_INDEX, command.startIndex)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
+                pendingQueueItems.clear() // discard any stale items from a previous session
                 launchActivityFromBackground(playerIntent, "Playing playlist (${command.items.size} items)")
+            }
+            is Command.QueueAdd -> {
+                FileLogger.i(TAG, "=== QUEUE_ADD === title: ${command.item.title}")
+                // Buffer the item so the player can drain it even if its receiver isn't registered yet.
+                // The broadcast acts only as a wake signal — the player always reads from pendingQueueItems.
+                pendingQueueItems.add(command.item)
+                sendBroadcast(Intent(ACTION_QUEUE_ADD).setPackage(packageName))
+            }
+            is Command.PlaylistJump -> {
+                FileLogger.i(TAG, "=== PLAYLIST_JUMP === index: ${command.index}")
+                val intent = Intent(ACTION_PLAYLIST_JUMP).apply {
+                    putExtra(EXTRA_PLAYLIST_JUMP_INDEX, command.index)
+                    setPackage(packageName)
+                }
+                sendBroadcast(intent)
             }
             is Command.Ping -> {
                 // Handled by WebSocketServer
@@ -435,6 +452,16 @@ class ServerService : Service() {
     private fun broadcastContext() {
         scope.launch {
             webSocketServer?.broadcastStatus(createContextJson(activeContext))
+        }
+    }
+
+    /**
+     * Broadcast playlist status to connected phone clients.
+     * Called by player activities via the static helper.
+     */
+    internal fun broadcastPlaylistStatusInternal(statusJson: String) {
+        scope.launch {
+            webSocketServer?.broadcastStatus(statusJson)
         }
     }
     
@@ -621,6 +648,13 @@ class ServerService : Service() {
         const val EXTRA_EXTERNAL_SUBTITLE_URL = "external_subtitle_url"
         const val EXTRA_VIDEO_FILTER = "video_filter"
         const val EXTRA_CUSTOM_FILTER_VALUES = "custom_filter_values"
+        const val ACTION_QUEUE_ADD = "com.playbridge.receiver.ACTION_QUEUE_ADD"
+        const val ACTION_PLAYLIST_JUMP = "com.playbridge.receiver.ACTION_PLAYLIST_JUMP"
+        const val EXTRA_QUEUE_ITEM_URL = "queue_item_url"
+        const val EXTRA_QUEUE_ITEM_TITLE = "queue_item_title"
+        const val EXTRA_QUEUE_ITEM_CONTENT_TYPE = "queue_item_content_type"
+        const val EXTRA_QUEUE_ITEM_DETECTED_BY = "queue_item_detected_by"
+        const val EXTRA_PLAYLIST_JUMP_INDEX = "playlist_jump_index"
         
         // Static flow for UI to observe connection state
         private val _connectionState = MutableStateFlow<WebSocketServer.ConnectionState>(WebSocketServer.ConnectionState.Stopped)
@@ -641,6 +675,31 @@ class ServerService : Service() {
         
         fun stop(context: Context) {
             context.stopService(Intent(context, ServerService::class.java))
+        }
+
+        /**
+         * Broadcast playlist_status to the phone from a player activity.
+         */
+        fun broadcastPlaylistStatus(statusJson: String) {
+            _staticInstance?.broadcastPlaylistStatusInternal(statusJson)
+        }
+
+        @Volatile
+        private var _staticInstance: ServerService? = null
+
+        /**
+         * Items buffered here when queue_add arrives before the player's receiver is registered.
+         * The player drains this after registering, and on each ACTION_QUEUE_ADD broadcast.
+         */
+        val pendingQueueItems = java.util.concurrent.ConcurrentLinkedQueue<com.playbridge.protocol.PlayPayload>()
+
+        /**
+         * Atomically drain and return all pending queue items.
+         */
+        fun drainPendingQueueItems(): List<com.playbridge.protocol.PlayPayload> {
+            val items = mutableListOf<com.playbridge.protocol.PlayPayload>()
+            while (true) items.add(pendingQueueItems.poll() ?: break)
+            return items
         }
     }
 }

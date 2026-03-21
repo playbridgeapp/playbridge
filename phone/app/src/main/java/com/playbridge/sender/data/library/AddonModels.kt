@@ -119,4 +119,28 @@ data class StemioBehaviorHints(
             else -> "$size B"
         }
     }
+
+    /**
+     * Estimate Mbps from file size and episode runtime.
+     * @param runtimeMinutes episode runtime in minutes (from TMDB)
+     * @return formatted Mbps string (e.g. "~6.2 Mbps") or null if unavailable
+     */
+    fun estimateMbps(runtimeMinutes: Int?): String? {
+        val size = videoSize ?: return null
+        val runtime = runtimeMinutes ?: return null
+        if (runtime <= 0) return null
+        val mbps = size * 8.0 / (runtime * 60 * 1_000_000.0)
+        return "~%.1f Mbps".format(mbps)
+    }
+
+    /**
+     * Calculate raw Mbps value for bitrate comparison.
+     * @return Mbps as Double, or null if unavailable
+     */
+    fun calculateMbps(runtimeMinutes: Int?): Double? {
+        val size = videoSize ?: return null
+        val runtime = runtimeMinutes ?: return null
+        if (runtime <= 0) return null
+        return size * 8.0 / (runtime * 60 * 1_000_000.0)
+    }
 }

@@ -59,6 +59,22 @@ data class PlaylistPayload(
 )
 
 /**
+ * Queue add command payload — append a single item to the TV's active playlist
+ */
+@Serializable
+data class QueueAddPayload(
+    val item: PlayPayload
+)
+
+/**
+ * Playlist jump command payload — jump to a specific index in the TV's playlist
+ */
+@Serializable
+data class PlaylistJumpPayload(
+    val index: Int
+)
+
+/**
  * Open browser command payload
  */
 @Serializable
@@ -182,6 +198,26 @@ data class PlaylistCommand(
     val payload: PlaylistPayload
 )
 
+/**
+ * Queue add command — append a single item to the TV's active playlist
+ */
+@Serializable
+data class QueueAddCommand(
+    val type: String = "command",
+    val action: String = "queue_add",
+    val payload: QueueAddPayload
+)
+
+/**
+ * Playlist jump command — tell TV to jump to a specific playlist index
+ */
+@Serializable
+data class PlaylistJumpCommand(
+    val type: String = "command",
+    val action: String = "playlist_jump",
+    val payload: PlaylistJumpPayload
+)
+
 // ==================== Status (TV → Phone) ====================
 
 /**
@@ -203,6 +239,26 @@ data class StatusMessage(
 data class ContextMessage(
     val type: String = "context",
     val active: String = "idle" // "player", "browser", or "idle"
+)
+
+/**
+ * Playlist item info for status messages
+ */
+@Serializable
+data class PlaylistItemInfo(
+    val index: Int,
+    val title: String
+)
+
+/**
+ * Playlist status message (TV → Phone) — broadcasts current playlist state
+ */
+@Serializable
+data class PlaylistStatusMessage(
+    val type: String = "playlist_status",
+    val items: List<PlaylistItemInfo> = emptyList(),
+    val currentIndex: Int = 0,
+    val totalCount: Int = 0
 )
 
 // ==================== Authentication ====================
@@ -251,6 +307,8 @@ sealed class Command {
     data class BrowserControl(val action: String) : Command()
     data object ContextQuery : Command()
     data class Playlist(val items: List<PlayPayload>, val startIndex: Int) : Command()
+    data class QueueAdd(val item: PlayPayload) : Command()
+    data class PlaylistJump(val index: Int) : Command()
     data object Ping : Command()
     data class Unknown(val type: String) : Command()
 }
@@ -330,6 +388,22 @@ fun parseCommand(jsonString: String): Command {
                         Command.Playlist(
                             items = payload?.items ?: emptyList(),
                             startIndex = payload?.startIndex ?: 0
+                        )
+                    }
+                    "queue_add" -> {
+                        val payload = envelope.payload?.let {
+                            protocolJson.decodeFromJsonElement<QueueAddPayload>(it)
+                        }
+                        Command.QueueAdd(
+                            item = payload?.item ?: PlayPayload(url = "")
+                        )
+                    }
+                    "playlist_jump" -> {
+                        val payload = envelope.payload?.let {
+                            protocolJson.decodeFromJsonElement<PlaylistJumpPayload>(it)
+                        }
+                        Command.PlaylistJump(
+                            index = payload?.index ?: 0
                         )
                     }
                     else -> Command.Unknown(envelope.action ?: "unknown")
@@ -426,6 +500,44 @@ fun createPlaylistCommandJson(
     return protocolJson.encodeToString(
         PlaylistCommand.serializer(),
         PlaylistCommand(payload = PlaylistPayload(items = items, startIndex = startIndex))
+    )
+}
+
+/**
+ * Create JSON string for queue_add command (append single item to active playlist)
+ */
+fun createQueueAddCommandJson(item: PlayPayload): String {
+    return protocolJson.encodeToString(
+        QueueAddCommand.serializer(),
+        QueueAddCommand(payload = QueueAddPayload(item = item))
+    )
+}
+
+/**
+ * Create JSON string for playlist_jump command (jump to specific playlist index)
+ */
+fun createPlaylistJumpCommandJson(index: Int): String {
+    return protocolJson.encodeToString(
+        PlaylistJumpCommand.serializer(),
+        PlaylistJumpCommand(payload = PlaylistJumpPayload(index = index))
+    )
+}
+
+/**
+ * Create JSON string for playlist_status message (TV → Phone)
+ */
+fun createPlaylistStatusJson(
+    items: List<PlaylistItemInfo>,
+    currentIndex: Int,
+    totalCount: Int
+): String {
+    return protocolJson.encodeToString(
+        PlaylistStatusMessage.serializer(),
+        PlaylistStatusMessage(
+            items = items,
+            currentIndex = currentIndex,
+            totalCount = totalCount
+        )
     )
 }
 

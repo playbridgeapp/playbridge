@@ -1,11 +1,20 @@
 package com.playbridge.sender.data.library
 
 import android.util.Log
+import java.io.File
+import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,19 +24,62 @@ import java.util.concurrent.TimeUnit
  * Manages Stremio-compatible addons: installing from manifest URLs,
  * resolving streams via the Stremio addon protocol.
  */
-class AddonRepository(private val addonDao: AddonDao) {
+class AddonRepository(
+    private val addonDao: AddonDao,
+    private val cacheDir: File? = null
+) {
 
     companion object {
         private const val TAG = "AddonRepository"
         private const val CACHE_TTL_MS = 60 * 60 * 1000L // 60 minutes
+        private const val CACHE_FILE_NAME = "stream_cache.json"
     }
 
+    @Serializable
     private data class CacheEntry(
         val timestamp: Long,
         val streams: List<ResolvedStream>
     )
 
+    @Serializable
+    private data class PersistedCache(val entries: Map<String, CacheEntry>)
+
     private val streamCache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
+    private val ioScope = CoroutineScope(Dispatchers.IO)
+    private val diskJson = Json { ignoreUnknownKeys = true }
+
+    init {
+        loadCacheFromDisk()
+    }
+
+    private fun loadCacheFromDisk() {
+        val file = cacheDir?.let { File(it, CACHE_FILE_NAME) } ?: return
+        if (!file.exists()) return
+        try {
+            val persisted = diskJson.decodeFromString<PersistedCache>(file.readText())
+            val now = System.currentTimeMillis()
+            persisted.entries.forEach { (key, entry) ->
+                if (now - entry.timestamp < CACHE_TTL_MS) {
+                    streamCache[key] = entry
+                }
+            }
+            Log.d(TAG, "Loaded ${streamCache.size} cached entries from disk")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load stream cache from disk: ${e.message}")
+        }
+    }
+
+    private fun saveCacheToDisk() {
+        val file = cacheDir?.let { File(it, CACHE_FILE_NAME) } ?: return
+        ioScope.launch {
+            try {
+                val persisted = PersistedCache(entries = HashMap(streamCache))
+                file.writeText(diskJson.encodeToString(persisted))
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to save stream cache to disk: ${e.message}")
+            }
+        }
+    }
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -182,6 +234,123 @@ class AddonRepository(private val addonDao: AddonDao) {
     }
 
     /**
+     * Flow-based sequential season stream resolution with cache-aware throttling.
+     * Emits one EpisodeStream at a time (or null for failed episodes).
+     *
+     * - Cached episodes emit instantly (no delay).
+     * - Uncached episodes are separated by [delayBetweenMs] to avoid addon rate limits.
+     * - When [targetBitrateMbps] is provided, streams closest to that bitrate are preferred.
+     *
+     * @param episodeRuntimeMinutes map of episode number → runtime in minutes (from TMDB)
+     * @param delayBetweenMs delay between uncached episode resolutions (default 2s)
+     */
+    fun resolveSeasonStreamsFlow(
+        imdbId: String,
+        season: Int,
+        episodeCount: Int,
+        showName: String,
+        qualityFilter: List<String> = emptyList(),
+        targetBitrateMbps: Double? = null,
+        preferredBingeGroup: String? = null,
+        episodeRuntimeMinutes: Map<Int, Int> = emptyMap(),
+        delayBetweenMs: Long = 2000
+    ): Flow<EpisodeStream?> = flow {
+        for (episode in 1..episodeCount) {
+            // Check cache to decide whether to delay
+            val cacheKey = "series:$imdbId:$season:$episode"
+            val cached = streamCache[cacheKey]
+            val isCacheHit = cached != null &&
+                    System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS &&
+                    !cached.streams.hasRateLimitError()
+
+            if (episode > 1) {
+                // Always delay between episodes: rate-limit protection for uncached, and for
+                // cached gives the TV player time to launch and register its receiver.
+                delay(if (isCacheHit) minOf(delayBetweenMs, 1000L) else delayBetweenMs)
+            }
+
+            try {
+                val streams = resolveStreams("series", "$imdbId:$season:$episode")
+
+                // Score streams: bingeGroup match > bitrate proximity > language > quality
+                val best = streams.maxByOrNull { s ->
+                    scoreStream(s, qualityFilter, targetBitrateMbps, preferredBingeGroup, episodeRuntimeMinutes[episode])
+                }
+
+                if (best != null) {
+                    emit(
+                        EpisodeStream(
+                            season = season,
+                            episode = episode,
+                            title = "$showName S${season}E$episode",
+                            stream = best
+                        )
+                    )
+                } else {
+                    emit(null) // Signal that this episode had no streams
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resolving S${season}E$episode: ${e.message}")
+                emit(null)
+            }
+        }
+    }
+
+    /**
+     * Score a stream for auto-selection. Higher = better.
+     * Includes language preference, quality match, direct URL bonus, and bitrate proximity.
+     */
+    internal fun scoreStream(
+        s: ResolvedStream,
+        qualityFilter: List<String> = emptyList(),
+        targetBitrateMbps: Double? = null,
+        preferredBingeGroup: String? = null,
+        episodeRuntimeMinutes: Int? = null
+    ): Int {
+        val text = "${s.stream.name.orEmpty()} ${s.stream.title.orEmpty()}".lowercase()
+        var score = 0
+
+        // Highest priority: same torrent/release group as Ep1 ensures language consistency
+        if (preferredBingeGroup != null && s.stream.behaviorHints?.bingeGroup == preferredBingeGroup) {
+            score += 20
+        }
+
+        // Language preference: strongly prefer English / Multi-audio
+        val englishPatterns = listOf("english", "eng", "multi", "dual", "multi audio")
+        if (englishPatterns.any { text.contains(it) }) {
+            score += 10
+        }
+        // Deprioritize streams that are explicitly single non-English language
+        val nonEnglishOnly = listOf("german", "deutsch", "french", "français", "spanish", "español", "italian", "italiano", "portuguese", "português")
+        val hasNonEnglish = nonEnglishOnly.any { text.contains(it) }
+        val hasEnglish = englishPatterns.any { text.contains(it) }
+        if (hasNonEnglish && !hasEnglish) {
+            score -= 5
+        }
+
+        // Quality preference
+        if (qualityFilter.isNotEmpty() && qualityFilter.any { text.contains(it.lowercase()) }) {
+            score += 5
+        }
+
+        // Prefer direct URLs
+        if (s.stream.isDirectUrl) score += 1
+
+        // Bitrate proximity scoring
+        if (targetBitrateMbps != null) {
+            val videoSize = s.stream.behaviorHints?.videoSize
+            if (videoSize != null && videoSize > 0) {
+                val runtimeMin = episodeRuntimeMinutes ?: 45
+                val estimatedMbps = videoSize * 8.0 / (runtimeMin * 60 * 1_000_000.0)
+                val proximity = 1.0 / (1.0 + abs(estimatedMbps - targetBitrateMbps))
+                score += (proximity * 15).toInt() // Strong weight for bitrate match
+            }
+        }
+
+        return score
+    }
+
+    /**
      * Internal: Resolve streams from all installed addons in parallel.
      * Returns a complete list (used by season play).
      */
@@ -213,6 +382,7 @@ class AddonRepository(private val addonDao: AddonDao) {
             val finalStreams = results.flatten().sortedByDescending { it.stream.isDirectUrl }
             if (!finalStreams.hasRateLimitError()) {
                 streamCache[cacheKey] = CacheEntry(System.currentTimeMillis(), finalStreams)
+                saveCacheToDisk()
             }
             finalStreams
         }
@@ -269,6 +439,7 @@ class AddonRepository(private val addonDao: AddonDao) {
                         timestamp = System.currentTimeMillis(),
                         streams = finalStreams
                     )
+                    saveCacheToDisk()
                 }
             }
         }
@@ -330,6 +501,7 @@ class AddonRepository(private val addonDao: AddonDao) {
 
                 if (!resultStreams.hasRateLimitError()) {
                     streamCache[cacheKey] = CacheEntry(System.currentTimeMillis(), resultStreams)
+                    saveCacheToDisk()
                 }
 
                 resultStreams
@@ -386,6 +558,7 @@ class AddonRepository(private val addonDao: AddonDao) {
 /**
  * A stream result tagged with the addon it came from.
  */
+@Serializable
 data class ResolvedStream(
     val addonName: String,
     val stream: StremioStream

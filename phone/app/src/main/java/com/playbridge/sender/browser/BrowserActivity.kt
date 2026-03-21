@@ -240,7 +240,7 @@ class BrowserActivity : ComponentActivity() {
             val historyDao = remember { database.historyDao() }
             val bookmarkDao = remember { database.bookmarkDao() }
             val addonDao = remember { database.addonDao() }
-            val addonRepository = remember { com.playbridge.sender.data.library.AddonRepository(addonDao) }
+            val addonRepository = remember { com.playbridge.sender.data.library.AddonRepository(addonDao, cacheDir) }
             val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
             
             // Suggestions State
@@ -398,6 +398,13 @@ class BrowserActivity : ComponentActivity() {
             
             // TV active context - updated via WebSocket messages from TV
             var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
+
+            // TV playlist state - updated via playlist_status messages from TV
+            var tvPlaylistState by remember { mutableStateOf<PlaylistUiState?>(null) }
+            // Now Playing context - set when a playlist play starts from LibraryDetailScreen
+            var nowPlayingTvId by remember { mutableStateOf<Int?>(null) }
+            var nowPlayingSeason by remember { mutableStateOf<Int?>(null) }
+            var nowPlayingEpisodeStart by remember { mutableStateOf<Int>(1) } // episode number of playlist index 0
             
             // Find in Page state
             var showFindBar by remember { mutableStateOf(false) }
@@ -419,8 +426,22 @@ class BrowserActivity : ComponentActivity() {
                     connectionViewModel.webSocketClient.messages.collect { message ->
                         try {
                             val json = org.json.JSONObject(message)
-                            if (json.optString("type") == "context") {
-                                tvActiveContext = json.optString("active", "idle")
+                            when (json.optString("type")) {
+                                "context" -> {
+                                    tvActiveContext = json.optString("active", "idle")
+                                    // Clear playlist state when TV goes idle
+                                    if (tvActiveContext == "idle") {
+                                        tvPlaylistState = null
+                                        nowPlayingTvId = null
+                                        nowPlayingSeason = null
+                                    }
+                                }
+                                "playlist_status" -> {
+                                    tvPlaylistState = PlaylistUiState(
+                                        currentIndex = json.optInt("currentIndex", 0),
+                                        totalCount = json.optInt("totalCount", 0)
+                                    )
+                                }
                             }
                         } catch (_: Exception) { }
                     }
@@ -1508,9 +1529,21 @@ class BrowserActivity : ComponentActivity() {
                                         }
                                         Screen.Library -> {
                                             BackHandler { finish() }
+                                            // Derive the currently playing episode from playlist index + startEpisode
+                                            val nowPlayingEp = tvPlaylistState?.let {
+                                                nowPlayingEpisodeStart + it.currentIndex
+                                            }
                                             LibraryScreen(
                                                 viewModel = libraryViewModel,
                                                 onMenuClick = { scope.launch { drawerState.open() } },
+                                                nowPlayingTvId = nowPlayingTvId,
+                                                nowPlayingSeason = nowPlayingSeason,
+                                                nowPlayingEpisode = nowPlayingEp,
+                                                onNowPlayingClick = {
+                                                    nowPlayingTvId?.let { id ->
+                                                        currentScreen = Screen.TvShowDetail(id)
+                                                    }
+                                                },
                                                 onMovieClick = { movieId ->
                                                     currentScreen = Screen.MovieDetail(movieId)
                                                 },
@@ -1594,21 +1627,37 @@ class BrowserActivity : ComponentActivity() {
                                                             defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" }
                                                         )
                                                     }
-
-                                                    val detectedVideo = DetectedVideo(
-                                                        url = "playlist://library",
-                                                        tabId = -1,
-                                                        timestamp = System.currentTimeMillis(),
-                                                        isPlayable = true,
-                                                        detectedBy = "library_playlist",
-                                                        playlistPayload = itemsWithMode
-                                                    )
-
-                                                    scope.launch {
-                                                        forcePlaylistSheet = detectedVideo
-                                                        showVideoSheet = true
-                                                    }
+                                                    val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode)
+                                                    connectionViewModel.webSocketClient.send(cmd)
                                                 },
+                                                onQueueAdd = { item ->
+                                                    val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                    val itemWithPrefs = item.copy(
+                                                        playerMode = playerMode,
+                                                        preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
+                                                        preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
+                                                        defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" }
+                                                    )
+                                                    connectionViewModel.webSocketClient.send(
+                                                        com.playbridge.protocol.createQueueAddCommandJson(itemWithPrefs)
+                                                    )
+                                                },
+                                                onPlaylistJump = { index ->
+                                                    connectionViewModel.webSocketClient.send(
+                                                        com.playbridge.protocol.createPlaylistJumpCommandJson(index)
+                                                    )
+                                                },
+                                                onNowPlayingStarted = { id, season, startEp ->
+                                                    nowPlayingTvId = id
+                                                    nowPlayingSeason = season
+                                                    nowPlayingEpisodeStart = startEp
+                                                },
+                                                // Highlight the playing season and episode when navigated via play icon
+                                                highlightSeason = if (tvId == nowPlayingTvId) nowPlayingSeason else null,
+                                                highlightEpisode = if (tvId == nowPlayingTvId) {
+                                                    tvPlaylistState?.let { nowPlayingEpisodeStart + it.currentIndex }
+                                                } else null,
+                                                playlistState = tvPlaylistState,
                                                 onBack = { currentScreen = Screen.Library }
                                             )
                                         }

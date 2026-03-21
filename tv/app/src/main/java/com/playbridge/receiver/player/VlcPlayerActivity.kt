@@ -111,6 +111,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     "seek_fwd" -> controlsManager.onSeekForward()
                     "seek_rev" -> controlsManager.onSeekBackward()
                 }
+            } else if (intent?.action == ServerService.ACTION_QUEUE_ADD) {
+                ServerService.drainPendingQueueItems().forEach { payload ->
+                    playlistItems.add(payload)
+                }
+                controlsManager.setPlaylistVisible(true)
+                broadcastPlaylistStatus()
+            } else if (intent?.action == ServerService.ACTION_PLAYLIST_JUMP) {
+                val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
+                if (index >= 0) {
+                    playItemAtIndex(index) // broadcasts status internally
+                }
             }
         }
     }
@@ -203,6 +214,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
             addAction(ServerService.ACTION_CONTROL)
+            addAction(ServerService.ACTION_QUEUE_ADD)
+            addAction(ServerService.ACTION_PLAYLIST_JUMP)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -213,6 +226,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         handleIntent(intent)
+
+        // Drain any queue items that arrived before our receiver was registered.
+        // Must happen AFTER handleIntent because handleIntent replaces playlistItems.
+        ServerService.drainPendingQueueItems().forEach { payload ->
+            playlistItems.add(payload)
+            android.util.Log.i("VlcPlayerActivity", "Queue add (startup drain): ${payload.title ?: payload.url}")
+        }
+        if (playlistItems.isNotEmpty()) {
+            controlsManager.setPlaylistVisible(true)
+            broadcastPlaylistStatus()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -306,6 +330,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         playlistIndex++
         val nextItem = playlistItems[playlistIndex]
         playPlaylistItem(nextItem)
+        broadcastPlaylistStatus()
     }
 
     private fun playPreviousInPlaylist() {
@@ -319,6 +344,34 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         if (playlistItems.isEmpty() || index < 0 || index >= playlistItems.size) return
         playlistIndex = index
         playPlaylistItem(playlistItems[index])
+        broadcastPlaylistStatus()
+    }
+
+    /**
+     * Broadcast current playlist state to the phone via WebSocket.
+     */
+    private fun broadcastPlaylistStatus() {
+        if (playlistItems.isEmpty()) return
+
+        try {
+            val itemsArray = org.json.JSONArray()
+            playlistItems.forEachIndexed { index, item ->
+                itemsArray.put(org.json.JSONObject().apply {
+                    put("index", index)
+                    put("title", item.title ?: "Item ${index + 1}")
+                })
+            }
+            val statusJson = org.json.JSONObject().apply {
+                put("type", "playlist_status")
+                put("items", itemsArray)
+                put("currentIndex", playlistIndex)
+                put("totalCount", playlistItems.size)
+            }.toString()
+
+            ServerService.broadcastPlaylistStatus(statusJson)
+        } catch (e: Exception) {
+            android.util.Log.e("VlcPlayerActivity", "Failed to broadcast playlist status: ${e.message}")
+        }
     }
 
     private fun showPlaylistPicker() {

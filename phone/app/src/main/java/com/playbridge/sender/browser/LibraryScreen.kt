@@ -29,6 +29,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.scale
@@ -54,7 +56,11 @@ fun LibraryScreen(
     viewModel: LibraryViewModel,
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
-    onTvShowClick: (Int) -> Unit
+    onTvShowClick: (Int) -> Unit,
+    nowPlayingTvId: Int? = null,
+    nowPlayingSeason: Int? = null,
+    nowPlayingEpisode: Int? = null,
+    onNowPlayingClick: () -> Unit = {}
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -298,6 +304,32 @@ fun LibraryScreen(
                 },
                 actions = {
                     if (!isSearching) {
+                        // Now Playing button — only visible when a season is being queued
+                        if (nowPlayingTvId != null) {
+                            val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse")
+                            val pulseAlpha by infiniteTransition.animateFloat(
+                                initialValue = 0.6f,
+                                targetValue = 1f,
+                                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                                    animation = androidx.compose.animation.core.tween(800),
+                                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                                ),
+                                label = "pulseAlpha"
+                            )
+                            IconButton(onClick = onNowPlayingClick) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.alpha(pulseAlpha)
+                                ) {
+                                    Icon(
+                                        Icons.Default.PlayCircle,
+                                        contentDescription = "Now Playing",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
+                            }
+                        }
                         IconButton(onClick = { showFilterSheet = true }) {
                             Icon(Icons.Default.FilterList, "Filter")
                         }

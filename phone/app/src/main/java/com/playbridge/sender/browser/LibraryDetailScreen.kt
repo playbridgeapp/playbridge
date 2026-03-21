@@ -248,6 +248,12 @@ fun TvShowDetailScreen(
     addonRepository: AddonRepository,
     onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
     onPlayPlaylist: (items: List<com.playbridge.protocol.PlayPayload>) -> Unit,
+    onQueueAdd: (com.playbridge.protocol.PlayPayload) -> Unit = {},
+    onPlaylistJump: (Int) -> Unit = {},
+    playlistState: PlaylistUiState? = null,
+    onNowPlayingStarted: (tvId: Int, season: Int, startEpisode: Int) -> Unit = { _, _, _ -> },
+    highlightSeason: Int? = null,
+    highlightEpisode: Int? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -259,7 +265,7 @@ fun TvShowDetailScreen(
     var details by remember { mutableStateOf<TmdbTvDetails?>(null) }
     var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
-    var selectedSeason by remember { mutableIntStateOf(1) }
+    var selectedSeason by remember { mutableIntStateOf(highlightSeason ?: 1) }
     var seasonDetails by remember { mutableStateOf<TmdbSeason?>(null) }
     var isSeasonLoading by remember { mutableStateOf(false) }
 
@@ -272,7 +278,16 @@ fun TvShowDetailScreen(
     // Season play state
     var isResolvingSeason by remember { mutableStateOf(false) }
     var seasonResolveProgress by remember { mutableStateOf("") }
-    var showQualityPicker by remember { mutableStateOf(false) }
+
+    // Throttled queue state
+    var queuedCount by remember { mutableIntStateOf(0) }
+    var queueTotalCount by remember { mutableIntStateOf(0) }
+    var isQueueing by remember { mutableStateOf(false) }
+
+    // Episode selection for stream picker
+    var currentEpisodeSelection by remember { mutableStateOf<TmdbEpisode?>(null) }
+    // Context for season queue operations (holds episode list & preferences while Ep1 stream picker is open)
+    var seasonQueueContext by remember { mutableStateOf<SeasonQueueContext?>(null) }
 
     LaunchedEffect(tvId) {
         isLoading = true
@@ -293,108 +308,16 @@ fun TvShowDetailScreen(
         }
     }
 
-    // Quality picker dialog for Play Season
-    if (showQualityPicker) {
-        val qualityOptions = listOf(
-            "Any" to emptyList(),
-            "4K / 2160p" to listOf("2160p", "4k", "uhd"),
-            "1080p" to listOf("1080p", "1080"),
-            "720p" to listOf("720p", "720")
-        )
+    // Stream picker sheet — when seasonQueueContext is set, picking a stream for Ep1
+    // triggers the throttled queue for the rest of the season
 
-        AlertDialog(
-            onDismissRequest = { showQualityPicker = false },
-            title = { Text("Select Quality") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    qualityOptions.forEach { (label, filters) ->
-                        TextButton(
-                            onClick = {
-                                showQualityPicker = false
-                                val show = details ?: return@TextButton
-                                val imdbId = show.imdbId ?: return@TextButton
-                                val episodes = seasonDetails?.episodes ?: return@TextButton
-
-                                isResolvingSeason = true
-                                seasonResolveProgress = "Resolving (${label})…"
-                                scope.launch {
-                                    val episodeStreams = addonRepository.resolveSeasonStreams(
-                                        imdbId = imdbId,
-                                        season = selectedSeason,
-                                        episodeCount = episodes.size,
-                                        showName = show.name,
-                                        qualityFilter = filters
-                                    )
-                                    isResolvingSeason = false
-
-                                    if (episodeStreams.isEmpty()) {
-                                        Toast.makeText(context, "No streams found for any episode", Toast.LENGTH_SHORT).show()
-                                        return@launch
-                                    }
-
-                                    val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-                                    val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
-
-                                    val playlistItems = episodeStreams.map { ep ->
-                                        val subtitles = if (prefLang.isNotEmpty()) {
-                                            try {
-                                                val allSubs = subtitleService.getSubtitlesForEpisode(imdbId, selectedSeason, ep.episode)
-                                                allSubs.mapNotNull { it.url }
-                                            } catch (e: Exception) {
-                                                emptyList()
-                                            }
-                                        } else {
-                                            emptyList()
-                                        }
-
-                                        com.playbridge.protocol.PlayPayload(
-                                            url = ep.stream.stream.url ?: "",
-                                            title = ep.title,
-                                            subtitles = subtitles.ifEmpty { null }
-                                        )
-                                    }.filter { it.url.isNotBlank() }
-
-                                    if (playlistItems.isEmpty()) {
-                                        Toast.makeText(context, "No playable streams found", Toast.LENGTH_SHORT).show()
-                                        return@launch
-                                    }
-
-                                    // Instead of directly calling onPlayPlaylist, wrap it in a DetectedVideo
-                                    // and trigger DetectedVideosSheet (which we will handle by calling onPlayPlaylist in BrowserActivity via a special trigger,
-                                    // or just execute directly here via another sheet).
-                                    // Wait, it is cleaner if BrowserActivity handles DetectedVideosSheet rendering.
-                                    // But LibraryDetailScreen is a child of BrowserActivity and can just pass the List<PlayPayload> back.
-                                    onPlayPlaylist(playlistItems)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showQualityPicker = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    // State to keep track of selected episode to fetch specific subtitles
-    var currentEpisodeSelection by remember { mutableStateOf<TmdbEpisode?>(null) }
-
-    // Stream picker sheet
     if (showStreamPicker) {
+        val episodeRuntime = currentEpisodeSelection?.runtime
         StreamPickerSheet(
             streams = resolvedStreams,
             isLoading = isResolving,
             title = streamPickerTitle,
+            episodeRuntimeMinutes = episodeRuntime,
             onStreamSelected = { resolved ->
                 showStreamPicker = false
                 val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
@@ -418,11 +341,91 @@ fun TvShowDetailScreen(
                         }
                     } else emptyList()
 
-                    onPlayStream(streamUrl, streamPickerTitle, subtitles.ifEmpty { null })
-                    Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+                    val ep1Payload = com.playbridge.protocol.PlayPayload(
+                        url = streamUrl,
+                        title = streamPickerTitle,
+                        subtitles = subtitles.ifEmpty { null }
+                    )
+
+                    val sqCtx = seasonQueueContext
+                    if (sqCtx != null) {
+                        // Season play: send Ep1 as a 1-item playlist so the TV enters
+                        // playlist mode immediately (ExoPlayer playlist button shows)
+                        seasonQueueContext = null
+                        onPlayPlaylist(listOf(ep1Payload))
+                        // Notify BrowserActivity of which show/season is now playing
+                        val startEp = sqCtx.episodes.firstOrNull()?.episodeNumber ?: 1
+                        onNowPlayingStarted(tvId, sqCtx.season, startEp)
+                        Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+
+                        // Derive target bitrate + bingeGroup from selected Ep1 stream
+                        val ep1Runtime = currentEpisodeSelection?.runtime
+                        val targetMbps = resolved.stream.behaviorHints?.calculateMbps(ep1Runtime)
+                        val preferredBingeGroup = resolved.stream.behaviorHints?.bingeGroup
+
+                        // Start background queue for Eps 2+
+                        val totalEpisodes = sqCtx.episodes.size
+                        queueTotalCount = totalEpisodes
+                        queuedCount = 1 // Ep1 is already playing
+                        isQueueing = true
+                        isResolvingSeason = true
+                        seasonResolveProgress = "Queuing: 1/$totalEpisodes"
+
+                        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                        val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
+
+                        addonRepository.resolveSeasonStreamsFlow(
+                            imdbId = sqCtx.imdbId,
+                            season = sqCtx.season,
+                            episodeCount = totalEpisodes,
+                            showName = sqCtx.showName,
+                            qualityFilter = sqCtx.qualityFilter,
+                            targetBitrateMbps = targetMbps,
+                            preferredBingeGroup = preferredBingeGroup,
+                            episodeRuntimeMinutes = sqCtx.runtimeMap,
+                            delayBetweenMs = 2000
+                        ).collect { episodeStream ->
+                            // Skip Ep1 — already playing
+                            if (episodeStream != null && episodeStream.episode > 1) {
+                                val epUrl = episodeStream.stream.stream.url
+                                if (!epUrl.isNullOrBlank()) {
+                                    val epSubs = if (prefLang.isNotEmpty()) {
+                                        try {
+                                            val allSubs = subtitleService.getSubtitlesForEpisode(
+                                                sqCtx.imdbId, sqCtx.season, episodeStream.episode
+                                            )
+                                            allSubs.mapNotNull { it.url }
+                                        } catch (_: Exception) { emptyList() }
+                                    } else emptyList()
+
+                                    onQueueAdd(
+                                        com.playbridge.protocol.PlayPayload(
+                                            url = epUrl,
+                                            title = episodeStream.title,
+                                            subtitles = epSubs.ifEmpty { null }
+                                        )
+                                    )
+                                    queuedCount++
+                                    seasonResolveProgress = "Queuing: $queuedCount/$totalEpisodes"
+                                }
+                            }
+                        }
+
+                        isResolvingSeason = false
+                        isQueueing = false
+                        seasonResolveProgress = ""
+                        Toast.makeText(context, "All $queuedCount episodes queued", Toast.LENGTH_SHORT).show()
+                    } else {
+                        // Single episode play (not season queue)
+                        onPlayStream(streamUrl, streamPickerTitle, subtitles.ifEmpty { null })
+                        Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+                    }
                 }
             },
-            onDismiss = { showStreamPicker = false }
+            onDismiss = {
+                showStreamPicker = false
+                seasonQueueContext = null
+            }
         )
     }
 
@@ -539,9 +542,59 @@ fun TvShowDetailScreen(
                             label = if (isResolvingSeason) seasonResolveProgress else "Play Season $selectedSeason (${episodes.size} episodes)",
                             enabled = !isResolvingSeason,
                             onClick = {
-                                showQualityPicker = true
+                                val ep1 = episodes.firstOrNull() ?: return@PlayButton
+                                val runtimeMap = episodes.associate { ep ->
+                                    ep.episodeNumber to (ep.runtime ?: 45)
+                                }
+                                currentEpisodeSelection = ep1
+                                streamPickerTitle = "${show.name} S${selectedSeason}E${ep1.episodeNumber}"
+                                resolvedStreams = emptyList()
+                                showStreamPicker = true
+                                isResolving = true
+                                scope.launch {
+                                    addonRepository.resolveEpisodeStreamsFlow(
+                                        imdbId, selectedSeason, ep1.episodeNumber
+                                    ).collect { latest ->
+                                        resolvedStreams = latest
+                                    }
+                                    isResolving = false
+                                }
+                                seasonQueueContext = SeasonQueueContext(
+                                    imdbId = imdbId,
+                                    season = selectedSeason,
+                                    episodes = episodes,
+                                    showName = show.name,
+                                    qualityFilter = emptyList(),
+                                    runtimeMap = runtimeMap
+                                )
                             }
                         )
+                    }
+                }
+
+                // Queuing progress — slim bar below the Play Season button
+                if (isQueueing && queueTotalCount > 0) {
+                    item {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .padding(bottom = 8.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                progress = { queuedCount.toFloat() / queueTotalCount },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(2.dp)
+                                    .clip(RoundedCornerShape(1.dp))
+                            )
+                            Text(
+                                text = "Queuing $queuedCount / $queueTotalCount episodes…",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
                     }
                 }
 
@@ -561,13 +614,37 @@ fun TvShowDetailScreen(
 
                 // Episodes list
                 val episodes = seasonDetails?.episodes ?: emptyList()
+                val isActivePlaylistSeason = highlightSeason != null &&
+                        selectedSeason == highlightSeason &&
+                        playlistState != null
+                // Episode number of playlist index 0, derived from current playing ep and current index
+                val startEpisodeNumber = if (highlightEpisode != null && playlistState != null) {
+                    highlightEpisode - playlistState.currentIndex
+                } else null
                 items(episodes.size) { index ->
                     val episode = episodes[index]
+                    val epPlaylistIndex = if (startEpisodeNumber != null) {
+                        episode.episodeNumber - startEpisodeNumber
+                    } else -1
+                    val isEpPlaying = isActivePlaylistSeason &&
+                            epPlaylistIndex == playlistState?.currentIndex
+                    val isEpQueued = isActivePlaylistSeason &&
+                            epPlaylistIndex >= 0 &&
+                            epPlaylistIndex < (playlistState?.totalCount ?: 0) &&
+                            !isEpPlaying
                     EpisodeItem(
                         episode = episode,
                         hasAddon = imdbId != null,
+                        isPlaying = isEpPlaying,
+                        isInActivePlaylist = isEpQueued,
                         onPlay = {
                             if (imdbId != null) {
+                                // Jump if this episode is in the active playlist and queuing is done
+                                if (!isQueueing && (isEpPlaying || isEpQueued)) {
+                                    onPlaylistJump(epPlaylistIndex)
+                                    return@EpisodeItem
+                                }
+                                // Otherwise open stream picker for this episode
                                 currentEpisodeSelection = episode
                                 streamPickerTitle = "${show.name} S${episode.seasonNumber}E${episode.episodeNumber}"
                                 resolvedStreams = emptyList()
@@ -762,13 +839,21 @@ private fun PlayButton(
 private fun EpisodeItem(
     episode: TmdbEpisode,
     hasAddon: Boolean = false,
+    isPlaying: Boolean = false,
+    isInActivePlaylist: Boolean = false,
     onPlay: (() -> Unit)? = null
 ) {
+    val containerColor = when {
+        isPlaying -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+        isInActivePlaylist -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        else -> MaterialTheme.colorScheme.surface
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
         Row(
             modifier = Modifier
@@ -835,17 +920,56 @@ private fun EpisodeItem(
                 )
             }
 
-            // Play button per episode
+            // Action button
             if (hasAddon && onPlay != null) {
-                IconButton(onClick = onPlay) {
-                    Icon(
-                        Icons.Default.PlayCircle,
-                        contentDescription = "Play episode",
+                when {
+                    isPlaying -> Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Now playing",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(32.dp)
                     )
+                    isInActivePlaylist -> IconButton(onClick = onPlay) {
+                        Icon(
+                            Icons.Default.PlayCircleOutline,
+                            contentDescription = "Jump to episode",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                    else -> IconButton(onClick = onPlay) {
+                        Icon(
+                            Icons.Default.PlayCircle,
+                            contentDescription = "Play episode",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+// ==================== Queue / Playlist Data Classes ====================
+
+/**
+ * Context for a season queue operation (stored while the stream picker is open for Ep1)
+ */
+data class SeasonQueueContext(
+    val imdbId: String,
+    val season: Int,
+    val episodes: List<TmdbEpisode>,
+    val showName: String,
+    val qualityFilter: List<String>,
+    val runtimeMap: Map<Int, Int>
+)
+
+/**
+ * UI state for the playlist synced from the TV
+ */
+data class PlaylistUiState(
+    val currentIndex: Int = 0,
+    val totalCount: Int = 0
+)
+

@@ -108,6 +108,20 @@ class ExoPlayerActivity : PlayerActivity() {
                         playVideo(url, title, contentType, detectedBy, headers, subtitles)
                     }
                 }
+                ServerService.ACTION_QUEUE_ADD -> {
+                    ServerService.drainPendingQueueItems().forEach { payload ->
+                        playlistItems.add(payload)
+                        FileLogger.i(TAG, "Queue add: ${payload.title ?: payload.url} — playlist now has ${playlistItems.size} items")
+                    }
+                    broadcastPlaylistStatus()
+                }
+                ServerService.ACTION_PLAYLIST_JUMP -> {
+                    val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
+                    if (index >= 0) {
+                        FileLogger.i(TAG, "Playlist jump to index: $index")
+                        playItemAtIndex(index) // broadcasts status internally after updating playlistIndex
+                    }
+                }
             }
         }
     }
@@ -224,6 +238,8 @@ class ExoPlayerActivity : PlayerActivity() {
             addAction(ServerService.ACTION_CONTROL)
             addAction(ServerService.ACTION_REMOTE)
             addAction(ServerService.ACTION_PLAY)
+            addAction(ServerService.ACTION_QUEUE_ADD)
+            addAction(ServerService.ACTION_PLAYLIST_JUMP)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(controlReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -233,6 +249,17 @@ class ExoPlayerActivity : PlayerActivity() {
 
         // Handle initial intent
         handleIntent(intent)
+
+        // Drain any queue items that arrived before our receiver was registered.
+        // Must happen AFTER handleIntent because handleIntent replaces playlistItems.
+        ServerService.drainPendingQueueItems().forEach { payload ->
+            playlistItems.add(payload)
+            FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
+        }
+        if (playlistItems.isNotEmpty()) {
+            controlsManager.setPlaylistVisible(true)
+            broadcastPlaylistStatus()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -969,6 +996,7 @@ class ExoPlayerActivity : PlayerActivity() {
             )
             videoFilterManager.reapplyFilter()
             controlsManager.hideUI()
+            broadcastPlaylistStatus()
         }
     }
 
@@ -1013,6 +1041,34 @@ class ExoPlayerActivity : PlayerActivity() {
             )
             videoFilterManager.reapplyFilter()
             controlsManager.hideUI()
+            broadcastPlaylistStatus()
+        }
+    }
+
+    /**
+     * Broadcast current playlist state to the phone via WebSocket.
+     */
+    private fun broadcastPlaylistStatus() {
+        if (playlistItems.isEmpty()) return
+
+        try {
+            val itemsArray = org.json.JSONArray()
+            playlistItems.forEachIndexed { index, item ->
+                itemsArray.put(org.json.JSONObject().apply {
+                    put("index", index)
+                    put("title", item.title ?: "Item ${index + 1}")
+                })
+            }
+            val statusJson = org.json.JSONObject().apply {
+                put("type", "playlist_status")
+                put("items", itemsArray)
+                put("currentIndex", playlistIndex)
+                put("totalCount", playlistItems.size)
+            }.toString()
+
+            ServerService.broadcastPlaylistStatus(statusJson)
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Failed to broadcast playlist status: ${e.message}")
         }
     }
 
