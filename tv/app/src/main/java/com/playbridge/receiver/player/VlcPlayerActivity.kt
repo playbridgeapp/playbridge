@@ -56,29 +56,24 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     // Settings dialog state
     private var activeDialog: android.app.Dialog? = null
+    private var surfaceLayoutListener: android.view.View.OnLayoutChangeListener? = null
 
     private lateinit var progressManager: ProgressManager
     private lateinit var historyStore: HistoryStore
 
     // Seek buffering
     private var pendingSeekTime: Long? = null
+    private var pendingResumeTime: Long? = null
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val seekResyncRunnable = Runnable {
-        // Force VLC to resync video/audio after a large seek — without this, video can
-        // freeze while audio keeps playing because VLC drops "late" video frames post-seek.
-        val player = mediaPlayer ?: return@Runnable
-        if (player.isPlaying) {
-            player.pause()
-            player.play()
-        }
-    }
     private val performSeekRunnable = Runnable {
         pendingSeekTime?.let { targetTime ->
             mediaPlayer?.time = targetTime
             pendingSeekTime = null
-            controlsManager.setPendingSeekTime(null)
-            seekHandler.removeCallbacks(seekResyncRunnable)
-            seekHandler.postDelayed(seekResyncRunnable, 500)
+            // Do NOT clear the pending seek time in the controls manager yet.
+            // VLC's seek is async — player.time still reflects the pre-seek position until VLC
+            // confirms it. Clearing activePendingSeekTime here would let the 1s poll snap the
+            // seekbar back to the old position. Instead, keep showing the target and let
+            // VlcControlsManager.updateProgress() auto-clear once player.time catches up.
         }
     }
 
@@ -175,21 +170,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             attachViews()
         }
 
-        // Listen for end of playback to advance playlist
-        mediaPlayer?.setEventListener { event ->
-            if (event.type == MediaPlayer.Event.EndReached) {
-                if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
-                    runOnUiThread {
-                        playNextInPlaylist()
-                    }
-                } else {
-                    runOnUiThread {
-                        finish()
-                    }
-                }
-            }
-        }
-
         // Set video scale to 0 (fit to screen)
         mediaPlayer?.scale = 0f
 
@@ -219,6 +199,29 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         )
 
         controlsManager.attachPlayer()
+
+        // Single unified event listener — VlcControlsManager.handleEvent() handles UI state;
+        // activity-level logic (EndReached, pendingResumeTime) is handled here.
+        // Must be set AFTER controlsManager is initialised so handleEvent() is safe to call.
+        mediaPlayer?.setEventListener { event ->
+            controlsManager.handleEvent(event)
+            when (event.type) {
+                MediaPlayer.Event.Playing -> {
+                    // Defer resume seek until VLC is actually playing and ready to accept seeks.
+                    pendingResumeTime?.let { resumeAt ->
+                        pendingResumeTime = null
+                        runOnUiThread { mediaPlayer?.time = resumeAt }
+                    }
+                }
+                MediaPlayer.Event.EndReached -> {
+                    if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
+                        runOnUiThread { playNextInPlaylist() }
+                    } else {
+                        runOnUiThread { finish() }
+                    }
+                }
+            }
+        }
 
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
@@ -347,6 +350,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         playlistIndex--
         val prevItem = playlistItems[playlistIndex]
         playPlaylistItem(prevItem)
+        broadcastPlaylistStatus()
     }
 
     private fun playItemAtIndex(index: Int) {
@@ -445,8 +449,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private fun handleVlcError() {
         runOnUiThread {
-            android.widget.Toast.makeText(this, "VLC encountered an error", android.widget.Toast.LENGTH_SHORT).show()
-            if (playlistItems.isEmpty()) {
+            if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
+                android.widget.Toast.makeText(this, "Link failed, skipping to next...", android.widget.Toast.LENGTH_SHORT).show()
+                playNextInPlaylist()
+            } else {
+                android.widget.Toast.makeText(this, "VLC encountered an error", android.widget.Toast.LENGTH_SHORT).show()
                 finish()
             }
         }
@@ -535,12 +542,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 mediaPlayer?.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, android.net.Uri.parse(it), true)
             }
 
-            // VLC needs to be playing to reliably accept seek commands for a new media source
-            mediaPlayer?.play()
+            // Stage the resume seek so the Playing event handler applies it once VLC
+            // has buffered enough to reliably accept the command.
+            pendingResumeTime = if (finalResumeTime != null && finalResumeTime > 0) finalResumeTime else null
 
-            if (finalResumeTime != null && finalResumeTime > 0) {
-                mediaPlayer?.time = finalResumeTime
-            }
+            mediaPlayer?.play()
 
             if (startPaused) {
                 mediaPlayer?.pause()
@@ -686,8 +692,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         progressManager.saveProgress()
         super.onDestroy()
         seekHandler.removeCallbacks(performSeekRunnable)
-        seekHandler.removeCallbacks(seekResyncRunnable)
         unregisterReceiver(remoteReceiver)
+        mediaPlayer?.setEventListener(null)
         controlsManager.detachPlayer()
         mediaPlayer?.vlcVout?.apply {
             removeCallback(this@VlcPlayerActivity)
@@ -720,7 +726,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         controlsManager.setPendingSeekTime(newTime)
 
         seekHandler.removeCallbacks(performSeekRunnable)
-        seekHandler.removeCallbacks(seekResyncRunnable)
         seekHandler.postDelayed(performSeekRunnable, 400)
 
         controlsManager.showSeekUI()
@@ -819,12 +824,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onResume() {
         super.onResume()
-        surfaceView.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+        surfaceLayoutListener?.let { surfaceView.removeOnLayoutChangeListener(it) }
+        val listener = android.view.View.OnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
             val width = right - left
             val height = bottom - top
             if (width > 0 && height > 0) {
                 mediaPlayer?.vlcVout?.setWindowSize(width, height)
             }
         }
+        surfaceLayoutListener = listener
+        surfaceView.addOnLayoutChangeListener(listener)
     }
 }

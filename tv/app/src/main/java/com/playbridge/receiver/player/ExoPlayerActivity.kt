@@ -113,6 +113,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         playlistItems.add(payload)
                         FileLogger.i(TAG, "Queue add: ${payload.title ?: payload.url} — playlist now has ${playlistItems.size} items")
                     }
+                    controlsManager.setPlaylistVisible(true)
                     broadcastPlaylistStatus()
                 }
                 ServerService.ACTION_PLAYLIST_JUMP -> {
@@ -229,9 +230,6 @@ class ExoPlayerActivity : PlayerActivity() {
             playerProvider = { player },
             controls = controlsManager
         )
-
-        // Initialize ExoPlayer
-        initializePlayer()
 
         // Register broadcast receiver for control commands
         val filter = IntentFilter().apply {
@@ -559,8 +557,6 @@ class ExoPlayerActivity : PlayerActivity() {
              androidx.media3.exoplayer.source.DefaultMediaSourceFactory(okHttpDataSourceFactory, extractorsFactory)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         }
-
-        releasePlayer()
 
         val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
             override fun buildTextRenderers(
@@ -1233,7 +1229,7 @@ class ExoPlayerActivity : PlayerActivity() {
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener {
             activeDialog = null
-            player?.play()
+            if (wasPlaying) player?.play()
             controlsManager.hideUI()
         }
 
@@ -1288,8 +1284,6 @@ class ExoPlayerActivity : PlayerActivity() {
                     currentVideoScalingMode = liveVideoScalingMode,
                     onDismiss = {
                         dialog.dismiss()
-                        if (wasPlaying) player.play()
-                        controlsManager.showControlsUI()
                     },
                     onTrackSelected = { trackType, format ->
                         if (trackType == androidx.media3.common.C.TRACK_TYPE_TEXT) {
@@ -1340,7 +1334,7 @@ class ExoPlayerActivity : PlayerActivity() {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) player.play()
-            controlsManager.hideUI()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }

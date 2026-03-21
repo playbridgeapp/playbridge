@@ -47,12 +47,20 @@ class VlcControlsManager(
         }
     }
 
-    private val playerListener = MediaPlayer.EventListener { event ->
+    /**
+     * Dispatch a VLC MediaPlayer event into the controls layer.
+     * VlcPlayerActivity owns the single setEventListener call and forwards here,
+     * so it can also handle EndReached and other activity-level events in the
+     * same listener without one overwriting the other.
+     */
+    fun handleEvent(event: MediaPlayer.Event) {
         when (event.type) {
             MediaPlayer.Event.Playing -> {
                 handler.post {
                     playPauseButton.setImageResource(android.R.drawable.ic_media_pause)
-                    bufferingSpinner.visibility = View.GONE
+                    // Do NOT hide the buffering spinner here — the Buffering event (buffering==100f)
+                    // is the correct signal. Hiding it on Playing causes the spinner to vanish
+                    // before VLC has finished re-buffering at the seeked position.
                     hideControls()
                 }
             }
@@ -71,8 +79,7 @@ class VlcControlsManager(
                 }
             }
             MediaPlayer.Event.TimeChanged -> {
-                // Time update is handled by the poll loop when controls are visible,
-                // but we could also update here if we want more frequent updates
+                // Time update is handled by the poll loop when controls are visible
             }
             MediaPlayer.Event.LengthChanged -> {
                 handler.post { updateProgress() }
@@ -134,18 +141,19 @@ class VlcControlsManager(
         activePendingSeekTime = time
         if (time != null) {
             updatePendingSeekProgress(time)
-        } else {
-            updateProgress()
         }
+        // When time is null (seek committed), do NOT call updateProgress() — VLC's seek is async
+        // and player.time still reflects the pre-seek position at this point, which would snap
+        // the seekbar back. The 1s poll loop will pick up the real position once VLC confirms it.
     }
 
     fun attachPlayer() {
-        playerProvider()?.setEventListener(playerListener)
+        // Event listener is owned by VlcPlayerActivity via a single setEventListener call
+        // that dispatches to handleEvent(). We just kick off the progress poll here.
         updateProgress()
     }
 
     fun detachPlayer() {
-        playerProvider()?.setEventListener(null)
         handler.removeCallbacks(updateProgressRunnable)
         handler.removeCallbacks(autoHideRunnable)
     }
@@ -249,11 +257,22 @@ class VlcControlsManager(
     fun isFullOverlayVisible() = isControlsVisible
 
     private fun updateProgress() {
-        if (activePendingSeekTime != null) return // Don't override progress if a seek is pending
-
         val player = playerProvider() ?: return
         val position = player.time
         val duration = player.length
+
+        val target = activePendingSeekTime
+        if (target != null) {
+            // Keep showing the committed seek target until VLC confirms the seek by advancing
+            // player.time to within 3 seconds of the target. Without this, the 1s poll would
+            // snap the seekbar back to the pre-seek position while VLC's async seek is in flight.
+            if (position > 0 && Math.abs(position - target) < 3000L) {
+                activePendingSeekTime = null
+            } else {
+                updatePendingSeekProgress(target)
+                return
+            }
+        }
 
         if (duration > 0) {
             val progressPercent = (position.toFloat() / duration.toFloat()) * 1000
