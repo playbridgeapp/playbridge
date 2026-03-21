@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import okhttp3.Request
 
 private const val TAG = "ServerService"
 private const val CHANNEL_ID = "playbridge_server"
@@ -138,7 +139,8 @@ class ServerService : Service() {
                 server.start()
             }
 
-            webSocketServer = WebSocketServer(port = port, authToken = token).also { server ->
+            val subtitleDir = java.io.File(cacheDir, "subtitles").also { it.mkdirs() }
+            webSocketServer = WebSocketServer(port = port, authToken = token, subtitleDir = subtitleDir).also { server ->
                 server.start()
                 
                 // Register NSD service
@@ -231,33 +233,48 @@ class ServerService : Service() {
                     activeContext = "external_player"
                     broadcastContext()
 
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        setClassName("is.xyz.mpv", "is.xyz.mpv.MPVActivity")
-                        data = android.net.Uri.parse(command.url)
-
-                        command.title?.let { title ->
-                            putExtra(Intent.EXTRA_TITLE, title)
-                            putExtra("title", title)
-                        }
-
+                    // Download subtitles on the TV side (with the video's headers) before launching
+                    // MPV. Serving them via the local HTTP server guarantees MPV can access them
+                    // regardless of auth, redirects, or SSL quirks on the original URL.
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                         val subs = command.subtitles
-                        if (!subs.isNullOrEmpty()) {
-                            putExtra("sub-files", subs.joinToString("\n"))
+                        val localSubUrls = if (!subs.isNullOrEmpty()) {
+                            val serverPort = _serverInfo.value?.port
+                            val localFiles = downloadSubtitlesToCache(subs, command.headers)
+                            if (localFiles.isNotEmpty() && serverPort != null) {
+                                localFiles.map { "http://127.0.0.1:$serverPort/subtitle/${it.name}" }
+                            } else subs // fallback to original URLs if download failed
+                        } else emptyList()
+
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setClassName("is.xyz.mpv", "is.xyz.mpv.MPVActivity")
+                            data = android.net.Uri.parse(command.url)
+
+                            command.title?.let { title ->
+                                putExtra(Intent.EXTRA_TITLE, title)
+                                putExtra("title", title)
+                            }
+
+                            if (localSubUrls.size == 1) {
+                                putExtra("sub", localSubUrls[0])
+                            } else if (localSubUrls.size > 1) {
+                                putExtra("sub-files", localSubUrls.joinToString("\n"))
+                            }
+
+                            val hdrs = command.headers
+                            if (!hdrs.isNullOrEmpty()) {
+                                val headersStr = hdrs.map { (key, value) ->
+                                    val escapedValue = value.replace(",", "\\,")
+                                    "$key: $escapedValue"
+                                }.joinToString(",")
+                                putExtra("http-header-fields", headersStr)
+                            }
+
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         }
 
-                        val hdrs = command.headers
-                        if (!hdrs.isNullOrEmpty()) {
-                            val headersStr = hdrs.map { (key, value) ->
-                                val escapedValue = value.replace(",", "\\,")
-                                "$key: $escapedValue"
-                            }.joinToString(",")
-                            putExtra("http-header-fields", headersStr)
-                        }
-
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        launchActivityFromBackground(intent, "Playing media in MPV")
                     }
-
-                    launchActivityFromBackground(intent, "Playing media in MPV")
                 } else if (useExternalPlayer) {
                     activeContext = "external_player"
                     broadcastContext()
@@ -472,6 +489,35 @@ class ServerService : Service() {
         }
     }
     
+    /**
+     * Downloads subtitle URLs to the local subtitle cache directory using the provided headers.
+     * Returns the list of successfully downloaded [File]s in the same order as [subtitleUrls].
+     */
+    private fun downloadSubtitlesToCache(subtitleUrls: List<String>, headers: Map<String, String>?): List<java.io.File> {
+        val subtitleDir = java.io.File(cacheDir, "subtitles").also { it.mkdirs() }
+        val client = com.playbridge.receiver.player.ContentSniffer().getUnsafeOkHttpClient(headers)
+        return subtitleUrls.mapIndexedNotNull { index, url ->
+            try {
+                val ext = if (url.contains(".vtt", ignoreCase = true)) "vtt" else "srt"
+                val file = java.io.File(subtitleDir, "sub_$index.$ext")
+                val request = Request.Builder().url(url).build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        file.writeBytes(response.body!!.bytes())
+                        FileLogger.i(TAG, "Downloaded subtitle [$index] → ${file.name}")
+                        file
+                    } else {
+                        FileLogger.e(TAG, "Subtitle download failed: $url (HTTP ${response.code})")
+                        null
+                    }
+                }
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Subtitle download error: $url", e)
+                null
+            }
+        }
+    }
+
     /**
      * Launches an activity from the background (e.g. when the app is not in the foreground).
      *

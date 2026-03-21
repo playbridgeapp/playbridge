@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 
@@ -30,7 +31,8 @@ private const val TAG = "WebSocketServer"
  */
 class WebSocketServer(
     private val port: Int = com.playbridge.protocol.Config.DEFAULT_PORT,
-    private val authToken: String
+    private val authToken: String,
+    private val subtitleDir: File? = null
 ) {
     private var server: EmbeddedServer<*, *>? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -102,6 +104,25 @@ class WebSocketServer(
                         delete("/logs") {
                             FileLogger.clearLogs()
                             call.respondText("Logs cleared.", ContentType.Text.Plain)
+                        }
+
+                        // HTTP endpoint: serve locally-cached subtitle files to external players (e.g. MPV)
+                        get("/subtitle/{filename}") {
+                            val filename = call.parameters["filename"]
+                                ?: return@get call.respond(HttpStatusCode.BadRequest, "Missing filename")
+                            val dir = subtitleDir
+                                ?: return@get call.respond(HttpStatusCode.NotFound, "No subtitle cache")
+                            val file = File(dir, filename)
+                            // Guard against path traversal
+                            if (!file.canonicalPath.startsWith(dir.canonicalPath)) {
+                                call.respond(HttpStatusCode.BadRequest, "Invalid path")
+                                return@get
+                            }
+                            if (!file.exists()) {
+                                call.respond(HttpStatusCode.NotFound, "Subtitle not found")
+                                return@get
+                            }
+                            call.respondBytes(file.readBytes(), ContentType.Text.Plain)
                         }
 
                         webSocket("/") {
