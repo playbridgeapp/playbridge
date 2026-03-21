@@ -60,7 +60,8 @@ fun LibraryScreen(
     nowPlayingTvId: Int? = null,
     nowPlayingSeason: Int? = null,
     nowPlayingEpisode: Int? = null,
-    onNowPlayingClick: () -> Unit = {}
+    onNowPlayingClick: () -> Unit = {},
+    onRemoteClick: (() -> Unit)? = null
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -328,6 +329,11 @@ fun LibraryScreen(
                                         modifier = Modifier.size(26.dp)
                                     )
                                 }
+                            }
+                        }
+                        if (onRemoteClick != null) {
+                            IconButton(onClick = onRemoteClick) {
+                                Icon(Icons.Default.Gamepad, "Remote Control", tint = MaterialTheme.colorScheme.primary)
                             }
                         }
                         IconButton(onClick = { showFilterSheet = true }) {

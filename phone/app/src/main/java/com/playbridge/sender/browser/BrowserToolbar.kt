@@ -40,6 +40,7 @@ fun BrowserToolbar(
     onMenuClick: () -> Unit,
     onDrawerClick: () -> Unit = {},
     onTabsClick: () -> Unit = {},
+    onRemoteClick: (() -> Unit)? = null,
     isEditing: Boolean = false,
     isSecure: Boolean = false,
     isDesktopMode: Boolean = false,
@@ -229,7 +230,22 @@ fun BrowserToolbar(
                 
                 if (!isEditing) {
                     Spacer(modifier = Modifier.width(4.dp))
-                    
+
+                    // Remote control shortcut (only when connected to TV)
+                    if (onRemoteClick != null) {
+                        IconButton(
+                            onClick = onRemoteClick,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Gamepad,
+                                contentDescription = "Remote Control",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
                     // Tabs button with badge
                     IconButton(
                         onClick = onTabsClick,

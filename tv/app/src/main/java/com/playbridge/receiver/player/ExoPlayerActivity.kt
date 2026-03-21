@@ -701,6 +701,15 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
+            // Live stream fell behind the available DVR window — seek back to the live edge and resume.
+            // Without this, the error falls through to the playlist-skip logic and drops the channel.
+            if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                FileLogger.w(TAG, "Behind live window, seeking to live edge")
+                player?.seekToDefaultPosition()
+                player?.prepare()
+                return
+            }
+
             val isAudioDiscontinuity = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ||
                                        error.cause is androidx.media3.exoplayer.audio.AudioSink.UnexpectedDiscontinuityException
 

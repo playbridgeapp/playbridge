@@ -24,7 +24,8 @@ fun DebridLibraryScreen(
     onMenuClick: () -> Unit,
     onCopyUrl: (String) -> Unit,
     onPlayOnTv: (String, String, List<String>?) -> Unit, // url, title, subtitles
-    onPlayPlaylistOnTv: (List<com.playbridge.protocol.PlayPayload>) -> Unit = {}
+    onPlayPlaylistOnTv: (List<com.playbridge.protocol.PlayPayload>) -> Unit = {},
+    onRemoteClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -76,6 +77,11 @@ fun DebridLibraryScreen(
                     }
                 },
                 actions = {
+                    if (onRemoteClick != null) {
+                        IconButton(onClick = onRemoteClick) {
+                            Icon(Icons.Default.Gamepad, "Remote Control", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
                     IconButton(onClick = { loadTorrents() }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }
