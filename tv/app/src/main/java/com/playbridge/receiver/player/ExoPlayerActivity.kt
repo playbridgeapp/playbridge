@@ -61,6 +61,9 @@ class ExoPlayerActivity : PlayerActivity() {
     override fun getVideoSurfaceView(): android.view.SurfaceView? = playerView.videoSurfaceView as? android.view.SurfaceView
     private var audioDiscontinuityRetryCount = 0
     private var videoDecoderRetryCount = 0
+    private var malformedContentRetryCount = 0
+    private var stuckBufferRetryCount = 0
+    private val stuckBufferHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     // Managers
     private val contentSniffer = ContentSniffer()
@@ -654,6 +657,9 @@ class ExoPlayerActivity : PlayerActivity() {
 
         audioDiscontinuityRetryCount = 0
         videoDecoderRetryCount = 0
+        malformedContentRetryCount = 0
+        stuckBufferRetryCount = 0
+        stuckBufferHandler.removeCallbacksAndMessages(null)
     }
 
     private fun createPlayerListener() = object : androidx.media3.common.Player.Listener {
@@ -663,13 +669,22 @@ class ExoPlayerActivity : PlayerActivity() {
                     FileLogger.d(TAG, "Buffering...")
                     if (player?.playWhenReady == true) {
                         controlsManager.showBuffering()
+                        // Watchdog: detect a dead connection vs legitimate slow buffering.
+                        // A 4K file buffering slowly will have an advancing bufferedPosition
+                        // (bytes arriving). A dropped CDN connection produces a completely flat
+                        // bufferedPosition — no bytes at all. Only seek forward in the latter case.
+                        val lastBuffered = player?.bufferedPosition ?: 0L
+                        scheduleStuckBufferCheck(lastBuffered)
                     }
                 }
                 androidx.media3.common.Player.STATE_READY -> {
                     FileLogger.i(TAG, "Playback ready")
                     controlsManager.hideBuffering()
+                    stuckBufferHandler.removeCallbacksAndMessages(null)
+                    stuckBufferRetryCount = 0
                     audioDiscontinuityRetryCount = 0
                     videoDecoderRetryCount = 0
+                    malformedContentRetryCount = 0
                 }
                 androidx.media3.common.Player.STATE_ENDED -> {
                     FileLogger.i(TAG, "Playback ended")
@@ -779,6 +794,14 @@ class ExoPlayerActivity : PlayerActivity() {
                         if (currentHeaders.isNotEmpty()) {
                             putExtra(com.playbridge.receiver.server.ServerService.EXTRA_HEADERS, HashMap(currentHeaders))
                         }
+
+                        // If ExoPlayer was navigating a playlist, pass the playlist context so
+                        // VLC can continue from the same position. PlaylistStore.currentPlaylist
+                        // is already populated; VLC just needs the flag and index to use it.
+                        if (playlistItems.isNotEmpty()) {
+                            putExtra(com.playbridge.receiver.server.ServerService.EXTRA_IS_PLAYLIST, true)
+                            putExtra(com.playbridge.receiver.server.ServerService.EXTRA_PLAYLIST_INDEX, playlistIndex)
+                        }
                     }
                     startActivity(vlcIntent)
                     finish()
@@ -787,6 +810,33 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
+
+            // Malformed container data (e.g. corrupt MKV cluster mid-stream) — seek past the bad
+            // segment and re-prepare. Each retry skips an extra 5s further to avoid re-hitting
+            // adjacent corrupt data. Recovery is fast because the load policy no longer wastes
+            // time retrying contentIsMalformed errors at the network level.
+            // An UnexpectedLoaderException wrapping a runtime crash (e.g. ArrayIndexOutOfBounds
+            // from a negative srcPos due to EBML integer overflow) also means corrupt container
+            // data — treat it the same as a contentIsMalformed ParserException.
+            val isExtractorCrash = error.cause is androidx.media3.exoplayer.upstream.Loader.UnexpectedLoaderException &&
+                error.cause?.cause is RuntimeException
+            val isMalformedContent =
+                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ||
+                (error.cause as? androidx.media3.common.ParserException)?.contentIsMalformed == true ||
+                isExtractorCrash
+            if (isMalformedContent && malformedContentRetryCount < 10) {
+                malformedContentRetryCount++
+                val skipAheadMs = 1000L * malformedContentRetryCount
+                val currentPos = player?.currentPosition ?: 0L
+                FileLogger.w(TAG, "Malformed content at ${currentPos}ms. Seeking forward ${skipAheadMs}ms (attempt $malformedContentRetryCount)...")
+                player?.let { p ->
+                    val duration = p.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                    p.seekTo((currentPos + skipAheadMs).coerceAtMost(duration))
+                    p.prepare()
+                    p.play()
+                }
+                return
+            }
 
             // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found, Timeout)
             if (playlistItems.isNotEmpty()) {
@@ -887,6 +937,7 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun releasePlayer() {
+        stuckBufferHandler.removeCallbacksAndMessages(null)
         try {
             // Workaround for Media3 GL resource leakage when using VideoFrameProcessor
             // with hardware layer surfaces like Exoplayer's playerView.surfaceView.
@@ -944,6 +995,34 @@ class ExoPlayerActivity : PlayerActivity() {
             videoFilterManager.reapplyFilter()
             controlsManager.hideUI()
         }
+    }
+
+    /**
+     * Checks every 5s whether bufferedPosition is advancing. If it hasn't moved at all
+     * for two consecutive checks (10s with zero bytes received), the CDN connection is
+     * dead and we seek forward 3s to request a new byte range. A 4K file that is simply
+     * buffering slowly will always show some advancement and won't trigger this.
+     */
+    private fun scheduleStuckBufferCheck(lastBuffered: Long) {
+        stuckBufferHandler.removeCallbacksAndMessages(null)
+        stuckBufferHandler.postDelayed({
+            val p = player ?: return@postDelayed
+            if (p.playbackState != androidx.media3.common.Player.STATE_BUFFERING) return@postDelayed
+            val currentBuffered = p.bufferedPosition
+            if (currentBuffered > lastBuffered) {
+                // Bytes are arriving — reschedule with updated baseline, no seek
+                scheduleStuckBufferCheck(currentBuffered)
+            } else if (stuckBufferRetryCount < 5) {
+                // Zero bytes received in the last 5s — connection is dead
+                stuckBufferRetryCount++
+                val skipAheadMs = 1000L * stuckBufferRetryCount
+                val pos = p.currentPosition
+                val duration = p.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                val skipTo = (pos + skipAheadMs).coerceAtMost(duration)
+                FileLogger.w(TAG, "No bytes received while buffering at ${pos}ms — seeking forward ${skipAheadMs}ms to ${skipTo}ms (attempt $stuckBufferRetryCount)")
+                p.seekTo(skipTo)
+            }
+        }, 5_000L)
     }
 
     /**
@@ -1414,10 +1493,26 @@ class ExoPlayerActivity : PlayerActivity() {
             FileLogger.w(TAG, "Load error occurred: ${exception.message}, count: ${loadErrorInfo.errorCount}")
 
             if (exception is androidx.media3.common.ParserException) {
+                if (exception.contentIsMalformed) {
+                    // The segment data is genuinely corrupt — retrying the same bytes won't help.
+                    // Escalate immediately to onPlayerError so the seek-forward recovery runs
+                    // instead of wasting 5×2s retries + ExoPlayer's internal load timeout.
+                    FileLogger.w(TAG, "Malformed content, escalating to player-level recovery")
+                    return androidx.media3.common.C.TIME_UNSET
+                }
                 if (loadErrorInfo.errorCount < 5) {
                     FileLogger.w(TAG, "Retrying ParserException (attempt ${loadErrorInfo.errorCount + 1})")
                     return 1000L
                 }
+            }
+
+            // Extractor crash (e.g. ArrayIndexOutOfBounds from EBML integer overflow) — same as
+            // malformed content, escalate immediately rather than retrying the same corrupt bytes.
+            if (exception is androidx.media3.exoplayer.upstream.Loader.UnexpectedLoaderException &&
+                exception.cause is RuntimeException
+            ) {
+                FileLogger.w(TAG, "Extractor crash, escalating to player-level recovery")
+                return androidx.media3.common.C.TIME_UNSET
             }
 
             return super.getRetryDelayMsFor(loadErrorInfo)

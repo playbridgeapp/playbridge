@@ -65,6 +65,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var pendingSeekTime: Long? = null
     private var pendingResumeTime: Long? = null
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    // Timestamp of the most recently committed seek. Each seek captures this value in a closure;
+    // if the value has changed by the time the resync runnable fires, a newer seek superseded it
+    // and the resync is skipped.
+    private var lastSeekCommitTime = 0L
+
     private val performSeekRunnable = Runnable {
         pendingSeekTime?.let { targetTime ->
             mediaPlayer?.time = targetTime
@@ -74,7 +80,42 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             // confirms it. Clearing activePendingSeekTime here would let the 1s poll snap the
             // seekbar back to the old position. Instead, keep showing the target and let
             // VlcControlsManager.updateProgress() auto-clear once player.time catches up.
+            schedulePostSeekVideoResync()
         }
+    }
+
+    /**
+     * Schedule a post-seek video decoder resync to fix frozen video in malformed MKV files.
+     *
+     * When seeking in an MKV with corrupt EBML data, VLC's parser resyncs forward past the bad
+     * cluster. Audio recovers immediately (small/frequent packets), but the video decoder loses
+     * its keyframe reference and shows the last decoded frame indefinitely — player.time advances
+     * with audio, making the freeze invisible to event-based detection.
+     *
+     * Fix: 2s after the seek commits (by which point the demuxer is in clean data), toggle the
+     * video track off→on. This closes the video decoder without re-seeking, then reopens it at
+     * the current demuxer position. VLC waits for the next keyframe (already in the clean region)
+     * and video resumes. Brief black screen (~100–500ms), but recovers a permanently frozen frame.
+     */
+    private fun schedulePostSeekVideoResync() {
+        val commitTime = System.currentTimeMillis()
+        lastSeekCommitTime = commitTime
+        seekHandler.postDelayed({
+            if (lastSeekCommitTime != commitTime) return@postDelayed // superseded by a newer seek
+            val player = mediaPlayer ?: return@postDelayed
+            if (!player.isPlaying || pendingSeekTime != null) return@postDelayed
+
+            val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+                ?: return@postDelayed
+
+            android.util.Log.d("VlcPlayerActivity", "Post-seek video decoder resync (track toggle)")
+            player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+            seekHandler.postDelayed({
+                if (lastSeekCommitTime == commitTime) {
+                    mediaPlayer?.selectTrack(videoTrack.id)
+                }
+            }, 200)
+        }, 2000)
     }
 
     override fun play() { mediaPlayer?.play() }
@@ -462,37 +503,58 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
         val title = controlsManager.getTitle()
 
-        // Build playlist JSON for history persistence
-        val plistJson = if (playlistItems.isNotEmpty()) {
-            try {
-                com.playbridge.protocol.protocolJson.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
-                    playlistItems
-                )
-            } catch (e: Exception) { null }
-        } else null
-
-        progressManager.setCurrentMedia(
-            url = url,
-            title = title,
-            contentType = null,
-            headers = headers,
-            playlistJson = plistJson,
-            playlistIndex = playlistIndex,
-            preferredAudioLanguage = null, // Vlc uses track ID internally, not lang directly in UI
-            preferredSubtitleLanguage = null,
-            externalSubtitleUrl = currentSubtitleUrl,
-            playbackSpeed = currentPlaybackSpeed,
-            videoScalingMode = when (currentVideoScalingMode) {
-                "Fit" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                "Fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
-                "Center" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                else -> null
-            }
-        )
-
         lifecycleScope.launch {
             val historyItem = progressManager.restoreProgress(url)
+
+            // Fallback: if playlist context wasn't available when handleIntent() ran
+            // (e.g. PlaylistStore was cleared between MainActivity setting it and this
+            // activity reading it), restore the playlist directly from the history item.
+            if (playlistItems.isEmpty() && historyItem?.playlistJson != null) {
+                try {
+                    val decoded = com.playbridge.protocol.protocolJson.decodeFromString(
+                        kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                        historyItem.playlistJson!!
+                    )
+                    if (decoded.isNotEmpty()) {
+                        playlistItems = decoded.toMutableList()
+                        playlistIndex = historyItem.playlistIndex
+                        controlsManager.setPlaylistVisible(true)
+                        android.util.Log.i("VlcPlayerActivity", "Restored playlist from history: ${playlistItems.size} items at index $playlistIndex")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("VlcPlayerActivity", "Failed to restore playlist from history: ${e.message}")
+                }
+            }
+
+            // Build playlist JSON for history persistence (computed after fallback restore)
+            val plistJson = if (playlistItems.isNotEmpty()) {
+                try {
+                    com.playbridge.protocol.protocolJson.encodeToString(
+                        kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                        playlistItems
+                    )
+                } catch (e: Exception) { null }
+            } else null
+
+            progressManager.setCurrentMedia(
+                url = url,
+                title = title,
+                contentType = null,
+                headers = headers,
+                playlistJson = plistJson,
+                playlistIndex = playlistIndex,
+                preferredAudioLanguage = null, // Vlc uses track ID internally, not lang directly in UI
+                preferredSubtitleLanguage = null,
+                externalSubtitleUrl = currentSubtitleUrl,
+                playbackSpeed = currentPlaybackSpeed,
+                videoScalingMode = when (currentVideoScalingMode) {
+                    "Fit" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    "Fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    "Center" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    else -> null
+                }
+            )
+
             val finalResumeTime = resumeTime ?: historyItem?.position
 
             val media = Media(libVLC, Uri.parse(url)).apply {
