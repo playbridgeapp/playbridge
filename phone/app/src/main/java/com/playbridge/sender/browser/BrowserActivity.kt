@@ -643,11 +643,31 @@ class BrowserActivity : ComponentActivity() {
                     gesturesEnabled = drawerState.isOpen, // Only swipe to close, not to open
                     drawerContent = {
                         ModalDrawerSheet(modifier = Modifier.width(260.dp)) {
-                            Text(
-                                "PlayBridge",
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "PlayBridge",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = {
+                                    scope.launch { drawerState.close() }
+                                    currentScreen = Screen.Settings
+                                }) {
+                                    Icon(
+                                        Icons.Default.Settings,
+                                        contentDescription = "Settings",
+                                        tint = if (currentScreen == Screen.Settings || currentScreen == Screen.AddonSettings)
+                                            MaterialTheme.colorScheme.primary
+                                        else
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                             HorizontalDivider()
 
                             NavigationDrawerItem(
@@ -722,19 +742,6 @@ class BrowserActivity : ComponentActivity() {
                                 modifier = Modifier.height(48.dp)
                             )
 
-                            Spacer(modifier = Modifier.weight(1f))
-
-                            NavigationDrawerItem(
-                                icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                                label = { Text("Settings", style = MaterialTheme.typography.titleMedium) },
-                                selected = currentScreen == Screen.Settings || currentScreen == Screen.AddonSettings,
-                                onClick = {
-                                    scope.launch { drawerState.close() }
-                                    currentScreen = Screen.Settings
-                                },
-                                shape = androidx.compose.ui.graphics.RectangleShape,
-                                modifier = Modifier.height(48.dp)
-                            )
                             Spacer(Modifier.height(8.dp))
                         }
                     }

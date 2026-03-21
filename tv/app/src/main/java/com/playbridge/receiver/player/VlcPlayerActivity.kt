@@ -755,14 +755,27 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         super.onDestroy()
         seekHandler.removeCallbacks(performSeekRunnable)
         unregisterReceiver(remoteReceiver)
-        mediaPlayer?.setEventListener(null)
+
+        // Capture and null out references before any cleanup so nothing else uses them.
+        val playerToRelease = mediaPlayer
+        val vlcToRelease = libVLC
+        mediaPlayer = null
+        libVLC = null
+
+        // UI-side cleanup is fast and must stay on the main thread.
+        playerToRelease?.setEventListener(null)
         controlsManager.detachPlayer()
-        mediaPlayer?.vlcVout?.apply {
+        playerToRelease?.vlcVout?.apply {
             removeCallback(this@VlcPlayerActivity)
             detachViews()
         }
-        mediaPlayer?.release()
-        libVLC?.release()
+
+        // Native VLC teardown can be slow; run it off the main thread to avoid an ANR in
+        // MainActivity (same process, same main thread) when the user presses Back.
+        Thread {
+            playerToRelease?.release()
+            vlcToRelease?.release()
+        }.start()
     }
 
     // IVLCVout.Callback
