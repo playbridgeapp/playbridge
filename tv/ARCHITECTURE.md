@@ -38,6 +38,7 @@ com.playbridge.receiver/
 │   ├── VlcPlayerActivity.kt
 │   └── VlcTrackSelectionDialog.kt
 ├── server/
+│   ├── BluetoothServer.kt
 │   ├── OverlayWindowHelper.kt
 │   ├── ServerService.kt
 │   └── WebSocketServer.kt
@@ -60,6 +61,7 @@ com.playbridge.receiver/
 | Component | File | Purpose |
 |-----------|------|---------|
 | WebSocket Server | WebSocketServer.kt | Ktor Netty server on port 8765 with auth |
+| Bluetooth Server | BluetoothServer.kt | Bluetooth RFCOMM socket server fallback |
 | Server Service | ServerService.kt | Foreground service managing server lifecycle, command routing, external player intents, NSD registration, context broadcasting |
 | Video Player Base | PlayerActivity.kt | Abstract base class for players, playlist queue, auto-advance |
 | ExoPlayer | ExoPlayerActivity.kt | ExoPlayer implementation with HLS/DASH/RTSP support |
@@ -91,8 +93,8 @@ com.playbridge.receiver/
 | Color Matrix | ColorMatrixEffect.kt | Media3 GlEffect applying custom ColorMatrix for filters via GLSL |
 
 ## Dependencies
-- **Ktor** v3.0 (Netty) — WebSocket server
-- **Media3 ExoPlayer** v1.5 — Full streaming suite (HLS, DASH, RTSP, Smooth Streaming)
+- **Ktor** v3.0.3 (Netty) — WebSocket server
+- **Media3 ExoPlayer** v1.9.2 — Full streaming suite (HLS, DASH, RTSP, Smooth Streaming)
 - **Media3 Session** — Media session support
 - **Media3 DataSource OkHttp** — HTTP performance with OkHttp backend
 - **ZXing** v3.5 — QR code generation
@@ -102,6 +104,7 @@ com.playbridge.receiver/
 - **Kotlin Serialization** v1.7 — JSON protocol
 - **DataStore** v1.1 — Preferences persistence
 - **GeckoView** (Mozilla) — Alternative browser engine with uBlock Origin
+- **LibVLC** v4.0.0-eap24 — Fallback video player for unsupported formats
 
 ---
 
