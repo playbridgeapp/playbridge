@@ -246,6 +246,12 @@ PlayBridge/
 │   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
 │   │       │   │   ├── MagnetParsingSheet.kt   (Debrid integration)
 │   │       │   │   ├── LibraryViewModel.kt
+│   │       │   │   ├── CommandHistoryScreen.kt
+│   │       │   │   ├── HomeScreen.kt
+│   │       │   │   ├── ErrorPageUtils.kt
+│   │       │   │   ├── FindOnPageBar.kt
+│   │       │   │   ├── LibraryDetailScreen.kt
+│   │       │   │   ├── LibraryEnums.kt
 │   │       │   │   └── ...
 │   │       │   ├── connection/
 │   │       │   │   ├── BluetoothClient.kt
@@ -253,6 +259,16 @@ PlayBridge/
 │   │       │   ├── data/
 │   │       │   │   ├── debrid/                 (Debrid integration clients/providers)
 │   │       │   │   ├── history/
+│   │       │   │   │   ├── BookmarkDao.kt
+│   │       │   │   │   ├── BookmarkEntity.kt
+│   │       │   │   │   ├── CommandHistoryDao.kt
+│   │       │   │   │   ├── CommandHistoryEntity.kt
+│   │       │   │   │   ├── DatabaseProvider.kt
+│   │       │   │   │   ├── HistoryDao.kt
+│   │       │   │   │   ├── HistoryDatabase.kt
+│   │       │   │   │   ├── HistoryEntity.kt
+│   │       │   │   │   ├── TabDao.kt
+│   │       │   │   │   └── TabEntity.kt
 │   │       │   │   └── library/
 │   │       │   │       ├── OmdbModels.kt
 │   │       │   │       ├── OmdbRepository.kt
