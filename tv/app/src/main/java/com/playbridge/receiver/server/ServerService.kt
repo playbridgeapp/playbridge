@@ -495,7 +495,8 @@ class ServerService : Service() {
      */
     private fun downloadSubtitlesToCache(subtitleUrls: List<String>, headers: Map<String, String>?): List<java.io.File> {
         val subtitleDir = java.io.File(cacheDir, "subtitles").also { it.mkdirs() }
-        val client = com.playbridge.receiver.player.ContentSniffer().getUnsafeOkHttpClient(headers)
+        val sniffer = com.playbridge.receiver.player.ContentSniffer()
+        val client = sniffer.getOkHttpClient(headers, trustAllCerts = subtitleUrls.firstOrNull()?.let { sniffer.isLocalUrl(it) } ?: false)
         return subtitleUrls.mapIndexedNotNull { index, url ->
             try {
                 val ext = if (url.contains(".vtt", ignoreCase = true)) "vtt" else "srt"

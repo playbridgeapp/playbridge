@@ -109,7 +109,8 @@ class SubtitleManager(
     }
 
     private fun downloadUrl(urlString: String): String {
-        val client = ContentSniffer().getUnsafeOkHttpClient()
+        val sniffer = ContentSniffer()
+        val client = sniffer.getOkHttpClient(trustAllCerts = sniffer.isLocalUrl(urlString))
         val request = Request.Builder()
             .url(urlString)
             .header("User-Agent", "Mozilla/5.0")
@@ -216,7 +217,8 @@ class SubtitleManager(
     
     suspend fun getPreview(url: String): String? = withContext(Dispatchers.IO) {
         try {
-            val client = ContentSniffer().getUnsafeOkHttpClient()
+            val sniffer = ContentSniffer()
+            val client = sniffer.getOkHttpClient(trustAllCerts = sniffer.isLocalUrl(url))
             val request = Request.Builder()
                 .url(url)
                 .header("Range", "bytes=0-4096") // Fetch first 4KB

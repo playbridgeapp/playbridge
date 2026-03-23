@@ -500,7 +500,7 @@ class ExoPlayerActivity : PlayerActivity() {
         FileLogger.i(TAG, "CURL COMMAND: $curlBuilder")
 
         // 2. Create OkHttp Data Source Factory
-        val okHttpClient = contentSniffer.getUnsafeOkHttpClient(requestProperties)
+        val okHttpClient = contentSniffer.getOkHttpClient(requestProperties, trustAllCerts = contentSniffer.isLocalUrl(url))
         val cacheControl = okhttp3.CacheControl.Builder().noCache().noStore().build()
 
         val okHttpDataSourceFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)

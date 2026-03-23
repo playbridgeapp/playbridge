@@ -22,7 +22,7 @@ object M3uParser {
     suspend fun parseMasterPlaylist(url: String, headers: Map<String, String>?): List<HlsVariant>? = withContext(Dispatchers.IO) {
         try {
             val sniffer = ContentSniffer()
-            val client = sniffer.getUnsafeOkHttpClient(headers)
+            val client = sniffer.getOkHttpClient(headers, trustAllCerts = sniffer.isLocalUrl(url))
             val requestBuilder = okhttp3.Request.Builder().url(url)
 
             val response = client.newCall(requestBuilder.build()).execute()
@@ -116,7 +116,7 @@ object M3uParser {
     suspend fun fetchAndParseM3u(url: String, headers: Map<String, String>?): List<PlayPayload>? = withContext(Dispatchers.IO) {
         try {
             val sniffer = ContentSniffer()
-            val client = sniffer.getUnsafeOkHttpClient(headers)
+            val client = sniffer.getOkHttpClient(headers, trustAllCerts = sniffer.isLocalUrl(url))
             val requestBuilder = okhttp3.Request.Builder().url(url)
 
             val response = client.newCall(requestBuilder.build()).execute()

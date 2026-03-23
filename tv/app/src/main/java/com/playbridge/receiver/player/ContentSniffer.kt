@@ -1,47 +1,83 @@
 package com.playbridge.receiver.player
 
+import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.net.InetAddress
+import java.net.UnknownHostException
 
 private const val TAG = "ContentSniffer"
 
 /**
- * Handles SSL-bypassing HTTP client creation and pre-flight content-type
- * sniffing (reads the first few bytes of a URL to detect HLS streams).
+ * Handles HTTP client creation and pre-flight content-type sniffing
+ * (reads the first few bytes of a URL to detect HLS streams).
+ *
+ * SSL certificate validation is bypassed only for local-network URLs
+ * (RFC 1918 private IPs, loopback, and .local hostnames) to support
+ * self-signed certs on local servers (Plex, Jellyfin, etc.).
  */
 class ContentSniffer {
 
     /**
-     * Creates an OkHttpClient that trusts all certificates.
-     * Required for local-network / self-signed servers.
+     * Returns true if the URL resolves to a local/private network address
+     * where self-signed certificates are common and acceptable.
      */
-    fun getUnsafeOkHttpClient(headers: Map<String, String>? = null): okhttp3.OkHttpClient {
+    fun isLocalUrl(url: String): Boolean {
+        val host = Uri.parse(url).host ?: return false
+
+        if (host == "localhost" || host.endsWith(".local")) return true
+
+        return try {
+            val addr = InetAddress.getByName(host)
+            val bytes = addr.address
+            when (bytes.size) {
+                4 -> // IPv4 private ranges
+                    bytes[0] == 10.toByte() ||                                        // 10.0.0.0/8
+                    (bytes[0] == 172.toByte() && bytes[1] in 16..31) ||              // 172.16.0.0/12
+                    (bytes[0] == 192.toByte() && bytes[1] == 168.toByte()) ||        // 192.168.0.0/16
+                    bytes[0] == 127.toByte()                                          // 127.0.0.0/8
+                16 -> // IPv6 loopback (::1) or private (fc00::/7)
+                    addr.isLoopbackAddress ||
+                    bytes[0] == 0xfc.toByte() || bytes[0] == 0xfd.toByte()
+                else -> false
+            }
+        } catch (e: UnknownHostException) {
+            false
+        }
+    }
+
+    /**
+     * Creates an OkHttpClient. For local-network URLs, SSL certificate
+     * validation is disabled to support self-signed certificates.
+     * Public URLs always use standard certificate validation.
+     */
+    fun getOkHttpClient(headers: Map<String, String>? = null, trustAllCerts: Boolean = false): okhttp3.OkHttpClient {
         try {
-            val trustAllCerts = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-            })
-
-            val sslContext = javax.net.ssl.SSLContext.getInstance("SSL")
-            sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-            val sslSocketFactory = sslContext.socketFactory
-
             val builder = okhttp3.OkHttpClient.Builder()
-                .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as javax.net.ssl.X509TrustManager)
-                .hostnameVerifier { _, _ -> true }
                 .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
-                
+
+            if (trustAllCerts) {
+                val trustManagers = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+                })
+                val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+                sslContext.init(null, trustManagers, java.security.SecureRandom())
+                builder.sslSocketFactory(sslContext.socketFactory, trustManagers[0] as javax.net.ssl.X509TrustManager)
+                       .hostnameVerifier { _, _ -> true }
+            }
+
             if (headers != null && headers.isNotEmpty()) {
                 builder.addInterceptor { chain ->
                     val requestBuilder = chain.request().newBuilder()
                     val url = chain.request().url.toString()
                     headers.forEach { (key, value) ->
-                        // Use .header() instead of .addHeader() to overwrite any existing 
+                        // Use .header() instead of .addHeader() to overwrite any existing
                         // duplicate headers that ExoPlayer might have set (like double User-Agent)
                         requestBuilder.header(key, value)
                     }
@@ -50,12 +86,16 @@ class ContentSniffer {
                     chain.proceed(finalRequest)
                 }
             }
-                
+
             return builder.build()
         } catch (e: Exception) {
             throw RuntimeException(e)
         }
     }
+
+    /** Kept for binary compatibility with existing callers. */
+    fun getUnsafeOkHttpClient(headers: Map<String, String>? = null): okhttp3.OkHttpClient =
+        getOkHttpClient(headers, trustAllCerts = true)
 
     /**
      * Attempts to infer the content type from the URL extension.
@@ -76,7 +116,7 @@ class ContentSniffer {
             try {
                 // Pass headers to the client so the interceptor applies them
                 // This ensures cookies and auth headers are sent during the sniff
-                val client = getUnsafeOkHttpClient(headers)
+                val client = getOkHttpClient(headers, trustAllCerts = isLocalUrl(url))
                 val requestBuilder = okhttp3.Request.Builder()
                     .url(url)
                     .header("Range", "bytes=0-50")
