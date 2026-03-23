@@ -25,11 +25,11 @@ object FileLogger {
     private const val TAG = "FileLogger"
     private const val LOG_DIR = "logs"
     private const val LOG_FILE_NAME = "playbridge.log"
-    private const val MAX_FILE_SIZE = 1 * 1024 * 1024L // 1 MB
+    private const val MAX_FILE_SIZE = 5 * 1024 * 1024L // 5 MB
     private const val MAX_FILES = 2
 
     private lateinit var logDir: File
-    private lateinit var logFile: File
+    @Volatile private lateinit var logFile: File
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     private val handlerThread = HandlerThread("FileLoggerThread").apply { start() }
@@ -69,6 +69,7 @@ object FileLogger {
 
     /**
      * Records a fatal crash. Called from the uncaught exception handler before recovery.
+     * Writes synchronously and skips rotation — we may not get another chance.
      */
     fun logCrash(thread: Thread, throwable: Throwable) {
         val sw = StringWriter()
@@ -77,10 +78,10 @@ object FileLogger {
             append("${timestamp()} CRASH [${thread.name}] ${throwable.javaClass.name}: ${throwable.message}\n")
             append(sw.toString())
         }
-        // Write synchronously — we may not get another chance
         try {
-            rotateIfNeeded()
-            logFile.appendText(line)
+            // Capture snapshot of logFile to avoid racing with the handler thread's rotation
+            val file = if (::logFile.isInitialized) logFile else return
+            file.appendText(line)
         } catch (_: Exception) {
             // Last resort; nothing we can do
         }

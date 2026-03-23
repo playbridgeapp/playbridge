@@ -51,7 +51,9 @@ fun DetectedVideosSheet(
     onDismiss: () -> Unit,
     onVideoClick: (DetectedVideo, List<String>?) -> Unit,
     onDownload: (DetectedVideo) -> Unit,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    playerMode: String = "tv",
+    onPlayerModeChange: (String) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -175,7 +177,65 @@ fun DetectedVideosSheet(
                 }
             }
             
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Compact player mode selector
+            val playerOptions = listOf(
+                "tv"           to "TV Default",
+                "internal"     to "ExoPlayer",
+                "internal_vlc" to "LibVLC",
+                "internal_mpv" to "MPV",
+                "external"     to "External",
+                "external_mpv" to "Ext. MPV"
+            )
+            val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
+            var playerDropdownExpanded by remember { mutableStateOf(false) }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Player",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Box {
+                    TextButton(
+                        onClick = { playerDropdownExpanded = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Text(selectedPlayerLabel, style = MaterialTheme.typography.bodySmall)
+                        Icon(
+                            Icons.Default.ArrowDropDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = playerDropdownExpanded,
+                        onDismissRequest = { playerDropdownExpanded = false }
+                    ) {
+                        playerOptions.forEach { (value, label) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        label,
+                                        fontWeight = if (value == playerMode) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                onClick = {
+                                    onPlayerModeChange(value)
+                                    playerDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
 
             TabRow(selectedTabIndex = selectedTab) {
                 tabs.forEachIndexed { index, title ->

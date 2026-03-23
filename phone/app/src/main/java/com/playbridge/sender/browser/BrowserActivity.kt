@@ -383,6 +383,7 @@ class BrowserActivity : ComponentActivity() {
             
             // Video detection state — per-tab
             var showVideoSheet by remember { mutableStateOf(false) }
+            var sheetPlayerMode by remember { mutableStateOf(prefs.getString("tv_player_mode", "tv") ?: "tv") }
             var forcePlaylistSheet by remember { mutableStateOf<DetectedVideo?>(null) }
             var forcedVideos by remember { mutableStateOf<List<DetectedVideo>?>(null) }
             val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
@@ -1794,6 +1795,11 @@ class BrowserActivity : ComponentActivity() {
                             forcePlaylistSheet = null
                             forcedVideos = null
                         },
+                        playerMode = sheetPlayerMode,
+                        onPlayerModeChange = { mode ->
+                            sheetPlayerMode = mode
+                            prefs.edit().putString("tv_player_mode", mode).apply()
+                        },
                         onVideoClick = { video, subtitles ->
                             Log.d(TAG, "=== PLAY ON TV CLICKED ===")
                             Log.d(TAG, "Video URL: ${video.url}")
@@ -1837,7 +1843,7 @@ class BrowserActivity : ComponentActivity() {
                                             contentType = video.contentType,
                                             subtitles = subtitles,
                                             detectedBy = video.detectedBy,
-                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                            playerMode = sheetPlayerMode.takeIf { it != "tv" },
                                             preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
                                             preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
                                             defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }

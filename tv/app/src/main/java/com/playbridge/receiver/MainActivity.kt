@@ -174,7 +174,8 @@ fun MainContent(
                 serverPort = serverPort,
                 connectedCount = connectedCount,
                 deviceId = deviceId,
-                onShowPairing = { currentScreen = Screen.Pairing }
+                token = authToken,
+                deviceName = deviceName
             )
         }
         Screen.Library -> {

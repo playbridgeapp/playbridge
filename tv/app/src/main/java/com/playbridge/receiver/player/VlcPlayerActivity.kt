@@ -32,8 +32,13 @@ import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.interfaces.IVLCVout
+import com.playbridge.receiver.logging.FileLogger
 
 class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
+
+    companion object {
+        private const val TAG = "VlcPlayerActivity"
+    }
 
     private var libVLC: LibVLC? = null
     private var mediaPlayer: MediaPlayer? = null
@@ -108,7 +113,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
                 ?: return@postDelayed
 
-            android.util.Log.d("VlcPlayerActivity", "Post-seek video decoder resync (track toggle)")
+            FileLogger.d(TAG,"Post-seek video decoder resync (track toggle)")
             player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
             seekHandler.postDelayed({
                 if (lastSeekCommitTime == commitTime) {
@@ -175,6 +180,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        FileLogger.i(TAG, "=== VlcPlayerActivity CREATED ===")
+        FileLogger.i(TAG, "Intent action: ${intent?.action}")
 
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -247,14 +254,34 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         mediaPlayer?.setEventListener { event ->
             controlsManager.handleEvent(event)
             when (event.type) {
+                MediaPlayer.Event.Opening ->
+                    FileLogger.i(TAG, "Opening: ${originalM3u8Url ?: "(unknown)"}")
+
+                MediaPlayer.Event.Buffering -> {
+                    val pct = event.buffering.toInt()
+                    if (pct < 100) FileLogger.d(TAG, "Buffering: $pct%")
+                }
+
                 MediaPlayer.Event.Playing -> {
+                    FileLogger.i(TAG, "Playing at ${mediaPlayer?.time ?: 0}ms")
                     // Defer resume seek until VLC is actually playing and ready to accept seeks.
                     pendingResumeTime?.let { resumeAt ->
                         pendingResumeTime = null
                         runOnUiThread { mediaPlayer?.time = resumeAt }
                     }
                 }
+
+                MediaPlayer.Event.Paused ->
+                    FileLogger.i(TAG, "Paused at ${mediaPlayer?.time ?: 0}ms")
+
+                MediaPlayer.Event.Stopped ->
+                    FileLogger.i(TAG, "Stopped")
+
+                MediaPlayer.Event.EncounteredError ->
+                    FileLogger.e(TAG, "VLC encountered an error (url=${originalM3u8Url ?: "(unknown)"})")
+
                 MediaPlayer.Event.EndReached -> {
+                    FileLogger.i(TAG, "End reached — playlist size=${playlistItems.size}, index=$playlistIndex")
                     if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
                         runOnUiThread { playNextInPlaylist() }
                     } else {
@@ -284,7 +311,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Must happen AFTER handleIntent because handleIntent replaces playlistItems.
         ServerService.drainPendingQueueItems().forEach { payload ->
             playlistItems.add(payload)
-            android.util.Log.i("VlcPlayerActivity", "Queue add (startup drain): ${payload.title ?: payload.url}")
+            FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
         }
         if (playlistItems.isNotEmpty()) {
             controlsManager.setPlaylistVisible(true)
@@ -371,7 +398,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         return@launch
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("VlcPlayerActivity", "Error parsing M3U", e)
+                    FileLogger.e(TAG, "Error parsing M3U", e)
                 }
             }
             playVideo(url, headers)
@@ -424,7 +451,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
             ServerService.broadcastPlaylistStatus(statusJson)
         } catch (e: Exception) {
-            android.util.Log.e("VlcPlayerActivity", "Failed to broadcast playlist status: ${e.message}")
+            FileLogger.e(TAG, "Failed to broadcast playlist status: ${e.message}")
         }
     }
 
@@ -489,6 +516,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun handleVlcError() {
+        FileLogger.e(TAG, "handleVlcError — playlist size=${playlistItems.size}, index=$playlistIndex, url=${originalM3u8Url ?: "(unknown)"}")
         runOnUiThread {
             if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
                 android.widget.Toast.makeText(this, "Link failed, skipping to next...", android.widget.Toast.LENGTH_SHORT).show()
@@ -502,6 +530,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
         val title = controlsManager.getTitle()
+        FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
+        FileLogger.i(TAG, "URL: $url")
+        FileLogger.i(TAG, "Title: $title")
+        FileLogger.i(TAG, "Headers: $headers")
+        FileLogger.i(TAG, "===========================================")
+
 
         lifecycleScope.launch {
             val historyItem = progressManager.restoreProgress(url)
@@ -519,10 +553,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         playlistItems = decoded.toMutableList()
                         playlistIndex = historyItem.playlistIndex
                         controlsManager.setPlaylistVisible(true)
-                        android.util.Log.i("VlcPlayerActivity", "Restored playlist from history: ${playlistItems.size} items at index $playlistIndex")
+                        FileLogger.i(TAG,"Restored playlist from history: ${playlistItems.size} items at index $playlistIndex")
                     }
                 } catch (e: Exception) {
-                    android.util.Log.w("VlcPlayerActivity", "Failed to restore playlist from history: ${e.message}")
+                    FileLogger.w(TAG,"Failed to restore playlist from history: ${e.message}")
                 }
             }
 
@@ -749,6 +783,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     override fun onDestroy() {
+        FileLogger.i(TAG, "=== VlcPlayerActivity DESTROYED ===")
         activeDialog?.dismiss()
         syncSelectionsToProgressManager()
         progressManager.saveProgress()

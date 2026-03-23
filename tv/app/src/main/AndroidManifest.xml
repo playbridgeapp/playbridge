@@ -110,6 +110,7 @@
         <activity
             android:name=".player.MpvPlayerActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
         </activity>

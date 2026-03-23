@@ -9,9 +9,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -25,9 +25,11 @@ fun HomeScreen(
     serverPort: Int?,
     connectedCount: Int,
     deviceId: String,
-    onShowPairing: () -> Unit,
+    token: String,
+    deviceName: String,
     modifier: Modifier = Modifier
 ) {
+    val pinDisplay = token.take(4).uppercase()
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -111,27 +113,43 @@ fun HomeScreen(
                 }
             }
             
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            // Show QR Button
-            Button(
-                onClick = onShowPairing
-            ) {
-                Text(
-                    text = "Show Pairing Code",
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Pairing PIN — always visible
+            if (pinDisplay.isNotEmpty()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Enter this PIN on your phone",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.Gray
+                    )
+                    Text(
+                        text = pinDisplay,
+                        fontSize = 96.sp,
+                        color = Color.White,
+                        letterSpacing = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = deviceName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
-            
-            Spacer(modifier = Modifier.height(48.dp))
-            
-            // Instructions
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             Text(
                 text = when (connectionState) {
-                    is WebSocketServer.ConnectionState.Connected -> 
+                    is WebSocketServer.ConnectionState.Connected ->
                         "Ready to receive videos!\nUse your phone to send content."
-                    else -> 
-                        "Press the button above to display the pairing QR code.\nScan it with the PlayBridge phone app."
+                    else ->
+                        "Open PlayBridge on your phone and enter the PIN above."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.Gray,

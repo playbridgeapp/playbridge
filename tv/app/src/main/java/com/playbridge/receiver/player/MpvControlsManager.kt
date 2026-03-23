@@ -146,6 +146,7 @@ class MpvControlsManager(
     }
 
     fun isControlsVisible() = isControlsVisible
+    fun isFullOverlayVisible() = isControlsVisible
 
     // ── Playback actions ──────────────────────────────────────────────────────
 
@@ -180,6 +181,15 @@ class MpvControlsManager(
 
     fun setTitle(title: String?) {
         titleText.text = title ?: ""
+    }
+
+    fun setStreamInfo(info: String) {
+        if (info.isBlank()) {
+            streamInfoText.visibility = View.GONE
+        } else {
+            streamInfoText.text = info
+            streamInfoText.visibility = View.VISIBLE
+        }
     }
 
     fun getTitle(): String? = titleText.text?.toString()
