@@ -531,11 +531,14 @@ class ServerService : Service() {
         // Attempt 1: direct startActivity (requires mediaPlayback foreground service type)
         try {
             startActivity(intent)
+            FileLogger.i(TAG, "startActivity succeeded for: $description")
+            return // startActivity worked — do not also fire the notification, which would
+                   // deliver a second intent to the already-running activity via onNewIntent.
         } catch (e: Exception) {
             FileLogger.w(TAG, "startActivity failed, falling back to fullScreenIntent: ${e.message}")
         }
 
-        // Attempt 2: fullScreenIntent notification (fires in parallel as a guaranteed fallback)
+        // Attempt 2: fullScreenIntent notification — only reached if startActivity threw.
         val pendingIntent = PendingIntent.getActivity(
             this,
             intent.component.hashCode(), // unique request code per activity

@@ -1,8 +1,14 @@
 package com.playbridge.sender.browser
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.util.Log
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,8 +17,14 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import java.io.BufferedReader
+import java.io.File
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Data class representing a detected video URL
@@ -60,17 +72,73 @@ data class Cue(val startTime: Long, val endTime: Long, val text: String) : Compa
  * has its own isolated list of detected videos.
  */
 object VideoDetector {
-    
+
     private const val TAG = "VideoDetector"
-    
+
+    private var appContext: Context? = null
+
+    /** Call once from Application or Activity.onCreate so HLS thumbnail extraction has a cache dir. */
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    /**
+     * Headers that are browser-context-specific and must not be forwarded to media players.
+     * Sending `sec-fetch-site: same-origin` to a CDN (different domain) causes the CDN to
+     * reject segment requests. `sec-ch-ua-*` are client-hint fingerprinting headers that
+     * media players should never send.
+     */
+    val PLAYER_SKIP_HEADERS: Set<String> = setOf(
+        "Range", "Accept-Encoding", "Host", "Connection", "Content-Length",
+        "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site", "Sec-Fetch-Storage-Access",
+        "Sec-GPC", "Sec-CH-UA", "Sec-CH-UA-Mobile", "Sec-CH-UA-Platform",
+        "Priority", "Upgrade-Insecure-Requests", "TE", "Pragma"
+    )
+
+    /** Returns the cached thumbnail for [url], or null if not yet fetched. */
+    fun getCachedThumbnail(url: String): Bitmap? = synchronized(thumbnailCache) { thumbnailCache[url] }
+
+    /** Returns true if a thumbnail has already been fetched and cached for this URL. */
+    fun hasThumbnail(url: String): Boolean = synchronized(thumbnailCache) { thumbnailCache.containsKey(url) }
+
+    /** Returns a headers map safe to pass to ExoPlayer or MediaMetadataRetriever. */
+    fun mediaHeaders(video: DetectedVideo): HashMap<String, String> {
+        val result = HashMap<String, String>()
+        video.headers?.forEach { (k, v) ->
+            if (PLAYER_SKIP_HEADERS.none { it.equals(k, ignoreCase = true) }) result[k] = v
+        }
+        if (result.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+            result["User-Agent"] =
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        }
+        return result
+    }
+
     // Per-tab storage: Kotlin tab ID -> list of detected videos
     private val tabVideos = mutableStateMapOf<String, SnapshotStateList<DetectedVideo>>()
-    
+
+    // Thumbnail cache: URL -> Bitmap (max 20 entries, LRU eviction)
+    private val thumbnailCache: LinkedHashMap<String, Bitmap> =
+        object : LinkedHashMap<String, Bitmap>(20, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, Bitmap>) = size > 20
+        }
+
     // Per-tab seen URLs to avoid duplicates
     private val tabSeenUrls = mutableMapOf<String, MutableSet<String>>()
 
     // Track ignored URLs (e.g., HLS variants) — global since variants can appear across tabs
     private val ignoredUrls = mutableSetOf<String>()
+
+    /**
+     * Incremented on the main thread whenever a video's playability or quality status changes.
+     * Observed inside derivedStateOf in BrowserActivity so the video list re-derives and the
+     * sheet's sort order updates automatically without the user closing and reopening the sheet.
+     */
+    var processingVersion by mutableStateOf(0)
+        private set
+
+    /** Must be called from the main thread after updating any video's sort-relevant fields. */
+    private fun notifyVideoUpdated() { processingVersion++ }
     
     /**
      * Get the observable video list for a specific tab.
@@ -179,10 +247,14 @@ object VideoDetector {
                 connection.readTimeout = 5000
                 connection.instanceFollowRedirects = true
                 
-                // Set user agent and apply captured headers (crucial for auth/cookies)
+                // Apply captured headers (User-Agent, Cookie, Referer, etc.)
+                // Range is excluded — sending it on a HEAD request can trigger 206/416 responses
+                // from strict servers, corrupting the Content-Length and isPlayable result.
                 connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
                 video.headers?.forEach { (key, value) ->
-                    connection.setRequestProperty(key, value)
+                    if (!key.equals("Range", ignoreCase = true)) {
+                        connection.setRequestProperty(key, value)
+                    }
                 }
                 
                 connection.connect()
@@ -198,15 +270,16 @@ object VideoDetector {
                     video.isPlayable = false
                     Log.w(TAG, "Video unplayable: HTTP $responseCode for ${video.url}")
                 }
-                
+
                 video.fileSizeChecked = true
-                
                 Log.d(TAG, "File size for ${video.url.take(50)}: ${video.fileSize ?: "unknown"}")
-                
+
+                withContext(Dispatchers.Main) { notifyVideoUpdated() }
                 video.fileSize
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching file size: ${e.message}")
                 video.fileSizeChecked = true
+                withContext(Dispatchers.Main) { notifyVideoUpdated() }
                 null
             }
         }
@@ -389,30 +462,43 @@ object VideoDetector {
 
         return withContext(Dispatchers.IO) {
             try {
+                // DASH/MPD
+                if (video.url.contains(".mpd", ignoreCase = true) ||
+                    video.contentType?.contains("dash", ignoreCase = true) == true) {
+
+                    val qualities = DashParser.parseManifest(video.url, video.headers)
+                    video.qualities = qualities
+                    video.qualitiesChecked = true
+                    if (qualities.isNotEmpty()) video.isPlayable = true
+                    Log.d(TAG, "Fetched ${qualities.size} DASH qualities for ${video.url}")
+                    return@withContext qualities
+                }
+
                 // simple check if it looks like an m3u8 url
-                if (video.url.contains(".m3u8", ignoreCase = true) || 
+                if (video.url.contains(".m3u8", ignoreCase = true) ||
                     video.contentType?.contains("mpegurl", ignoreCase = true) == true) {
                     
-                    val playlist = HlsParser.parsePlaylist(video.url)
+                    val playlist = HlsParser.parsePlaylist(video.url, video.headers)
                     video.hlsPlaylist = playlist
                     video.qualities = playlist.videoQualities
                     video.qualitiesChecked = true
                     
                     if (playlist.segmentPrefixes.isNotEmpty()) {
                         withContext(Dispatchers.Main) {
-                            ignoredUrls.addAll(playlist.segmentPrefixes)
-                            
-                            // Remove any already detected videos that are actually segments
-                            val prefixes = playlist.segmentPrefixes
+                            // Only add prefixes that don't accidentally match the master playlist
+                            // URL itself (e.g. stream.m3u8 is in the same directory as segments).
+                            val safeSegmentPrefixes = playlist.segmentPrefixes
+                                .filter { !video.url.startsWith(it) }
+                            ignoredUrls.addAll(safeSegmentPrefixes)
+
+                            // Only remove existing items when we have a confirmed tab ID.
+                            // Without one (UI-triggered parse) we must not mutate the live list —
+                            // that would cause the stream the user is looking at to vanish.
                             if (kotlinTabId != null) {
+                                val prefixes = playlist.segmentPrefixes
                                 tabVideos[kotlinTabId]?.removeAll { detected ->
+                                    detected.url != video.url &&
                                     prefixes.any { detected.url.startsWith(it) }
-                                }
-                            } else {
-                                for ((_, videos) in tabVideos) {
-                                    videos.removeAll { detected ->
-                                        prefixes.any { detected.url.startsWith(it) }
-                                    }
                                 }
                             }
                         }
@@ -421,23 +507,15 @@ object VideoDetector {
                     if (playlist.videoQualities.isNotEmpty()) {
                         video.isPlayable = true
                         withContext(Dispatchers.Main) {
-                            // Add variants to ignore list
+                            // Add variants to ignore list so future detections are filtered
                             playlist.videoQualities.forEach { quality ->
                                 ignoredUrls.add(quality.url)
                             }
-                            
-                            // Remove any already detected videos that are actually variants
+
+                            // Only remove existing items when we have a confirmed tab ID.
                             if (kotlinTabId != null) {
-                                val videos = tabVideos[kotlinTabId]
-                                videos?.removeAll { detected ->
+                                tabVideos[kotlinTabId]?.removeAll { detected ->
                                     ignoredUrls.contains(detected.url)
-                                }
-                            } else {
-                                // Clean across all tabs
-                                for ((_, videos) in tabVideos) {
-                                    videos.removeAll { detected ->
-                                        ignoredUrls.contains(detected.url)
-                                    }
                                 }
                             }
                         }
@@ -445,8 +523,9 @@ object VideoDetector {
                         // It's a media playlist directly (no variants), so it is playable
                         video.isPlayable = true
                     }
-                    
+
                     Log.d(TAG, "Fetched ${playlist.videoQualities.size} qualities for ${video.url}")
+                    withContext(Dispatchers.Main) { notifyVideoUpdated() }
                     playlist.videoQualities
 
                 } else {
@@ -457,8 +536,247 @@ object VideoDetector {
                 Log.e(TAG, "Error fetching HLS qualities for ${video.url}: ${e.message}")
                 video.isPlayable = false
                 video.qualitiesChecked = true
+                withContext(Dispatchers.Main) { notifyVideoUpdated() }
                 emptyList()
             }
+        }
+    }
+
+    /**
+     * Fetch a video thumbnail. Routes to HLS-aware extraction for m3u8 streams (downloads a TS
+     * segment and runs MMR locally) or falls back to direct MMR for progressive files.
+     */
+    suspend fun fetchThumbnail(video: DetectedVideo): Bitmap? {
+        if (video.isSubtitle) return null
+        if (video.url.startsWith("data:", ignoreCase = true)) return null
+        synchronized(thumbnailCache) { thumbnailCache[video.url]?.let { return it } }
+
+        return withContext(Dispatchers.IO) {
+            val isHls = video.url.contains(".m3u8", ignoreCase = true) ||
+                        video.contentType?.contains("mpegurl", ignoreCase = true) == true
+            val bmp: Bitmap? = if (isHls && appContext != null) {
+                fetchHlsThumbnail(video)
+            } else {
+                fetchMmrThumbnail(video)
+            }
+            if (bmp != null) {
+                video.isPlayable = true
+                synchronized(thumbnailCache) { thumbnailCache[video.url] = bmp }
+            }
+            withContext(Dispatchers.Main) { notifyVideoUpdated() }
+            bmp
+        }
+    }
+
+    /**
+     * Direct MMR thumbnail for progressive video files (MP4, MKV, WebM, etc.).
+     * Runs on a raw Thread because MediaMetadataRetriever.setDataSource is a JNI blocking call
+     * that cannot be interrupted by coroutine cancellation.
+     */
+    private fun fetchMmrThumbnail(video: DetectedVideo): Bitmap? {
+        var result: Bitmap? = null
+        var exception: Exception? = null
+        val latch = CountDownLatch(1)
+        Thread {
+            try {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(video.url, mediaHeaders(video))
+                    val durationMs = retriever
+                        .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull() ?: 0L
+                    val seekUs = if (durationMs > 8_000L) {
+                        val windowStartUs = (durationMs * 0.25).toLong() * 1_000L
+                        val windowEndUs   = (durationMs * 0.75).toLong() * 1_000L
+                        windowStartUs + (Math.random() * (windowEndUs - windowStartUs)).toLong()
+                    } else {
+                        1_000_000L
+                    }
+                    result = retriever.getFrameAtTime(seekUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                } finally {
+                    retriever.release()
+                }
+            } catch (e: Exception) {
+                exception = e
+            }
+            latch.countDown()
+        }.start()
+
+        val completed = latch.await(12L, TimeUnit.SECONDS)
+        return when {
+            !completed -> {
+                Log.w(TAG, "MMR thumbnail timed out for ${video.url.take(60)}")
+                null
+            }
+            exception != null -> {
+                Log.w(TAG, "MMR thumbnail failed for ${video.url.take(60)}: ${exception!!.message}")
+                video.isPlayable = false
+                null
+            }
+            else -> {
+                if (result != null) Log.d(TAG, "MMR thumbnail fetched for ${video.url.take(60)}")
+                result
+            }
+        }
+    }
+
+    /**
+     * HLS thumbnail extraction:
+     * 1. Fetch the media playlist to get segment URLs.
+     * 2. Download ~3 MB of a segment from around the 25% mark.
+     * 3. Run MMR on the local .ts file — MMR handles MPEG-TS reliably without needing to speak HLS.
+     */
+    private fun fetchHlsThumbnail(video: DetectedVideo): Bitmap? {
+        val ctx = appContext ?: return null
+
+        // If fetchHlsQualities already ran and found variant playlists, use the lowest-bandwidth
+        // variant's media playlist URL to save bandwidth. Otherwise video.url is the playlist itself.
+        val mediaPlaylistUrl: String = run {
+            val playlist = video.hlsPlaylist
+            if (playlist != null && playlist.videoQualities.isNotEmpty()) {
+                playlist.videoQualities.minByOrNull { it.bandwidth }?.url ?: video.url
+            } else {
+                video.url
+            }
+        }
+
+        val segmentUrls = fetchMediaSegmentUrls(mediaPlaylistUrl, video.headers)
+        if (segmentUrls.isNullOrEmpty()) {
+            Log.w(TAG, "HLS thumbnail: no segments found in $mediaPlaylistUrl")
+            return null
+        }
+
+        // ~25% into the segment list for a mid-stream frame (avoids intros)
+        val targetIndex = ((segmentUrls.size - 1) * 0.25).toInt()
+        val segmentUrl = segmentUrls[targetIndex]
+        Log.d(TAG, "HLS thumbnail: segment [${targetIndex + 1}/${segmentUrls.size}]")
+
+        val tempFile = File.createTempFile("playbridge_thumb_", ".ts", ctx.cacheDir)
+        return try {
+            if (!downloadSegmentToFile(segmentUrl, video.headers, tempFile)) {
+                Log.w(TAG, "HLS thumbnail: segment download failed")
+                return null
+            }
+
+            var result: Bitmap? = null
+            val latch = CountDownLatch(1)
+            Thread {
+                try {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(tempFile.absolutePath)
+                        val durationMs = retriever
+                            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                            ?.toLongOrNull() ?: 0L
+                        val seekUs = if (durationMs > 2_000L) (durationMs / 2 * 1_000L) else 500_000L
+                        result = retriever.getFrameAtTime(seekUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    } finally {
+                        retriever.release()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "HLS segment MMR failed: ${e.message}")
+                }
+                latch.countDown()
+            }.start()
+
+            if (!latch.await(10L, TimeUnit.SECONDS)) {
+                Log.w(TAG, "HLS segment thumbnail timed out")
+            }
+            if (result != null) Log.d(TAG, "HLS thumbnail fetched for ${video.url.take(60)}")
+            result
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    /**
+     * Fetches a media (.m3u8) playlist and returns all segment URLs in order.
+     * Automatically recurses into a master playlist's first variant if needed.
+     */
+    private fun fetchMediaSegmentUrls(mediaPlaylistUrl: String, headers: Map<String, String>?): List<String>? {
+        return try {
+            val conn = URL(mediaPlaylistUrl).openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 8_000
+            conn.readTimeout = 8_000
+            conn.instanceFollowRedirects = true
+            headers?.forEach { (k, v) ->
+                if (!k.equals("Range", ignoreCase = true) &&
+                    PLAYER_SKIP_HEADERS.none { it.equals(k, ignoreCase = true) }) {
+                    conn.setRequestProperty(k, v)
+                }
+            }
+            if (headers?.keys?.none { it.equals("User-Agent", ignoreCase = true) } != false) {
+                conn.setRequestProperty("User-Agent",
+                    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+            }
+            val content = conn.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
+            if (!content.startsWith("#EXTM3U")) return null
+
+            val baseUri = URI(mediaPlaylistUrl)
+            // If this is a master playlist, recurse into its first variant
+            if (content.contains("#EXT-X-STREAM-INF")) {
+                val variantUrl = content.lineSequence()
+                    .dropWhile { !it.startsWith("#EXT-X-STREAM-INF") }
+                    .drop(1)
+                    .firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
+                    ?.let { baseUri.resolve(it).toString() }
+                    ?: return null
+                return fetchMediaSegmentUrls(variantUrl, headers)
+            }
+
+            content.lineSequence()
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+                .map { baseUri.resolve(it).toString() }
+                .toList()
+                .takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchMediaSegmentUrls failed for $mediaPlaylistUrl: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Downloads up to [maxBytes] of [segmentUrl] into [outFile].
+     * Returns true if the file is non-empty after the download.
+     */
+    private fun downloadSegmentToFile(
+        segmentUrl: String,
+        headers: Map<String, String>?,
+        outFile: File,
+        maxBytes: Int = 3 * 1024 * 1024
+    ): Boolean {
+        return try {
+            val conn = URL(segmentUrl).openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 8_000
+            conn.readTimeout = 8_000
+            conn.instanceFollowRedirects = true
+            headers?.forEach { (k, v) ->
+                if (PLAYER_SKIP_HEADERS.none { it.equals(k, ignoreCase = true) }) {
+                    conn.setRequestProperty(k, v)
+                }
+            }
+            if (headers?.keys?.none { it.equals("User-Agent", ignoreCase = true) } != false) {
+                conn.setRequestProperty("User-Agent",
+                    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+            }
+            conn.inputStream.use { input ->
+                outFile.outputStream().use { output ->
+                    val buffer = ByteArray(8_192)
+                    var totalRead = 0
+                    while (totalRead < maxBytes) {
+                        val read = input.read(buffer, 0, minOf(buffer.size, maxBytes - totalRead))
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        totalRead += read
+                    }
+                }
+            }
+            outFile.length() > 0
+        } catch (e: Exception) {
+            Log.w(TAG, "downloadSegmentToFile failed for $segmentUrl: ${e.message}")
+            false
         }
     }
 

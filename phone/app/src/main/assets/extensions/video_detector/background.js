@@ -183,11 +183,19 @@ browser.webRequest.onHeadersReceived.addListener(
         if (contentTypeHeader) {
             const isVideoContentType = VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
             const isM3u8Url = details.url.toLowerCase().includes('m3u8');
-            
+
             // Check for common video extensions
             const videoExtensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.m4v', '.wmv', '.3gp'];
             const urlLower = details.url.toLowerCase().split('?')[0]; // Ignore query params
             const hasVideoExtension = videoExtensions.some(ext => urlLower.endsWith(ext));
+
+            // Suppress HLS/DASH media segments — they are not playable streams on their own
+            // and would flood the detected-videos list before the segment-prefix cleanup in Kotlin.
+            const segmentExtensions = ['.ts', '.m4s', '.fmp4', '.cmfv', '.cmfa'];
+            if (segmentExtensions.some(ext => urlLower.endsWith(ext))) {
+                if (storedData) requestHeadersMap.delete(details.requestId);
+                return;
+            }
             
             // Check for subtitle extensions
             const subtitleExtensions = ['.vtt', '.srt'];
@@ -314,6 +322,21 @@ browser.webRequest.onHeadersReceived.addListener(
 
 // Handle messages from content scripts
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Video element detected by DOM observer in content.js
+    if (message.action === 'dom_video_found') {
+        const tabId = sender.tab?.id;
+        if (tabId && tabId > 0) {
+            notifyContentScript({
+                url: message.url,
+                tabId: tabId,
+                contentType: null,
+                detectedBy: 'dom_video_element',
+                originUrl: message.origin,
+                timestamp: Date.now()
+            }, tabId, null); // headers arrive later via webRequest and will update this entry
+        }
+        return false;
+    }
     if (message.action === 'getVideos') {
         const tabId = message.tabId || (sender.tab && sender.tab.id);
         const videos = tabId ? (tabVideos.get(tabId) || []) : [];

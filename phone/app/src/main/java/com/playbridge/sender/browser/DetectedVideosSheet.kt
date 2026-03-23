@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,10 +24,15 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.animation.AnimatedVisibility
@@ -103,6 +109,9 @@ fun DetectedVideosSheet(
     var selectedVideo by remember { mutableStateOf<DetectedVideo?>(playableVideos.firstOrNull()) }
     var selectedQualityUrl by remember { mutableStateOf<String?>(null) }
     var selectedSubtitles by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // In-app preview state
+    var previewVideo by remember { mutableStateOf<DetectedVideo?>(null) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -320,7 +329,8 @@ fun DetectedVideosSheet(
                                 },
                                 onOpenWithClick = {
                                     openInExternalPlayer(context, video.url, video.contentType, video.headers)
-                                }
+                                },
+                                onPreviewClick = { previewVideo = video }
                             )
                         }
                     }
@@ -568,6 +578,18 @@ fun DetectedVideosSheet(
             }
         )
     }
+
+    // In-app video preview
+    previewVideo?.let { pv ->
+        VideoPreviewSheet(
+            video = pv,
+            onDismiss = { previewVideo = null },
+            onSendToTv = {
+                previewVideo = null
+                onVideoClick(pv, selectedSubtitles.toList())
+            }
+        )
+    }
 }
 
 @Composable
@@ -579,7 +601,8 @@ private fun VideoItemDetailed(
     onQualityClick: (String) -> Unit,
     onDownloadClick: () -> Unit,
     onCopyClick: () -> Unit,
-    onOpenWithClick: () -> Unit
+    onOpenWithClick: () -> Unit,
+    onPreviewClick: () -> Unit
 ) {
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
     val videoType = remember(video) { getVideoType(video) }
@@ -592,21 +615,36 @@ private fun VideoItemDetailed(
 
     // HLS Qualities state
     val isHls = remember(videoType) { videoType == "HLS" }
+    val isStream = remember(videoType) { videoType == "HLS" || videoType == "DASH" }
     var qualities by remember { mutableStateOf(video.qualities) }
     var isLoadingQualities by remember { mutableStateOf(isHls && !video.qualitiesChecked) }
-    
+
+    // Thumbnail — pre-seed from cache so there's no loading flash if BrowserActivity
+    // already completed the background fetch before the sheet was opened.
+    var thumbnail by remember(video.url) {
+        mutableStateOf(VideoDetector.getCachedThumbnail(video.url))
+    }
+    var thumbnailFailed by remember { mutableStateOf(false) }
+
     LaunchedEffect(video.url) {
         if (!video.fileSizeChecked) {
             isLoadingSize = true
             fileSize = VideoDetector.fetchFileSize(video)
             isLoadingSize = false
         }
-        
+
         if (isHls && !video.qualitiesChecked) {
             isLoadingQualities = true
             qualities = VideoDetector.fetchHlsQualities(video)
             isLoadingQualities = false
         }
+    }
+
+    // Thumbnail fetch — fast no-op if already cached; only re-tries on cache miss
+    LaunchedEffect(video.url) {
+        if (thumbnail != null) return@LaunchedEffect
+        val bmp = VideoDetector.fetchThumbnail(video)
+        if (bmp != null) thumbnail = bmp else thumbnailFailed = true
     }
     
     Card(
@@ -663,7 +701,48 @@ private fun VideoItemDetailed(
             }
             
             Spacer(modifier = Modifier.height(8.dp))
-            
+
+            // Thumbnail — always shown for all video types
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                when {
+                    thumbnail != null -> Image(
+                        bitmap = thumbnail!!.asImageBitmap(),
+                        contentDescription = "Video preview",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    thumbnailFailed -> Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(32.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Preview unavailable",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                    else -> CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
             // Content Information
             if (video.playlistPayload != null) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -847,6 +926,13 @@ private fun VideoItemDetailed(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
+                    }
+                    IconButton(onClick = onPreviewClick) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = "Preview",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
                     IconButton(onClick = onOpenWithClick) {
                         Icon(

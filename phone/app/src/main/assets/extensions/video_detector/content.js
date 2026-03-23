@@ -82,4 +82,50 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
 });
 
+// ── Video element observer ────────────────────────────────────────────────────
+// Catches <video src="..."> set in HTML or via JS assignment.
+// webRequest covers most cases, but scanning the DOM ensures we don't miss
+// elements whose network load started before the extension listener was ready.
+
+function reportVideoSrc(src) {
+    if (!src || src.startsWith('blob:') || src.startsWith('data:') || !src.startsWith('http')) return;
+    browser.runtime.sendMessage({
+        action: 'dom_video_found',
+        url: src,
+        origin: window.location.href
+    }).catch(() => {});
+}
+
+function scanElement(el) {
+    if (el.tagName === 'VIDEO' || el.tagName === 'SOURCE') reportVideoSrc(el.src);
+}
+
+function scanAll() {
+    document.querySelectorAll('video, source').forEach(scanElement);
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', scanAll);
+} else {
+    scanAll();
+}
+
+const videoObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+            if (node.nodeType !== 1) continue;
+            scanElement(node);
+            node.querySelectorAll?.('video, source').forEach(scanElement);
+        }
+        if (mutation.type === 'attributes' && mutation.target.nodeType === 1) {
+            scanElement(mutation.target);
+        }
+    }
+});
+
+videoObserver.observe(document.documentElement, {
+    childList: true, subtree: true,
+    attributes: true, attributeFilter: ['src']
+});
+
 console.log('[VideoDetector Content] Loaded');

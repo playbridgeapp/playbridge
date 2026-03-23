@@ -57,10 +57,11 @@ object HlsParser {
 
     /**
      * Parses the given M3U8 URL and returns a comprehensive HlsPlaylist object.
+     * Pass [headers] (e.g. from the browser extension) so auth/cookie-gated playlists can be fetched.
      */
-    suspend fun parsePlaylist(masterPlaylistUrl: String): HlsPlaylist = withContext(Dispatchers.IO) {
+    suspend fun parsePlaylist(masterPlaylistUrl: String, headers: Map<String, String>? = null): HlsPlaylist = withContext(Dispatchers.IO) {
         try {
-            val content = fetchUrlContent(masterPlaylistUrl)
+            val content = fetchUrlContent(masterPlaylistUrl, headers)
             
             // Basic check for M3U8 format
             if (!content.startsWith("#EXTM3U")) {
@@ -183,8 +184,8 @@ object HlsParser {
      * Parsing wrapper for backward compatibility.
      * Returns just list of video qualities.
      */
-    suspend fun parse(masterPlaylistUrl: String): List<VideoQuality> {
-        return parsePlaylist(masterPlaylistUrl).videoQualities
+    suspend fun parse(masterPlaylistUrl: String, headers: Map<String, String>? = null): List<VideoQuality> {
+        return parsePlaylist(masterPlaylistUrl, headers).videoQualities
     }
 
     /**
@@ -243,16 +244,25 @@ object HlsParser {
         return sb.toString()
     }
 
-    private fun fetchUrlContent(urlString: String): String {
+    private fun fetchUrlContent(urlString: String, headers: Map<String, String>? = null): String {
         val url = URL(urlString)
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
         connection.connectTimeout = 10000
         connection.readTimeout = 10000
         connection.instanceFollowRedirects = true
-        
-        // Some servers require User-Agent
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+
+        // Apply captured headers first (includes cookies, auth, Referer, etc.)
+        headers?.forEach { (key, value) ->
+            // Skip headers that HttpURLConnection manages or that break playlist fetching
+            if (key.equals("Range", ignoreCase = true)) return@forEach
+            connection.setRequestProperty(key, value)
+        }
+
+        // Fall back to a browser-like User-Agent if the extension didn't capture one
+        if (headers?.keys?.none { it.equals("User-Agent", ignoreCase = true) } != false) {
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        }
 
         return connection.inputStream.use { stream ->
             BufferedReader(InputStreamReader(stream)).readText()

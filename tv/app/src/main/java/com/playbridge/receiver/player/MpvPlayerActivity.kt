@@ -630,7 +630,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         headers["User-Agent"]?.let { MPVLib.setOptionString("user-agent", it) }
         headers["Referer"]?.let { MPVLib.setOptionString("referrer", it) }
 
-        val extra = headers.filterKeys { it !in listOf("User-Agent", "Referer") }
+        // Exclude headers that MPV manages itself (Range), browser-only fetch-metadata headers
+        // (Sec-Fetch-*), and headers whose values contain commas (Accept) — MPV's
+        // http-header-fields is a comma-separated list, so a comma in a value would corrupt it.
+        val skipKeys = setOf("User-Agent", "Referer", "Range", "Accept", "Accept-Language",
+            "Sec-Fetch-Dest", "Sec-Fetch-Site", "Sec-Fetch-Mode")
+        val extra = headers.filterKeys { it !in skipKeys }
         if (extra.isNotEmpty()) {
             MPVLib.setOptionString(
                 "http-header-fields",

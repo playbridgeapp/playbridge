@@ -277,8 +277,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 MediaPlayer.Event.Stopped ->
                     FileLogger.i(TAG, "Stopped")
 
-                MediaPlayer.Event.EncounteredError ->
+                MediaPlayer.Event.EncounteredError -> {
                     FileLogger.e(TAG, "VLC encountered an error (url=${originalM3u8Url ?: "(unknown)"})")
+                    handleVlcError()
+                }
 
                 MediaPlayer.Event.EndReached -> {
                     FileLogger.i(TAG, "End reached — playlist size=${playlistItems.size}, index=$playlistIndex")

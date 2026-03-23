@@ -191,6 +191,7 @@ class BrowserActivity : ComponentActivity() {
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
         }
+        VideoDetector.init(applicationContext)
         
         // Set tabManager reference for resolving Kotlin tab IDs from extension messages
         Components.tabManager = tabManager
@@ -388,6 +389,10 @@ class BrowserActivity : ComponentActivity() {
             var forcedVideos by remember { mutableStateOf<List<DetectedVideo>?>(null) }
             val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
                 derivedStateOf {
+                    // Read processingVersion so this re-derives whenever any video's
+                    // isPlayable / qualities / hlsPlaylist fields are updated by background fetches.
+                    @Suppress("UNUSED_EXPRESSION")
+                    VideoDetector.processingVersion
                     if (forcedVideos != null) forcedVideos!!
                     else if (forcePlaylistSheet != null) listOf(forcePlaylistSheet!!)
                     else VideoDetector.getVideosForTab(selectedTabId ?: "").toList()
@@ -396,7 +401,22 @@ class BrowserActivity : ComponentActivity() {
             val videoCount by remember(selectedTabId) {
                 derivedStateOf { detectedVideos.count { !it.isSubtitle } }
             }
-            
+
+            // Eagerly parse HLS/DASH qualities and fetch thumbnails for the current tab's videos
+            // so results are ready before the user opens the sheet.
+            LaunchedEffect(selectedTabId, detectedVideos.size) {
+                val tabId = selectedTabId ?: return@LaunchedEffect
+                for (video in detectedVideos) {
+                    if (video.isSubtitle) continue
+                    if (!video.qualitiesChecked) {
+                        launch { VideoDetector.fetchHlsQualities(video, tabId) }
+                    }
+                    if (!VideoDetector.hasThumbnail(video.url)) {
+                        launch { VideoDetector.fetchThumbnail(video) }
+                    }
+                }
+            }
+
             // TV active context - updated via WebSocket messages from TV
             var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
 
