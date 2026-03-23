@@ -216,6 +216,8 @@ PlayBridge/
 ├── protocol/                    # Shared module
 │   ├── build.gradle.kts
 │   └── src/main/java/com/playbridge/protocol/
+│       ├── BluetoothConstants.kt
+│       ├── Config.kt
 │       ├── NsdConstants.kt
 │       └── Message.kt           # Unified protocol messages + sealed Command class
 ├── phone/
@@ -244,12 +246,29 @@ PlayBridge/
 │   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
 │   │       │   │   ├── MagnetParsingSheet.kt   (Debrid integration)
 │   │       │   │   ├── LibraryViewModel.kt
+│   │       │   │   ├── CommandHistoryScreen.kt
+│   │       │   │   ├── HomeScreen.kt
+│   │       │   │   ├── ErrorPageUtils.kt
+│   │       │   │   ├── FindOnPageBar.kt
+│   │       │   │   ├── LibraryDetailScreen.kt
+│   │       │   │   ├── LibraryEnums.kt
 │   │       │   │   └── ...
 │   │       │   ├── connection/
+│   │       │   │   ├── BluetoothClient.kt
 │   │       │   │   ├── ConnectionViewModel.kt
 │   │       │   ├── data/
 │   │       │   │   ├── debrid/                 (Debrid integration clients/providers)
 │   │       │   │   ├── history/
+│   │       │   │   │   ├── BookmarkDao.kt
+│   │       │   │   │   ├── BookmarkEntity.kt
+│   │       │   │   │   ├── CommandHistoryDao.kt
+│   │       │   │   │   ├── CommandHistoryEntity.kt
+│   │       │   │   │   ├── DatabaseProvider.kt
+│   │       │   │   │   ├── HistoryDao.kt
+│   │       │   │   │   ├── HistoryDatabase.kt
+│   │       │   │   │   ├── HistoryEntity.kt
+│   │       │   │   │   ├── TabDao.kt
+│   │       │   │   │   └── TabEntity.kt
 │   │       │   │   └── library/
 │   │       │   │       ├── OmdbModels.kt
 │   │       │   │       ├── OmdbRepository.kt
@@ -286,6 +305,7 @@ PlayBridge/
     │       │   │   ├── VlcPlayerActivity.kt (~753 lines)
     │       │   │   └── VlcTrackSelectionDialog.kt
     │       │   ├── server/
+    │       │   │   ├── BluetoothServer.kt
     │       │   │   ├── ServerService.kt    (~586 lines)
     │       │   ├── ui/
     │       │   └── model/

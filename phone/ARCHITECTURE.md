@@ -40,6 +40,7 @@ com.playbridge.sender/
 │   ├── TabsScreen.kt
 │   └── VideoDetector.kt
 ├── connection/
+│   ├── BluetoothClient.kt
 │   ├── ConnectionStore.kt
 │   ├── ConnectionViewModel.kt
 │   ├── NsdHelper.kt
@@ -114,6 +115,8 @@ com.playbridge.sender/
 | Download Utils | DownloadUtils.kt | Download helper: standard files via DownloadManager, HLS via ExoPlayer DownloadService |
 | HLS Download Manager | DownloadManagerSingleton.kt | Media3 ExoPlayer download manager singleton for HLS offline downloads |
 | Media Download Service | MediaDownloadService.kt | Foreground service for HLS media downloads with notifications |
+| Command History | CommandHistoryScreen.kt | UI for viewing command history sent to TV |
+| Home Page | HomeScreen.kt | Default browser landing page |
 | Browser Settings | SettingsScreen.kt | Browser settings (e.g., toggle inbuilt extension visibility, import/export settings) |
 | Settings Export | ExportedSettings.kt | Serializable data models for settings export/import including tabs, addons, Debrid configs |
 | Browser History | HistoryScreen.kt | Browsing history list with clear functionality |
@@ -124,18 +127,19 @@ com.playbridge.sender/
 | Find on Page | FindOnPageBar.kt | UI for finding text within web pages |
 | Connection VM | ConnectionViewModel.kt | Centralized logic for WebSocket + NSD discovery, TV commands, state |
 | WebSocket | WebSocketClient.kt | OkHttp-based client with auto-retry (60 attempts, 5s intervals) |
+| Bluetooth Client | BluetoothClient.kt | Bluetooth RFCOMM socket client fallback for TV connections |
 | Connection | ConnectionScreen.kt | NSD auto-discovery, QR scanning, manual IP entry, PIN authentication |
 | Service Discovery | NsdHelper.kt | Network Service Discovery to find TV services on local network |
 | Embedded Extension | `assets/extensions/video_detector` | Legacy internal extension bundled with the phone app for video detection in GeckoView |
 
 ## Dependencies
-- **GeckoView** (Mozilla) v147 — Full Firefox engine
-- **Mozilla Android Components** v147 — Tabs, toolbar, extensions, sessions, prompts support
-- **OkHttp** v4.12 — WebSocket client
-- **CameraX** v1.4 + **ML Kit Barcode** v17.3 — QR code scanning
-- **Jetpack Compose** — UI (Material3)
-- **Kotlin Serialization** v1.7 — JSON protocol
-- **DataStore** v1.1 — Preferences persistence
-- **Room** — SQLite persistence for browsing history
-- **Media3 ExoPlayer** — HLS offline download support
-- **Coil** — Image loading
+- **GeckoView** (Mozilla) v147.0.20260105210555 — Full Firefox engine
+- **Mozilla Android Components** v147.0 — Tabs, toolbar, extensions, sessions, prompts support
+- **OkHttp** v4.12.0 — WebSocket client
+- **CameraX** v1.4.1 + **ML Kit Barcode** v17.3.0 — QR code scanning
+- **Jetpack Compose BOM** v2024.09.00 — UI (Material3)
+- **Kotlin Serialization** v1.7.3 — JSON protocol
+- **DataStore** v1.1.1 — Preferences persistence
+- **Room** v2.8.4 — SQLite persistence for browsing history
+- **Media3 ExoPlayer** v1.2.1 — HLS offline download support
+- **Coil** v2.7.0 — Image loading
