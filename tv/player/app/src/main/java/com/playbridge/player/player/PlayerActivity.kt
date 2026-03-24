@@ -1,15 +1,9 @@
 package com.playbridge.player.player
 
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.core.view.WindowCompat
-import com.playbridge.player.server.ServerService
 
 abstract class PlayerActivity : ComponentActivity() {
 
@@ -24,11 +18,30 @@ abstract class PlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         // Keep screen on
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        
+
         // Handle window insets
         WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        // Ensure only one player activity is alive at a time so that pressing back always
+        // returns to the home/library screen rather than a previously-used player.
+        current?.get()?.let { prev ->
+            if (prev !== this && !prev.isFinishing) {
+                prev.finish()
+            }
+        }
+        current = java.lang.ref.WeakReference(this)
+    }
+
+    override fun onDestroy() {
+        if (current?.get() === this) current = null
+        super.onDestroy()
+    }
+
+    companion object {
+        @Volatile
+        private var current: java.lang.ref.WeakReference<PlayerActivity>? = null
     }
 }

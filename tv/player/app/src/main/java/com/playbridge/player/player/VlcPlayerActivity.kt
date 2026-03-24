@@ -65,6 +65,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private lateinit var progressManager: ProgressManager
     private lateinit var historyStore: HistoryStore
+    private var receiverRegistered = false
 
     // Seek buffering
     private var pendingSeekTime: Long? = null
@@ -209,8 +210,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val args = ArrayList<String>().apply {
             add("-vvv") // Verbosity
         }
-        libVLC = LibVLC(this, args)
-        mediaPlayer = MediaPlayer(libVLC)
+        try {
+            libVLC = LibVLC(this, args)
+            mediaPlayer = MediaPlayer(libVLC)
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Failed to initialize LibVLC", e)
+            Toast.makeText(this, "Failed to start VLC player", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
 
         mediaPlayer?.vlcVout?.apply {
             setVideoView(surfaceView)
@@ -306,6 +314,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(remoteReceiver, filter)
         }
+        receiverRegistered = true
 
         handleIntent(intent)
 
@@ -787,11 +796,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     override fun onDestroy() {
         FileLogger.i(TAG, "=== VlcPlayerActivity DESTROYED ===")
         activeDialog?.dismiss()
-        syncSelectionsToProgressManager()
-        progressManager.saveProgress()
+        if (::progressManager.isInitialized) {
+            syncSelectionsToProgressManager()
+            progressManager.saveProgress()
+        }
         super.onDestroy()
         seekHandler.removeCallbacks(performSeekRunnable)
-        unregisterReceiver(remoteReceiver)
+        if (receiverRegistered) {
+            unregisterReceiver(remoteReceiver)
+            receiverRegistered = false
+        }
 
         // Capture and null out references before any cleanup so nothing else uses them.
         val playerToRelease = mediaPlayer

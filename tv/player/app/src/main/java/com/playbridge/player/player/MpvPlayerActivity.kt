@@ -46,6 +46,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private lateinit var controlsManager: MpvControlsManager
     private lateinit var progressManager: ProgressManager
     private lateinit var historyStore: HistoryStore
+    private var mpvInitialized = false
+    private var receiverRegistered = false
 
     // Current media state (updated via MPV property observers)
     private var positionMs: Long = 0L
@@ -297,7 +299,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         )
 
         // Initialise MPV
-        MPVLib.create(this)
+        try {
+            MPVLib.create(this)
+            mpvInitialized = true
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Failed to create MPV instance", e)
+            Toast.makeText(this, "Failed to start MPV player", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
 
         // Video output — gpu with Android GPU context
         MPVLib.setOptionString("vo", "gpu")
@@ -406,6 +416,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(remoteReceiver, filter)
         }
+        receiverRegistered = true
 
         handleIntent(intent)
 
@@ -481,11 +492,16 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         FileLogger.i(TAG, "=== MpvPlayerActivity DESTROYED ===")
         seekHandler.removeCallbacks(seekTimeoutRunnable)
         super.onDestroy()
-        progressManager.saveProgress()
-        controlsManager.detachPlayer()
-        unregisterReceiver(remoteReceiver)
-        MPVLib.removeObserver(this)
-        MPVLib.destroy()
+        if (::progressManager.isInitialized) progressManager.saveProgress()
+        if (::controlsManager.isInitialized) controlsManager.detachPlayer()
+        if (receiverRegistered) {
+            unregisterReceiver(remoteReceiver)
+            receiverRegistered = false
+        }
+        if (mpvInitialized) {
+            MPVLib.removeObserver(this)
+            MPVLib.destroy()
+        }
     }
 
     // ── Intent handling ──────────────────────────────────────────────────────

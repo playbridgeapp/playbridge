@@ -51,21 +51,6 @@ android {
     }
     buildFeatures {
         compose = true
-        buildConfig = true
-    }
-
-    flavorDimensions += "distribution"
-    productFlavors {
-        create("playstore") {
-            dimension = "distribution"
-            // ExoPlayer + VLC only — no MPV
-            buildConfigField("boolean", "INCLUDE_MPV", "false")
-        }
-        create("full") {
-            dimension = "distribution"
-            // All players + MPV
-            buildConfigField("boolean", "INCLUDE_MPV", "true")
-        }
     }
     packaging {
         resources {
@@ -143,9 +128,9 @@ dependencies {
     
     implementation(project(":protocol"))
 
-    // LibVLC — included in both flavors
+    // LibVLC
     implementation(libs.libvlc.all)
 
-    // MPV — full flavor only (omitted from playstore to keep download ~30 MB)
-    "fullImplementation"(files("libs/mpv-android.aar"))
+    // MPV
+    implementation(files("libs/mpv-android.aar"))
 }

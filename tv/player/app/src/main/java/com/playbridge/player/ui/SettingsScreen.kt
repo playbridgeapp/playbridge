@@ -82,16 +82,14 @@ fun SettingsScreen(
                     "external_mpv" -> "Always passes videos directly to the MPV player. Supports headers and multiple subtitles."
                     else -> ""
                 },
-                options = buildList {
-                    add("phone" to "Use Phone Setting")
-                    add("internal" to "Internal (ExoPlayer)")
-                    add("internal_vlc" to "Internal (LibVLC)")
-                    if (com.playbridge.player.BuildConfig.INCLUDE_MPV) {
-                        add("internal_mpv" to "Internal (MPV)")
-                        add("external_mpv" to "External (MPV)")
-                    }
-                    add("external" to "External Player")
-                },
+                options = listOf(
+                    "phone" to "Use Phone Setting",
+                    "internal" to "Internal (ExoPlayer)",
+                    "internal_vlc" to "Internal (LibVLC)",
+                    "internal_mpv" to "Internal (MPV)",
+                    "external_mpv" to "External (MPV)",
+                    "external" to "External Player",
+                ),
                 selected = playerMode,
                 onSelected = { mode ->
                     playerMode = mode

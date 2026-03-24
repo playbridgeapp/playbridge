@@ -314,10 +314,7 @@ class ServerService : Service() {
 
                     val activityClass = when (finalMode) {
                         "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
-                        "internal_mpv" -> if (com.playbridge.player.BuildConfig.INCLUDE_MPV)
-                            Class.forName("com.playbridge.player.player.MpvPlayerActivity")
-                        else
-                            com.playbridge.player.player.ExoPlayerActivity::class.java
+                        "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
                         else           -> com.playbridge.player.player.ExoPlayerActivity::class.java
                     }
 
