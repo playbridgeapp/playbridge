@@ -1820,6 +1820,16 @@ class BrowserActivity : ComponentActivity() {
                             sheetPlayerMode = mode
                             prefs.edit().putString("tv_player_mode", mode).apply()
                         },
+                        availableTvDevices = remember(discoveredDevices, history) {
+                            (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
+                        },
+                        selectedTvDevice = tvDevice,
+                        onTvChange = { device -> connectionViewModel.connect(device) },
+                        tvConnectionState = when (connectionState) {
+                            is WebSocketClient.ConnectionState.Connected -> true
+                            is WebSocketClient.ConnectionState.Error -> false
+                            else -> null
+                        },
                         onVideoClick = { video, subtitles ->
                             Log.d(TAG, "=== PLAY ON TV CLICKED ===")
                             Log.d(TAG, "Video URL: ${video.url}")

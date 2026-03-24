@@ -205,39 +205,37 @@ fun HistoryItemCard(
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.DarkGray.copy(alpha = 0.3f))
-                .padding(16.dp),
+                .background(Color.DarkGray.copy(alpha = 0.3f)),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Thumbnail area
-             Box(
+            // Thumbnail area — borderless, full card height
+            Box(
                 modifier = Modifier
-                    .size(80.dp)
-                    .background(Color.Black)
-                     .aspectRatio(16f/9f),
+                    .fillMaxHeight()
+                    .aspectRatio(16f / 9f)
+                    .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
-                 if (item.thumbnailPath != null) {
-                     coil3.compose.AsyncImage(
-                         model = coil3.request.ImageRequest.Builder(LocalContext.current)
-                             .data(File(item.thumbnailPath))
-                             .memoryCacheKey("${item.thumbnailPath}_${item.timestamp}")
-                             .diskCacheKey("${item.thumbnailPath}_${item.timestamp}")
-                             .crossfade(true)
-                             .build(),
-                         contentDescription = null,
-                         modifier = Modifier.fillMaxSize(),
-                         contentScale = ContentScale.Crop
-                     )
-                 } else {
-                     // Placeholder
-                     Text("▶", color = Color.White)
-                 }
+                if (item.thumbnailPath != null) {
+                    coil3.compose.AsyncImage(
+                        model = coil3.request.ImageRequest.Builder(LocalContext.current)
+                            .data(File(item.thumbnailPath))
+                            .memoryCacheKey("${item.thumbnailPath}_${item.timestamp}")
+                            .diskCacheKey("${item.thumbnailPath}_${item.timestamp}")
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Text("▶", color = Color.White)
+                }
             }
 
             Column(
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                modifier = Modifier.weight(1f).padding(top = 12.dp, bottom = 12.dp, end = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
@@ -281,7 +279,7 @@ fun HistoryItemCard(
                     imageVector = Icons.Default.Favorite,
                     contentDescription = "Favorite",
                     tint = Color(0xFFFF4081),
-                    modifier = Modifier.size(24.dp).padding(end = 8.dp)
+                    modifier = Modifier.size(24.dp).padding(end = 16.dp)
                 )
             }
         }

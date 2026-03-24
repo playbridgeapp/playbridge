@@ -73,7 +73,7 @@ class WebSocketClient {
         }
         
         val url = "ws://$ip:$port/"
-        Log.i(TAG, "Connecting to $url")
+        if (retryCount == 0) Log.i(TAG, "Connecting to $url") else Log.d(TAG, "Retrying $url (attempt $retryCount)")
         
         val request = Request.Builder()
             .url(url)
@@ -165,14 +165,18 @@ class WebSocketClient {
             }
             
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Connection failed", t)
-                
+                if (retryCount == 0) {
+                    Log.e(TAG, "Connection failed: ${t.message}", t)
+                } else {
+                    Log.d(TAG, "Connection attempt $retryCount failed: ${t.message}")
+                }
+
                 if (webSocket === this@WebSocketClient.webSocket) {
                     this@WebSocketClient.webSocket = null
-                    
+
                     if (!isUserDisconnect && retryCount < MAX_RETRIES) {
                         retryCount++
-                        Log.i(TAG, "Retrying connection ($retryCount/$MAX_RETRIES) in ${RETRY_DELAY_MS}ms")
+                        Log.d(TAG, "Retrying ($retryCount/$MAX_RETRIES) in ${RETRY_DELAY_MS}ms")
                         _connectionState.value = ConnectionState.Retrying(retryCount, MAX_RETRIES, (RETRY_DELAY_MS/1000).toInt())
                         
                         scope.launch {

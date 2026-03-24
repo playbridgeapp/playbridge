@@ -216,6 +216,7 @@ object VideoDetector {
                 
                 seenUrls.add(url)
                 videos.add(video)
+                notifyVideoUpdated()
             }
             else -> {
                 Log.w(TAG, "Unknown message type: $type")

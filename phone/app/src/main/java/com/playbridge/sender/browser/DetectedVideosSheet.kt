@@ -46,6 +46,7 @@ import java.util.*
 import kotlinx.coroutines.launch
 import com.playbridge.sender.data.library.TmdbRepository
 import com.playbridge.sender.data.library.StremioSubtitleService
+import com.playbridge.sender.model.TvDevice
 
 /**
  * Bottom sheet displaying detected video sources with detailed info like 1DM.
@@ -59,13 +60,17 @@ fun DetectedVideosSheet(
     onDownload: (DetectedVideo) -> Unit,
     onClear: () -> Unit,
     playerMode: String = "tv",
-    onPlayerModeChange: (String) -> Unit = {}
+    onPlayerModeChange: (String) -> Unit = {},
+    availableTvDevices: List<TvDevice> = emptyList(),
+    selectedTvDevice: TvDevice? = null,
+    onTvChange: (TvDevice) -> Unit = {},
+    tvConnectionState: Boolean? = null  // true = connected, false = error, null = neutral
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
     
     // Separate distinct videos and subtitles, and sort videos by priority
-    val playableVideos = remember(videos) { 
+    val playableVideos = remember(videos) {
         videos.filter { !it.isSubtitle }
               .sortedWith(
                   compareByDescending<DetectedVideo> { video ->
@@ -74,12 +79,11 @@ fun DetectedVideosSheet(
                           video.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
                           // Score 4: Playable stream (HLS/DASH)
                           video.isPlayable == true && (video.url.contains(".m3u8", ignoreCase = true) || video.url.contains(".mpd", ignoreCase = true)) -> 4
-                          // Score 3: Playable normal video
-                          video.isPlayable == true -> 3
-                          // Score 2: Unchecked status
-                          video.isPlayable == null -> 2
                           // Score 1: Verified unplayable (dead link, 403, etc)
-                          else -> 1
+                          video.isPlayable == false -> 1
+                          // Score 2: Normal video — unchecked or confirmed playable both rank equally,
+                          // so timestamp (thenByDescending below) determines order: newest first.
+                          else -> 2
                       }
                   }.thenByDescending { it.timestamp }
               )
@@ -133,11 +137,11 @@ fun DetectedVideosSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Detected Media",
+                    text = "Send to TV",
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -186,9 +190,7 @@ fun DetectedVideosSheet(
                 }
             }
             
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // Compact player mode selector
+            // Compact player + TV selectors side by side
             val playerOptions = listOf(
                 "tv"           to "TV Default",
                 "internal"     to "ExoPlayer",
@@ -199,52 +201,132 @@ fun DetectedVideosSheet(
             )
             val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
             var playerDropdownExpanded by remember { mutableStateOf(false) }
+            var tvDropdownExpanded by remember { mutableStateOf(false) }
+            val showTvDropdown = availableTvDevices.size > 1 || (availableTvDevices.size == 1 && selectedTvDevice == null)
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    "Player",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Box {
-                    TextButton(
-                        onClick = { playerDropdownExpanded = true },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                // TV dropdown
+                if (showTvDropdown) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(selectedPlayerLabel, style = MaterialTheme.typography.bodySmall)
-                        Icon(
-                            Icons.Default.ArrowDropDown,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
+                        Text(
+                            "TV",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    }
-                    DropdownMenu(
-                        expanded = playerDropdownExpanded,
-                        onDismissRequest = { playerDropdownExpanded = false }
-                    ) {
-                        playerOptions.forEach { (value, label) ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        label,
-                                        fontWeight = if (value == playerMode) FontWeight.Bold else FontWeight.Normal
+                        Box {
+                            val tvLabelColor = when (tvConnectionState) {
+                                true  -> androidx.compose.ui.graphics.Color(0xFF4CAF50) // green
+                                false -> MaterialTheme.colorScheme.error
+                                null  -> MaterialTheme.colorScheme.onSurface
+                            }
+                            TextButton(
+                                onClick = { tvDropdownExpanded = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) {
+                                Text(
+                                    selectedTvDevice?.name ?: "None",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = tvLabelColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = tvLabelColor
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = tvDropdownExpanded,
+                                onDismissRequest = { tvDropdownExpanded = false }
+                            ) {
+                                availableTvDevices.forEach { device ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                device.name,
+                                                fontWeight = if (device.uuid == selectedTvDevice?.uuid) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
+                                        onClick = {
+                                            onTvChange(device)
+                                            tvDropdownExpanded = false
+                                        }
                                     )
-                                },
-                                onClick = {
-                                    onPlayerModeChange(value)
-                                    playerDropdownExpanded = false
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // Player dropdown
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        "Player",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Box {
+                        TextButton(
+                            onClick = { playerDropdownExpanded = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        ) {
+                            Text(
+                                selectedPlayerLabel,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                            Icon(
+                                Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = playerDropdownExpanded,
+                            onDismissRequest = { playerDropdownExpanded = false }
+                        ) {
+                            playerOptions.forEach { (value, label) ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            label,
+                                            fontWeight = if (value == playerMode) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        onPlayerModeChange(value)
+                                        playerDropdownExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Detected media",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
 
             TabRow(selectedTabIndex = selectedTab) {
                 tabs.forEachIndexed { index, title ->
