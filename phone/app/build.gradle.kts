@@ -19,8 +19,8 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.1.20"
+        versionCode = 21
+        versionName = "0.1.21"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -81,14 +81,6 @@ dependencies {
     
     // OkHttp WebSocket
     implementation(libs.okhttp)
-    
-    // ZXing (Open Source Barcode Scanning)
-    implementation(libs.zxing.core)
-    
-    // CameraX
-    implementation(libs.camerax.camera2)
-    implementation(libs.camerax.lifecycle)
-    implementation(libs.camerax.view)
     
     // DataStore
     implementation(libs.androidx.datastore)

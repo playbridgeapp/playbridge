@@ -15,27 +15,24 @@ echo "Publishing PlayBridge Releases..."
 
 # Get versions from build.gradle.kts files
 PHONE_VERSION=$(grep 'versionName =' phone/app/build.gradle.kts | grep -o '"[^"]*"$' | sed 's/"//g')
-TV_VERSION=$(grep 'versionName =' tv/app/build.gradle.kts | grep -o '"[^"]*"$' | sed 's/"//g')
+TV_PLAYER_VERSION=$(grep 'versionName =' tv/player/app/build.gradle.kts | grep -o '"[^"]*"$' | sed 's/"//g')
+TV_BROWSER_VERSION=$(grep 'versionName =' tv/browser/app/build.gradle.kts | grep -o '"[^"]*"$' | sed 's/"//g')
 
 echo "========================================="
-echo "📱 Phone Version : $PHONE_VERSION"
-echo "📺 TV Version    : $TV_VERSION"
+echo "📱 Phone Version     : $PHONE_VERSION"
+echo "📺 TV Player Version : $TV_PLAYER_VERSION"
+echo "🌐 TV Browser Version: $TV_BROWSER_VERSION"
 echo "========================================="
 
 # Helper function to publish a module
+# Args: <module_path> <tag_prefix> <title> <version>
 publish_module() {
   local module=$1
-  local version=$2
-  local tag="${module}-v${version}"
-  local title=""
-  local apk_dir="${module}/app/build/outputs/apk/release"
+  local tag_prefix=$2
+  local title=$3
+  local version=$4
+  local tag="${tag_prefix}-v${version}"
 
-  if [ "$module" == "phone" ]; then
-      title="Phone App v${version}"
-  else
-      title="TV App v${version}"
-  fi
-  
   # Search for all .apk files in the release directory
   local apks=()
   for search_dir in "${module}/app/release" "${module}/app/build/outputs/apk/release"; do
@@ -49,7 +46,7 @@ publish_module() {
   done
 
   if [ ${#apks[@]} -eq 0 ]; then
-    echo "⚠️ No $module APKs found. Did you build the release?"
+    echo "⚠️ No APKs found for '$module'. Did you build the release?"
     return
   fi
 
@@ -57,9 +54,9 @@ publish_module() {
   if gh release view "$tag" >/dev/null 2>&1; then
     echo "⏭️ Release '$tag' already exists. Skipping."
   else
-    local prev_tag=$(git tag -l "${module}-v*" --sort=-v:refname | grep -v "^${tag}$" | head -n 1)
-    
-    local cmd=(gh release create "$tag" "${apks[@]}" --title "$title" --generate-notes)
+    local prev_tag=$(git tag -l "${tag_prefix}-v*" --sort=-v:refname | grep -v "^${tag}$" | head -n 1)
+
+    local cmd=(gh release create "$tag" "${apks[@]}" --title "$title v${version}" --generate-notes)
     if [ -n "$prev_tag" ]; then
       echo "📝 Generating notes since: $prev_tag"
       cmd+=(--notes-start-tag "$prev_tag")
@@ -71,8 +68,10 @@ publish_module() {
   fi
 }
 
-publish_module "phone" "$PHONE_VERSION"
+publish_module "phone"      "phone"      "Phone App"      "$PHONE_VERSION"
 echo "-----------------------------------------"
-publish_module "tv" "$TV_VERSION"
+publish_module "tv/player"  "tv-player"  "TV Player App"  "$TV_PLAYER_VERSION"
+echo "-----------------------------------------"
+publish_module "tv/browser" "tv-browser" "TV Browser App" "$TV_BROWSER_VERSION"
 
 echo "🎉 Done."

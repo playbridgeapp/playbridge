@@ -8,38 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  check-version:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get_version.outputs.version }}
-      tag_exists: ${{ steps.check_tag.outputs.exists }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Fetch all history for tags
-      
-      - name: Read Version
-        id: get_version
-        run: |
-          VERSION=$(grep 'VERSION_NAME' version.properties | cut -d'=' -f2)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Detected version: $VERSION"
-
-      - name: Check if Tag Exists
-        id: check_tag
-        run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag v$VERSION already exists."
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Tag v$VERSION does not exist. Will release."
-          fi
-
   build-phone:
-    needs: check-version
-    if: needs.check-version.outputs.tag_exists == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -47,8 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    
-    - name: set up JDK 17
+
+    - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
@@ -72,33 +41,35 @@ jobs:
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
       run: ./gradlew assembleRelease
 
-    - name: Rename APKs
-      env:
-        VERSION: ${{ needs.check-version.outputs.version }}
+    - name: Get version
+      id: version
       run: |
-        find app/build/outputs/apk -name "*.apk" -type f | while read f; do
-          mv "$f" "$(dirname "$f")/playbridge-phone-${VERSION}-$(basename "$f")"
+        VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Rename APKs
+      run: |
+        find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
+          mv "$f" "$(dirname "$f")/playbridge-phone-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: phone-release-apk
-        path: phone/app/build/outputs/apk/**/*.apk
+        path: phone/app/build/outputs/apk/release/*.apk
         retention-days: 1
 
-  build-tv:
-    needs: check-version
-    if: needs.check-version.outputs.tag_exists == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+  build-tv-player:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./tv
+        working-directory: ./tv/player
 
     steps:
     - uses: actions/checkout@v4
-    
-    - name: set up JDK 17
+
+    - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
@@ -109,8 +80,8 @@ jobs:
       env:
         PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
       run: |
-        mkdir -p ../keystore
-        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../keystore/release.jks
+        mkdir -p ../../../keystore
+        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../../../keystore/release.jks
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
@@ -122,46 +93,126 @@ jobs:
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
       run: ./gradlew assembleRelease
 
-    - name: Rename APKs
-      env:
-        VERSION: ${{ needs.check-version.outputs.version }}
+    - name: Get version
+      id: version
       run: |
-        find app/build/outputs/apk -name "*.apk" -type f | while read f; do
-          mv "$f" "$(dirname "$f")/playbridge-tv-${VERSION}-$(basename "$f")"
+        VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Rename APKs
+      run: |
+        find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
+          mv "$f" "$(dirname "$f")/playbridge-tv-player-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: tv-release-apk
-        path: tv/app/build/outputs/apk/**/*.apk
+        name: tv-player-release-apk
+        path: tv/player/app/build/outputs/apk/release/*.apk
+        retention-days: 1
+
+  build-tv-browser:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./tv/browser
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Decode Keystore
+      env:
+        PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
+      run: |
+        mkdir -p ../../../keystore
+        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../../../keystore/release.jks
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Build Release APK
+      env:
+        PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
+        PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
+        PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
+      run: ./gradlew assembleRelease
+
+    - name: Get version
+      id: version
+      run: |
+        VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Rename APKs
+      run: |
+        find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
+          mv "$f" "$(dirname "$f")/playbridge-tv-browser-${{ steps.version.outputs.version }}-$(basename "$f")"
+        done
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: tv-browser-release-apk
+        path: tv/browser/app/build/outputs/apk/release/*.apk
         retention-days: 1
 
   release:
-    needs: [check-version, build-phone, build-tv]
-    if: needs.check-version.outputs.tag_exists == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-phone, build-tv-player, build-tv-browser]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download Phone APK
         uses: actions/download-artifact@v4
         with:
           name: phone-release-apk
           path: output/phone
 
-      - name: Download TV APK
+      - name: Download TV Player APK
         uses: actions/download-artifact@v4
         with:
-          name: tv-release-apk
-          path: output/tv
+          name: tv-player-release-apk
+          path: output/tv-player
+
+      - name: Download TV Browser APK
+        uses: actions/download-artifact@v4
+        with:
+          name: tv-browser-release-apk
+          path: output/tv-browser
+
+      - name: Get versions
+        id: versions
+        run: |
+          PHONE=$(grep 'versionName =' phone/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          PLAYER=$(grep 'versionName =' tv/player/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          BROWSER=$(grep 'versionName =' tv/browser/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          echo "phone=$PHONE" >> $GITHUB_OUTPUT
+          echo "player=$PLAYER" >> $GITHUB_OUTPUT
+          echo "browser=$BROWSER" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ needs.check-version.outputs.version }}
-          name: Release v${{ needs.check-version.outputs.version }}
+          tag_name: phone-v${{ steps.versions.outputs.phone }}
+          name: PlayBridge Phone v${{ steps.versions.outputs.phone }}
+          body: |
+            **Phone:** v${{ steps.versions.outputs.phone }}
+            **TV Player:** v${{ steps.versions.outputs.player }}
+            **TV Browser:** v${{ steps.versions.outputs.browser }}
           files: |
-            output/phone/**/*.apk
-            output/tv/**/*.apk
+            output/phone/*.apk
+            output/tv-player/*.apk
+            output/tv-browser/*.apk
           generate_release_notes: true
