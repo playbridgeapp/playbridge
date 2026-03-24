@@ -1842,18 +1842,14 @@ class BrowserActivity : ComponentActivity() {
                                             ).show()
                                         }
                                     } else {
-                                        val headers = mutableMapOf<String, String>()
-                                        // Default UA
-                                        headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                        // Use mediaHeaders() to strip browser-context headers (Sec-Fetch-*, etc.)
+                                        // that cause CDN token validation to reject requests from non-browser clients.
+                                        // Cookie, Referer, Origin, and User-Agent are preserved.
+                                        val headers = VideoDetector.mediaHeaders(video)
 
-                                        // Default Referer from originUrl
-                                        if (!video.originUrl.isNullOrEmpty()) {
+                                        // Fall back to originUrl as Referer if not captured in request headers
+                                        if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
                                             headers["Referer"] = video.originUrl
-                                        }
-
-                                        // Apply captured headers (these take precedence and include Cookies)
-                                        video.headers?.forEach { (k, v) ->
-                                            headers[k] = v
                                         }
 
                                         val commandJson = com.playbridge.protocol.createPlayCommandJson(

@@ -499,16 +499,15 @@ class ExoPlayerActivity : PlayerActivity() {
         }
         FileLogger.i(TAG, "CURL COMMAND: $curlBuilder")
 
-        // 2. Create OkHttp Data Source Factory
-        val okHttpClient = contentSniffer.getOkHttpClient(requestProperties, trustAllCerts = contentSniffer.isLocalUrl(url))
-        val cacheControl = okhttp3.CacheControl.Builder().noCache().noStore().build()
-
-        val okHttpDataSourceFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)
+        // 2. Create Data Source Factory
+        // DefaultHttpDataSource (Android's HttpURLConnection) is used instead of OkHttp because
+        // some CDNs perform TLS fingerprint (JA3) validation and reject OkHttp clients.
+        val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
             .setUserAgent(userAgent)
             .setDefaultRequestProperties(requestProperties)
-            .setCacheControl(cacheControl)
+            .setAllowCrossProtocolRedirects(true)
 
-        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, okHttpDataSourceFactory)
+        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
 
         // 3. Configure Load Control
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
@@ -548,16 +547,14 @@ class ExoPlayerActivity : PlayerActivity() {
         // 4. Build Player
         val mediaSourceFactory = if (isHls) {
             FileLogger.i(TAG, "Using HlsMediaSource.Factory")
-            // Use okHttpDataSourceFactory directly to ensure headers and SSL bypass
-            // apply to M3U8 chunk lists and AES-128 key HTTP queries
-            androidx.media3.exoplayer.hls.HlsMediaSource.Factory(okHttpDataSourceFactory)
+            androidx.media3.exoplayer.hls.HlsMediaSource.Factory(httpDataSourceFactory)
                 .setAllowChunklessPreparation(true)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         } else {
             FileLogger.i(TAG, "Using DefaultMediaSourceFactory")
             val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
                 .setConstantBitrateSeekingEnabled(true)
-             androidx.media3.exoplayer.source.DefaultMediaSourceFactory(okHttpDataSourceFactory, extractorsFactory)
+            androidx.media3.exoplayer.source.DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         }
 

@@ -7,8 +7,8 @@ import com.playbridge.protocol.parseCommand
 import com.playbridge.receiver.logging.FileLogger
 import io.ktor.http.*
 import io.ktor.server.application.*
+import io.ktor.server.cio.*
 import io.ktor.server.engine.*
-import io.ktor.server.netty.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
@@ -74,7 +74,7 @@ class WebSocketServer(
                 server?.stop(1000, 2000)
                 server = null
                 
-                server = embeddedServer(Netty, port = port) {
+                server = embeddedServer(CIO, port = port) {
                     install(WebSockets) {
                         pingPeriod = 15.seconds
                         timeout = 15.seconds

@@ -56,7 +56,6 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/INDEX.LIST"
-            excludes += "/META-INF/io.netty.versions.properties"
         }
         jniLibs {
             // mpv-android and libvlc both ship libc++_shared.so for every ABI; pick one copy.
@@ -89,7 +88,7 @@ dependencies {
     
     // Ktor WebSocket Server
     implementation(libs.ktor.server.core)
-    implementation(libs.ktor.server.netty)
+    implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.websockets)
     implementation(libs.ktor.serialization.json)
     
