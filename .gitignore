@@ -32,7 +32,11 @@ Thumbs.db
 # Project Specific
 deploymentTargetSelector.xml
 tv/app/release
+tv/player/app/release
+tv/browser/app/release
 phone/app/release
+**/*.apk
+**/*.aab
 
 extension/dist
 
