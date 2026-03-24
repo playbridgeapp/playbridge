@@ -13,6 +13,7 @@ import com.playbridge.receiver.logging.FileLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.InputStream
@@ -69,17 +70,26 @@ class BluetoothServer(
     }
 
     private suspend fun acceptConnections() {
+        var consecutiveFailures = 0
         while (isRunning && serverSocket != null) {
             val socket: BluetoothSocket? = try {
                 serverSocket?.accept()
             } catch (e: IOException) {
                 if (isRunning) {
-                    FileLogger.e(TAG, "Socket accept failed", e)
+                    consecutiveFailures++
+                    // Only log the first failure and every 10th after that to avoid flooding logcat
+                    if (consecutiveFailures == 1 || consecutiveFailures % 10 == 0) {
+                        FileLogger.w(TAG, "Socket accept failed (×$consecutiveFailures): ${e.message}")
+                    }
+                    // Exponential backoff capped at 30s to avoid a tight spin loop
+                    val backoffMs = minOf(1000L * consecutiveFailures, 30_000L)
+                    delay(backoffMs)
                 }
                 null
             }
 
             socket?.let {
+                consecutiveFailures = 0
                 FileLogger.i(TAG, "Bluetooth client connected: ${it.remoteDevice.address}")
                 manageConnectedSocket(it)
             }

@@ -20,13 +20,21 @@ private const val TAG = "ContentSniffer"
 class ContentSniffer {
 
     /**
-     * Returns true if the URL resolves to a local/private network address
-     * where self-signed certificates are common and acceptable.
+     * Returns true if the URL is on a local/private network address where
+     * self-signed certificates are common and acceptable.
+     *
+     * Only numeric IP addresses are checked against private ranges — hostname
+     * resolution via DNS is a network operation and must not run on the main
+     * thread. Non-numeric hostnames are matched only by name (.local, localhost).
      */
     fun isLocalUrl(url: String): Boolean {
         val host = Uri.parse(url).host ?: return false
 
         if (host == "localhost" || host.endsWith(".local")) return true
+
+        // Avoid DNS: only attempt InetAddress parsing for numeric IPs.
+        val looksLikeIp = host.all { it.isDigit() || it == '.' || it == ':' || it in 'a'..'f' || it in 'A'..'F' }
+        if (!looksLikeIp) return false
 
         return try {
             val addr = InetAddress.getByName(host)
