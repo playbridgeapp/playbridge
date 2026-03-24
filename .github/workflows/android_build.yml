@@ -1,8 +1,8 @@
 name: Android Build
 
 on:
-  # push:
-  #   branches: [ "main" ]
+  push:
+    branches: [ "main" ]
   # pull_request:
   #   branches: [ "main" ]
   workflow_dispatch:
@@ -34,30 +34,39 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build Release APK
-      env:
-        PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
-        PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
-        PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew assembleRelease
-
     - name: Get version
       id: version
       run: |
         VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-    - name: Rename APKs
+    - name: Build Release APK + AAB
+      env:
+        PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
+        PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
+        PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
+      run: ./gradlew assembleRelease bundleRelease
+
+    - name: Rename outputs
       run: |
         find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-phone-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
+        mv app/build/outputs/bundle/release/app-release.aab \
+           app/build/outputs/bundle/release/playbridge-phone-${{ steps.version.outputs.version }}.aab
 
-    - name: Upload APK
+    - name: Upload APKs
       uses: actions/upload-artifact@v4
       with:
         name: phone-release-apk
         path: phone/app/build/outputs/apk/release/*.apk
+        retention-days: 1
+
+    - name: Upload AAB
+      uses: actions/upload-artifact@v4
+      with:
+        name: phone-release-aab
+        path: phone/app/build/outputs/bundle/release/*.aab
         retention-days: 1
 
   build-tv-player:
@@ -86,30 +95,39 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build Release APK
-      env:
-        PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
-        PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
-        PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew assembleRelease
-
     - name: Get version
       id: version
       run: |
         VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-    - name: Rename APKs
+    - name: Build Release APK + AAB
+      env:
+        PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
+        PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
+        PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
+      run: ./gradlew assembleRelease bundleRelease
+
+    - name: Rename outputs
       run: |
         find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-tv-player-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
+        mv app/build/outputs/bundle/release/app-release.aab \
+           app/build/outputs/bundle/release/playbridge-tv-player-${{ steps.version.outputs.version }}.aab
 
-    - name: Upload APK
+    - name: Upload APKs
       uses: actions/upload-artifact@v4
       with:
         name: tv-player-release-apk
         path: tv/player/app/build/outputs/apk/release/*.apk
+        retention-days: 1
+
+    - name: Upload AAB
+      uses: actions/upload-artifact@v4
+      with:
+        name: tv-player-release-aab
+        path: tv/player/app/build/outputs/bundle/release/*.aab
         retention-days: 1
 
   build-tv-browser:
@@ -138,30 +156,39 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build Release APK
-      env:
-        PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
-        PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
-        PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew assembleRelease
-
     - name: Get version
       id: version
       run: |
         VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-    - name: Rename APKs
+    - name: Build Release APK + AAB
+      env:
+        PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
+        PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
+        PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
+      run: ./gradlew assembleRelease bundleRelease
+
+    - name: Rename outputs
       run: |
         find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-tv-browser-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
+        mv app/build/outputs/bundle/release/app-release.aab \
+           app/build/outputs/bundle/release/playbridge-tv-browser-${{ steps.version.outputs.version }}.aab
 
-    - name: Upload APK
+    - name: Upload APKs
       uses: actions/upload-artifact@v4
       with:
         name: tv-browser-release-apk
         path: tv/browser/app/build/outputs/apk/release/*.apk
+        retention-days: 1
+
+    - name: Upload AAB
+      uses: actions/upload-artifact@v4
+      with:
+        name: tv-browser-release-aab
+        path: tv/browser/app/build/outputs/bundle/release/*.aab
         retention-days: 1
 
   release:
@@ -174,23 +201,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download Phone APK
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: phone-release-apk
-          path: output/phone
-
-      - name: Download TV Player APK
-        uses: actions/download-artifact@v4
-        with:
-          name: tv-player-release-apk
-          path: output/tv-player
-
-      - name: Download TV Browser APK
-        uses: actions/download-artifact@v4
-        with:
-          name: tv-browser-release-apk
-          path: output/tv-browser
+          pattern: '*-release-*'
+          path: output
+          merge-multiple: false
 
       - name: Get versions
         id: versions
@@ -211,8 +227,9 @@ jobs:
             **Phone:** v${{ steps.versions.outputs.phone }}
             **TV Player:** v${{ steps.versions.outputs.player }}
             **TV Browser:** v${{ steps.versions.outputs.browser }}
+
+            > `.aab` files are for Play Store. `.apk` files are for sideloading.
           files: |
-            output/phone/*.apk
-            output/tv-player/*.apk
-            output/tv-browser/*.apk
+            output/**/*.apk
+            output/**/*.aab
           generate_release_notes: true
