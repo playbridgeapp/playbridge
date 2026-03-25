@@ -13,26 +13,14 @@ jobs:
     defaults:
       run:
         working-directory: ./phone
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
       with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: gradle
-
-    - name: Decode Keystore
-      env:
-        PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
-      run: |
-        mkdir -p ../keystore
-        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../keystore/release.jks
-
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+        fetch-depth: 0
 
     - name: Get version
       id: version
@@ -40,7 +28,38 @@ jobs:
         VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+    - name: Check tag
+      id: check_tag
+      run: |
+        if git rev-parse "phone-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ phone-v${{ steps.version.outputs.version }} already exists, skipping."
+        else
+          echo "skipped=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up JDK 17
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Decode Keystore
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
+      run: |
+        mkdir -p ../keystore
+        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../keystore/release.jks
+
+    - name: Grant execute permission for gradlew
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: chmod +x gradlew
+
     - name: Build Release APK + AAB
+      if: steps.check_tag.outputs.skipped == 'false'
       env:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
@@ -48,6 +67,7 @@ jobs:
       run: ./gradlew assembleRelease bundleRelease
 
     - name: Rename outputs
+      if: steps.check_tag.outputs.skipped == 'false'
       run: |
         find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-phone-${{ steps.version.outputs.version }}-$(basename "$f")"
@@ -56,6 +76,7 @@ jobs:
            app/build/outputs/bundle/release/playbridge-phone-${{ steps.version.outputs.version }}.aab
 
     - name: Upload APKs
+      if: steps.check_tag.outputs.skipped == 'false'
       uses: actions/upload-artifact@v4
       with:
         name: phone-release-apk
@@ -63,6 +84,7 @@ jobs:
         retention-days: 1
 
     - name: Upload AAB
+      if: steps.check_tag.outputs.skipped == 'false'
       uses: actions/upload-artifact@v4
       with:
         name: phone-release-aab
@@ -74,26 +96,14 @@ jobs:
     defaults:
       run:
         working-directory: ./tv/player
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
       with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: gradle
-
-    - name: Decode Keystore
-      env:
-        PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
-      run: |
-        mkdir -p ../../../keystore
-        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../../../keystore/release.jks
-
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+        fetch-depth: 0
 
     - name: Get version
       id: version
@@ -101,7 +111,38 @@ jobs:
         VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+    - name: Check tag
+      id: check_tag
+      run: |
+        if git rev-parse "tv-player-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ tv-player-v${{ steps.version.outputs.version }} already exists, skipping."
+        else
+          echo "skipped=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up JDK 17
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Decode Keystore
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
+      run: |
+        mkdir -p ../../../keystore
+        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../../../keystore/release.jks
+
+    - name: Grant execute permission for gradlew
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: chmod +x gradlew
+
     - name: Build Release APK + AAB
+      if: steps.check_tag.outputs.skipped == 'false'
       env:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
@@ -109,6 +150,7 @@ jobs:
       run: ./gradlew assembleRelease bundleRelease
 
     - name: Rename outputs
+      if: steps.check_tag.outputs.skipped == 'false'
       run: |
         find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-tv-player-${{ steps.version.outputs.version }}-$(basename "$f")"
@@ -117,6 +159,7 @@ jobs:
            app/build/outputs/bundle/release/playbridge-tv-player-${{ steps.version.outputs.version }}.aab
 
     - name: Upload APKs
+      if: steps.check_tag.outputs.skipped == 'false'
       uses: actions/upload-artifact@v4
       with:
         name: tv-player-release-apk
@@ -124,6 +167,7 @@ jobs:
         retention-days: 1
 
     - name: Upload AAB
+      if: steps.check_tag.outputs.skipped == 'false'
       uses: actions/upload-artifact@v4
       with:
         name: tv-player-release-aab
@@ -135,26 +179,14 @@ jobs:
     defaults:
       run:
         working-directory: ./tv/browser
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
       with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: gradle
-
-    - name: Decode Keystore
-      env:
-        PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
-      run: |
-        mkdir -p ../../../keystore
-        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../../../keystore/release.jks
-
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+        fetch-depth: 0
 
     - name: Get version
       id: version
@@ -162,7 +194,38 @@ jobs:
         VERSION=$(grep 'versionName =' app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+    - name: Check tag
+      id: check_tag
+      run: |
+        if git rev-parse "tv-browser-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ tv-browser-v${{ steps.version.outputs.version }} already exists, skipping."
+        else
+          echo "skipped=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up JDK 17
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Decode Keystore
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
+      run: |
+        mkdir -p ../../../keystore
+        echo $PLAYBRIDGE_KEYSTORE_BASE64 | base64 -d > ../../../keystore/release.jks
+
+    - name: Grant execute permission for gradlew
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: chmod +x gradlew
+
     - name: Build Release APK + AAB
+      if: steps.check_tag.outputs.skipped == 'false'
       env:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
@@ -170,6 +233,7 @@ jobs:
       run: ./gradlew assembleRelease bundleRelease
 
     - name: Rename outputs
+      if: steps.check_tag.outputs.skipped == 'false'
       run: |
         find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-tv-browser-${{ steps.version.outputs.version }}-$(basename "$f")"
@@ -178,6 +242,7 @@ jobs:
            app/build/outputs/bundle/release/playbridge-tv-browser-${{ steps.version.outputs.version }}.aab
 
     - name: Upload APKs
+      if: steps.check_tag.outputs.skipped == 'false'
       uses: actions/upload-artifact@v4
       with:
         name: tv-browser-release-apk
@@ -185,6 +250,7 @@ jobs:
         retention-days: 1
 
     - name: Upload AAB
+      if: steps.check_tag.outputs.skipped == 'false'
       uses: actions/upload-artifact@v4
       with:
         name: tv-browser-release-aab
@@ -193,6 +259,7 @@ jobs:
 
   release:
     needs: [build-phone, build-tv-player, build-tv-browser]
+    if: always() && (needs.build-phone.outputs.skipped == 'false' || needs.build-tv-player.outputs.skipped == 'false' || needs.build-tv-browser.outputs.skipped == 'false')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -218,18 +285,41 @@ jobs:
           echo "player=$PLAYER" >> $GITHUB_OUTPUT
           echo "browser=$BROWSER" >> $GITHUB_OUTPUT
 
-      - name: Create Release
+      - name: Create Phone release
+        if: needs.build-phone.outputs.skipped == 'false'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: phone-v${{ steps.versions.outputs.phone }}
           name: PlayBridge Phone v${{ steps.versions.outputs.phone }}
           body: |
             **Phone:** v${{ steps.versions.outputs.phone }}
+
+            > `.aab` files are for Play Store. `.apk` files are for sideloading.
+          files: output/phone-release-*/*
+          generate_release_notes: true
+
+      - name: Create TV Player release
+        if: needs.build-tv-player.outputs.skipped == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: tv-player-v${{ steps.versions.outputs.player }}
+          name: PlayBridge TV Player v${{ steps.versions.outputs.player }}
+          body: |
             **TV Player:** v${{ steps.versions.outputs.player }}
+
+            > `.aab` files are for Play Store. `.apk` files are for sideloading.
+          files: output/tv-player-release-*/*
+          generate_release_notes: true
+
+      - name: Create TV Browser release
+        if: needs.build-tv-browser.outputs.skipped == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: tv-browser-v${{ steps.versions.outputs.browser }}
+          name: PlayBridge TV Browser v${{ steps.versions.outputs.browser }}
+          body: |
             **TV Browser:** v${{ steps.versions.outputs.browser }}
 
             > `.aab` files are for Play Store. `.apk` files are for sideloading.
-          files: |
-            output/**/*.apk
-            output/**/*.aab
+          files: output/tv-browser-release-*/*
           generate_release_notes: true
