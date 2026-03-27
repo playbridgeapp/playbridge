@@ -17,6 +17,9 @@ import android.content.Context
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 
+/** State for a blocked popup awaiting user decision. */
+data class PendingPopup(val openerHost: String, val popupUrl: String)
+
 /** State for a pending download awaiting user confirmation. */
 data class PendingDownload(
     val url: String,

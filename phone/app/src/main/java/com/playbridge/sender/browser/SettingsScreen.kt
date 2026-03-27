@@ -25,6 +25,7 @@ private sealed class SettingsSection {
     object Playback : SettingsSection()
     object TV : SettingsSection()
     object ImportExport : SettingsSection()
+    object PopupBlocker : SettingsSection()
 }
 
 @Composable
@@ -47,7 +48,11 @@ fun SettingsScreen(
             onDebrid = { section = SettingsSection.Debrid },
             onPlayback = { section = SettingsSection.Playback },
             onTV = { section = SettingsSection.TV },
-            onImportExport = { section = SettingsSection.ImportExport }
+            onImportExport = { section = SettingsSection.ImportExport },
+            onPopupBlocker = { section = SettingsSection.PopupBlocker }
+        )
+        SettingsSection.PopupBlocker -> PopupBlockerSettingsScreen(
+            onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.Library -> LibrarySettingsScreen(
             onBack = { section = SettingsSection.Hub },
@@ -78,7 +83,8 @@ private fun SettingsHubContent(
     onDebrid: () -> Unit,
     onPlayback: () -> Unit,
     onTV: () -> Unit,
-    onImportExport: () -> Unit
+    onImportExport: () -> Unit,
+    onPopupBlocker: () -> Unit
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -163,6 +169,13 @@ private fun SettingsHubContent(
                 title = "Import / Export",
                 subtitle = "Backup and restore settings",
                 onClick = onImportExport
+            )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+            SettingsNavItem(
+                icon = Icons.Default.Block,
+                title = "Popup Blocker",
+                subtitle = "Block popups with per-site exceptions",
+                onClick = onPopupBlocker
             )
         }
     }

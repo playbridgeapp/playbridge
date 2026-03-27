@@ -1,5 +1,6 @@
 package com.playbridge.sender.browser
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -13,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -43,6 +45,7 @@ fun BrowserToolbar(
     onRemoteClick: (() -> Unit)? = null,
     isEditing: Boolean = false,
     isSecure: Boolean = false,
+    onSecurityIconClick: () -> Unit = {},
     isDesktopMode: Boolean = false,
     onDesktopModeChange: (Boolean) -> Unit = {},
     onBookmarkClick: () -> Unit = {},
@@ -146,7 +149,11 @@ fun BrowserToolbar(
                                     if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
                                     contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
                                     tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .pointerInput(Unit) {
+                                            detectTapGestures { onSecurityIconClick() }
+                                        }
                                 )
                             }
                         }

@@ -344,6 +344,8 @@ class BrowserActivity : ComponentActivity() {
             var detectVideosEnabled by remember { mutableStateOf(prefs.getBoolean("detect_videos", true)) }
             var isDesktopMode by remember { mutableStateOf(false) }
             var isSecureConnection by remember { mutableStateOf(false) }
+            var siteSecurityInfo by remember { mutableStateOf<SiteSecurityInfo?>(null) }
+            var showSiteInfoSheet by remember { mutableStateOf(false) }
             var isFullscreen by remember { mutableStateOf(false) }
             
             // Fullscreen: hide/show system bars
@@ -430,9 +432,7 @@ class BrowserActivity : ComponentActivity() {
             // Find in Page state
             var showFindBar by remember { mutableStateOf(false) }
             
-            // Snackbar State
-            val snackbarHostState = remember { SnackbarHostState() }
-            var pendingPopupUrl by remember { mutableStateOf<String?>(null) }
+            var pendingPopup by remember { mutableStateOf<PendingPopup?>(null) }
 
             // Clear finding when bar closes
             LaunchedEffect(showFindBar) {
@@ -486,8 +486,9 @@ class BrowserActivity : ComponentActivity() {
             val previousUrlState = remember { mutableStateOf(previousUrl) }
             val pendingDownloadState = remember { mutableStateOf(pendingDownload) }
             val isSecureConnectionState = remember { mutableStateOf(isSecureConnection) }
-            
-            val pendingPopupUrlState = remember { mutableStateOf(pendingPopupUrl) }
+            val siteSecurityInfoState = remember { mutableStateOf(siteSecurityInfo) }
+
+            val pendingPopupState = remember { mutableStateOf(pendingPopup) }
 
             // Sync wrapper states back to local vars
             currentUrl = currentUrlState.value
@@ -498,7 +499,8 @@ class BrowserActivity : ComponentActivity() {
             previousUrl = previousUrlState.value
             pendingDownload = pendingDownloadState.value
             isSecureConnection = isSecureConnectionState.value
-            pendingPopupUrl = pendingPopupUrlState.value
+            siteSecurityInfo = siteSecurityInfoState.value
+            pendingPopup = pendingPopupState.value
             
             // Sync wrapper states from BrowserStore when the selected tab changes
             // This ensures the URL bar shows the correct URL immediately on tab switch
@@ -572,7 +574,8 @@ class BrowserActivity : ComponentActivity() {
                 isDesktopMode = isDesktopMode,
                 detectVideosEnabled = detectVideosEnabled,
                 isSecureConnection = isSecureConnectionState,
-                pendingPopupUrl = pendingPopupUrlState,
+                siteSecurityInfo = siteSecurityInfoState,
+                pendingPopup = pendingPopupState,
                 onXpiDetected = { url ->
                     runOnUiThread {
                         Toast.makeText(this@BrowserActivity, "Installing extension...", Toast.LENGTH_SHORT).show()
@@ -768,7 +771,6 @@ class BrowserActivity : ComponentActivity() {
                     }
                 ) {
                     Scaffold(
-                    snackbarHost = { SnackbarHost(snackbarHostState) },
                     topBar = {
                         if (isFullscreen) {
                             // Hide toolbar in fullscreen
@@ -784,6 +786,7 @@ class BrowserActivity : ComponentActivity() {
                                             tabCount = browserState.tabs.size,
                                             isEditing = isEditing,
                                             isSecure = isSecureConnection,
+                                            onSecurityIconClick = { showSiteInfoSheet = true },
                                             isDesktopMode = isDesktopMode,
                                             onDesktopModeChange = { isDesktopMode = it },
                                             onBookmarkClick = { handleBookmarkClick() },
@@ -1925,26 +1928,58 @@ class BrowserActivity : ComponentActivity() {
                     )
                 }
                 
-                // Show Popup Blocked Snackbar
-                LaunchedEffect(pendingPopupUrl) {
-                    pendingPopupUrl?.let { url ->
-                        val host = try {
-                            java.net.URI(url).host ?: url.take(30)
-                        } catch (e: Exception) {
-                            url.take(30)
-                        }
+                // Site Info Sheet
+                if (showSiteInfoSheet) {
+                    val sheetInfo = siteSecurityInfo ?: SiteSecurityInfo(
+                        isSecure = isSecureConnection,
+                        host = try { java.net.URI(currentUrl).host ?: currentUrl } catch (e: Exception) { currentUrl }
+                    )
+                    SiteInfoSheet(
+                        info = sheetInfo,
+                        onDismiss = { showSiteInfoSheet = false }
+                    )
+                }
 
-                        val result = snackbarHostState.showSnackbar(
-                            message = "Popup blocked from $host",
-                            actionLabel = "Allow",
-                            duration = SnackbarDuration.Long
+                // Popup Blocked Bar — pinned to bottom of the content Box
+                pendingPopup?.let { popup ->
+                    val popupPrefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+
+                    fun openPopupTab() {
+                        val openerEngineSession = tabManager.sessions[selectedTab?.id]
+                        scope.launch(Dispatchers.Main) {
+                            val newEngineSession = Components.engine.createSession()
+                            val tabId = tabManager.createTab(
+                                url = popup.popupUrl,
+                                store = store,
+                                parentId = selectedTab?.id,
+                                select = true
+                            )
+                            tabManager.sessions[tabId] = newEngineSession
+                            newEngineSession.loadUrl(url = popup.popupUrl, parent = openerEngineSession)
+                        }
+                    }
+
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.BottomCenter) {
+                        PopupBlockedBar(
+                            host = popup.openerHost,
+                            onAllowOnce = {
+                                openPopupTab()
+                                pendingPopup = null
+                                pendingPopupState.value = null
+                            },
+                            onAlwaysAllow = {
+                                val whitelist = popupPrefs.getStringSet("popup_whitelist", emptySet())!!.toMutableSet()
+                                whitelist.add(popup.openerHost)
+                                popupPrefs.edit().putStringSet("popup_whitelist", whitelist).apply()
+                                openPopupTab()
+                                pendingPopup = null
+                                pendingPopupState.value = null
+                            },
+                            onDismiss = {
+                                pendingPopup = null
+                                pendingPopupState.value = null
+                            }
                         )
-
-                        if (result == SnackbarResult.ActionPerformed) {
-                            tabManager.createTab(url, store, parentId = selectedTab?.id)
-                        }
-                        pendingPopupUrl = null
-                        pendingPopupUrlState.value = null
                     }
                 }
 

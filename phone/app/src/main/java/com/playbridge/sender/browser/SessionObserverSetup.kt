@@ -1,10 +1,12 @@
 package com.playbridge.sender.browser
 
+import android.content.Context
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -47,13 +49,16 @@ fun SessionObserverSetup(
     isDesktopMode: Boolean,
     detectVideosEnabled: Boolean,
     isSecureConnection: MutableState<Boolean>,
-    pendingPopupUrl: MutableState<String?>,
+    siteSecurityInfo: MutableState<SiteSecurityInfo?>,
+    pendingPopup: MutableState<PendingPopup?>,
     onXpiDetected: (String) -> Unit,
     onMagnetDetected: (String) -> Unit,
     onTorrentDownloaded: (ByteArray) -> Unit,
     onVideoHashDetected: (String, String) -> Unit,  // (url, kotlinTabId)
     onFullScreenChange: (Boolean) -> Unit
 ) {
+    val context = LocalContext.current
+
     // Desktop Mode User Agent
     val desktopUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
     
@@ -236,6 +241,8 @@ fun SessionObserverSetup(
                     val existingNav = gs.navigationDelegate
                     originalNavDelegate = existingNav
 
+                    val popupPrefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+
                     val navProxy = java.lang.reflect.Proxy.newProxyInstance(
                         GeckoSession.NavigationDelegate::class.java.classLoader,
                         arrayOf(GeckoSession.NavigationDelegate::class.java)
@@ -243,6 +250,23 @@ fun SessionObserverSetup(
                         if (method.name == "onNewSession" && args != null && args.size >= 2) {
                             val uri = args[1] as? String
                             if (uri != null) {
+                                val openerUrl = selectedTab?.content?.url ?: ""
+                                val openerHost = try {
+                                    java.net.URI(openerUrl).host ?: openerUrl
+                                } catch (e: Exception) { openerUrl }
+
+                                val blockPopups = popupPrefs.getBoolean("block_popups", true)
+                                val whitelist = popupPrefs.getStringSet("popup_whitelist", emptySet()) ?: emptySet()
+                                val isWhitelisted = whitelist.contains(openerHost)
+
+                                if (blockPopups && !isWhitelisted) {
+                                    Log.d(TAG, "Popup blocked from $openerHost: $uri")
+                                    scope.launch(Dispatchers.Main) {
+                                        pendingPopup.value = PendingPopup(openerHost, uri)
+                                    }
+                                    return@newProxyInstance GeckoResult.fromValue(null)
+                                }
+
                                 Log.d(TAG, "Auto-opening new tab for popup: $uri")
                                 // Capture the opener session now (main thread) for referrer use below.
                                 val openerEngineSession = tabManager.sessions[selectedTab?.id]
@@ -415,7 +439,20 @@ fun SessionObserverSetup(
                             securityInfo: GeckoSession.ProgressDelegate.SecurityInformation
                         ) {
                             isSecureConnection.value = securityInfo.isSecure
-                            Log.d(TAG, "Security changed: isSecure=${securityInfo.isSecure}, host=${securityInfo.host}")
+
+                            val cert = securityInfo.certificate
+                            val certIssuer = cert?.issuerX500Principal?.name?.let { parseCN(it) }
+                            val certValidUntil = cert?.notAfter?.let {
+                                java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(it)
+                            }
+                            siteSecurityInfo.value = SiteSecurityInfo(
+                                isSecure = securityInfo.isSecure,
+                                host = securityInfo.host ?: "",
+                                certIssuer = certIssuer,
+                                certValidUntil = certValidUntil
+                            )
+
+                            Log.d(TAG, "Security changed: isSecure=${securityInfo.isSecure}, host=${securityInfo.host}, issuer=$certIssuer")
                         }
                         
                         override fun onProgressChange(session: GeckoSession, progress: Int) {
@@ -439,5 +476,12 @@ fun SessionObserverSetup(
         }
     }
 }
+
+/** Extracts the CN value from an X.500 principal name string. */
+private fun parseCN(principal: String): String? =
+    principal.split(",")
+        .map { it.trim() }
+        .firstOrNull { it.startsWith("CN=") }
+        ?.removePrefix("CN=")
 
 private const val TAG = "SessionObserver"
