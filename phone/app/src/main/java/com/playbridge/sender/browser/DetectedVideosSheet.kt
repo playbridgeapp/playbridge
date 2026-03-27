@@ -74,7 +74,8 @@ fun DetectedVideosSheet(
         videos.filter { !it.isSubtitle }
               .sortedWith(
                   compareByDescending<DetectedVideo> { video ->
-                      when {
+                      val hasMaster = video.url.contains("master", ignoreCase = true)
+                      val base = when {
                           // Score 5: HLS with multiple variants (Master Playlist)
                           video.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
                           // Score 4: Playable stream (HLS/DASH)
@@ -85,6 +86,7 @@ fun DetectedVideosSheet(
                           // so timestamp (thenByDescending below) determines order: newest first.
                           else -> 2
                       }
+                      if (hasMaster) base + 1 else base
                   }.thenByDescending { it.timestamp }
               )
     }
@@ -126,6 +128,7 @@ fun DetectedVideosSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .fillMaxHeight()
                     .padding(bottom = 80.dp) // Provide padding so FAB doesn't cover content
             ) {
                 // Header
@@ -137,7 +140,7 @@ fun DetectedVideosSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Send to TV",
+                    text = "Play on TV",
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
