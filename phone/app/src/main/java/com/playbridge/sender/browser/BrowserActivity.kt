@@ -33,8 +33,14 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
@@ -75,6 +81,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.zIndex
 
 import androidx.lifecycle.lifecycleScope
@@ -232,6 +239,9 @@ class BrowserActivity : ComponentActivity() {
         setContent {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Browser) }
             val clipboardManager = LocalClipboardManager.current
+            val keyboardController = LocalSoftwareKeyboardController.current
+            val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+            val context = LocalContext.current
             val connectionState by connectionViewModel.connectionState.collectAsState()
             val scope = rememberCoroutineScope()
             
@@ -248,6 +258,19 @@ class BrowserActivity : ComponentActivity() {
             var editUrl by remember { mutableStateOf("") }
             val suggestions by historyDao.search(editUrl).collectAsState(initial = emptyList())
             val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
+            // URL bar tap panel state (Chrome-like panel shown before user types)
+            var urlBarTapped by remember { mutableStateOf(false) }
+            var urlPanelClipboard by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(isEditing) {
+                if (isEditing) {
+                    urlBarTapped = true
+                    val clip = clipboardManager.getText()?.text
+                    urlPanelClipboard = if (!clip.isNullOrBlank()) clip else null
+                } else {
+                    urlBarTapped = false
+                    urlPanelClipboard = null
+                }
+            }
             
             // Connection ViewModel State
             val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
@@ -796,7 +819,10 @@ class BrowserActivity : ComponentActivity() {
                                                     editUrl = currentUrl
                                                 }
                                             },
-                                            onUrlChange = { url -> editUrl = url },
+                                            onUrlChange = { url ->
+                                                editUrl = url
+                                                urlBarTapped = false
+                                            },
                                             onNavigate = { url -> 
                                                 session.loadUrl(url)
                                                 isEditing = false
@@ -1192,7 +1218,7 @@ class BrowserActivity : ComponentActivity() {
                                                 }
                                             }
                                             // Browser: first back goes to browser history, second back exits
-                                            BackHandler(enabled = !isFullscreen) {
+                                            BackHandler(enabled = !isFullscreen && !isEditing) {
                                                 if (browserCanGoBack) {
                                                     session.goBack()
                                                 } else {
@@ -1210,6 +1236,14 @@ class BrowserActivity : ComponentActivity() {
                                                 }
                                             }
                                             
+                                            // Editing mode: back dismisses URL bar — registered last so has highest priority
+                                            BackHandler(enabled = isEditing) {
+                                                isEditing = false
+                                                urlBarTapped = false
+                                                keyboardController?.hide()
+                                                focusManager.clearFocus()
+                                            }
+
                                             // Clear fresh-load flag once the page finishes loading
                                             LaunchedEffect(isLoading) {
                                                 if (!isLoading && selectedTabId != null) {
@@ -1249,42 +1283,178 @@ class BrowserActivity : ComponentActivity() {
                                                     )
                                                 }
                                                 
-                                                // Suggestions Overlay (Full Screen)
+                                                // Editing Overlay (Full Screen)
                                                 if (isEditing) {
                                                     Box(
                                                         modifier = Modifier
                                                             .fillMaxSize()
                                                             .background(MaterialTheme.colorScheme.background)
-                                                            .zIndex(1f) // Ensure it's on top of BrowserView
+                                                            .zIndex(1f)
                                                     ) {
-                                                        LazyColumn(
-                                                            modifier = Modifier.fillMaxSize()
-                                                        ) {
-                                                            items(suggestions) { historyItem ->
-                                                                ListItem(
-                                                                    headlineContent = {
-                                                                        Text(
-                                                                            historyItem.title ?: historyItem.url,
-                                                                            maxLines = 1,
-                                                                            style = MaterialTheme.typography.bodyMedium
-                                                                        )
-                                                                    },
-                                                                    supportingContent = {
-                                                                        Text(
-                                                                            historyItem.url,
-                                                                            maxLines = 1,
-                                                                            style = MaterialTheme.typography.bodySmall
-                                                                        )
-                                                                    },
-                                                                    leadingContent = {
-                                                                        Icon(Icons.Default.History, null)
-                                                                    },
-                                                                    modifier = Modifier.clickable {
-                                                                        session.loadUrl(historyItem.url)
-                                                                        isEditing = false
+                                                        if (urlBarTapped) {
+                                                            // Chrome-like tap panel: current site + actions + clipboard
+                                                            val pageTitle = selectedTab?.content?.title?.takeIf { it.isNotBlank() }
+                                                            val domain = try { Uri.parse(currentUrl).host ?: currentUrl } catch (e: Exception) { currentUrl }
+                                                            val faviconUrl = if (currentUrl != "about:blank") "https://www.google.com/s2/favicons?domain=$domain&sz=64" else null
+                                                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                                                if (currentUrl != "about:blank") {
+                                                                    // Current site row: favicon + title/url + action icons
+                                                                    item {
+                                                                        Surface(
+                                                                            modifier = Modifier
+                                                                                .fillMaxWidth()
+                                                                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                                            shape = MaterialTheme.shapes.large,
+                                                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                                                        ) {
+                                                                            Row(
+                                                                                modifier = Modifier
+                                                                                    .fillMaxWidth()
+                                                                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                                                verticalAlignment = Alignment.CenterVertically
+                                                                            ) {
+                                                                                if (faviconUrl != null) {
+                                                                                    AsyncImage(
+                                                                                        model = ImageRequest.Builder(context)
+                                                                                            .data(faviconUrl)
+                                                                                            .crossfade(true)
+                                                                                            .build(),
+                                                                                        contentDescription = "Site icon",
+                                                                                        modifier = Modifier.size(28.dp)
+                                                                                    )
+                                                                                } else {
+                                                                                    Icon(
+                                                                                        Icons.Default.Language,
+                                                                                        contentDescription = null,
+                                                                                        modifier = Modifier.size(28.dp),
+                                                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                                    )
+                                                                                }
+                                                                                Spacer(modifier = Modifier.width(10.dp))
+                                                                                Column(modifier = Modifier.weight(1f)) {
+                                                                                    Text(
+                                                                                        text = pageTitle ?: domain,
+                                                                                        style = MaterialTheme.typography.bodyMedium,
+                                                                                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                                                                        maxLines = 1,
+                                                                                        overflow = TextOverflow.Ellipsis
+                                                                                    )
+                                                                                    Text(
+                                                                                        text = currentUrl.removePrefix("https://").removePrefix("http://"),
+                                                                                        style = MaterialTheme.typography.bodySmall,
+                                                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                                        maxLines = 1,
+                                                                                        overflow = TextOverflow.Ellipsis
+                                                                                    )
+                                                                                }
+                                                                                // Action icons inline
+                                                                                IconButton(
+                                                                                    onClick = {
+                                                                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                                                                            type = "text/plain"
+                                                                                            putExtra(Intent.EXTRA_TEXT, currentUrl)
+                                                                                        }
+                                                                                        context.startActivity(Intent.createChooser(intent, "Share URL"))
+                                                                                    },
+                                                                                    modifier = Modifier.size(40.dp)
+                                                                                ) {
+                                                                                    Icon(Icons.Default.Share, contentDescription = "Share", modifier = Modifier.size(20.dp))
+                                                                                }
+                                                                                IconButton(
+                                                                                    onClick = {
+                                                                                        clipboardManager.setText(AnnotatedString(currentUrl))
+                                                                                        isEditing = false
+                                                                                        keyboardController?.hide()
+                                                                                        focusManager.clearFocus()
+                                                                                    },
+                                                                                    modifier = Modifier.size(40.dp)
+                                                                                ) {
+                                                                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(20.dp))
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     }
-                                                                )
-                                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                                                }
+                                                                // Clipboard suggestion
+                                                                if (urlPanelClipboard != null) {
+                                                                    item {
+                                                                        HorizontalDivider(
+                                                                            modifier = Modifier.padding(horizontal = 16.dp),
+                                                                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                                                        )
+                                                                        ListItem(
+                                                                            headlineContent = {
+                                                                                Text(
+                                                                                    "Link you copied",
+                                                                                    style = MaterialTheme.typography.labelMedium,
+                                                                                    color = MaterialTheme.colorScheme.primary
+                                                                                )
+                                                                            },
+                                                                            supportingContent = {
+                                                                                Text(
+                                                                                    urlPanelClipboard!!,
+                                                                                    style = MaterialTheme.typography.bodySmall,
+                                                                                    maxLines = 1,
+                                                                                    overflow = TextOverflow.Ellipsis,
+                                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                                )
+                                                                            },
+                                                                            leadingContent = {
+                                                                                Icon(Icons.Default.Link, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                                                            },
+                                                                            trailingContent = {
+                                                                                IconButton(onClick = {
+                                                                                    val clip = urlPanelClipboard!!
+                                                                                    val url = if (clip.startsWith("http://") || clip.startsWith("https://") || clip.startsWith("about:")) clip else "https://$clip"
+                                                                                    session.loadUrl(url)
+                                                                                    isEditing = false
+                                                                                    keyboardController?.hide()
+                                                                                    focusManager.clearFocus()
+                                                                                }) {
+                                                                                    Icon(Icons.Default.OpenInBrowser, contentDescription = "Open link")
+                                                                                }
+                                                                            },
+                                                                            modifier = Modifier.clickable {
+                                                                                val clip2 = urlPanelClipboard!!
+                                                                                val url = if (clip2.startsWith("http://") || clip2.startsWith("https://") || clip2.startsWith("about:")) clip2 else "https://$clip2"
+                                                                                session.loadUrl(url)
+                                                                                isEditing = false
+                                                                                keyboardController?.hide()
+                                                                                focusManager.clearFocus()
+                                                                            }
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+                                                        } else {
+                                                            // Suggestions list (user is typing)
+                                                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                                                items(suggestions) { historyItem ->
+                                                                    ListItem(
+                                                                        headlineContent = {
+                                                                            Text(
+                                                                                historyItem.title ?: historyItem.url,
+                                                                                maxLines = 1,
+                                                                                style = MaterialTheme.typography.bodyMedium
+                                                                            )
+                                                                        },
+                                                                        supportingContent = {
+                                                                            Text(
+                                                                                historyItem.url,
+                                                                                maxLines = 1,
+                                                                                style = MaterialTheme.typography.bodySmall
+                                                                            )
+                                                                        },
+                                                                        leadingContent = {
+                                                                            Icon(Icons.Default.History, null)
+                                                                        },
+                                                                        modifier = Modifier.clickable {
+                                                                            session.loadUrl(historyItem.url)
+                                                                            isEditing = false
+                                                                        }
+                                                                    )
+                                                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                                                }
                                                             }
                                                         }
                                                     }

@@ -1,7 +1,9 @@
 package com.playbridge.sender.browser
 
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -14,10 +16,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -53,41 +57,31 @@ fun BrowserToolbar(
     menuContent: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // Use TextFieldValue for selection control
-    var textFieldValue by remember { mutableStateOf(TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)) }
-    
+    // Use TextFieldValue for selection control; display stripped URL when not editing
+    var textFieldValue by remember { mutableStateOf(TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))) }
+
     // Update text when currentUrl changes (only if not editing)
     LaunchedEffect(currentUrl) {
         if (!isEditing) {
-            textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)
+            textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))
+        }
+    }
+
+    // Reset stripped URL when editing stops
+    LaunchedEffect(isEditing) {
+        if (!isEditing) {
+            textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))
         }
     }
 
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
-    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-    var clipboardDetail by remember { mutableStateOf<String?>(null) }
-    var everFocused by remember { mutableStateOf(false) }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
-    // Check clipboard when editing starts
-    LaunchedEffect(isEditing) {
-        if (isEditing) {
-            val clipText = clipboardManager.getText()?.text
-            if (!clipText.isNullOrBlank() && clipText != textFieldValue.text) {
-                clipboardDetail = clipText
-            } else {
-                clipboardDetail = null
-            }
-        } else {
-             // Reset to current URL when editing stops
-             textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)
-        }
-    }
-    
     Surface(
         shadowElevation = 4.dp,
         modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainer, // distinct from background
+        color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurface
     ) {
         Column(
@@ -96,16 +90,17 @@ fun BrowserToolbar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (isEditing) {
                     // Back button to cancel editing
                     IconButton(
-                        onClick = { 
-                            onEditingChange(false) 
+                        onClick = {
+                            onEditingChange(false)
                             keyboardController?.hide()
-                            textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)
+                            focusManager.clearFocus()
+                            textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))
                         },
                         modifier = Modifier.size(40.dp)
                     ) {
@@ -129,90 +124,44 @@ fun BrowserToolbar(
                         )
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.width(4.dp))
-                
-                // URL Bar
-                TextField(
+
+                // URL Bar — BasicTextField + DecorationBox for custom (compact) content padding
+                val urlInteractionSource = remember { MutableInteractionSource() }
+                @OptIn(ExperimentalMaterial3Api::class)
+                BasicTextField(
                     value = textFieldValue,
-                    leadingIcon = if (!isEditing) {
-                        {
-                            if (currentUrl == "about:blank") {
-                                Icon(
-                                    Icons.Default.Search,
-                                    contentDescription = "Search",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            } else {
-                                Icon(
-                                    if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
-                                    contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
-                                    tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .size(16.dp)
-                                        .pointerInput(Unit) {
-                                            detectTapGestures { onSecurityIconClick() }
-                                        }
-                                )
-                            }
-                        }
-                    } else null,
                     onValueChange = { newValue ->
                         textFieldValue = newValue
                         onUrlChange(newValue.text)
                     },
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp)
+                        .heightIn(min = 50.dp)
                         .onFocusChanged { focusState ->
                             if (focusState.isFocused) {
                                 onEditingChange(true)
-                                // Select all text on first focus
-                                if (!everFocused) {
-                                     textFieldValue = textFieldValue.copy(
-                                         selection = androidx.compose.ui.text.TextRange(0, textFieldValue.text.length)
-                                     )
-                                     everFocused = true
-                                }
+                                val fullUrl = if (currentUrl == "about:blank") "" else currentUrl
+                                textFieldValue = TextFieldValue(
+                                    text = fullUrl,
+                                    selection = androidx.compose.ui.text.TextRange(0, fullUrl.length)
+                                )
                             } else {
-                                everFocused = false
                                 scope.launch {
                                     delay(200)
                                     if (isEditing) {
                                         onEditingChange(false)
-                                        textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else currentUrl)
+                                        textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))
                                     }
                                 }
                             }
                         },
                     singleLine = true,
-                    placeholder = { 
-                        Text(
-                            "Search or type URL",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodySmall
-                        ) 
-                    },
-                    trailingIcon = {
-                        if (textFieldValue.text.isNotEmpty() && isEditing) {
-                            IconButton(
-                                onClick = { 
-                                    textFieldValue = TextFieldValue("")
-                                    onUrlChange("") // Establish empty state
-                                },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Clear URL",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(
                         onGo = {
@@ -222,19 +171,84 @@ fun BrowserToolbar(
                             keyboardController?.hide()
                         }
                     ),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = MaterialTheme.colorScheme.primary
-                    ),
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    shape = MaterialTheme.shapes.extraLarge // Pill shape
+                    interactionSource = urlInteractionSource,
+                    decorationBox = { innerTextField ->
+                        TextFieldDefaults.DecorationBox(
+                            value = textFieldValue.text,
+                            innerTextField = innerTextField,
+                            enabled = true,
+                            singleLine = true,
+                            visualTransformation = VisualTransformation.None,
+                            interactionSource = urlInteractionSource,
+                            placeholder = {
+                                Text(
+                                    "Search or type URL",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            },
+                            leadingIcon = if (!isEditing) {
+                                {
+                                    if (currentUrl == "about:blank") {
+                                        Icon(
+                                            Icons.Default.Search,
+                                            contentDescription = "Search",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    } else {
+                                        Icon(
+                                            if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                            contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
+                                            tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier
+                                                .size(16.dp)
+                                                .pointerInput(Unit) {
+                                                    detectTapGestures { onSecurityIconClick() }
+                                                }
+                                        )
+                                    }
+                                }
+                            } else null,
+                            trailingIcon = if (textFieldValue.text.isNotEmpty() && isEditing) {
+                                {
+                                    IconButton(
+                                        onClick = {
+                                            textFieldValue = TextFieldValue("")
+                                            onUrlChange("")
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Clear URL",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            } else null,
+                            shape = MaterialTheme.shapes.extraLarge,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                cursorColor = MaterialTheme.colorScheme.primary
+                            ),
+                            contentPadding = TextFieldDefaults.contentPaddingWithoutLabel(
+                                top = 6.dp,
+                                bottom = 6.dp,
+                                start = 12.dp,
+                                end = 12.dp
+                            )
+                        )
+                    }
                 )
-                
+
                 Spacer(modifier = Modifier.width(4.dp))
-                
+
                 if (!isEditing) {
                     Spacer(modifier = Modifier.width(4.dp))
 
@@ -276,7 +290,7 @@ fun BrowserToolbar(
                             )
                         }
                     }
-                    
+
                     // Menu button
                     Box {
                         IconButton(
@@ -294,53 +308,6 @@ fun BrowserToolbar(
                 }
             }
 
-            // Clipboard suggestion
-            if (isEditing && clipboardDetail != null) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp), // Less padding
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = MaterialTheme.shapes.medium,
-                    onClick = {
-                        val url = normalizeUrl(clipboardDetail!!)
-                        textFieldValue = TextFieldValue(url, androidx.compose.ui.text.TextRange(url.length))
-                        onNavigate(url)
-                        onEditingChange(false)
-                        keyboardController?.hide()
-                    }
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Paste link",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text(
-                                text = "Link you copied",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = clipboardDetail!!,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-            
             // Loading progress indicator
             if (isLoading) {
                 LinearProgressIndicator(
@@ -365,4 +332,11 @@ private fun normalizeUrl(input: String): String {
         trimmed.contains(".") && !trimmed.contains(" ") -> "https://$trimmed"
         else -> "https://www.google.com/search?q=${trimmed.replace(" ", "+")}"
     }
+}
+
+/**
+ * Strip http:// or https:// from a URL for compact display.
+ */
+private fun stripProtocol(url: String): String {
+    return url.removePrefix("https://").removePrefix("http://")
 }
