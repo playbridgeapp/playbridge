@@ -105,17 +105,18 @@ class TabManager {
      * clean up sessions whose tabs have been closed or hiberated.
      */
     suspend fun syncSessions(tabs: List<TabSessionState>, selectedTabId: String? = null) {
-        // Yield to allow UI to draw first frame
-        delay(10)
-
         val allValidTabIds = tabs.map { it.id }.toSet()
 
-        // 1. Maintain LRU tracker
+        // 1. Maintain LRU tracker — done before any suspension point so it is never lost
+        // if this coroutine is cancelled (e.g. rapid store updates cancel the previous call).
         if (selectedTabId != null && allValidTabIds.contains(selectedTabId)) {
             // Re-adding at the end of a LinkedHashSet moves it to the most-recently-used position
             recentlyActiveTabIds.remove(selectedTabId)
             recentlyActiveTabIds.add(selectedTabId)
         }
+
+        // Yield to allow UI to draw first frame
+        delay(10)
 
         // 2. Cull the LRU tracker
         // Remove any tabs that were closed by the user

@@ -58,10 +58,15 @@ fun SessionObserverSetup(
 ) {
     val context = LocalContext.current
 
-    // React to Desktop Mode changes
-    LaunchedEffect(isDesktopMode, session) {
+    // Apply desktop user agent when the session changes (tab switch) — no reload,
+    // since the page isn't loaded in desktop mode yet anyway.
+    LaunchedEffect(session) {
+        session.toggleDesktopMode(isDesktopMode, reload = false)
+    }
+    // Reload when the user actively toggles desktop mode on the current tab.
+    LaunchedEffect(isDesktopMode) {
         val shouldReload = currentUrl.value != "about:blank"
-        session.toggleDesktopMode(isDesktopMode, shouldReload)
+        session.toggleDesktopMode(isDesktopMode, reload = shouldReload)
         Log.d(TAG, "${if (isDesktopMode) "Enabled" else "Disabled"} Desktop Mode (reload=$shouldReload)")
     }
     DisposableEffect(session, selectedTab?.id) {

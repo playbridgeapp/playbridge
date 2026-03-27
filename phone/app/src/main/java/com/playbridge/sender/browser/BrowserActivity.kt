@@ -296,10 +296,15 @@ class BrowserActivity : ComponentActivity() {
                 tabManager.ensureAtLeastOneTab(store)
             }
             
-            // Sync sessions with tabs
-            LaunchedEffect(browserState.tabs, browserState.selectedTabId) {
-                // LaunchedEffect already runs on the main dispatcher, we just yield or let it run
-                // deferring it slightly is okay, but it should run on Main.
+            // Sync sessions with tabs.
+            // Key on tab IDs (not full TabSessionState) so content changes (URL, title, loading
+            // state) during navigation do NOT re-trigger syncSessions — only structural changes
+            // (tabs added/removed) or selection changes do. Keying on the full list caused
+            // syncSessions to be cancelled and restarted on every navigation event, which
+            // prevented the LRU tracker from being updated and caused sessions to be hibernated
+            // unexpectedly, resulting in page reloads on every tab switch.
+            val tabIds = browserState.tabs.map { it.id }
+            LaunchedEffect(tabIds, browserState.selectedTabId) {
                 tabManager.syncSessions(browserState.tabs, browserState.selectedTabId)
             }
             
