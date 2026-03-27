@@ -1,3 +1,6 @@
+# Java heap dumps
+*.hprof
+
 # Android/IntelliJ
 *.iml
 .idea

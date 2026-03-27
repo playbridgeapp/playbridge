@@ -197,9 +197,57 @@ fun ExtensionsScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Show all extensions (including built-in like video detector)
-                    items(installedExtensions) { extension ->
+                    items(installedExtensions, key = { it.id }) { extension ->
                         ExtensionCard(
                             extension = extension,
+                            onToggleEnabled = {
+                                val extensionName = extension.metaData?.name ?: extension.id
+                                val isCurrentlyEnabled = extension.metaData?.enabled ?: true
+                                scope.launch {
+                                    try {
+                                        Handler(Looper.getMainLooper()).post {
+                                            val result = if (isCurrentlyEnabled) {
+                                                Components.runtime.webExtensionController.disable(
+                                                    extension,
+                                                    org.mozilla.geckoview.WebExtensionController.EnableSource.USER
+                                                )
+                                            } else {
+                                                Components.runtime.webExtensionController.enable(
+                                                    extension,
+                                                    org.mozilla.geckoview.WebExtensionController.EnableSource.USER
+                                                )
+                                            }
+                                            result.then({ updatedExtension ->
+                                                val action = if (isCurrentlyEnabled) "disabled" else "enabled"
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "$extensionName $action",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                // Refresh list
+                                                Handler(Looper.getMainLooper()).post {
+                                                    Components.runtime.webExtensionController.list().then({ exts ->
+                                                        val allExtensions = exts?.toList() ?: emptyList()
+                                                        val prefs = Components.applicationContext.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE)
+                                                        val showInbuilt = prefs.getBoolean("show_inbuilt_extensions", false)
+                                                        installedExtensions = if (showInbuilt) allExtensions
+                                                        else allExtensions.filter { it.id != "video-detector@playbridge" }
+                                                        org.mozilla.geckoview.GeckoResult.fromValue(null)
+                                                    }, { _ ->
+                                                        org.mozilla.geckoview.GeckoResult.fromValue(null)
+                                                    })
+                                                }
+                                                org.mozilla.geckoview.GeckoResult.fromValue(null)
+                                            }, { error ->
+                                                errorMessage = "Failed to toggle extension: ${error?.message}"
+                                                org.mozilla.geckoview.GeckoResult.fromValue(null)
+                                            })
+                                        }
+                                    } catch (e: Exception) {
+                                        errorMessage = "Failed to toggle extension: ${e.message}"
+                                    }
+                                }
+                            },
                             onUninstall = {
                                 val extensionName = extension.metaData?.name ?: extension.id
                                 scope.launch {
@@ -277,6 +325,7 @@ fun ExtensionsScreen(
 @Composable
 private fun ExtensionCard(
     extension: WebExtension,
+    onToggleEnabled: () -> Unit,
     onUninstall: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -359,14 +408,14 @@ private fun ExtensionCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                // Show enabled status
-                Text(
-                    text = if (isEnabled) "Enabled" else "Disabled",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                )
             }
-            
+
+            // Enable/disable toggle
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = { onToggleEnabled() }
+            )
+
             // Uninstall button
             IconButton(onClick = onUninstall) {
                 Icon(Icons.Default.Delete, "Uninstall", tint = MaterialTheme.colorScheme.error)

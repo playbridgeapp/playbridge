@@ -221,6 +221,7 @@ fun SessionObserverSetup(
 
         var originalNavDelegate: GeckoSession.NavigationDelegate? = null
         var originalContentDelegate: GeckoSession.ContentDelegate? = null
+        var originalPermissionDelegate: GeckoSession.PermissionDelegate? = null
         var geckoSessionInstance: GeckoSession? = null
 
         if (geckoEngineSession != null) {
@@ -242,10 +243,30 @@ fun SessionObserverSetup(
                         if (method.name == "onNewSession" && args != null && args.size >= 2) {
                             val uri = args[1] as? String
                             if (uri != null) {
-                                Log.d(TAG, "Intercepting popup: $uri")
+                                Log.d(TAG, "Auto-opening new tab for popup: $uri")
+                                // Capture the opener session now (main thread) for referrer use below.
+                                val openerEngineSession = tabManager.sessions[selectedTab?.id]
                                 scope.launch(Dispatchers.Main) {
-                                    pendingPopupUrl.value = uri
+                                    // Create the EngineSession immediately and pre-register it so
+                                    // syncSessions doesn't create a duplicate later.
+                                    val newEngineSession = Components.engine.createSession()
+                                    val tabId = tabManager.createTab(
+                                        url = uri,
+                                        store = store,
+                                        parentId = selectedTab?.id,
+                                        select = true
+                                    )
+                                    tabManager.sessions[tabId] = newEngineSession
+                                    // Pass openerEngineSession as parent so GeckoView automatically
+                                    // sets Referer to the opener's URL — required by CDNs like
+                                    // groundbanks.net that gate video playback on the Referer header.
+                                    newEngineSession.loadUrl(
+                                        url = uri,
+                                        parent = openerEngineSession
+                                    )
                                 }
+                                // Return null — GeckoEngine.createSession() opens the session
+                                // immediately which makes GeckoView crash if we return it here.
                                 return@newProxyInstance GeckoResult.fromValue(null)
                             }
                         }
@@ -356,6 +377,29 @@ fun SessionObserverSetup(
                         gs.contentDelegate = fullscreenDelegate
                     }
                     
+                    // PermissionDelegate — grant autoplay and media key system access so
+                    // video players on sites like apnetv.xyz embedded articles work the
+                    // same as in Firefox. All other permission types are denied by default
+                    // (same as GeckoView's unhandled behaviour) to avoid granting location
+                    // or notifications without user interaction.
+                    originalPermissionDelegate = gs.permissionDelegate
+                    gs.permissionDelegate = object : GeckoSession.PermissionDelegate {
+                        override fun onContentPermissionRequest(
+                            session: GeckoSession,
+                            perm: GeckoSession.PermissionDelegate.ContentPermission
+                        ): GeckoResult<Int> {
+                            return when (perm.permission) {
+                                GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE,
+                                GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE,
+                                GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> {
+                                    Log.d(TAG, "Granting media permission: ${perm.permission} for ${perm.uri}")
+                                    GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                                }
+                                else -> GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                            }
+                        }
+                    }
+
                     // ProgressDelegate for Security/SSL status
                     gs.progressDelegate = object : GeckoSession.ProgressDelegate {
                         override fun onPageStart(session: GeckoSession, url: String) {
@@ -390,6 +434,7 @@ fun SessionObserverSetup(
             geckoSessionInstance?.let { gs ->
                 if (originalNavDelegate != null) gs.navigationDelegate = originalNavDelegate
                 if (originalContentDelegate != null) gs.contentDelegate = originalContentDelegate
+                if (originalPermissionDelegate != null) gs.permissionDelegate = originalPermissionDelegate
             }
         }
     }
