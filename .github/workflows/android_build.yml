@@ -51,8 +51,10 @@ jobs:
       env:
         PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
       run: |
+        set -euo pipefail
         mkdir -p ../keystore
         echo "$PLAYBRIDGE_KEYSTORE_BASE64" | base64 -d > ../keystore/release.jks
+        ls -la ../keystore/release.jks
 
     - name: Grant execute permission for gradlew
       if: steps.check_tag.outputs.skipped == 'false'
@@ -134,8 +136,10 @@ jobs:
       env:
         PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
       run: |
+        set -euo pipefail
         mkdir -p ../../../keystore
         echo "$PLAYBRIDGE_KEYSTORE_BASE64" | base64 -d > ../../../keystore/release.jks
+        ls -la ../../../keystore/release.jks
 
     - name: Grant execute permission for gradlew
       if: steps.check_tag.outputs.skipped == 'false'
@@ -217,8 +221,10 @@ jobs:
       env:
         PLAYBRIDGE_KEYSTORE_BASE64: ${{ secrets.PLAYBRIDGE_KEYSTORE_BASE64 }}
       run: |
+        set -euo pipefail
         mkdir -p ../../../keystore
         echo "$PLAYBRIDGE_KEYSTORE_BASE64" | base64 -d > ../../../keystore/release.jks
+        ls -la ../../../keystore/release.jks
 
     - name: Grant execute permission for gradlew
       if: steps.check_tag.outputs.skipped == 'false'
