@@ -21,7 +21,6 @@ import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import com.playbridge.sender.data.history.HistoryDao
 import com.playbridge.sender.data.history.HistoryEntity
-import org.mozilla.geckoview.GeckoSessionSettings
 import androidx.compose.runtime.LaunchedEffect
 
 /**
@@ -59,39 +58,11 @@ fun SessionObserverSetup(
 ) {
     val context = LocalContext.current
 
-    // Desktop Mode User Agent
-    val desktopUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
-    
     // React to Desktop Mode changes
     LaunchedEffect(isDesktopMode, session) {
-        val gs = (session as? GeckoEngineSession)?.let { 
-             try {
-                val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
-                field.isAccessible = true
-                field.get(it) as? GeckoSession
-             } catch(e: Exception) { null }
-        }
-        
-        gs?.let { geckoSession ->
-            val currentMode = geckoSession.settings.userAgentMode
-            val targetMode = if (isDesktopMode) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE
-            
-            if (currentMode != targetMode) {
-                if (isDesktopMode) {
-                    geckoSession.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
-                    geckoSession.settings.userAgentOverride = desktopUserAgent
-                    Log.d(TAG, "Enabled Desktop Mode")
-                } else {
-                    geckoSession.settings.userAgentMode = GeckoSessionSettings.USER_AGENT_MODE_MOBILE
-                    geckoSession.settings.userAgentOverride = null // Reset to default
-                    Log.d(TAG, "Disabled Desktop Mode")
-                }
-                // Reload to apply changes if content is loaded
-                if (currentUrl.value != "about:blank") {
-                    session.reload()
-                }
-            }
-        }
+        val shouldReload = currentUrl.value != "about:blank"
+        session.toggleDesktopMode(isDesktopMode, shouldReload)
+        Log.d(TAG, "${if (isDesktopMode) "Enabled" else "Disabled"} Desktop Mode (reload=$shouldReload)")
     }
     DisposableEffect(session, selectedTab?.id) {
         val observer = object : EngineSession.Observer {
