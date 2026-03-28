@@ -338,7 +338,7 @@ jobs:
           packageName: com.playbridge.sender
           releaseFiles: output/phone-release-aab/*.aab
           track: internal
-          status: completed
+          status: draft
 
       - name: Publish TV Player to Play Store (internal)
         if: needs.build-tv-player.outputs.skipped == 'false'
@@ -348,7 +348,7 @@ jobs:
           packageName: com.playbridge.player
           releaseFiles: output/tv-player-release-aab/*.aab
           track: internal
-          status: completed
+          status: draft
 
       - name: Publish TV Browser to Play Store (internal)
         if: needs.build-tv-browser.outputs.skipped == 'false'

@@ -59,6 +59,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
+    // Preferred language selections — persisted across stream switches and app restarts
+    private var preferredAudioLanguage: String? = null
+    private var preferredSubtitleLanguage: String? = null
+
     // Loop state
     private var isLooping = false
 
@@ -213,7 +217,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         // Setup VLC
         val args = ArrayList<String>().apply {
-            add("-vvv") // Verbosity
+            if (com.playbridge.player.BuildConfig.DEBUG) add("-vvv") // Verbose logging in debug only
         }
         try {
             libVLC = LibVLC(this, args)
@@ -284,6 +288,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         pendingResumeTime = null
                         runOnUiThread { mediaPlayer?.time = resumeAt }
                     }
+                    // Auto-select preferred audio/subtitle language if the user hasn't already
+                    // made a manual selection for this stream (i.e., no specific track ID was
+                    // restored from history). VLC exposes track language via IMedia.Track.language.
+                    runOnUiThread { applyPreferredLanguages() }
                 }
 
                 MediaPlayer.Event.Paused ->
@@ -363,15 +371,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
         val inMemoryPlaylist = PlaylistStore.currentPlaylist
 
-        // Restore saved selections from history or incoming intent preferences
+        // Restore saved language preferences from history intent so they survive app restarts.
         intent.getStringExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG)?.let {
-            // VlcPlayerActivity doesn't track these top-level currently like ExoPlayerActivity
-            // We can just log or store them if needed later.
-            // FileLogger.i(TAG, "Restored preferred audio language: $it")
+            preferredAudioLanguage = it
+            FileLogger.i(TAG, "Restored preferred audio language: $it")
         }
         intent.getStringExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG)?.let {
-            // preferredSubtitleLanguage = it
-            // FileLogger.i(TAG, "Restored preferred subtitle language: $it")
+            preferredSubtitleLanguage = it
+            FileLogger.i(TAG, "Restored preferred subtitle language: $it")
         }
         if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
             playlistItems = inMemoryPlaylist.toMutableList()
@@ -548,6 +555,86 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         FileLogger.i(TAG, "Loop mode: $enabled")
     }
 
+    // ── Video scaling helpers ─────────────────────────────────────────────────
+
+    /**
+     * Map VLC scaling mode string → Int for [ProgressManager] persistence.
+     *
+     * Media3 RESIZE_MODE constants are re-used as numeric keys since ProgressManager
+     * stores a single Int.  "Center" (original size) uses RESIZE_MODE_ZOOM (4) so it
+     * round-trips distinctly from "Fit" (0).  "16:9" / "4:3" use the fixed-dimension
+     * constants (1 / 2) which ExoPlayer never writes via this path.
+     */
+    private fun vlcScalingModeToInt(mode: String): Int? = when (mode) {
+        "Fit"    -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT          // 0
+        "16:9"   -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH  // 1
+        "4:3"    -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT // 2
+        "Fill"   -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL         // 3
+        "Center" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM         // 4
+        else     -> null
+    }
+
+    /** Reverse of [vlcScalingModeToInt]. */
+    private fun vlcScalingModeFromInt(value: Int): String = when (value) {
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH  -> "16:9"
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT -> "4:3"
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL         -> "Fill"
+        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM         -> "Center"
+        else                                                                -> "Fit"
+    }
+
+    /**
+     * Apply [mode] to the live [mediaPlayer].  Single source of truth used by both
+     * the settings dialog callback and history restore so they stay in sync.
+     */
+    private fun applyVlcScalingMode(mode: String) {
+        val player = mediaPlayer ?: return
+        when (mode) {
+            "Fit" -> { player.scale = 0f; player.aspectRatio = null }
+            // Fill: force the surface's aspect ratio so VLC crops to fill without letterboxing.
+            // TVs are universally 16:9; using the surface dimensions would be more precise but
+            // requires a layout pass — 16:9 is a safe default for the TV target.
+            "Fill" -> { player.scale = 0f; player.aspectRatio = "16:9" }
+            "16:9" -> { player.scale = 0f; player.aspectRatio = "16:9" }
+            "4:3"  -> { player.scale = 0f; player.aspectRatio = "4:3" }
+            // Center: scale=1f renders at the video's native pixel size, no stretching.
+            "Center" -> { player.scale = 1f; player.aspectRatio = null }
+        }
+    }
+
+    /**
+     * Auto-select tracks matching [preferredAudioLanguage] / [preferredSubtitleLanguage].
+     *
+     * Called once per stream on the first Playing event. If a track with the preferred language
+     * exists and is not already selected, it is selected silently. If no match is found the
+     * current VLC default is left unchanged — we never force an unexpected track.
+     */
+    private fun applyPreferredLanguages() {
+        val player = mediaPlayer ?: return
+
+        preferredAudioLanguage?.let { lang ->
+            val tracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio) ?: return@let
+            val current = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)
+            if (current?.language == lang) return@let // already correct
+            val match = tracks.firstOrNull { it.language == lang }
+            if (match != null) {
+                FileLogger.i(TAG, "Auto-selecting preferred audio language '$lang' (track ${match.id})")
+                player.selectTrack(match.id)
+            }
+        }
+
+        preferredSubtitleLanguage?.let { lang ->
+            val tracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) ?: return@let
+            val current = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)
+            if (current?.language == lang) return@let
+            val match = tracks.firstOrNull { it.language == lang }
+            if (match != null) {
+                FileLogger.i(TAG, "Auto-selecting preferred subtitle language '$lang' (track ${match.id})")
+                player.selectTrack(match.id)
+            }
+        }
+    }
+
     private fun handleVlcError() {
         FileLogger.e(TAG, "handleVlcError — playlist size=${playlistItems.size}, index=$playlistIndex, url=${originalM3u8Url ?: "(unknown)"}")
         runOnUiThread {
@@ -610,16 +697,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 headers = headers,
                 playlistJson = plistJson,
                 playlistIndex = playlistIndex,
-                preferredAudioLanguage = null, // Vlc uses track ID internally, not lang directly in UI
-                preferredSubtitleLanguage = null,
+                preferredAudioLanguage = preferredAudioLanguage,
+                preferredSubtitleLanguage = preferredSubtitleLanguage,
                 externalSubtitleUrl = currentSubtitleUrl,
                 playbackSpeed = currentPlaybackSpeed,
-                videoScalingMode = when (currentVideoScalingMode) {
-                    "Fit" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    "Fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    "Center" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    else -> null
-                }
+                videoScalingMode = vlcScalingModeToInt(currentVideoScalingMode)
             )
 
             val finalResumeTime = resumeTime ?: historyItem?.position
@@ -627,22 +709,24 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             val media = Media(libVLC, Uri.parse(url)).apply {
                 setHWDecoderEnabled(true, false)
 
-                // Apply headers to VLC
+                // Apply headers to VLC.
+                // user-agent, referer, and cookie have dedicated VLC options and must NOT also
+                // appear in :http-extra-headers (VLC would send them twice).
+                // Everything else goes into :http-extra-headers, which the VLC HTTP module parses
+                // more reliably than the deprecated :http-custom-headers — particularly for values
+                // that contain colons (e.g. "Authorization: Bearer <token>").
+                val extraHeaders = mutableListOf<String>()
                 headers?.forEach { (key, value) ->
                     when (key.lowercase()) {
                         "user-agent" -> addOption(":http-user-agent=$value")
-                        "referer" -> addOption(":http-referrer=$value")
+                        "referer"    -> addOption(":http-referrer=$value")
+                        "cookie"     -> addOption(":http-cookies=$value")
+                        else         -> extraHeaders.add("$key: $value")
                     }
                 }
-
-                // Reconstruct remaining custom headers to VLC's format if they are not agent/referer
-                val customHeaders = headers?.filter { entry ->
-                    val lowerKey = entry.key.lowercase()
-                    lowerKey != "user-agent" && lowerKey != "referer"
-                }?.map { "${it.key}: ${it.value}" }?.joinToString("\r\n")
-
-                if (!customHeaders.isNullOrBlank()) {
-                    addOption(":http-custom-headers=$customHeaders")
+                if (extraHeaders.isNotEmpty()) {
+                    // VLC expects headers separated by \r\n with no trailing separator.
+                    addOption(":http-extra-headers=${extraHeaders.joinToString("\r\n")}")
                 }
             }
 
@@ -656,15 +740,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 mediaPlayer?.rate = it
             }
             historyItem?.videoScalingMode?.let {
-                currentVideoScalingMode = when (it) {
-                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT -> "Fit"
-                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Fill"
-                    else -> "Fit"
-                }
-                when (currentVideoScalingMode) {
-                    "Fit" -> { mediaPlayer?.scale = 0f; mediaPlayer?.aspectRatio = null }
-                    "Fill" -> { mediaPlayer?.scale = 0f; mediaPlayer?.aspectRatio = null }
-                }
+                currentVideoScalingMode = vlcScalingModeFromInt(it)
+                applyVlcScalingMode(currentVideoScalingMode)
             }
             historyItem?.externalSubtitleUrl?.let {
                 currentSubtitleUrl = it
@@ -687,12 +764,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         progressManager.updateSelections(
             externalSubtitleUrl = currentSubtitleUrl,
             playbackSpeed = currentPlaybackSpeed,
-            videoScalingMode = when (currentVideoScalingMode) {
-                "Fit" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                "Fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
-                "Center" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                else -> null
-            }
+            videoScalingMode = vlcScalingModeToInt(currentVideoScalingMode)
         )
     }
 
@@ -748,6 +820,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     onAudioTrackSelected = { id ->
                         if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio) else player.selectTrack(id)
                         liveCurrentAudioTrack = id
+                        // Persist the selected track's language so it auto-applies on next play.
+                        preferredAudioLanguage = audioTracks.firstOrNull { it.id == id }?.language
+                            ?.also { FileLogger.i(TAG, "Saved preferred audio language: $it") }
                     },
                     onSubtitleTrackSelected = { id ->
                         if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) else player.selectTrack(id)
@@ -756,6 +831,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                             currentSubtitleUrl = null
                             liveCurrentSubtitleUrl = null
                         }
+                        // Persist the selected subtitle track's language.
+                        preferredSubtitleLanguage = if (id == null) null
+                        else subtitleTracks.firstOrNull { it.id == id }?.language
+                            ?.also { FileLogger.i(TAG, "Saved preferred subtitle language: $it") }
                     },
                     onExternalSubtitleSelected = { url ->
                         currentSubtitleUrl = url
@@ -775,31 +854,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     onVideoScalingSelected = { mode ->
                         currentVideoScalingMode = mode
                         liveCurrentVideoScalingMode = mode
-                        when (mode) {
-                            "Fit" -> {
-                                player.scale = 0f
-                                player.aspectRatio = null
-                            }
-                            "Fill" -> {
-                                player.scale = 0f
-                                // For fill we use the display aspect ratio (handled internally by scale=0 but we could force crop)
-                                // Standard libvlc fill might require exact window size ratio, but for simplicity:
-                                player.aspectRatio = null
-                                player.scale = 0f // Let Vout scale
-                            }
-                            "16:9" -> {
-                                player.scale = 0f
-                                player.aspectRatio = "16:9"
-                            }
-                            "4:3" -> {
-                                player.scale = 0f
-                                player.aspectRatio = "4:3"
-                            }
-                            "Center" -> {
-                                player.scale = 1f // Original size
-                                player.aspectRatio = null
-                            }
-                        }
+                        applyVlcScalingMode(mode)
                     }
                 )
             }
