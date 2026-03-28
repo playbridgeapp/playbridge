@@ -64,6 +64,7 @@ class ExoPlayerActivity : PlayerActivity() {
     private var videoDecoderRetryCount = 0
     private var malformedContentRetryCount = 0
     private var stuckBufferRetryCount = 0
+    private var networkErrorRetryCount = 0
     private val stuckBufferHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     // Loop state
@@ -518,6 +519,10 @@ class ExoPlayerActivity : PlayerActivity() {
             .setUserAgent(userAgent)
             .setDefaultRequestProperties(requestProperties)
             .setAllowCrossProtocolRedirects(true)
+            // Debrid redirect chains can take >8s on first open — raise both timeouts
+            // to avoid spurious connection failures before playback even starts.
+            .setConnectTimeoutMs(20_000)
+            .setReadTimeoutMs(20_000)
 
         val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
 
@@ -668,6 +673,7 @@ class ExoPlayerActivity : PlayerActivity() {
         videoDecoderRetryCount = 0
         malformedContentRetryCount = 0
         stuckBufferRetryCount = 0
+        networkErrorRetryCount = 0
         stuckBufferHandler.removeCallbacksAndMessages(null)
     }
 
@@ -691,6 +697,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     controlsManager.hideBuffering()
                     stuckBufferHandler.removeCallbacksAndMessages(null)
                     stuckBufferRetryCount = 0
+                    networkErrorRetryCount = 0
                     audioDiscontinuityRetryCount = 0
                     videoDecoderRetryCount = 0
                     malformedContentRetryCount = 0
@@ -856,38 +863,57 @@ class ExoPlayerActivity : PlayerActivity() {
                 return
             }
 
-            // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found, Timeout)
-            if (playlistItems.isNotEmpty()) {
-                val isNetworkOrHttpError = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
-                                           error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
-                                           error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ||
-                                           error.cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException ||
-                                           error.cause is java.net.UnknownHostException ||
-                                           error.cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException ||
-                                           error.cause?.javaClass?.simpleName == "PlaylistStuckException"
+            // Classify as a transient network/HTTP error
+            val isNetworkOrHttpError = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                                       error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                                       error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                                       error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ||
+                                       error.cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException ||
+                                       error.cause is java.net.UnknownHostException ||
+                                       error.cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException ||
+                                       error.cause?.javaClass?.simpleName == "PlaylistStuckException" ||
+                                       error.message?.contains("timed out") == true
 
-                if (isNetworkOrHttpError || error.message?.contains("timed out") == true) {
-                    FileLogger.w(TAG, "Network/HTTP error detected. Skipping to next item in playlist.")
-                    runOnUiThread {
-                        android.widget.Toast.makeText(this@ExoPlayerActivity, "Link failed, skipping to next channel...", android.widget.Toast.LENGTH_SHORT).show()
-                    }
-
-                    // Mark item as failed
-                    if (playlistIndex in playlistItems.indices) {
-                        val failedItem = playlistItems[playlistIndex]
-                        val title = failedItem.title ?: "Channel ${playlistIndex + 1}"
-                        if (!title.startsWith("[FAILED]")) {
-                            playlistItems[playlistIndex] = failedItem.copy(title = "[FAILED] $title")
-                        }
-                    }
-
-                    // Add a small delay so the user sees the toast before it skips
-                    lifecycleScope.launch(Dispatchers.Main) {
-                        kotlinx.coroutines.delay(1000)
-                        playNextInPlaylist()
-                    }
-                    return
+            // Single-stream (non-playlist) network error: re-prepare up to 3 times with a
+            // short delay. Covers transient CDN drops and brief Debrid server hiccups.
+            if (isNetworkOrHttpError && playlistItems.isEmpty() && networkErrorRetryCount < 3) {
+                networkErrorRetryCount++
+                val delayMs = 3000L * networkErrorRetryCount // 3s, 6s, 9s
+                FileLogger.w(TAG, "Network error on single stream, retrying in ${delayMs}ms (attempt $networkErrorRetryCount/3)")
+                lifecycleScope.launch(Dispatchers.Main) {
+                    kotlinx.coroutines.delay(delayMs)
+                    val p = player ?: return@launch
+                    val pos = p.currentPosition
+                    p.stop()
+                    p.seekTo(pos)
+                    p.prepare()
+                    p.play()
                 }
+                return
+            }
+
+            // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found, Timeout)
+            if (playlistItems.isNotEmpty() && isNetworkOrHttpError) {
+                FileLogger.w(TAG, "Network/HTTP error detected. Skipping to next item in playlist.")
+                runOnUiThread {
+                    android.widget.Toast.makeText(this@ExoPlayerActivity, "Link failed, skipping to next channel...", android.widget.Toast.LENGTH_SHORT).show()
+                }
+
+                // Mark item as failed
+                if (playlistIndex in playlistItems.indices) {
+                    val failedItem = playlistItems[playlistIndex]
+                    val title = failedItem.title ?: "Channel ${playlistIndex + 1}"
+                    if (!title.startsWith("[FAILED]")) {
+                        playlistItems[playlistIndex] = failedItem.copy(title = "[FAILED] $title")
+                    }
+                }
+
+                // Add a small delay so the user sees the toast before it skips
+                lifecycleScope.launch(Dispatchers.Main) {
+                    kotlinx.coroutines.delay(1000)
+                    playNextInPlaylist()
+                }
+                return
             }
 
             runOnUiThread {
@@ -1541,6 +1567,20 @@ class ExoPlayerActivity : PlayerActivity() {
             ) {
                 FileLogger.w(TAG, "Extractor crash, escalating to player-level recovery")
                 return androidx.media3.common.C.TIME_UNSET
+            }
+
+            // Debrid servers (and CDNs) sometimes return 429 (rate-limit), 502, or 503 under
+            // load. These are transient — back off exponentially up to 5 attempts rather than
+            // immediately escalating to onPlayerError.
+            if (exception is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+                val code = exception.responseCode
+                if (code == 429 || code == 502 || code == 503) {
+                    if (loadErrorInfo.errorCount < 5) {
+                        val delayMs = minOf(1000L shl loadErrorInfo.errorCount, 10_000L) // 1s, 2s, 4s, 8s, 10s
+                        FileLogger.w(TAG, "HTTP $code from server, backing off ${delayMs}ms (attempt ${loadErrorInfo.errorCount + 1}/5)")
+                        return delayMs
+                    }
+                }
             }
 
             return super.getRetryDelayMsFor(loadErrorInfo)

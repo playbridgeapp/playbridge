@@ -32,6 +32,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -50,11 +51,78 @@ import com.playbridge.sender.data.library.StremioSubtitleService
 import com.playbridge.sender.model.TvDevice
 
 /**
- * Bottom sheet displaying detected video sources with detailed info like 1DM.
+ * A chip-shaped dropdown trigger that expands to show options as chips.
+ * The trigger renders as a [FilterChip]; the popup renders each option as a [FilterChip]
+ * (selected option appears filled/highlighted).
+ */
+@Composable
+private fun ChipDropdown(
+    selectedLabel: String,
+    options: List<Pair<String, String>>,
+    selectedValue: String,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    chipLabelColor: Color = Color.Unspecified
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val resolvedColor = if (chipLabelColor == Color.Unspecified)
+        MaterialTheme.colorScheme.onSurface else chipLabelColor
+    Box(modifier = modifier) {
+        FilterChip(
+            selected = false,
+            onClick = { expanded = true },
+            label = {
+                Text(
+                    text = selectedLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = resolvedColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = resolvedColor
+                )
+            }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                options.forEach { (value, label) ->
+                    FilterChip(
+                        selected = value == selectedValue,
+                        onClick = {
+                            onSelect(value)
+                            expanded = false
+                        },
+                        label = {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Bottom sheet for casting media to a TV — pick a video or browse URL, choose a device and player, send.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DetectedVideosSheet(
+fun CastSheet(
     videos: List<DetectedVideo>,
     onDismiss: () -> Unit,
     onVideoClick: (DetectedVideo, List<String>?) -> Unit,
@@ -253,8 +321,6 @@ fun DetectedVideosSheet(
                 )
             }
             val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
-            var playerDropdownExpanded by remember { mutableStateOf(false) }
-            var tvDropdownExpanded by remember { mutableStateOf(false) }
             val showTvDropdown = availableTvDevices.size > 1 || (availableTvDevices.size == 1 && selectedTvDevice == null)
 
             Row(
@@ -264,113 +330,28 @@ fun DetectedVideosSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // TV dropdown
                 if (showTvDropdown) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "TV",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Box {
-                            val tvLabelColor = when (tvConnectionState) {
-                                true  -> androidx.compose.ui.graphics.Color(0xFF4CAF50) // green
-                                false -> MaterialTheme.colorScheme.error
-                                null  -> MaterialTheme.colorScheme.onSurface
-                            }
-                            TextButton(
-                                onClick = { tvDropdownExpanded = true },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                            ) {
-                                Text(
-                                    selectedTvDevice?.name ?: "None",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = tvLabelColor,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Icon(
-                                    Icons.Default.ArrowDropDown,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = tvLabelColor
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = tvDropdownExpanded,
-                                onDismissRequest = { tvDropdownExpanded = false }
-                            ) {
-                                availableTvDevices.forEach { device ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                device.name,
-                                                fontWeight = if (device.uuid == selectedTvDevice?.uuid) FontWeight.Bold else FontWeight.Normal
-                                            )
-                                        },
-                                        onClick = {
-                                            onTvChange(device)
-                                            tvDropdownExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
+                    val tvLabelColor = when (tvConnectionState) {
+                        true  -> Color(0xFF4CAF50) // green
+                        false -> MaterialTheme.colorScheme.error
+                        null  -> Color.Unspecified
                     }
-                }
-
-                // Player dropdown
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    Text(
-                        if (sheetMode == "browse") "View" else "Player",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    ChipDropdown(
+                        selectedLabel = selectedTvDevice?.name ?: "None",
+                        options = availableTvDevices.map { it.uuid to it.name },
+                        selectedValue = selectedTvDevice?.uuid ?: "",
+                        onSelect = { uuid ->
+                            availableTvDevices.find { it.uuid == uuid }?.let { onTvChange(it) }
+                        },
+                        chipLabelColor = tvLabelColor
                     )
-                    Box {
-                        TextButton(
-                            onClick = { playerDropdownExpanded = true },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                        ) {
-                            Text(
-                                selectedPlayerLabel,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Icon(
-                                Icons.Default.ArrowDropDown,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = playerDropdownExpanded,
-                            onDismissRequest = { playerDropdownExpanded = false }
-                        ) {
-                            playerOptions.forEach { (value, label) ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            label,
-                                            fontWeight = if (value == playerMode) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    },
-                                    onClick = {
-                                        onPlayerModeChange(value)
-                                        playerDropdownExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
                 }
+                ChipDropdown(
+                    selectedLabel = selectedPlayerLabel,
+                    options = playerOptions,
+                    selectedValue = playerMode,
+                    onSelect = onPlayerModeChange
+                )
             }
 
             if (sheetMode == "browse") {

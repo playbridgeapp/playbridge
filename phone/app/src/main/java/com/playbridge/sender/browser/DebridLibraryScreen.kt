@@ -41,7 +41,7 @@ fun DebridLibraryScreen(
     var unrestrictError by remember { mutableStateOf<String?>(null) }
     
     var showBottomSheet by remember { mutableStateOf(false) }
-    var showDetectedVideosSheet by remember { mutableStateOf(false) }
+    var showCastSheet by remember { mutableStateOf(false) }
     var detectedVideoForSheet by remember { mutableStateOf<DetectedVideo?>(null) }
 
     fun loadTorrents() {
@@ -219,7 +219,7 @@ fun DebridLibraryScreen(
                                                 playlistPayload = playlistItems
                                             )
                                             showBottomSheet = false
-                                            showDetectedVideosSheet = true
+                                            showCastSheet = true
                                         } catch (e: Exception) {
                                             Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_LONG).show()
                                         } finally {
@@ -303,7 +303,7 @@ fun DebridLibraryScreen(
                                                             originalMessage = null
                                                         )
                                                         showBottomSheet = false
-                                                        showDetectedVideosSheet = true
+                                                        showCastSheet = true
                                                     } catch (e: Exception) {
                                                         Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_LONG).show()
                                                     }
@@ -324,11 +324,11 @@ fun DebridLibraryScreen(
         }
     }
 
-    if (showDetectedVideosSheet && detectedVideoForSheet != null) {
-        DetectedVideosSheet(
+    if (showCastSheet && detectedVideoForSheet != null) {
+        CastSheet(
             videos = listOf(detectedVideoForSheet!!),
             onDismiss = {
-                showDetectedVideosSheet = false
+                showCastSheet = false
                 detectedVideoForSheet = null
             },
             onVideoClick = { video, subtitles ->
@@ -337,16 +337,16 @@ fun DebridLibraryScreen(
                 } else {
                     onPlayOnTv(video.url, selectedTorrent?.filename ?: "Debrid Stream", subtitles)
                 }
-                showDetectedVideosSheet = false
+                showCastSheet = false
                 detectedVideoForSheet = null
             },
             onDownload = { video ->
                 onCopyUrl(video.url)
                 Toast.makeText(context, "URL copied for download", Toast.LENGTH_SHORT).show()
-                showDetectedVideosSheet = false
+                showCastSheet = false
             },
             onClear = {
-                showDetectedVideosSheet = false
+                showCastSheet = false
                 detectedVideoForSheet = null
             }
         )

@@ -1946,7 +1946,7 @@ class BrowserActivity : ComponentActivity() {
                 
                 // Video detection bottom sheet
                 if (showVideoSheet) {
-                    DetectedVideosSheet(
+                    CastSheet(
                         videos = detectedVideos,
                         onDismiss = {
                             showVideoSheet = false
