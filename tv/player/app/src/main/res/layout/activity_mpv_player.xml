@@ -92,7 +92,7 @@
                     android:fontFamily="sans-serif-medium"
                     android:text="00:00" />
 
-                <SeekBar
+                <com.playbridge.player.player.BufferSeekBar
                     android:id="@+id/player_seekbar"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

@@ -33,6 +33,7 @@ class MpvControlsManager(
     private val filterButton: ImageButton,
     private val getPosition: () -> Long,       // current position in ms
     private val getDuration: () -> Long,       // total duration in ms
+    private val getBufferedPosition: () -> Long, // furthest buffered position in ms
     private val isPlayerPlaying: () -> Boolean,
     private val onTogglePlayPause: () -> Unit,
     private val onShowSettings: () -> Unit,
@@ -225,8 +226,18 @@ class MpvControlsManager(
 
         if (duration > 0) {
             seekBar.progress = ((position.toFloat() / duration.toFloat()) * 1000).toInt()
+            // Feed buffer data into BufferSeekBar's custom fields (avoids system
+            // rendering an unwanted secondaryProgress white bar over the track)
+            (seekBar as? BufferSeekBar)?.let {
+                it.durationMs = duration
+                it.bufferedMs = getBufferedPosition()
+            }
         } else {
             seekBar.progress = 0
+            (seekBar as? BufferSeekBar)?.let {
+                it.durationMs = 0
+                it.bufferedMs = 0
+            }
         }
 
         elapsedText.text = formatTime(position)

@@ -53,6 +53,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private var positionMs: Long = 0L
     private var durationMs: Long = 0L
     private var isPlayingState: Boolean = false
+    // Buffered-ahead time in ms (from demuxer-cache-time, observed as seconds Double)
+    private var bufferAheadMs: Long = 0L
 
     // Settings state
     private var subtitleUrls: List<String> = emptyList()
@@ -145,7 +147,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // ── MPVLib.EventObserver ─────────────────────────────────────────────────
 
     override fun eventProperty(property: String) {}
-    override fun eventProperty(property: String, value: Double) {}
+    override fun eventProperty(property: String, value: Double) {
+        if (property == "demuxer-cache-time") {
+            bufferAheadMs = (value * 1000L).toLong()
+        }
+    }
     override fun eventProperty(property: String, value: MPVNode) {}
 
     override fun eventProperty(property: String, value: String) {
@@ -349,14 +355,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Format IDs from mpv/client.h: MPV_FORMAT_FLAG=3, MPV_FORMAT_INT64=4
         MPVLib.addObserver(this)
         // Format IDs: MPV_FORMAT_STRING=1, MPV_FORMAT_FLAG=3, MPV_FORMAT_INT64=4
-        MPVLib.observeProperty("pause",         3) // Boolean
-        MPVLib.observeProperty("time-pos",      4) // Long (seconds)
-        MPVLib.observeProperty("duration",      4) // Long (seconds)
-        MPVLib.observeProperty("height",        4) // Long (px)
-        MPVLib.observeProperty("video-bitrate", 4) // Long (bits/s)
-        MPVLib.observeProperty("video-codec",   1) // String
-        MPVLib.observeProperty("audio-codec",   1) // String
-        MPVLib.observeProperty("audio-channels",1) // String e.g. "stereo", "5.1"
+        MPVLib.observeProperty("pause",               3) // Boolean
+        MPVLib.observeProperty("time-pos",            4) // Long (seconds)
+        MPVLib.observeProperty("duration",            4) // Long (seconds)
+        MPVLib.observeProperty("height",              4) // Long (px)
+        MPVLib.observeProperty("video-bitrate",       4) // Long (bits/s)
+        MPVLib.observeProperty("video-codec",         1) // String
+        MPVLib.observeProperty("audio-codec",         1) // String
+        MPVLib.observeProperty("audio-channels",      1) // String e.g. "stereo", "5.1"
+        MPVLib.observeProperty("demuxer-cache-time",  5) // Double (seconds buffered ahead)
 
         // Attach MPV rendering surface
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -392,6 +399,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             filterButton          = findViewById(R.id.btn_filter),
             getPosition           = { positionMs },
             getDuration           = { durationMs },
+            getBufferedPosition   = { (positionMs + bufferAheadMs).coerceAtMost(durationMs) },
             isPlayerPlaying       = { isPlayingState },
             onTogglePlayPause     = {
                 MPVLib.setPropertyBoolean("pause", isPlayingState) // toggle

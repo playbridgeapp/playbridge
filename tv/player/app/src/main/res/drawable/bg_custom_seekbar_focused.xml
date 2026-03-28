@@ -1,17 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:id="@android:id/background">
+        <!-- Remaining: dim track -->
         <shape android:shape="rectangle">
             <size android:height="8dp" />
-            <solid android:color="#40FFFFFF" />
+            <solid android:color="#33FFFFFF" />
             <corners android:radius="4dp" />
         </shape>
     </item>
     <item android:id="@android:id/progress">
+        <!-- Played: pure white — sharp and unmistakable -->
         <clip>
             <shape android:shape="rectangle">
                 <size android:height="8dp" />
-                <solid android:color="#D0BCFF" />
+                <solid android:color="#FFFFFFFF" />
                 <corners android:radius="4dp" />
             </shape>
         </clip>

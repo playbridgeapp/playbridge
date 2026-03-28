@@ -93,7 +93,7 @@
                     android:text="00:00" />
 
                 <!-- Add margin to the seekbar so history times don't overlap -->
-                <SeekBar
+                <com.playbridge.player.player.BufferSeekBar
                     android:id="@+id/player_seekbar"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

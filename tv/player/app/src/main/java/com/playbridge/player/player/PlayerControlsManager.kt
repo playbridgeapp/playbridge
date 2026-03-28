@@ -161,6 +161,12 @@ class PlayerControlsManager(
             if (duration > 0) {
                 val progress = (1000 * position / duration).toInt()
                 seekBar.progress = progress
+                // Feed buffer data into BufferSeekBar's custom fields (avoids system
+                // rendering an unwanted secondaryProgress white bar over the track)
+                (seekBar as? BufferSeekBar)?.let {
+                    it.durationMs = duration
+                    it.bufferedMs = p.bufferedPosition
+                }
                 updateTimeLabels(position, duration)
             }
         }
