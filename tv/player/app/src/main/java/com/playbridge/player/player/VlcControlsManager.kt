@@ -25,13 +25,15 @@ class VlcControlsManager(
     private val prevButton: ImageButton,
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
+    private val loopButton: ImageButton,
     private val onShowSettings: () -> Unit,
     private val onShowPlaylist: () -> Unit,
     private val onError: () -> Unit,
     private val onSeekForwardRequested: () -> Unit,
     private val onSeekBackwardRequested: () -> Unit,
     private val onPrevious: () -> Unit,
-    private val onNext: () -> Unit
+    private val onNext: () -> Unit,
+    private val onToggleLoop: () -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var isControlsVisible = false
@@ -99,6 +101,7 @@ class VlcControlsManager(
         streamInfoText.visibility = View.GONE
 
         tracksButton.visibility = View.VISIBLE
+        loopButton.visibility = View.VISIBLE
 
         // Set up Play/Pause
         playPauseButton.setOnClickListener {
@@ -122,8 +125,21 @@ class VlcControlsManager(
             onNext()
         }
 
+        loopButton.setOnClickListener {
+            onToggleLoop()
+        }
+
         // Initially hide controls
         hideControls()
+    }
+
+    /** Update the loop button tint to reflect the current loop state. */
+    fun updateLoopIcon(isLooping: Boolean) {
+        if (isLooping) {
+            loopButton.setColorFilter(android.graphics.Color.parseColor("#4FC3F7"))
+        } else {
+            loopButton.clearColorFilter()
+        }
     }
 
     fun setPlaylistVisible(visible: Boolean) {

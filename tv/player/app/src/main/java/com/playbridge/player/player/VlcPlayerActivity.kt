@@ -59,6 +59,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
+    // Loop state
+    private var isLooping = false
+
     // Settings dialog state
     private var activeDialog: android.app.Dialog? = null
     private var surfaceLayoutListener: android.view.View.OnLayoutChangeListener? = null
@@ -163,6 +166,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     "stop" -> finish()
                     "seek_fwd" -> controlsManager.onSeekForward()
                     "seek_rev" -> controlsManager.onSeekBackward()
+                    "loop_on"  -> setLooping(true)
+                    "loop_off" -> setLooping(false)
                 }
             } else if (intent?.action == ServerService.ACTION_QUEUE_ADD) {
                 ServerService.drainPendingQueueItems().forEach { payload ->
@@ -245,13 +250,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             prevButton = findViewById(R.id.btn_prev),
             nextButton = findViewById(R.id.btn_next),
             filterButton = findViewById(R.id.btn_filter),
+            loopButton = findViewById(R.id.btn_loop),
             onShowSettings = { showSettingsDialog() },
             onShowPlaylist = { showPlaylistPicker() },
             onError = { handleVlcError() },
             onSeekForwardRequested = { handleSeek(1) },
             onSeekBackwardRequested = { handleSeek(-1) },
             onPrevious = { playPreviousInPlaylist() },
-            onNext = { playNextInPlaylist() }
+            onNext = { playNextInPlaylist() },
+            onToggleLoop = { setLooping(!isLooping) }
         )
 
         controlsManager.attachPlayer()
@@ -291,8 +298,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 }
 
                 MediaPlayer.Event.EndReached -> {
-                    FileLogger.i(TAG, "End reached — playlist size=${playlistItems.size}, index=$playlistIndex")
-                    if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
+                    FileLogger.i(TAG, "End reached — loop=$isLooping playlist size=${playlistItems.size}, index=$playlistIndex")
+                    if (isLooping) {
+                        runOnUiThread {
+                            mediaPlayer?.time = 0
+                            mediaPlayer?.play()
+                        }
+                    } else if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
                         runOnUiThread { playNextInPlaylist() }
                     } else {
                         runOnUiThread { finish() }
@@ -524,6 +536,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         } else {
             playVideo(item.url, item.headers)
         }
+    }
+
+    /**
+     * Enable or disable single-video loop mode for VLC.
+     * Looping is implemented by seeking to 0 and replaying on EndReached.
+     */
+    private fun setLooping(enabled: Boolean) {
+        isLooping = enabled
+        controlsManager.updateLoopIcon(enabled)
+        FileLogger.i(TAG, "Loop mode: $enabled")
     }
 
     private fun handleVlcError() {

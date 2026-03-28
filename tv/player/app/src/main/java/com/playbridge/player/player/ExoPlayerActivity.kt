@@ -15,6 +15,7 @@ import androidx.activity.ComponentActivity
 import androidx.annotation.OptIn
 import androidx.core.view.WindowCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -65,6 +66,9 @@ class ExoPlayerActivity : PlayerActivity() {
     private var stuckBufferRetryCount = 0
     private val stuckBufferHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
+    // Loop state
+    private var isLooping = false
+
     // Managers
     private val contentSniffer = ContentSniffer()
     private lateinit var controlsManager: PlayerControlsManager
@@ -87,7 +91,11 @@ class ExoPlayerActivity : PlayerActivity() {
             when (intent?.action) {
                 ServerService.ACTION_CONTROL -> {
                     val command = intent.getStringExtra(ServerService.EXTRA_COMMAND)
-                    inputHandler.handleControlCommand(command)
+                    when (command) {
+                        "loop_on"  -> setLooping(true)
+                        "loop_off" -> setLooping(false)
+                        else       -> inputHandler.handleControlCommand(command)
+                    }
                 }
                 ServerService.ACTION_REMOTE -> {
                     val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
@@ -195,6 +203,8 @@ class ExoPlayerActivity : PlayerActivity() {
         // Initialize VideoFilterManager
         videoFilterManager = VideoFilterManager(playerView)
 
+        val loopButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_loop)
+
         // Initialize managers
         controlsManager = PlayerControlsManager(
             controlsRoot = controlsRoot,
@@ -206,6 +216,7 @@ class ExoPlayerActivity : PlayerActivity() {
             prevButton = prevButton,
             nextButton = nextButton,
             filterButton = filterButton,
+            loopButton = loopButton,
             streamInfoText = streamInfoText,
             elapsedText = elapsedText,
             remainingText = remainingText,
@@ -216,7 +227,8 @@ class ExoPlayerActivity : PlayerActivity() {
             onShowPlaylist = { showPlaylistPicker() },
             onShowFilter = { showVideoFilterDialog() },
             onPrevious = { playPreviousInPlaylist() },
-            onNext = { playNextInPlaylist() }
+            onNext = { playNextInPlaylist() },
+            onToggleLoop = { setLooping(!isLooping) }
         )
         controlsManager.setupControls()
 
@@ -1157,6 +1169,16 @@ class ExoPlayerActivity : PlayerActivity() {
         } catch (e: Exception) {
             FileLogger.e(TAG, "Failed to broadcast playlist status: ${e.message}")
         }
+    }
+
+    /**
+     * Enable or disable single-video loop mode.
+     */
+    private fun setLooping(enabled: Boolean) {
+        isLooping = enabled
+        player?.repeatMode = if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        controlsManager.updateLoopIcon(enabled)
+        FileLogger.i(TAG, "Loop mode: $enabled")
     }
 
     /**

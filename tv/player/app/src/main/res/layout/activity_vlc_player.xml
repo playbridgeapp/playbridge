@@ -213,6 +213,21 @@
                     android:focusable="true"
                     android:nextFocusUp="@id/player_seekbar"
                     android:nextFocusLeft="@id/btn_playlist"
+                    android:nextFocusRight="@id/btn_loop" />
+
+                <ImageButton
+                    android:id="@+id/btn_loop"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="12dp"
+                    android:background="@drawable/selector_player_button"
+                    android:src="@drawable/ic_loop"
+                    android:scaleType="fitCenter"
+                    android:padding="6dp"
+                    android:contentDescription="Loop Video"
+                    android:focusable="true"
+                    android:nextFocusUp="@id/player_seekbar"
+                    android:nextFocusLeft="@id/btn_filter"
                     android:nextFocusRight="@id/btn_tracks" />
 
                 <ImageButton
@@ -227,7 +242,7 @@
                     android:focusable="true"
                     android:nextFocusUp="@id/player_seekbar"
                     android:nextFocusRight="@id/btn_tracks"
-                    android:nextFocusLeft="@id/btn_filter" />
+                    android:nextFocusLeft="@id/btn_loop" />
             </LinearLayout>
         </LinearLayout>
     </RelativeLayout>

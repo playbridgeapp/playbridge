@@ -29,6 +29,7 @@ class PlayerControlsManager(
     private val prevButton: ImageButton,
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
+    private val loopButton: ImageButton,
     private val streamInfoText: TextView,
     private val elapsedText: TextView,
     private val remainingText: TextView,
@@ -39,7 +40,8 @@ class PlayerControlsManager(
     private val onShowPlaylist: () -> Unit,
     private val onShowFilter: () -> Unit,
     private val onPrevious: () -> Unit,
-    private val onNext: () -> Unit
+    private val onNext: () -> Unit,
+    private val onToggleLoop: () -> Unit
 ) {
     // Scrubbing state
     var isScrubbing = false
@@ -99,12 +101,25 @@ class PlayerControlsManager(
             onShowFilter()
         }
 
+        loopButton.setOnClickListener {
+            onToggleLoop()
+        }
+
         prevButton.setOnClickListener {
             onPrevious()
         }
 
         nextButton.setOnClickListener {
             onNext()
+        }
+    }
+
+    /** Update the loop button tint to reflect the current loop state. */
+    fun updateLoopIcon(isLooping: Boolean) {
+        if (isLooping) {
+            loopButton.setColorFilter(android.graphics.Color.parseColor("#4FC3F7"))
+        } else {
+            loopButton.clearColorFilter()
         }
     }
 
@@ -177,7 +192,8 @@ class PlayerControlsManager(
                              currentFocus?.id == com.playbridge.player.R.id.btn_playlist ||
                              currentFocus?.id == com.playbridge.player.R.id.btn_prev ||
                              currentFocus?.id == com.playbridge.player.R.id.btn_next ||
-                             currentFocus?.id == com.playbridge.player.R.id.btn_filter
+                             currentFocus?.id == com.playbridge.player.R.id.btn_filter ||
+                             currentFocus?.id == com.playbridge.player.R.id.btn_loop
         if (!hasButtonFocus) {
             playPauseButton.post { playPauseButton.requestFocus() }
         }

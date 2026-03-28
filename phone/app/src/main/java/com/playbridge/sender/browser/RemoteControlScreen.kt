@@ -425,6 +425,7 @@ private fun NavigationRow(onRemoteKey: (String) -> Unit) {
 @Composable
 private fun MediaControlRow(onPlayerControl: (String) -> Unit) {
     var isPlaying by remember { mutableStateOf(true) } // Assume playing if media started
+    var isLooping by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -460,6 +461,18 @@ private fun MediaControlRow(onPlayerControl: (String) -> Unit) {
             label = "+10s",
             tint = MaterialTheme.colorScheme.onSurface,
             onClick = { onPlayerControl("seek_forward") }
+        )
+
+        // Loop toggle
+        LabeledIconButton(
+            icon = Icons.Default.Repeat,
+            label = "Loop",
+            tint = if (isLooping) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            onClick = {
+                val next = !isLooping
+                onPlayerControl(if (next) "loop_on" else "loop_off")
+                isLooping = next
+            }
         )
 
         // Stop
