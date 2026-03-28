@@ -244,12 +244,25 @@ fun SessionObserverSetup(
                                 }
 
                                 Log.d(TAG, "Auto-opening new tab for popup: $uri")
-                                // Capture the opener session now (main thread) for referrer use below.
-                                val openerEngineSession = tabManager.sessions[selectedTab?.id]
+                                // Create a raw GeckoSession (not yet opened) and return it to
+                                // GeckoView. GeckoView will open it and replay the original
+                                // navigation — preserving POST bodies, cookies, and headers that
+                                // a loadUrl() GET would discard (e.g. apne.co → finzesty.com
+                                // POSTs id+channel params required for the video to load).
+                                //
+                                // We can't return a session from GeckoEngine.createSession() here
+                                // because that already opens the GeckoSession, and GeckoView
+                                // crashes if you hand it an already-open session via onNewSession.
+                                // Instead we construct GeckoEngineSession directly with
+                                // openGeckoSession=false so the session is set up (delegates
+                                // registered) but not yet opened.
+                                val rawGeckoSession = GeckoSession()
+                                val newEngineSession = GeckoEngineSession(
+                                    runtime = Components.runtime,
+                                    geckoSessionProvider = { rawGeckoSession },
+                                    openGeckoSession = false
+                                )
                                 scope.launch(Dispatchers.Main) {
-                                    // Create the EngineSession immediately and pre-register it so
-                                    // syncSessions doesn't create a duplicate later.
-                                    val newEngineSession = Components.engine.createSession()
                                     val tabId = tabManager.createTab(
                                         url = uri,
                                         store = store,
@@ -257,17 +270,8 @@ fun SessionObserverSetup(
                                         select = true
                                     )
                                     tabManager.sessions[tabId] = newEngineSession
-                                    // Pass openerEngineSession as parent so GeckoView automatically
-                                    // sets Referer to the opener's URL — required by CDNs like
-                                    // groundbanks.net that gate video playback on the Referer header.
-                                    newEngineSession.loadUrl(
-                                        url = uri,
-                                        parent = openerEngineSession
-                                    )
                                 }
-                                // Return null — GeckoEngine.createSession() opens the session
-                                // immediately which makes GeckoView crash if we return it here.
-                                return@newProxyInstance GeckoResult.fromValue(null)
+                                return@newProxyInstance GeckoResult.fromValue(rawGeckoSession)
                             }
                         }
 
