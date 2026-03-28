@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -64,10 +65,13 @@ fun DetectedVideosSheet(
     availableTvDevices: List<TvDevice> = emptyList(),
     selectedTvDevice: TvDevice? = null,
     onTvChange: (TvDevice) -> Unit = {},
-    tvConnectionState: Boolean? = null  // true = connected, false = error, null = neutral
+    tvConnectionState: Boolean? = null,  // true = connected, false = error, null = neutral
+    browseUrl: String = "",
+    onBrowseClick: ((String) -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
+    var sheetMode by remember { mutableStateOf("play") } // "play" or "browse"
     
     // Separate distinct videos and subtitles, and sort videos by priority
     val playableVideos = remember(videos) {
@@ -139,16 +143,42 @@ fun DetectedVideosSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Play on TV",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                var modeDropdownExpanded by remember { mutableStateOf(false) }
+                Box {
+                    Row(
+                        modifier = Modifier.clickable { modeDropdownExpanded = true },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (sheetMode == "browse") "Browse on TV" else "Play on TV",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Icon(
+                            Icons.Default.ArrowDropDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = modeDropdownExpanded,
+                        onDismissRequest = { modeDropdownExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Play on TV", fontWeight = if (sheetMode == "play") FontWeight.Bold else FontWeight.Normal) },
+                            onClick = { sheetMode = "play"; modeDropdownExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Browse on TV", fontWeight = if (sheetMode == "browse") FontWeight.Bold else FontWeight.Normal) },
+                            onClick = { sheetMode = "browse"; modeDropdownExpanded = false }
+                        )
+                    }
+                }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (videos.isNotEmpty()) {
+                    if (sheetMode == "play" && videos.isNotEmpty()) {
                         IconButton(onClick = onClear) {
                             Icon(
                                 Icons.Default.Delete,
@@ -158,50 +188,70 @@ fun DetectedVideosSheet(
                         }
                     }
 
-                    IconButton(
-                        onClick = {
-                            val specificUrl = selectedQualityUrl
-                            if (specificUrl != null) {
-                                val selectedQuality = selectedVideo!!.qualities.find { it.url == specificUrl }
-                                val playlist = selectedVideo!!.hlsPlaylist
+                    if (sheetMode == "browse") {
+                        IconButton(
+                            onClick = { onBrowseClick?.invoke(playerMode) }
+                        ) {
+                            Icon(
+                                Icons.Default.Send,
+                                contentDescription = "Browse on TV",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = {
+                                val specificUrl = selectedQualityUrl
+                                if (specificUrl != null) {
+                                    val selectedQuality = selectedVideo!!.qualities.find { it.url == specificUrl }
+                                    val playlist = selectedVideo!!.hlsPlaylist
 
-                                if (playlist != null && selectedQuality != null) {
-                                    // Generate filtered playlist
-                                    val filteredContent = HlsParser.generateFilteredPlaylist(playlist, selectedQuality)
-                                    val base64Content = android.util.Base64.encodeToString(filteredContent.toByteArray(), android.util.Base64.NO_WRAP)
-                                    val dataUri = "data:application/x-mpegurl;base64,$base64Content"
+                                    if (playlist != null && selectedQuality != null) {
+                                        // Generate filtered playlist
+                                        val filteredContent = HlsParser.generateFilteredPlaylist(playlist, selectedQuality)
+                                        val base64Content = android.util.Base64.encodeToString(filteredContent.toByteArray(), android.util.Base64.NO_WRAP)
+                                        val dataUri = "data:application/x-mpegurl;base64,$base64Content"
 
-                                    onVideoClick(selectedVideo!!.copy(
-                                        url = dataUri,
-                                        contentType = "application/x-mpegurl"
-                                    ), selectedSubtitles.toList())
+                                        onVideoClick(selectedVideo!!.copy(
+                                            url = dataUri,
+                                            contentType = "application/x-mpegurl"
+                                        ), selectedSubtitles.toList())
+                                    } else {
+                                        onVideoClick(selectedVideo!!.copy(url = specificUrl), selectedSubtitles.toList())
+                                    }
                                 } else {
-                                    onVideoClick(selectedVideo!!.copy(url = specificUrl), selectedSubtitles.toList())
+                                    onVideoClick(selectedVideo!!, selectedSubtitles.toList())
                                 }
-                            } else {
-                                onVideoClick(selectedVideo!!, selectedSubtitles.toList())
-                            }
-                        },
-                        enabled = selectedVideo != null
-                    ) {
-                        Icon(
-                            Icons.Default.Send,
-                            contentDescription = "Play on TV",
-                            tint = if (selectedVideo != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                        )
+                            },
+                            enabled = selectedVideo != null
+                        ) {
+                            Icon(
+                                Icons.Default.Send,
+                                contentDescription = "Play on TV",
+                                tint = if (selectedVideo != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                            )
+                        }
                     }
                 }
             }
             
             // Compact player + TV selectors side by side
-            val playerOptions = listOf(
-                "tv"           to "TV Default",
-                "internal"     to "ExoPlayer",
-                "internal_vlc" to "LibVLC",
-                "internal_mpv" to "MPV",
-                "external"     to "External",
-                "external_mpv" to "Ext. MPV"
-            )
+            val playerOptions = if (sheetMode == "browse") {
+                listOf(
+                    "tv"      to "TV Default",
+                    "webview" to "System WebView",
+                    "gecko"   to "GeckoView"
+                )
+            } else {
+                listOf(
+                    "tv"           to "TV Default",
+                    "internal"     to "ExoPlayer",
+                    "internal_vlc" to "LibVLC",
+                    "internal_mpv" to "MPV",
+                    "external"     to "External",
+                    "external_mpv" to "Ext. MPV"
+                )
+            }
             val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
             var playerDropdownExpanded by remember { mutableStateOf(false) }
             var tvDropdownExpanded by remember { mutableStateOf(false) }
@@ -279,7 +329,7 @@ fun DetectedVideosSheet(
                     horizontalArrangement = Arrangement.End
                 ) {
                     Text(
-                        "Player",
+                        if (sheetMode == "browse") "View" else "Player",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -322,6 +372,30 @@ fun DetectedVideosSheet(
                     }
                 }
             }
+
+            if (sheetMode == "browse") {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "URL",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    Text(
+                        text = browseUrl,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            } else {
 
             Spacer(modifier = Modifier.height(8.dp))
             Text(
@@ -550,6 +624,7 @@ fun DetectedVideosSheet(
                     }
                 }
             }
+            } // end else (non-browse mode)
 
         }
     }

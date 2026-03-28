@@ -907,48 +907,6 @@ class BrowserActivity : ComponentActivity() {
                                                 
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                                 
-                                                // TV Controls (when connected)
-                                                if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                                    // Remote Control
-                                                    AnimatedMenuItem(
-                                                        index = 1,
-                                                        onClick = {
-                                                            menuExpanded = false
-                                                            connectionViewModel.webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
-                                                            currentScreen = Screen.Remote
-                                                        }
-                                                    ) { onClick ->
-                                                        DropdownMenuItem(
-                                                            text = { Text("Remote Control", style = MaterialTheme.typography.bodyLarge) },
-                                                            leadingIcon = { Icon(Icons.Default.Gamepad, null, tint = MaterialTheme.colorScheme.primary) },
-                                                            onClick = onClick,
-                                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                        )
-                                                    }
-                                                    
-                                                    // Open on TV
-                                                    AnimatedMenuItem(
-                                                        index = 2,
-                                                        onClick = {
-                                                            menuExpanded = false
-                                                            val cmd = com.playbridge.protocol.createBrowserCommandJson(
-                                                                currentUrl, 
-                                                                browserMode = prefs.getString("tv_browser_mode", "tv")?.takeIf { it != "tv" }
-                                                            )
-                                                            connectionViewModel.sendCommandAndRecord(cmd, "browser", currentUrl, "Browser Page")
-                                                            Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
-                                                        }
-                                                    ) { onClick ->
-                                                        DropdownMenuItem(
-                                                            text = { Text("Open on TV", style = MaterialTheme.typography.bodyLarge) },
-                                                            leadingIcon = { Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.primary) },
-                                                            onClick = onClick,
-                                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                        )
-                                                    }
-                                                    
-                                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                                }
 
                                                 AnimatedMenuItem(
                                                     index = 3,
@@ -1466,7 +1424,7 @@ class BrowserActivity : ComponentActivity() {
                                                 }
                                                 
                                                 // Draggable Video FAB
-                                                if (videoCount > 0 && detectVideosEnabled && !isEditing) {
+                                                if (!isEditing) {
                                                     FloatingActionButton(
                                                         onClick = { showVideoSheet = true },
                                                         containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -1487,15 +1445,17 @@ class BrowserActivity : ComponentActivity() {
                                                     ) {
                                                         BadgedBox(
                                                             badge = {
-                                                                Badge(
-                                                                    containerColor = MaterialTheme.colorScheme.error,
-                                                                    contentColor = MaterialTheme.colorScheme.onError
-                                                                ) {
-                                                                    Text(videoCount.toString())
+                                                                if (videoCount > 0) {
+                                                                    Badge(
+                                                                        containerColor = MaterialTheme.colorScheme.error,
+                                                                        contentColor = MaterialTheme.colorScheme.onError
+                                                                    ) {
+                                                                        Text(videoCount.toString())
+                                                                    }
                                                                 }
                                                             }
                                                         ) {
-                                                            Icon(Icons.Default.PlayArrow, "Detected $videoCount videos")
+                                                            Icon(Icons.Default.PlayArrow, "Open TV sheet")
                                                         }
                                                     }
                                                 }
@@ -2099,10 +2059,21 @@ class BrowserActivity : ComponentActivity() {
                                 video.headers?.get("Cookie"),
                                 video.headers?.get("Referer") ?: video.originUrl
                             )
+                        },
+                        browseUrl = currentUrl,
+                        onBrowseClick = { selectedMode ->
+                            val cmd = com.playbridge.protocol.createBrowserCommandJson(
+                                currentUrl,
+                                browserMode = selectedMode.takeIf { it != "tv" }
+                            )
+                            connectionViewModel.sendCommandAndRecord(cmd, "browser", currentUrl, "Browser Page")
+                            Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                            showVideoSheet = false
+                            forcePlaylistSheet = null
                         }
                     )
                 }
-                
+
                 // Site Info Sheet
                 if (showSiteInfoSheet) {
                     val sheetInfo = siteSecurityInfo ?: SiteSecurityInfo(
