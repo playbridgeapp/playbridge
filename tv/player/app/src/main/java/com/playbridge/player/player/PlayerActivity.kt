@@ -47,24 +47,29 @@ abstract class PlayerActivity : ComponentActivity() {
     // -------------------------------------------------------------------------
 
     /**
-     * Buffer caps computed from the device's current available memory so that
-     * low-RAM TV hardware (e.g. Hisense, ~1 GB free) doesn't trigger Android's
-     * memory manager into trimming buffer allocations — which causes the visible
-     * buffer bar to collapse a few seconds after playback starts.
+     * Buffer caps computed from the device's current available memory.
+     *
+     * ExoPlayer strategy: time-based primary constraint (prioritizeTimeOverSizeThresholds=true),
+     * with [targetBytes] as a hard ceiling for ultra-high-bitrate content only (e.g. 4K REMUX
+     * at 100 Mbps).  Back-buffer is intentionally omitted: setBackBuffer() allocates from the
+     * same DefaultAllocator pool as the forward buffer, so a 30 s back-buffer at 25 Mbps eats
+     * ~94 MB of a 128 MB cap — starving the forward buffer and causing the oscillating
+     * "buffer reset" symptom observed on Hisense TVs.
+     *
+     * MPV strategy: demuxer-max-bytes caps the in-RAM ring buffer; demuxer-max-back-bytes
+     * is managed independently by libmpv outside Android's allocator, so it does not compete.
      *
      * Tiers (based on availMem at player launch):
      *
-     *   ≥ 1 500 MB  →  120 s / 64 s back / 256 MB  (high-end, emulator-class)
-     *   ≥   800 MB  →   90 s / 45 s back / 192 MB
-     *   ≥   400 MB  →   60 s / 30 s back / 128 MB
-     *      < 400 MB  →   30 s / 15 s back /  64 MB  (very constrained)
+     *   ≥ 1 500 MB  →  90 s / 800 MB safety cap  (emulator / high-end)
+     *   ≥   800 MB  →  60 s / 400 MB safety cap
+     *   ≥   400 MB  →  45 s / 200 MB safety cap
+     *      < 400 MB  →  30 s / 100 MB safety cap  (Hisense / very constrained)
      */
     data class BufferConfig(
-        /** ExoPlayer DefaultLoadControl maxBufferMs */
+        /** ExoPlayer DefaultLoadControl maxBufferMs (primary time-based cap) */
         val maxBufferMs: Int,
-        /** ExoPlayer DefaultLoadControl back-buffer duration */
-        val backBufferMs: Int,
-        /** ExoPlayer DefaultLoadControl byte cap (passed to setTargetBufferBytes) */
+        /** ExoPlayer DefaultLoadControl byte ceiling — guards against very high-bitrate content */
         val targetBytes: Int,
         /** MPV demuxer-max-bytes option string, e.g. "128MiB" */
         val demuxerMaxBytes: String,
@@ -78,10 +83,10 @@ abstract class PlayerActivity : ComponentActivity() {
         am.getMemoryInfo(memInfo)
         val availMb = memInfo.availMem / (1024L * 1024L)
         return when {
-            availMb >= 1_500 -> BufferConfig(120_000, 60_000, 256 * 1024 * 1024, "256MiB", "64MiB")
-            availMb >=   800 -> BufferConfig( 90_000, 45_000, 192 * 1024 * 1024, "192MiB", "48MiB")
-            availMb >=   400 -> BufferConfig( 60_000, 30_000, 128 * 1024 * 1024, "128MiB", "32MiB")
-            else             -> BufferConfig( 30_000, 15_000,  64 * 1024 * 1024,  "64MiB", "16MiB")
+            availMb >= 1_500 -> BufferConfig( 90_000, 800 * 1024 * 1024, "256MiB", "64MiB")
+            availMb >=   800 -> BufferConfig( 60_000, 400 * 1024 * 1024, "192MiB", "48MiB")
+            availMb >=   400 -> BufferConfig( 45_000, 200 * 1024 * 1024, "128MiB", "32MiB")
+            else             -> BufferConfig( 30_000, 100 * 1024 * 1024,  "64MiB", "16MiB")
         }
     }
 

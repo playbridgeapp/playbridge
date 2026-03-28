@@ -77,21 +77,19 @@ jobs:
         mv app/build/outputs/bundle/release/app-release.aab \
            app/build/outputs/bundle/release/playbridge-phone-${{ steps.version.outputs.version }}.aab
 
-    - name: Upload APKs
+    - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: actions/upload-artifact@v4
-      with:
-        name: phone-release-apk
-        path: phone/app/build/outputs/apk/release/*.apk
-        retention-days: 1
-
-    - name: Upload AAB
-      if: steps.check_tag.outputs.skipped == 'false'
-      uses: actions/upload-artifact@v4
-      with:
-        name: phone-release-aab
-        path: phone/app/build/outputs/bundle/release/*.aab
-        retention-days: 1
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      run: |
+        aws s3 cp app/build/outputs/apk/release/ \
+          s3://${{ secrets.R2_BUCKET }}/phone-release-apk/ \
+          --recursive --exclude "*" --include "*.apk"
+        aws s3 cp app/build/outputs/bundle/release/ \
+          s3://${{ secrets.R2_BUCKET }}/phone-release-aab/ \
+          --recursive --exclude "*" --include "*.aab"
 
   build-tv-player:
     runs-on: ubuntu-latest
@@ -162,21 +160,19 @@ jobs:
         mv app/build/outputs/bundle/release/app-release.aab \
            app/build/outputs/bundle/release/playbridge-tv-player-${{ steps.version.outputs.version }}.aab
 
-    - name: Upload APKs
+    - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: actions/upload-artifact@v4
-      with:
-        name: tv-player-release-apk
-        path: tv/player/app/build/outputs/apk/release/*.apk
-        retention-days: 1
-
-    - name: Upload AAB
-      if: steps.check_tag.outputs.skipped == 'false'
-      uses: actions/upload-artifact@v4
-      with:
-        name: tv-player-release-aab
-        path: tv/player/app/build/outputs/bundle/release/*.aab
-        retention-days: 1
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      run: |
+        aws s3 cp app/build/outputs/apk/release/ \
+          s3://${{ secrets.R2_BUCKET }}/tv-player-release-apk/ \
+          --recursive --exclude "*" --include "*.apk"
+        aws s3 cp app/build/outputs/bundle/release/ \
+          s3://${{ secrets.R2_BUCKET }}/tv-player-release-aab/ \
+          --recursive --exclude "*" --include "*.aab"
 
   build-tv-browser:
     runs-on: ubuntu-latest
@@ -247,21 +243,19 @@ jobs:
         mv app/build/outputs/bundle/release/app-release.aab \
            app/build/outputs/bundle/release/playbridge-tv-browser-${{ steps.version.outputs.version }}.aab
 
-    - name: Upload APKs
+    - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: actions/upload-artifact@v4
-      with:
-        name: tv-browser-release-apk
-        path: tv/browser/app/build/outputs/apk/release/*.apk
-        retention-days: 1
-
-    - name: Upload AAB
-      if: steps.check_tag.outputs.skipped == 'false'
-      uses: actions/upload-artifact@v4
-      with:
-        name: tv-browser-release-aab
-        path: tv/browser/app/build/outputs/bundle/release/*.aab
-        retention-days: 1
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      run: |
+        aws s3 cp app/build/outputs/apk/release/ \
+          s3://${{ secrets.R2_BUCKET }}/tv-browser-release-apk/ \
+          --recursive --exclude "*" --include "*.apk"
+        aws s3 cp app/build/outputs/bundle/release/ \
+          s3://${{ secrets.R2_BUCKET }}/tv-browser-release-aab/ \
+          --recursive --exclude "*" --include "*.aab"
 
   release:
     needs: [build-phone, build-tv-player, build-tv-browser]
@@ -274,12 +268,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: '*-release-*'
-          path: output
-          merge-multiple: false
+      - name: Download artifacts from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/ output/
 
       - name: Get versions
         id: versions
@@ -359,3 +354,12 @@ jobs:
           releaseFiles: output/tv-browser-release-aab/*.aab
           track: internal
           status: completed
+
+      - name: Clean up R2 after release
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/ --recursive

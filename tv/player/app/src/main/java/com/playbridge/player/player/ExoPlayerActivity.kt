@@ -355,9 +355,13 @@ class ExoPlayerActivity : PlayerActivity() {
         val bufCfg = computeBufferConfig()
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
-            .setBackBuffer(bufCfg.backBufferMs, true)
+            // No setBackBuffer: back-buffer allocation shares the same DefaultAllocator pool
+            // as the forward buffer, so e.g. 30 s back at 25 Mbps ≈ 94 MB eats into the cap
+            // and causes the forward buffer to oscillate ("reset" symptom on Hisense TVs).
             .setTargetBufferBytes(bufCfg.targetBytes)
-            .setPrioritizeTimeOverSizeThresholds(false)
+            // Time-based primary: let maxBufferMs drive loading; targetBytes is a safety
+            // ceiling only (prevents runaway allocation on 4K REMUX / 100 Mbps streams).
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
@@ -532,9 +536,13 @@ class ExoPlayerActivity : PlayerActivity() {
         val bufCfg = computeBufferConfig()
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
-            .setBackBuffer(bufCfg.backBufferMs, true)
+            // No setBackBuffer: back-buffer allocation shares the same DefaultAllocator pool
+            // as the forward buffer, so e.g. 30 s back at 25 Mbps ≈ 94 MB eats into the cap
+            // and causes the forward buffer to oscillate ("reset" symptom on Hisense TVs).
             .setTargetBufferBytes(bufCfg.targetBytes)
-            .setPrioritizeTimeOverSizeThresholds(false)
+            // Time-based primary: let maxBufferMs drive loading; targetBytes is a safety
+            // ceiling only (prevents runaway allocation on 4K REMUX / 100 Mbps streams).
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(this).apply {
