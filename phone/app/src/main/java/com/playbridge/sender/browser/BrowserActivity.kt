@@ -784,11 +784,11 @@ class BrowserActivity : ComponentActivity() {
 
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.History, contentDescription = null) },
-                                label = { Text("Command History", style = MaterialTheme.typography.titleMedium) },
-                                selected = currentScreen == Screen.CommandHistory,
+                                label = { Text("Cast History", style = MaterialTheme.typography.titleMedium) },
+                                selected = currentScreen == Screen.CastHistory,
                                 onClick = {
                                     scope.launch { drawerState.close() }
-                                    currentScreen = Screen.CommandHistory
+                                    currentScreen = Screen.CastHistory
                                 },
                                 shape = androidx.compose.ui.graphics.RectangleShape,
                                 modifier = Modifier.height(48.dp)
@@ -1100,8 +1100,8 @@ class BrowserActivity : ComponentActivity() {
                             Screen.History -> {
                                 // No TopAppBar here as HistoryScreen has its own
                             }
-                            Screen.CommandHistory -> {
-                                // No TopAppBar here as CommandHistoryScreen has its own
+                            Screen.CastHistory -> {
+                                // No TopAppBar here as CastHistoryScreen has its own
                             }
                             Screen.Bookmarks -> {}
                             Screen.Home -> {}
@@ -1476,25 +1476,22 @@ class BrowserActivity : ComponentActivity() {
                                                 onBack = { currentScreen = Screen.Browser }
                                             )
                                         }
-                                        Screen.CommandHistory -> {
+                                        Screen.CastHistory -> {
                                             val db = com.playbridge.sender.data.history.DatabaseProvider.getDatabase(androidx.compose.ui.platform.LocalContext.current)
                                             val commandHistoryFlow = remember { db.commandHistoryDao().getAll() }
                                             val commandHistory by commandHistoryFlow.collectAsState(initial = emptyList())
-                                            CommandHistoryScreen(
+                                            CastHistoryScreen(
                                                 historyItems = commandHistory,
-                                                onSendToTv = { item ->
-                                                    if (connectionViewModel.webSocketClient.isConnected()) {
-                                                        item.payloadJson?.let {
-                                                            connectionViewModel.webSocketClient.send(it)
-                                                        }
-                                                        Toast.makeText(this@BrowserActivity, "Command sent", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                },
-                                                onOpenLocally = { url ->
-                                                    session.loadUrl(url)
-                                                    currentScreen = Screen.Browser
+                                                onItemClick = { item ->
+                                                    forcedVideos = listOf(
+                                                        DetectedVideo(
+                                                            url = item.url,
+                                                            title = item.title,
+                                                            detectedBy = "history",
+                                                            timestamp = item.timestamp
+                                                        )
+                                                    )
+                                                    showVideoSheet = true
                                                 },
                                                 onDelete = { item ->
                                                     lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { db.commandHistoryDao().delete(item) }
@@ -2290,7 +2287,7 @@ sealed class Screen {
     object Downloads : Screen()
     object Settings : Screen()
     object History : Screen()
-    object CommandHistory : Screen()
+    object CastHistory : Screen()
     object Bookmarks : Screen()
     object Home : Screen()
     object Remote : Screen()

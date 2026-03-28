@@ -7,8 +7,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Tv
@@ -25,21 +23,17 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CommandHistoryScreen(
+fun CastHistoryScreen(
     historyItems: List<CommandHistoryEntity>,
-    onSendToTv: (CommandHistoryEntity) -> Unit,
-    onOpenLocally: (String) -> Unit,
+    onItemClick: (CommandHistoryEntity) -> Unit,
     onDelete: (CommandHistoryEntity) -> Unit,
     onClearHistory: () -> Unit,
     onBack: () -> Unit
 ) {
-    var selectedItem by remember { mutableStateOf<CommandHistoryEntity?>(null) }
-    var showRawDialog by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Command History") },
+                title = { Text("Cast History") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -71,7 +65,7 @@ fun CommandHistoryScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        "No command history yet",
+                        "No cast history yet",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -83,92 +77,23 @@ fun CommandHistoryScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(historyItems, key = { it.id }) { item ->
-                    CommandHistoryItem(item = item, onClick = { selectedItem = item })
+                    CastHistoryItem(
+                        item = item,
+                        onClick = { onItemClick(item) },
+                        onDelete = { onDelete(item) }
+                    )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 }
             }
-        }
-
-        selectedItem?.let { item ->
-            ModalBottomSheet(
-                onDismissRequest = { selectedItem = null }
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 32.dp)
-                ) {
-                    Text(
-                        text = item.title ?: item.url,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(16.dp),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    HorizontalDivider()
-
-                    ListItem(
-                        headlineContent = { Text("Send to TV") },
-                        leadingContent = { Icon(Icons.Default.Tv, contentDescription = null) },
-                        modifier = Modifier.clickable {
-                            onSendToTv(item)
-                            selectedItem = null
-                        }
-                    )
-                    ListItem(
-                        headlineContent = { Text("Open Locally") },
-                        leadingContent = { Icon(Icons.Default.OpenInBrowser, contentDescription = null) },
-                        modifier = Modifier.clickable {
-                            onOpenLocally(item.url)
-                            selectedItem = null
-                        }
-                    )
-                    ListItem(
-                        headlineContent = { Text("View Raw Data") },
-                        leadingContent = { Icon(Icons.Default.Info, contentDescription = null) },
-                        modifier = Modifier.clickable {
-                            showRawDialog = true
-                        }
-                    )
-                    ListItem(
-                        headlineContent = { Text("Delete") },
-                        leadingContent = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                        colors = ListItemDefaults.colors(headlineColor = MaterialTheme.colorScheme.error),
-                        modifier = Modifier.clickable {
-                            onDelete(item)
-                            selectedItem = null
-                        }
-                    )
-                }
-            }
-        }
-
-        if (showRawDialog) {
-            AlertDialog(
-                onDismissRequest = { showRawDialog = false },
-                title = { Text("Raw Command Data") },
-                text = {
-                    OutlinedTextField(
-                        value = selectedItem?.payloadJson ?: "No payload data",
-                        onValueChange = {},
-                        readOnly = true,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp, max = 300.dp)
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = { showRawDialog = false }) {
-                        Text("Close")
-                    }
-                }
-            )
         }
     }
 }
 
 @Composable
-fun CommandHistoryItem(
+fun CastHistoryItem(
     item: CommandHistoryEntity,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDelete: () -> Unit
 ) {
     val dateFormat = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
     val icon = if (item.commandType.lowercase() == "play") Icons.Default.PlayArrow else Icons.Default.OpenInBrowser
@@ -198,6 +123,15 @@ fun CommandHistoryItem(
         },
         leadingContent = {
             Icon(icon, contentDescription = null)
+        },
+        trailingContent = {
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         },
         modifier = Modifier.clickable(onClick = onClick)
     )
