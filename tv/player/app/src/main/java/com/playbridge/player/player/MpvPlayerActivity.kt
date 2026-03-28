@@ -338,10 +338,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Drop frames at both the decoder and VO to relieve backpressure on high-bitrate streams.
         MPVLib.setOptionString("framedrop", "decoder+vo")
 
-        // Demuxer buffer — sized for 4K REMUX bitrates (~80–100 Mbps).
+        // Demuxer buffer — caps scale with available device RAM (see PlayerActivity.computeBufferConfig).
+        val bufCfg = computeBufferConfig()
         MPVLib.setOptionString("cache", "yes")
-        MPVLib.setOptionString("demuxer-max-bytes", "256MiB")
-        MPVLib.setOptionString("demuxer-max-back-bytes", "64MiB")
+        MPVLib.setOptionString("demuxer-max-bytes", bufCfg.demuxerMaxBytes)
+        MPVLib.setOptionString("demuxer-max-back-bytes", bufCfg.demuxerMaxBackBytes)
 
         // Network
         MPVLib.setOptionString("tls-verify", "no")

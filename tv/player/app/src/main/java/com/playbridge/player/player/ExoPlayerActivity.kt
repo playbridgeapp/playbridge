@@ -352,10 +352,12 @@ class ExoPlayerActivity : PlayerActivity() {
     private fun initializePlayer() {
         releasePlayer()
 
+        val bufCfg = computeBufferConfig()
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 120_000, 2500, 5000)
-            .setBackBuffer(60_000, true)
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
+            .setBackBuffer(bufCfg.backBufferMs, true)
+            .setTargetBufferBytes(bufCfg.targetBytes)
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
 
         val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
@@ -526,11 +528,13 @@ class ExoPlayerActivity : PlayerActivity() {
 
         val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
 
-        // 3. Configure Load Control
+        // 3. Configure Load Control — caps scale with available device RAM (see PlayerActivity.computeBufferConfig)
+        val bufCfg = computeBufferConfig()
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 120_000, 2500, 5000)
-            .setBackBuffer(60_000, true)
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
+            .setBackBuffer(bufCfg.backBufferMs, true)
+            .setTargetBufferBytes(bufCfg.targetBytes)
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
 
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(this).apply {
