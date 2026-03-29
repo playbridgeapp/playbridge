@@ -55,8 +55,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             tvDevice.combine(connectionState) { device, state ->
                 Pair(device, state)
             }.collect { (device, state) ->
-                // Only auto-connect on startup or initial discovery, not infinitely after disconnection
-                if (!hasAttemptedInitialConnect && _autoConnectEnabled.value && device != null && state is WebSocketClient.ConnectionState.Disconnected) {
+                // Only auto-connect on startup or initial discovery, not infinitely after disconnection.
+                // Never auto-connect after AuthFailed — the token is wrong and we must not retry it.
+                if (!hasAttemptedInitialConnect &&
+                    _autoConnectEnabled.value &&
+                    device != null &&
+                    state is WebSocketClient.ConnectionState.Disconnected) {
                     hasAttemptedInitialConnect = true
                     Log.d(TAG, "Auto-connecting to saved TV: ${device.name} at ${device.ip}:${device.port}")
                     webSocketClient.connect(device.ip, device.port, device.token, device.name)
@@ -107,6 +111,22 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     val updatedDevice = currentDevice.copy(token = token)
                     connectionStore.saveTvDevice(updatedDevice)
                     connectionStore.addToHistory(updatedDevice)
+                }
+            }
+        }
+
+        // On auth failure, wipe the stale token from storage so the next tap on this device
+        // shows the PIN dialog instead of silently retrying the wrong token (e.g. after TV reinstall).
+        viewModelScope.launch {
+            connectionState.collect { state ->
+                if (state is WebSocketClient.ConnectionState.AuthFailed) {
+                    val currentDevice = connectionStore.tvDevice.first()
+                    if (currentDevice != null && currentDevice.token.isNotEmpty()) {
+                        Log.i(TAG, "Auth failed — clearing stale token for ${currentDevice.ip}")
+                        val clearedDevice = currentDevice.copy(token = "")
+                        connectionStore.saveTvDevice(clearedDevice)
+                        connectionStore.addToHistory(clearedDevice)
+                    }
                 }
             }
         }

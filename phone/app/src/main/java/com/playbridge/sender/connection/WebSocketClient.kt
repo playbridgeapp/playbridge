@@ -54,11 +54,14 @@ class WebSocketClient {
         data class Connected(val serverName: String) : ConnectionState()
         data class Retrying(val attempt: Int, val maxAttempts: Int, val nextRetrySeconds: Int) : ConnectionState()
         data class Error(val message: String) : ConnectionState()
+        // Auth-specific failure: wrong PIN or stale token. Distinct from Error so the UI can
+        // prompt the user to re-enter their PIN rather than showing a generic error.
+        data object AuthFailed : ConnectionState()
     }
     
     fun connect(ip: String, port: Int, token: String, serverName: String) {
         retryCount = 0
-        isUserDisconnect = false
+        isUserDisconnect = false  // Reset so retries are allowed for genuine connectivity failures
         targetConnection = TvConnectionInfo(ip, port, token, serverName)
         attemptConnection(ip, port, serverName)
     }
@@ -132,8 +135,11 @@ class WebSocketClient {
                                         }
                                     }
                                 } else {
-                                    Log.e(TAG, "Authentication failed")
-                                    _connectionState.value = ConnectionState.Error("Authentication failed")
+                                    Log.e(TAG, "Authentication failed — wrong PIN or stale token")
+                                    // Set flag before close so onClosed doesn't overwrite AuthFailed
+                                    // with Disconnected, and so onFailure won't schedule retries.
+                                    isUserDisconnect = true
+                                    _connectionState.value = ConnectionState.AuthFailed
                                     webSocket.close(1000, "Auth failed")
                                 }
                                 return
@@ -158,7 +164,10 @@ class WebSocketClient {
                 Log.i(TAG, "Connection closed: $reason")
                 if (webSocket === this@WebSocketClient.webSocket) {
                     this@WebSocketClient.webSocket = null
-                    _connectionState.value = ConnectionState.Disconnected
+                    // Don't overwrite AuthFailed — the UI needs that state to show a re-pair prompt.
+                    if (_connectionState.value !is ConnectionState.AuthFailed) {
+                        _connectionState.value = ConnectionState.Disconnected
+                    }
                 } else {
                      Log.d(TAG, "Ignoring onClosed for stale socket")
                 }

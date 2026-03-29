@@ -2,7 +2,6 @@ package com.playbridge.sender.browser
 
 import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import mozilla.components.browser.engine.gecko.GeckoEngineSession
 import mozilla.components.browser.state.action.TabListAction
 import mozilla.components.browser.state.state.ContentState
@@ -30,11 +29,6 @@ class TabManager {
     /** Map of tab-id → live EngineSession. Observable by Compose. */
     val sessions = mutableStateMapOf<String, EngineSession>()
 
-    /**
-     * Tab IDs whose sessions were just created and are performing their initial page load.
-     * Used to show a loading overlay in place of the blank GeckoEngineView.
-     */
-    val freshLoadingTabIds = mutableStateOf<Set<String>>(emptySet())
 
     /** The maximum number of EngineSessions to keep alive to prevent OOM errors. */
     private val MAX_ALIVE_SESSIONS = 5
@@ -105,7 +99,17 @@ class TabManager {
      * clean up sessions whose tabs have been closed or hiberated.
      */
     suspend fun syncSessions(tabs: List<TabSessionState>, selectedTabId: String? = null) {
+        // Guard: if called with empty/null state (e.g. stale onResume capture before DB restore),
+        // skip entirely. Running retainAll(emptySet) would wipe recentlyActiveTabIds and prevent
+        // a concurrent LaunchedEffect syncSessions from creating sessions.
+        if (tabs.isEmpty() && selectedTabId == null) {
+            Log.d(TAG, "syncSessions: called with empty tabs + null selectedTabId — skipping to avoid clearing LRU")
+            return
+        }
+
         val allValidTabIds = tabs.map { it.id }.toSet()
+
+        Log.d(TAG, "syncSessions START — tabCount=${tabs.size}, selectedTabId=$selectedTabId, recentlyActive=${recentlyActiveTabIds.size}, existingSessions=${sessions.size}")
 
         // 1. Maintain LRU tracker — done before any suspension point so it is never lost
         // if this coroutine is cancelled (e.g. rapid store updates cancel the previous call).
@@ -113,6 +117,9 @@ class TabManager {
             // Re-adding at the end of a LinkedHashSet moves it to the most-recently-used position
             recentlyActiveTabIds.remove(selectedTabId)
             recentlyActiveTabIds.add(selectedTabId)
+            Log.d(TAG, "syncSessions: added selectedTabId to LRU — recentlyActive=${recentlyActiveTabIds.size}")
+        } else {
+            Log.d(TAG, "syncSessions: selectedTabId=$selectedTabId not added to LRU (null or not in tabs)")
         }
 
         // Yield to allow UI to draw first frame
@@ -129,8 +136,10 @@ class TabManager {
 
         // The intersection of our tracking limit and the currently available tabs
         val activeTabIds = recentlyActiveTabIds.toSet()
+        Log.d(TAG, "syncSessions: activeTabIds=${activeTabIds.size} (selectedTabId in active=${activeTabIds.contains(selectedTabId)})")
 
         // 3. Create sessions for tabs that are active but have no EngineSession yet
+        var createdCount = 0
         tabs.forEach { tab ->
             if (activeTabIds.contains(tab.id) && !sessions.containsKey(tab.id)) {
                 // Give a short breather to the main thread between session creations
@@ -143,14 +152,16 @@ class TabManager {
 
                 val newSession = Components.engine.createSession()
                 val url = tab.content.url.ifEmpty { "about:blank" }
+
+                sessions[tab.id] = newSession
+                createdCount++
+                Log.d(TAG, "Created/Restored EngineSession for tab ${tab.id} url=$url")
                 if (url != "about:blank") {
                     newSession.loadUrl(url)
-                    freshLoadingTabIds.value = freshLoadingTabIds.value + tab.id
                 }
-                sessions[tab.id] = newSession
-                Log.d(TAG, "Created/Restored EngineSession for tab ${tab.id}")
             }
         }
+        Log.d(TAG, "syncSessions: created $createdCount new sessions, total sessions=${sessions.size}")
 
         // 4. Cleanup sessions for closed or hibernated tabs
         val hibernatedIds = sessions.keys.filter { it !in activeTabIds }

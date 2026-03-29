@@ -59,7 +59,8 @@ fun HomeScreen(
                                 is WebSocketClient.ConnectionState.Connected -> Color(0xFF00FF88)
                                 is WebSocketClient.ConnectionState.Connecting,
                                 is WebSocketClient.ConnectionState.Retrying -> Color(0xFFFFAA00)
-                                is WebSocketClient.ConnectionState.Error -> Color(0xFFFF4444)
+                                is WebSocketClient.ConnectionState.Error,
+                                is WebSocketClient.ConnectionState.AuthFailed -> Color(0xFFFF4444)
                                 is WebSocketClient.ConnectionState.Disconnected -> Color(0xFF666666)
                             }
                         )
@@ -71,6 +72,7 @@ fun HomeScreen(
                         is WebSocketClient.ConnectionState.Connecting -> "Connecting..."
                         is WebSocketClient.ConnectionState.Retrying -> "Retrying in ${connectionState.nextRetrySeconds}s..."
                         is WebSocketClient.ConnectionState.Error -> "Connection Failed"
+                        is WebSocketClient.ConnectionState.AuthFailed -> "Incorrect PIN"
                         is WebSocketClient.ConnectionState.Disconnected -> "Disconnected"
                     },
                     style = MaterialTheme.typography.titleMedium
@@ -157,7 +159,7 @@ fun HomeScreen(
                     ) {
                         Text("Retry Connection")
                     }
-                    
+
                     // Rescan option
                     OutlinedButton(
                         onClick = onRescan,
@@ -165,13 +167,28 @@ fun HomeScreen(
                     ) {
                         Text("Scan Different TV")
                     }
-                    
+
                     // Clear and start fresh
                     TextButton(
                         onClick = onDisconnect,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Clear & Scan New QR")
+                    }
+                }
+                is WebSocketClient.ConnectionState.AuthFailed -> {
+                    // Wrong PIN / stale token — don't offer retry with same token, direct to re-pair
+                    OutlinedButton(
+                        onClick = onRescan,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Scan QR to Re-pair")
+                    }
+                    TextButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Cancel")
                     }
                 }
                 is WebSocketClient.ConnectionState.Disconnected -> {
@@ -232,6 +249,8 @@ fun HomeScreen(
                         "Establishing connection..."
                     is WebSocketClient.ConnectionState.Error ->
                         "Check that:\n• TV app is running\n• Both devices are on same network\n• IP address is correct"
+                    is WebSocketClient.ConnectionState.AuthFailed ->
+                        "The PIN was incorrect or the TV app was reinstalled.\nScan the QR code on your TV to re-pair."
                     is WebSocketClient.ConnectionState.Disconnected ->
                         "Connect to your TV to start casting videos."
                 },

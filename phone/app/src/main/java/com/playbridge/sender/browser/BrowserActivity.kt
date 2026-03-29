@@ -74,9 +74,6 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import mozilla.components.lib.state.ext.flow
-import kotlinx.coroutines.flow.dropWhile
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.history.HistoryEntity
 import androidx.compose.foundation.lazy.LazyColumn
@@ -158,13 +155,24 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Ensure sessions are synced when coming back from background (e.g., lock screen)
-        // to prevent black/blank screens. We launch on Main thread to avoid blocking the initial
-        // layout pass, letting the UI draw before heavy session creation begins.
-        val state = Components.store.state
+        // Ensure sessions are synced when coming back from background (e.g. lock screen).
+        // IMPORTANT: read store state inside the coroutine body, NOT here in onResume().
+        // If we capture state here and DB restore runs before the coroutine executes,
+        // we'd call syncSessions(emptyList, null) which calls retainAll(emptySet) and
+        // wipes recentlyActiveTabIds — racing with and killing the LaunchedEffect's
+        // concurrent syncSessions call that was about to create the selected session.
+        Log.d("PB_STARTUP", "onResume: existingSessions=${tabManager.sessions.size}")
         lifecycleScope.launch(Dispatchers.Main) {
+            val state = Components.store.state   // read CURRENT state when coroutine runs
+            Log.d("PB_STARTUP", "onResume coroutine: storeTabs=${state.tabs.size}, selectedTabId=${state.selectedTabId}, sessionForSelectedTab=${tabManager.sessions[state.selectedTabId] != null}")
             tabManager.syncSessions(state.tabs, state.selectedTabId)
+            Log.d("PB_STARTUP", "onResume: syncSessions done — sessions=${tabManager.sessions.size}, sessionForSelectedTab=${tabManager.sessions[state.selectedTabId] != null}")
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Log.d("PB_STARTUP", "onStop: storeTabs=${Components.store.state.tabs.size}, sessions=${tabManager.sessions.size}")
     }
 
     override fun onPause() {
@@ -214,11 +222,16 @@ class BrowserActivity : ComponentActivity() {
 
         // Restore tabs
         // Track whether tab restoration is complete to avoid blank screen
+        val storeTabsAtStart = Components.store.state.tabs.size
         val tabsRestoredOrReady = mutableStateOf(Components.store.state.tabs.isNotEmpty())
+        Log.d("PB_STARTUP", "onCreate: store has $storeTabsAtStart tabs at start, tabsRestoredOrReady=${tabsRestoredOrReady.value}")
 
         lifecycleScope.launch(Dispatchers.IO) {
+            Log.d("PB_STARTUP", "IO coroutine started — checking if store needs restoration")
             if (Components.store.state.tabs.isEmpty()) {
+                Log.d("PB_STARTUP", "Store is empty — querying DB")
                 val savedTabs = database.tabDao().getAll()
+                Log.d("PB_STARTUP", "DB returned ${savedTabs.size} tabs")
                 if (savedTabs.isNotEmpty()) {
                     val sessionTabs = savedTabs.map { entity ->
                         TabSessionState(
@@ -228,12 +241,20 @@ class BrowserActivity : ComponentActivity() {
                         )
                     }
                     val selectedId = savedTabs.find { it.isSelected }?.id
+                    Log.d("PB_STARTUP", "Restoring ${sessionTabs.size} tabs to store, selectedId=$selectedId")
                     withContext(Dispatchers.Main) {
+                        Log.d("PB_STARTUP", "Calling restoreTabs on Main thread")
                         tabManager.restoreTabs(sessionTabs, selectedId, Components.store)
+                        Log.d("PB_STARTUP", "restoreTabs done — store now has ${Components.store.state.tabs.size} tabs, selectedTabId=${Components.store.state.selectedTabId}")
                     }
+                } else {
+                    Log.d("PB_STARTUP", "DB has no tabs — will create blank tab via ensureAtLeastOneTab")
                 }
+            } else {
+                Log.d("PB_STARTUP", "Store already has ${Components.store.state.tabs.size} tabs — skipping DB restore")
             }
             withContext(Dispatchers.Main) {
+                Log.d("PB_STARTUP", "Setting tabsRestoredOrReady=true")
                 tabsRestoredOrReady.value = true
             }
         }
@@ -283,15 +304,30 @@ class BrowserActivity : ComponentActivity() {
             
             // Session and navigation state from BrowserStore
             val store = Components.store
-            var browserState by remember { mutableStateOf(store.state) }
-            
+            var browserState by remember {
+                Log.d("PB_STARTUP", "Compose: initialising browserState — store has ${store.state.tabs.size} tabs, selectedTabId=${store.state.selectedTabId}")
+                mutableStateOf(store.state)
+            }
+
             // Observe store state changes
             LaunchedEffect(store) {
+                Log.d("PB_STARTUP", "Compose: store.flow() collector started")
                 store.flow().collect { state ->
+                    if (state.tabs.size != browserState.tabs.size || state.selectedTabId != browserState.selectedTabId) {
+                        Log.d("PB_STARTUP", "Compose: store.flow() emitted — tabs=${state.tabs.size}, selectedTabId=${state.selectedTabId}")
+                    }
                     browserState = state
                 }
             }
-            // TODO: correct observation logic
+
+            // store.flow() only delivers FUTURE emissions — if restoreTabs() dispatched
+            // all 400+ tabs before this collector subscribed (fast DB read), browserState
+            // would stay empty forever. Force-sync once restoration is marked complete
+            // so we never miss a bulk insert that happened before we started collecting.
+            LaunchedEffect(tabsRestoredOrReady.value) {
+                Log.d("PB_STARTUP", "Compose: tabsRestoredOrReady=${tabsRestoredOrReady.value} — force-syncing browserState from store (${store.state.tabs.size} tabs, selectedTabId=${store.state.selectedTabId})")
+                browserState = store.state
+            }
 
             // Sync sessions with tabs.
             // Key on tab IDs (not full TabSessionState) so content changes (URL, title, loading
@@ -302,23 +338,27 @@ class BrowserActivity : ComponentActivity() {
             // unexpectedly, resulting in page reloads on every tab switch.
             val tabIds = browserState.tabs.map { it.id }
             LaunchedEffect(tabIds, browserState.selectedTabId) {
+                Log.d("PB_STARTUP", "Compose: syncSessions triggered — tabCount=${browserState.tabs.size}, selectedTabId=${browserState.selectedTabId}")
                 tabManager.syncSessions(browserState.tabs, browserState.selectedTabId)
+                Log.d("PB_STARTUP", "Compose: syncSessions returned — sessions.keys=${tabManager.sessions.keys.size}")
             }
-            
+
             val sessions = tabManager.sessions
 
             val selectedTabId = browserState.selectedTabId
             val selectedTab = browserState.tabs.find { it.id == selectedTabId }
             val session = if (selectedTab != null) sessions[selectedTab.id] else null
-            val freshLoadingTabIds by tabManager.freshLoadingTabIds
-            
+
+            Log.d("PB_STARTUP", "Compose: recompose — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, sessionNull=${session == null}, tabsRestored=${tabsRestoredOrReady.value}, sessionsMapSize=${sessions.size}")
+
             // State for download dialog
             var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
-            
+
             // If no session is available (e.g. during init), we normally show loading.
             // However, if we are in the Tabs screen, we can render the tabs screen standalone
             // without needing a selected session.
             if (session == null) {
+                Log.d("PB_STARTUP", "Compose: session==null path — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, tabsRestored=${tabsRestoredOrReady.value}, sessionsInMap=${sessions.keys.joinToString()}")
                 if (currentScreen == Screen.Tabs) {
                     PlayBridgeTheme {
                         Surface(modifier = Modifier.fillMaxSize()) {
@@ -343,12 +383,11 @@ class BrowserActivity : ComponentActivity() {
                 if (tabsRestoredOrReady.value) {
                     // Restoration done but session is still null — force create a tab
                     LaunchedEffect(Unit) {
+                        Log.d("PB_STARTUP", "Compose: tabsRestored=true but session still null — calling ensureAtLeastOneTab (storeTabCount=${store.state.tabs.size})")
                         tabManager.ensureAtLeastOneTab(store)
                     }
                 }
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+                // No spinner — just return and let the background show through while sessions init
                 return@setContent
             }
             
@@ -1204,24 +1243,6 @@ class BrowserActivity : ComponentActivity() {
                                                 focusManager.clearFocus()
                                             }
 
-                                            // Clear fresh-load flag once the page finishes loading.
-                                            // Keyed on (selectedTabId, session) so it re-arms whenever a
-                                            // new session is wired up for the active tab.
-                                            // Uses snapshotFlow to wait for loading to START then STOP,
-                                            // avoiding the race where DisposableEffect(session) sets
-                                            // isLoading=true in the same commit phase before a
-                                            // LaunchedEffect(isLoading=false) body has a chance to run.
-                                            LaunchedEffect(selectedTabId, session) {
-                                                if (selectedTabId != null && selectedTabId in tabManager.freshLoadingTabIds.value) {
-                                                    withTimeoutOrNull(30_000L) {
-                                                        snapshotFlow { isLoading }
-                                                            .dropWhile { !it }  // wait for loading to start
-                                                            .first { !it }      // then wait for it to stop
-                                                    }
-                                                    tabManager.freshLoadingTabIds.value -= selectedTabId
-                                                }
-                                            }
-
                                             // BrowserView call site
                                             Box(modifier = Modifier.fillMaxSize()) {
                                                 BrowserView(
@@ -1229,19 +1250,6 @@ class BrowserActivity : ComponentActivity() {
                                                     onLongPressLink = { url: String -> contextMenuUrl = url }
                                                 )
 
-                                                // Show loading overlay when session was freshly created (e.g. after lock screen
-                                                // forces a process restart). Hides the blank GeckoEngineView during initial load.
-                                                if (selectedTabId != null && selectedTabId in freshLoadingTabIds) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .fillMaxSize()
-                                                            .background(MaterialTheme.colorScheme.background),
-                                                        contentAlignment = Alignment.Center
-                                                    ) {
-                                                        CircularProgressIndicator()
-                                                    }
-                                                }
-                                                
                                                 // Home Screen Overlay
                                                 if (currentUrl == "about:blank") {
                                                     HomeScreen(
@@ -2252,6 +2260,7 @@ class BrowserActivity : ComponentActivity() {
 
 
     override fun onDestroy() {
+        Log.d("PB_STARTUP", "onDestroy: isFinishing=$isFinishing, sessions=${tabManager.sessions.size}")
         // Close all engine sessions to free GeckoView resources and prevent stale sessions
         // accumulating across Android Studio "Apply Changes" relaunches, which reuse the
         // same process without re-creating the Application but do call Activity.onCreate again.

@@ -47,7 +47,21 @@ fun ConnectionScreen(
     }
 
     var showPinDialog by remember { mutableStateOf<Triple<String, Int, String>?>(null) } // IP, Port, UUID
+    var pinDialogShowError by remember { mutableStateOf(false) }
     var showManualDialog by remember { mutableStateOf(false) }
+
+    // When auth fails, re-open the PIN dialog for the current device so the user knows
+    // to try again (covers wrong PIN and TV app reinstall scenarios).
+    val tvDeviceSnapshot by viewModel.tvDevice.collectAsState(initial = null)
+    LaunchedEffect(connectionState) {
+        if (connectionState is WebSocketClient.ConnectionState.AuthFailed) {
+            val device = tvDeviceSnapshot
+            if (device != null) {
+                pinDialogShowError = true
+                showPinDialog = Triple(device.ip, device.port, device.uuid)
+            }
+        }
+    }
     
     // When a device is selected, check history for token
     fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") {
@@ -289,14 +303,19 @@ fun ConnectionScreen(
             ip = ip,
             port = port,
             uuid = uuid,
-            onDismiss = { showPinDialog = null },
+            showError = pinDialogShowError,
+            onDismiss = {
+                showPinDialog = null
+                pinDialogShowError = false
+            },
             onConfirm = { pin ->
                 showPinDialog = null
+                pinDialogShowError = false
                 viewModel.connect(TvDevice(
                     ip = ip,
                     port = port,
-                    token = pin, // Use PIN as initial token
-                    name = "TV ($ip)", // Temp name, will update on connect
+                    token = pin,
+                    name = "TV ($ip)",
                     uuid = uuid
                 ))
             }
@@ -393,20 +412,29 @@ fun PinEntryDialog(
     ip: String,
     port: Int,
     uuid: String = "",
+    showError: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
     var pin by remember { mutableStateOf("") }
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Enter PIN") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    text = "Enter the 4-digit PIN displayed on the TV at $ip",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                if (showError) {
+                    Text(
+                        text = "Incorrect PIN — please check the PIN shown on the TV and try again.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    Text(
+                        text = "Enter the 4-digit PIN displayed on the TV at $ip",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
 
                 if (uuid.isNotEmpty()) {
                     Text(
@@ -415,12 +443,13 @@ fun PinEntryDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
+
                 OutlinedTextField(
                     value = pin,
                     onValueChange = { if (it.length <= 4) pin = it.uppercase() },
                     label = { Text("PIN") },
                     singleLine = true,
+                    isError = showError,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
