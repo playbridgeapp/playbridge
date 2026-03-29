@@ -92,11 +92,6 @@ Details on the shared protocol and communication flow between Phone and TV have 
 
 ### 🔴 Critical Issues (Play Store Blockers)
 
-#### 1. Unsafe SSL in ContentSniffer (TV App)
-- **Problem**: `getUnsafeOkHttpClient()` trusts ALL certificates and disables hostname verification
-- **Impact**: Google Play automated scanner will reject — [policy violation](https://support.google.com/faqs/answer/7188426)
-- **Recommendation**: Scope SSL bypass to private/local IPs only (`192.168.*`, `10.*`, `172.16-31.*`)
-
 #### 2. Cleartext Traffic Globally Enabled (TV App)
 - **Problem**: `network_security_config.xml` has `<base-config cleartextTrafficPermitted="true">` for all domains
 - **Impact**: Security review flag during Play Store review
@@ -128,6 +123,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 ## Open-Source Preparation Checklist
 
 ### ✅ Already Good
+- **Unsafe SSL in ContentSniffer (TV App)**
 - **Dangerous Permissions**: `CAMERA` and `RECORD_AUDIO` were successfully removed from TV manifest.
 - [x] Build pipeline uses AAB (Android App Bundle) for TV release
 - [x] `CONTRIBUTING.md` created with contribution guidelines
@@ -178,7 +174,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [ ] Store listing: title, descriptions, feature graphic (1024×500), screenshots, icon (512×512)
 
 #### 2. Critical Code Fixes
-- [ ] Fix SSL bypass in `ContentSniffer.kt` — scope to private IPs only
+- [x] Fix SSL bypass in `ContentSniffer.kt` — scope to private IPs only
 - [ ] Fix `network_security_config.xml` — remove global cleartext base-config
 - [x] Review CAMERA/RECORD_AUDIO permissions — successfully removed
 - [ ] Prepare SYSTEM_ALERT_WINDOW justification for manual review
@@ -340,10 +336,9 @@ PlayBridge/
 1. Review commit history for accidentally committed secrets
 
 **Key Actions Before Play Store (TV App):**
-1. Fix SSL certificate bypass in `ContentSniffer.kt` (auto-rejection risk)
-2. Remove global cleartext traffic permission
-3. Remove unused CAMERA/RECORD_AUDIO permissions
-4. Create and host a Privacy Policy
-5. Complete Play Console setup (data safety, content rating, store listing)
+1. Remove global cleartext traffic permission
+2. Remove unused CAMERA/RECORD_AUDIO permissions
+3. Create and host a Privacy Policy
+4. Complete Play Console setup (data safety, content rating, store listing)
 
 The codebase is in good shape for open-sourcing with relatively minor documentation additions. Play Store publishing requires addressing several security policy items first — see `tv/ARCHITECTURE.md` for the full readiness checklist.
