@@ -6,3 +6,7 @@
 1. Moving lazy, interaction-based operations (like SharedPreferences reads) from an `onClick` callback into an eager `remember` block outside a Compose `LazyColumn` is an anti-pattern. It blocks the main thread during composition and creates stale state.
 2. When parsing large files line-by-line, chaining `.map` and `.filter` after `.lines()` creates massive intermediate lists. While `.lines().asSequence()` avoids intermediate lists in the chain, `.lines()` still initially allocates every line in memory. `.lineSequence()` is required for true constant O(1) memory parsing.
 **Action:** When optimizing Compose, distinguish between eager state needed for rendering and deferred state needed for interaction. When optimizing large string parsing, use `.lineSequence()` instead of `.lines()` or `.lines().asSequence()`.
+
+## 2026-02-01 - [Kotlin] Regex compilation in loops
+**Learning:** Instantiating `Regex` objects inside loops or frequently called methods causes redundant CPU overhead and memory allocations.
+**Action:** Pre-compile and cache `Regex` instances as private constants in a `companion object` or a singleton `object`.
