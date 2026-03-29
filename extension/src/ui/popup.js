@@ -684,7 +684,7 @@ openUrlPlayerBtn.addEventListener('click', async () => {
 connectBtn.addEventListener('click', () => {
     const ip = tvIpInput.value.trim();
     const pin = tvPinInput.value.trim();
-    const port = tvPortInput ? parseInt(tvPortInput.value.trim(), 10) : 8765;
+    const port = tvPortInput ? parseInt(tvPortInput.value.trim(), 10) : CONFIG.DEFAULT_PORT;
     
     if (!ip) {
         showToast('Please enter an IP address');
@@ -700,7 +700,7 @@ connectBtn.addEventListener('click', () => {
         action: 'wsConnect',
         ip: ip,
         pin: pin,
-        port: port || 8765
+        port: port || CONFIG.DEFAULT_PORT
     });
     updateStatusUI('connecting');
 });
@@ -734,6 +734,12 @@ window.addEventListener('message', (event) => {
 
 // Init
 window.addEventListener('DOMContentLoaded', () => {
+    if (tvPortInput) {
+        tvPortInput.placeholder = CONFIG.DEFAULT_PORT;
+        if (!tvPortInput.value) {
+            tvPortInput.value = CONFIG.DEFAULT_PORT;
+        }
+    }
     loadStatus();
     loadVideos();
 });
