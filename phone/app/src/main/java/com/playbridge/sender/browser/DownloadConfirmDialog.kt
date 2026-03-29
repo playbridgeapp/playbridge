@@ -16,9 +16,23 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import mozilla.components.browser.engine.gecko.GeckoEngineSession
+import org.mozilla.geckoview.GeckoSession
 
-/** State for a blocked popup awaiting user decision. */
-data class PendingPopup(val openerHost: String, val popupUrl: String)
+/**
+ * State for a blocked popup awaiting user decision.
+ *
+ * [rawGeckoSession] and [engineSession] are created upfront and returned to
+ * GeckoView in [onNewSession], so GeckoView replays the original navigation
+ * (preserving POST body, cookies, headers) in the background while the user
+ * decides. On allow → wire the sessions into a new tab. On dismiss → close them.
+ */
+data class PendingPopup(
+    val openerHost: String,
+    val popupUrl: String,
+    val rawGeckoSession: GeckoSession,
+    val engineSession: GeckoEngineSession,
+)
 
 /** State for a pending download awaiting user confirmation. */
 data class PendingDownload(

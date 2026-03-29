@@ -2088,17 +2088,18 @@ class BrowserActivity : ComponentActivity() {
                     val popupPrefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
 
                     fun openPopupTab() {
-                        val openerEngineSession = tabManager.sessions[selectedTab?.id]
+                        // The GeckoSession was already created and returned to GeckoView in
+                        // onNewSession, so GeckoView is already replaying the original navigation
+                        // (POST body, cookies, headers intact).  All we need to do is wire the
+                        // pre-created engineSession into a new tab so it becomes visible.
                         scope.launch(Dispatchers.Main) {
-                            val newEngineSession = Components.engine.createSession()
                             val tabId = tabManager.createTab(
                                 url = popup.popupUrl,
                                 store = store,
                                 parentId = selectedTab?.id,
                                 select = true
                             )
-                            tabManager.sessions[tabId] = newEngineSession
-                            newEngineSession.loadUrl(url = popup.popupUrl, parent = openerEngineSession)
+                            tabManager.sessions[tabId] = popup.engineSession
                         }
                     }
 
@@ -2119,6 +2120,8 @@ class BrowserActivity : ComponentActivity() {
                                 pendingPopupState.value = null
                             },
                             onDismiss = {
+                                // Close the background session so it doesn't leak resources.
+                                popup.rawGeckoSession.close()
                                 pendingPopup = null
                                 pendingPopupState.value = null
                             }

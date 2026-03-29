@@ -237,10 +237,27 @@ fun SessionObserverSetup(
 
                                 if (blockPopups && !isWhitelisted) {
                                     Log.d(TAG, "Popup blocked from $openerHost: $uri")
+                                    // Create the session upfront (same pattern as the whitelisted
+                                    // flow) so GeckoView can replay the original navigation —
+                                    // preserving POST body, cookies, and headers — in the
+                                    // background while the user decides.  The session is NOT
+                                    // attached to a tab yet; that happens on Allow.  On Dismiss
+                                    // the caller closes the rawGeckoSession.
+                                    val rawGeckoSession = GeckoSession()
+                                    val newEngineSession = GeckoEngineSession(
+                                        runtime = Components.runtime,
+                                        geckoSessionProvider = { rawGeckoSession },
+                                        openGeckoSession = false
+                                    )
                                     scope.launch(Dispatchers.Main) {
-                                        pendingPopup.value = PendingPopup(openerHost, uri)
+                                        pendingPopup.value = PendingPopup(
+                                            openerHost = openerHost,
+                                            popupUrl = uri,
+                                            rawGeckoSession = rawGeckoSession,
+                                            engineSession = newEngineSession,
+                                        )
                                     }
-                                    return@newProxyInstance GeckoResult.fromValue(null)
+                                    return@newProxyInstance GeckoResult.fromValue(rawGeckoSession)
                                 }
 
                                 Log.d(TAG, "Auto-opening new tab for popup: $uri")
