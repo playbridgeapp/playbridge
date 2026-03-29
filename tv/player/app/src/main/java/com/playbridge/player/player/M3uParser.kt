@@ -18,6 +18,9 @@ data class HlsVariant(
 )
 
 object M3uParser {
+    private val REGEX_RESOLUTION = Regex("""RESOLUTION=(\d+x\d+)""")
+    private val REGEX_BANDWIDTH = Regex("""BANDWIDTH=(\d+)""")
+    private val REGEX_CODECS = Regex("""CODECS="([^"]+)"""")
 
     suspend fun parseMasterPlaylist(url: String, headers: Map<String, String>?): List<HlsVariant>? = withContext(Dispatchers.IO) {
         try {
@@ -67,13 +70,13 @@ object M3uParser {
                         isMasterPlaylist = true
 
                         // Parse attributes
-                        val resMatch = Regex("""RESOLUTION=(\d+x\d+)""").find(trimmed)
+                        val resMatch = REGEX_RESOLUTION.find(trimmed)
                         currentResolution = resMatch?.groupValues?.get(1)
 
-                        val bwMatch = Regex("""BANDWIDTH=(\d+)""").find(trimmed)
+                        val bwMatch = REGEX_BANDWIDTH.find(trimmed)
                         currentBandwidth = bwMatch?.groupValues?.get(1)?.toIntOrNull()
 
-                        val codecsMatch = Regex("""CODECS="([^"]+)"""").find(trimmed)
+                        val codecsMatch = REGEX_CODECS.find(trimmed)
                         currentCodecs = codecsMatch?.groupValues?.get(1)
                     } else if (!trimmed.startsWith("#") && currentBandwidth != null) {
                         // It's a URI for the stream inf
