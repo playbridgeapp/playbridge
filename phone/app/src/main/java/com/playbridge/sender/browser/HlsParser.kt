@@ -55,6 +55,20 @@ data class VideoQuality(
  */
 object HlsParser {
 
+    private val REGEX_GROUP_ID = Regex("GROUP-ID=\"([^\"]+)\"")
+    private val REGEX_NAME = Regex("NAME=\"([^\"]+)\"")
+    private val REGEX_LANGUAGE = Regex("LANGUAGE=\"([^\"]+)\"")
+    private val REGEX_URI = Regex("URI=\"([^\"]+)\"")
+    private val REGEX_DEFAULT_YES = Regex("DEFAULT=YES")
+    private val REGEX_AUTOSELECT_YES = Regex("AUTOSELECT=YES")
+    private val REGEX_CHANNELS = Regex("CHANNELS=\"([^\"]+)\"")
+    private val REGEX_BANDWIDTH = Regex("BANDWIDTH=(\\d+)")
+    private val REGEX_AVERAGE_BANDWIDTH = Regex("AVERAGE-BANDWIDTH=(\\d+)")
+    private val REGEX_RESOLUTION = Regex("RESOLUTION=(\\d+x\\d+)")
+    private val REGEX_CODECS = Regex("CODECS=\"([^\"]+)\"")
+    private val REGEX_AUDIO_GROUP = Regex("AUDIO=\"([^\"]+)\"")
+    private val REGEX_FRAME_RATE = Regex("FRAME-RATE=([\\d\\.]+)")
+
     /**
      * Parses the given M3U8 URL and returns a comprehensive HlsPlaylist object.
      * Pass [headers] (e.g. from the browser extension) so auth/cookie-gated playlists can be fetched.
@@ -88,13 +102,13 @@ object HlsParser {
                     // Parse Audio Track
                     val attributes = line.substringAfter(":")
                     
-                    val groupId = Regex("GROUP-ID=\"([^\"]+)\"").find(attributes)?.groupValues?.get(1)
-                    val name = Regex("NAME=\"([^\"]+)\"").find(attributes)?.groupValues?.get(1)
-                    val language = Regex("LANGUAGE=\"([^\"]+)\"").find(attributes)?.groupValues?.get(1)
-                    val uri = Regex("URI=\"([^\"]+)\"").find(attributes)?.groupValues?.get(1)
-                    val isDefault = Regex("DEFAULT=YES").containsMatchIn(attributes)
-                    val autoselect = Regex("AUTOSELECT=YES").containsMatchIn(attributes)
-                    val channels = Regex("CHANNELS=\"([^\"]+)\"").find(attributes)?.groupValues?.get(1) // e.g. "2"
+                    val groupId = REGEX_GROUP_ID.find(attributes)?.groupValues?.get(1)
+                    val name = REGEX_NAME.find(attributes)?.groupValues?.get(1)
+                    val language = REGEX_LANGUAGE.find(attributes)?.groupValues?.get(1)
+                    val uri = REGEX_URI.find(attributes)?.groupValues?.get(1)
+                    val isDefault = REGEX_DEFAULT_YES.containsMatchIn(attributes)
+                    val autoselect = REGEX_AUTOSELECT_YES.containsMatchIn(attributes)
+                    val channels = REGEX_CHANNELS.find(attributes)?.groupValues?.get(1) // e.g. "2"
 
                     if (groupId != null && name != null) {
                         // Resolve relative URI if present
@@ -115,20 +129,20 @@ object HlsParser {
                     val attributes = line.substringAfter(":")
                     
                     // Parse bandwidths
-                    currentBandwidth = Regex("BANDWIDTH=(\\d+)").find(attributes)?.groupValues?.get(1)?.toLongOrNull()
-                    currentAverageBandwidth = Regex("AVERAGE-BANDWIDTH=(\\d+)").find(attributes)?.groupValues?.get(1)?.toLongOrNull()
+                    currentBandwidth = REGEX_BANDWIDTH.find(attributes)?.groupValues?.get(1)?.toLongOrNull()
+                    currentAverageBandwidth = REGEX_AVERAGE_BANDWIDTH.find(attributes)?.groupValues?.get(1)?.toLongOrNull()
                     
                     // Parse dimensions
-                    currentResolution = Regex("RESOLUTION=(\\d+x\\d+)").find(attributes)?.groupValues?.get(1)
+                    currentResolution = REGEX_RESOLUTION.find(attributes)?.groupValues?.get(1)
                     
                     // Parse codecs
-                    currentCodecs = Regex("CODECS=\"([^\"]+)\"").find(attributes)?.groupValues?.get(1)
+                    currentCodecs = REGEX_CODECS.find(attributes)?.groupValues?.get(1)
                     
                     // Parse audio group ID
-                    currentAudioGroup = Regex("AUDIO=\"([^\"]+)\"").find(attributes)?.groupValues?.get(1)
+                    currentAudioGroup = REGEX_AUDIO_GROUP.find(attributes)?.groupValues?.get(1)
                     
                     // Parse frame rate
-                    currentFrameRate = Regex("FRAME-RATE=([\\d\\.]+)").find(attributes)?.groupValues?.get(1)
+                    currentFrameRate = REGEX_FRAME_RATE.find(attributes)?.groupValues?.get(1)
                     
                 } else if (!line.startsWith("#") && line.isNotEmpty()) {
                     if (currentBandwidth != null) {
