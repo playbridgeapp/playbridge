@@ -960,7 +960,7 @@ private fun VideoItemDetailed(
                     } else if (fileSize != null) {
                         InfoChip(
                             icon = Icons.Default.ArrowDropDown,
-                            text = formatFileSize(fileSize!!)
+                            text = DownloadUtils.formatFileSize(fileSize!!)
                         )
                     }
                 }
@@ -1212,14 +1212,6 @@ fun copyToClipboard(context: Context, text: String) {
     clipboard.setPrimaryClip(clip)
 }
 
-fun formatFileSize(bytes: Long): String {
-    return when {
-        bytes >= 1_073_741_824 -> String.format("%.2f GB", bytes / 1_073_741_824.0)
-        bytes >= 1_048_576 -> String.format("%.1f MB", bytes / 1_048_576.0)
-        bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
-        else -> "$bytes B"
-    }
-}
 
 fun openInExternalPlayer(
     context: Context, 

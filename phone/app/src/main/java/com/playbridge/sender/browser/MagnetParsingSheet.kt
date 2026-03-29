@@ -199,7 +199,7 @@ fun MagnetParsingSheet(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = formatSize(file.bytes),
+                                                text = DownloadUtils.formatFileSize(file.bytes),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -346,15 +346,4 @@ private suspend fun startResolvingFlow(
     } catch (e: Exception) {
         onError(e.message ?: "Failed during unrestrict flow")
     }
-}
-
-private fun formatSize(bytes: Long): String {
-    if (bytes <= 0) return "0 B"
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
-    return String.format(
-        "%.1f %s",
-        bytes / Math.pow(1024.0, digitGroups.toDouble()),
-        units[digitGroups]
-    )
 }
