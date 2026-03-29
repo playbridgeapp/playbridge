@@ -188,13 +188,11 @@ class WebSocketServer(
 
             // Log the expected PIN for debugging
             val pin = authToken.take(4).uppercase()
-            if (!isLocalhost) FileLogger.i(TAG, "Expecting PIN: $pin for client: $clientId")
 
             while (!isAuthenticated) {
                 val frame = session.incoming.receive()
                 if (frame is Frame.Text) {
                     val text = frame.readText()
-                    FileLogger.d(TAG, "Message received during auth: $text")
                     
                     if (text.contains("\"type\":\"ping\"") || text.contains("\"type\": \"ping\"")) {
                         FileLogger.d(TAG, "Received ping during auth, sending pong")
@@ -218,7 +216,7 @@ class WebSocketServer(
                                 // Send back the full token for future use
                                 session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true, \"token\": \"$authToken\"}"))
                             } else {
-                                FileLogger.w(TAG, "Authentication failed. Expected PIN: $pin, Received PIN: ${authMessage.pin}, Token: ${authMessage.token}")
+                                FileLogger.w(TAG, "Authentication failed for client: $clientId")
                                 session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": false}"))
                                 session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid credentials"))
                                 return
@@ -228,7 +226,7 @@ class WebSocketServer(
                              // Don't close immediately, maybe it's just noise or a wrong message type
                         }
                     } catch (e: Exception) {
-                        FileLogger.w(TAG, "Failed to parse auth message: $text", e)
+                        FileLogger.w(TAG, "Failed to parse auth message for client: $clientId", e)
                         // Fallback to substring matching just in case, or treat as error
                         // For now, let's just log and continue waiting
                     }
