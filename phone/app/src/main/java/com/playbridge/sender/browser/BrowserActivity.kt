@@ -74,7 +74,9 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import mozilla.components.lib.state.ext.flow
+import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.history.HistoryEntity
 import androidx.compose.foundation.lazy.LazyColumn
@@ -290,12 +292,7 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             // TODO: correct observation logic
-            
-            // Ensure we have at least one tab
-            LaunchedEffect(browserState.tabs.size) {
-                tabManager.ensureAtLeastOneTab(store)
-            }
-            
+
             // Sync sessions with tabs.
             // Key on tab IDs (not full TabSessionState) so content changes (URL, title, loading
             // state) during navigation do NOT re-trigger syncSessions — only structural changes
@@ -1207,11 +1204,21 @@ class BrowserActivity : ComponentActivity() {
                                                 focusManager.clearFocus()
                                             }
 
-                                            // Clear fresh-load flag once the page finishes loading
-                                            LaunchedEffect(isLoading) {
-                                                if (!isLoading && selectedTabId != null) {
-                                                    tabManager.freshLoadingTabIds.value =
-                                                        tabManager.freshLoadingTabIds.value - selectedTabId
+                                            // Clear fresh-load flag once the page finishes loading.
+                                            // Keyed on (selectedTabId, session) so it re-arms whenever a
+                                            // new session is wired up for the active tab.
+                                            // Uses snapshotFlow to wait for loading to START then STOP,
+                                            // avoiding the race where DisposableEffect(session) sets
+                                            // isLoading=true in the same commit phase before a
+                                            // LaunchedEffect(isLoading=false) body has a chance to run.
+                                            LaunchedEffect(selectedTabId, session) {
+                                                if (selectedTabId != null && selectedTabId in tabManager.freshLoadingTabIds.value) {
+                                                    withTimeoutOrNull(30_000L) {
+                                                        snapshotFlow { isLoading }
+                                                            .dropWhile { !it }  // wait for loading to start
+                                                            .first { !it }      // then wait for it to stop
+                                                    }
+                                                    tabManager.freshLoadingTabIds.value -= selectedTabId
                                                 }
                                             }
 
@@ -2245,6 +2252,10 @@ class BrowserActivity : ComponentActivity() {
 
 
     override fun onDestroy() {
+        // Close all engine sessions to free GeckoView resources and prevent stale sessions
+        // accumulating across Android Studio "Apply Changes" relaunches, which reuse the
+        // same process without re-creating the Application but do call Activity.onCreate again.
+        tabManager.sessions.values.forEach { it.close() }
         // webSocketClient destruction is now handled by ConnectionViewModel's onCleared
         super.onDestroy()
     }
