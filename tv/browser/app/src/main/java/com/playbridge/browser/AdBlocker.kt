@@ -182,7 +182,7 @@ class AdBlocker(private val context: Context) {
         }
     }
 
-    private fun parseLine(line: String) {
+    internal fun parseLine(line: String) {
         // Skip comments and empty lines
         if (line.isEmpty() || line.startsWith("!") || line.startsWith("[")) {
             return
@@ -306,7 +306,7 @@ class AdBlocker(private val context: Context) {
         val excludedDomains: Set<String>?
     )
 
-    private fun parseOptions(options: String): ParseResult {
+    internal fun parseOptions(options: String): ParseResult {
         if (options.isEmpty()) return ParseResult(TYPE_ALL, false, null, null)
 
         var resourceTypes = 0
@@ -376,7 +376,7 @@ class AdBlocker(private val context: Context) {
         )
     }
 
-    private fun patternToRegex(pattern: String): Regex? {
+    internal fun patternToRegex(pattern: String): Regex? {
         if (pattern.isEmpty()) return null
 
         val regexPattern = StringBuilder()
@@ -582,7 +582,7 @@ class AdBlocker(private val context: Context) {
         return sb.toString()
     }
 
-    private fun isException(url: String, host: String, pageHost: String?): Boolean {
+    internal fun isException(url: String, host: String, pageHost: String?): Boolean {
         // Check exception domains
         if (exceptionDomains.any { host.endsWith(it) }) {
             return true
@@ -604,7 +604,7 @@ class AdBlocker(private val context: Context) {
         return false
     }
 
-    private fun isDomainAllowed(pattern: UrlPattern, pageHost: String): Boolean {
+    internal fun isDomainAllowed(pattern: UrlPattern, pageHost: String): Boolean {
         // Check excluded domains (if listed, rule does NOT apply)
         if (pattern.excludedDomains != null) {
             for (excluded in pattern.excludedDomains) {
@@ -629,7 +629,7 @@ class AdBlocker(private val context: Context) {
         return true
     }
 
-    private fun isDomainBlocked(host: String): Boolean {
+    internal fun isDomainBlocked(host: String): Boolean {
         // Check exact match
         if (blockedDomains.contains(host)) return true
 
@@ -644,7 +644,7 @@ class AdBlocker(private val context: Context) {
         return false
     }
 
-    private fun extractHost(url: String): String? {
+    internal fun extractHost(url: String): String? {
         return try {
             val withoutProtocol = url.removePrefix("http://").removePrefix("https://")
             withoutProtocol.substringBefore('/').substringBefore(':').substringBefore('?')

@@ -17,6 +17,10 @@ android {
         versionName = "0.1.8"
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     signingConfigs {
         create("release") {
             storeFile = file("../../../keystore/release.jks")
@@ -74,6 +78,7 @@ dependencies {
     implementation(libs.androidx.datastore)
     implementation(libs.geckoview.omni)
 
+    testImplementation(libs.junit)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
