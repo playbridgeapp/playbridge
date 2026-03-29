@@ -9,10 +9,12 @@ com.playbridge.sender/
 │   ├── BookmarksScreen.kt
 │   ├── BrowserActivity.kt
 │   ├── BrowserToolbar.kt
+│   ├── CastSheet.kt
 │   ├── CommandHistoryScreen.kt
 │   ├── Components.kt
+│   ├── DashParser.kt
 │   ├── DebridLibraryScreen.kt
-│   ├── DetectedVideosSheet.kt
+│   ├── DebridSettingsScreen.kt
 │   ├── DownloadConfirmDialog.kt
 │   ├── DownloadManagerSingleton.kt
 │   ├── DownloadUtils.kt
@@ -24,21 +26,28 @@ com.playbridge.sender/
 │   ├── HistoryScreen.kt
 │   ├── HlsParser.kt
 │   ├── HomeScreen.kt
+│   ├── ImportExportSettingsScreen.kt
 │   ├── LibraryDetailScreen.kt
 │   ├── LibraryEnums.kt
 │   ├── LibraryScreen.kt
+│   ├── LibrarySettingsScreen.kt
 │   ├── LibraryViewModel.kt
 │   ├── LinkContextMenu.kt
 │   ├── MagnetParsingSheet.kt
 │   ├── MediaDownloadService.kt
+│   ├── PlaybackSettingsScreen.kt
+│   ├── PopupBlockerSettingsScreen.kt
 │   ├── RemoteControlScreen.kt
 │   ├── SessionObserverSetup.kt
 │   ├── SettingsScreen.kt
+│   ├── SiteInfoSheet.kt
 │   ├── StreamPickerSheet.kt
 │   ├── SubtitlePreferences.kt
+│   ├── TVSettingsScreen.kt
 │   ├── TabManager.kt
 │   ├── TabsScreen.kt
-│   └── VideoDetector.kt
+│   ├── VideoDetector.kt
+│   └── VideoPreviewSheet.kt
 ├── connection/
 │   ├── BluetoothClient.kt
 │   ├── ConnectionStore.kt
@@ -98,7 +107,8 @@ com.playbridge.sender/
 | Addon Manager | AddonRepository.kt | Installs Stremio addons and resolves video streams via IMDB ID |
 | TMDB Client | TmdbRepository.kt | Coroutine-based client for TMDB API v3 |
 | OMDB Client | OmdbRepository.kt | Client for OMDB API (ratings and metadata) |
-| Stream Selection | StreamPickerSheet.kt | Bottom sheet displaying resolved Debrid/Addon streams |
+| Stream Selection | StreamPickerSheet.kt | Bottom sheet displaying resolved Addon streams |
+| Video Actions | DetectedVideosSheet.kt | Unified bottom sheet handling all 'Play on TV' actions (Browser, TMDB, Debrid, Magnets), routing single videos (Videos/Subtitles tabs) and multi-item playlists (`playlistPayload`). |
 | Debrid Integration | DebridProvider.kt | Abstract interface for Debrid magnet and `.torrent` parsing |
 | Debrid Clients | RealDebrid, AllDebrid, Premiumize | API implementations for major Debrid services |
 | Magnet UI | MagnetParsingSheet.kt | Bottom sheet UI for selecting files from intercepted magnets/torrents |

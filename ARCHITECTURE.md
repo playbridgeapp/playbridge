@@ -102,11 +102,6 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - **Impact**: Security review flag during Play Store review
 - **Recommendation**: Remove the `<base-config>` block; keep only `<domain-config>` for local network addresses
 
-#### 3. Dangerous Permissions Not Used (TV App)
-- **Problem**: `CAMERA` and `RECORD_AUDIO` declared as "forensic permissions" but not used in core functionality
-- **Impact**: Triggers manual review + requires privacy policy + data safety declarations
-- **Recommendation**: Remove if not actually needed
-
 ### 🟡 Moderate Issues
 
 #### 4. Hardcoded Values
@@ -133,6 +128,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 ## Open-Source Preparation Checklist
 
 ### ✅ Already Good
+- **Dangerous Permissions**: `CAMERA` and `RECORD_AUDIO` were successfully removed from TV manifest.
 - [x] Build pipeline uses AAB (Android App Bundle) for TV release
 - [x] `CONTRIBUTING.md` created with contribution guidelines
 - [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
@@ -184,7 +180,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 #### 2. Critical Code Fixes
 - [ ] Fix SSL bypass in `ContentSniffer.kt` — scope to private IPs only
 - [ ] Fix `network_security_config.xml` — remove global cleartext base-config
-- [ ] Review CAMERA/RECORD_AUDIO permissions — remove if not needed
+- [x] Review CAMERA/RECORD_AUDIO permissions — successfully removed
 - [ ] Prepare SYSTEM_ALERT_WINDOW justification for manual review
 
 #### 3. Build Pipeline
@@ -321,7 +317,6 @@ PlayBridge/
 |----------|------|--------|
 | 🔴 High | Fix SSL bypass for Play Store (scope to private IPs) | 1-2 hours |
 | 🔴 High | Fix network_security_config.xml (remove global cleartext) | 30 min |
-| 🔴 High | Remove unused CAMERA/RECORD_AUDIO permissions | 15 min |
 | 🟡 Medium | Create & host Privacy Policy | 2-4 hours |
 | 🟡 Medium | Fill out Play Console (data safety, content rating, listing) | 2-3 hours |
 | 🟢 Low | Enable ProGuard for release | 2-4 hours |

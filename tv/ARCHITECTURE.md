@@ -1,14 +1,23 @@
 # TV App Architecture
 
 ## Package Structure
+
+### Browser App
 ```
-com.playbridge.receiver/
-├── browser/
-│   ├── AdBlocker.kt
-│   ├── BrowserActivity.kt
-│   ├── BrowserEngine.kt
-│   ├── GeckoViewEngine.kt
-│   └── SystemWebViewEngine.kt
+com.playbridge.browser/
+├── logging/
+│   └── FileLogger.kt
+├── AdBlocker.kt
+├── BrowserActivity.kt
+├── BrowserEngine.kt
+├── GeckoViewEngine.kt
+├── PlayBridgeBrowserApplication.kt
+└── SystemWebViewEngine.kt
+```
+
+### Player App
+```
+com.playbridge.player/
 ├── data/
 │   └── HistoryStore.kt
 ├── logging/
@@ -19,11 +28,15 @@ com.playbridge.receiver/
 │   ├── PairingStore.kt
 │   └── QRGenerator.kt
 ├── player/
+│   ├── BufferSeekBar.kt
 │   ├── ColorMatrixEffect.kt
 │   ├── ContentSniffer.kt
 │   ├── ExoPlayerActivity.kt
 │   ├── InputHandler.kt
 │   ├── M3uParser.kt
+│   ├── MpvControlsManager.kt
+│   ├── MpvPlayerActivity.kt
+│   ├── MpvTrackSelectionDialog.kt
 │   ├── PlayerActivity.kt
 │   ├── PlayerControlsManager.kt
 │   ├── PlaylistPickerDialog.kt
@@ -127,11 +140,6 @@ com.playbridge.receiver/
 - **Problem**: Used by `OverlayWindowHelper.kt` to work around Android 14+ Background Activity Launch restrictions
 - **Impact**: Triggers **manual review** — must provide justification in Play Console
 - **Fix**: Keep (legitimately needed), but prepare a clear explanation for Google reviewers
-
-#### 4. `CAMERA` and `RECORD_AUDIO` Permissions
-- **Problem**: Declared as "forensic permissions to prevent crashes on some TV boxes" — not used in core functionality
-- **Impact**: Triggers manual review + requires privacy policy + data safety declaration for these categories
-- **Fix**: Remove if not actually needed; if needed for specific TV box compatibility, handle runtime permission requests
 
 #### 5. Bundled Ad Blocking (uBlock Origin + `AdBlocker.kt`)
 - **Problem**: App bundles uBlock Origin extension + custom AdBlocker singleton with EasyList/EasyPrivacy/cosmetic filtering
