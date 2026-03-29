@@ -9,6 +9,7 @@
     },
     "background": {
         "scripts": [
+            "config.js",
             "hls-parser.js",
             "background.js"
         ],
@@ -17,7 +18,7 @@
     "content_scripts": [
         {
             "matches": ["<all_urls>"],
-            "js": ["content.js"],
+            "js": ["config.js", "content.js"],
             "run_at": "document_start"
         }
     ],

@@ -331,7 +331,7 @@ browser.webRequest.onHeadersReceived.addListener(
 let wsConnection = null;
 let playbridgeIp = null;
 let playbridgePin = null;
-let playbridgePort = 8765; // Default port, configurable via settings
+let playbridgePort = CONFIG.DEFAULT_PORT; // Default port, configurable via settings
 
 // Status values: disconnected, connecting, connected
 let wsStatus = 'disconnected'; 
@@ -538,7 +538,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 status: wsStatus, 
                 ip: res.pb_ip || '', 
                 pin: res.pb_pin || '',
-                port: res.pb_port || 8765
+                port: res.pb_port || CONFIG.DEFAULT_PORT
             });
         });
         return true;
