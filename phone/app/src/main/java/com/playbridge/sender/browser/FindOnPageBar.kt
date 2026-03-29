@@ -17,6 +17,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 
@@ -83,26 +87,44 @@ fun FindOnPageBar(
             )
 
             // Up/Prev Button
-            IconButton(onClick = onPrev) {
+            IconButton(
+                onClick = onPrev,
+                modifier = Modifier.semantics {
+                    contentDescription = "Previous match"
+                    role = Role.Button
+                }
+            ) {
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowUp,
-                    contentDescription = "Previous match"
+                    contentDescription = null
                 )
             }
 
             // Down/Next Button
-            IconButton(onClick = onNext) {
+            IconButton(
+                onClick = onNext,
+                modifier = Modifier.semantics {
+                    contentDescription = "Next match"
+                    role = Role.Button
+                }
+            ) {
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Next match"
+                    contentDescription = null
                 )
             }
 
             // Close Button
-            IconButton(onClick = onClose) {
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.semantics {
+                    contentDescription = "Close find"
+                    role = Role.Button
+                }
+            ) {
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Close find"
+                    contentDescription = null
                 )
             }
         }
