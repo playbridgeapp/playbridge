@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +26,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import com.playbridge.player.server.ServerService
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -32,6 +37,7 @@ fun SettingsScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
+    val scope = rememberCoroutineScope()
 
     // Player setting: "phone" (default), "internal", "external"
     var playerMode by remember {
@@ -42,6 +48,22 @@ fun SettingsScreen(
         mutableStateOf(prefs.getString("preferred_ip", "") ?: "")
     }
     var showIpDialog by remember { mutableStateOf(false) }
+
+    // Tracks whether the server restart cycle is in progress
+    var isRestarting by remember { mutableStateOf(false) }
+
+    // Restarts the WebSocket server + NSD advertisement so any changed settings (e.g. custom IP)
+    // take effect immediately without having to kill and relaunch the whole app.
+    fun restartServer() {
+        isRestarting = true
+        scope.launch {
+            ServerService.stop(context)
+            delay(600)            // Give the foreground service time to fully stop
+            ServerService.start(context)
+            delay(1200)           // Give it time to come back up before re-enabling the button
+            isRestarting = false
+        }
+    }
 
     // Migrate old boolean prefs to new mode strings on first load
     LaunchedEffect(Unit) {
@@ -60,7 +82,9 @@ fun SettingsScreen(
             .padding(48.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth(0.6f),
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(28.dp)
         ) {
             Text(
@@ -140,7 +164,31 @@ fun SettingsScreen(
                 }
 
                 Text(
-                    text = "Set a custom IP to advertise. Useful for emulator port forwarding (e.g. adb forward). Leave empty for Automatic. (Changes apply on next connection restart)",
+                    text = "Set a custom IP to advertise. Useful for emulator port forwarding (e.g. adb forward). Leave empty for Automatic. Saving triggers an automatic server restart.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // ── Restart Server ──
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Server",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.LightGray
+                )
+
+                Button(
+                    onClick = { restartServer() },
+                    enabled = !isRestarting
+                ) {
+                    Text(if (isRestarting) "Restarting…" else "Restart Server")
+                }
+
+                Text(
+                    text = "Stops and restarts the WebSocket server and network discovery (NSD). Use this after changing the Custom IP, or if phones can't connect.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray
                 )
@@ -183,7 +231,7 @@ fun SettingsScreen(
             ) {
                 Text("Enter Custom IP", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "Useful for emulator port forwarding (e.g. adb forward). Leave empty for Automatic. (Changes apply on next connection restart)",
+                    "Useful for emulator port forwarding (e.g. adb forward). Leave empty for Automatic. Saving will restart the server so the new IP takes effect immediately.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.LightGray
                 )
@@ -212,8 +260,10 @@ fun SettingsScreen(
                         customIp = finalIp
                         prefs.edit().putString("preferred_ip", finalIp).apply()
                         showIpDialog = false
+                        // Restart immediately so NSD re-advertises with the new IP
+                        restartServer()
                     }) {
-                        Text("Save")
+                        Text("Save & Restart")
                     }
                 }
             }

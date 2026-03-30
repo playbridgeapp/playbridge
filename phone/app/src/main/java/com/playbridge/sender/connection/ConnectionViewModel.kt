@@ -189,6 +189,53 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         webSocketClient.send(commandJson)
     }
+    // Timestamp of the last requestPairing call (per-instance debounce).
+    private var lastPairingRequestMs = 0L
+
+    /**
+     * Opens a short-lived WebSocket connection to the TV and sends a [request_pairing] signal,
+     * then immediately closes. No PIN or token is required.
+     *
+     * The TV handles this in its pre-auth loop: it emits [connectionAttemptFlow], raises its
+     * overlay window (for Android 14+ BAL), and opens its PairingScreen so the user can read
+     * the PIN *before* they look down at the phone to type it.
+     *
+     * Debounced to 5 s so rapid taps or quick AuthFailed retries don't flood the TV.
+     * Call this just before showing the PIN entry dialog.
+     */
+    fun requestPairing(ip: String, port: Int) {
+        val now = System.currentTimeMillis()
+        if (now - lastPairingRequestMs < 5_000L) {
+            Log.d(TAG, "requestPairing debounced — called too soon after previous signal")
+            return
+        }
+        lastPairingRequestMs = now
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val request = okhttp3.Request.Builder()
+                    .url("ws://$ip:$port")
+                    .build()
+                client.newWebSocket(request, object : okhttp3.WebSocketListener() {
+                    override fun onOpen(ws: okhttp3.WebSocket, response: okhttp3.Response) {
+                        ws.send(com.playbridge.protocol.createRequestPairingJson())
+                        // TV will close the connection after the ack; close our side too
+                        ws.close(1000, "pairing_requested")
+                    }
+                    override fun onFailure(ws: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
+                        Log.d(TAG, "requestPairing signal failed (TV may not be reachable): ${t.message}")
+                    }
+                })
+                // Shut down the one-shot client so it doesn't linger
+                client.dispatcher.executorService.shutdown()
+            } catch (e: Exception) {
+                Log.d(TAG, "requestPairing error: ${e.message}")
+            }
+        }
+    }
+
     fun startDiscovery() {
         nsdHelper.startDiscovery()
     }

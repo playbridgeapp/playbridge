@@ -57,6 +57,9 @@ fun ConnectionScreen(
         if (connectionState is WebSocketClient.ConnectionState.AuthFailed) {
             val device = tvDeviceSnapshot
             if (device != null) {
+                // Re-signal the TV so its PairingScreen comes back up (it may have navigated
+                // away after the failed attempt closed the WebSocket connection).
+                viewModel.requestPairing(device.ip, device.port)
                 pinDialogShowError = true
                 showPinDialog = Triple(device.ip, device.port, device.uuid)
             }
@@ -76,7 +79,10 @@ fun ConnectionScreen(
             // Already have token, connect directly. Update IP and name if changed.
             viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
         } else {
-            // New device or token missing/invalid, ask for PIN
+            // No token — user will need to enter the PIN.
+            // Signal the TV first so it opens its PairingScreen and shows the PIN
+            // *before* the user looks at it to type it here.
+            viewModel.requestPairing(ip, port)
             showPinDialog = Triple(ip, port, uuid)
         }
     }

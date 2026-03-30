@@ -310,6 +310,9 @@ sealed class Command {
     data class QueueAdd(val item: PlayPayload) : Command()
     data class PlaylistJump(val index: Int) : Command()
     data object Ping : Command()
+    // Sent by the phone before it has a PIN/token, as a lightweight "I'm about to pair"
+    // signal so the TV can open its PairingScreen and show the PIN in advance.
+    data object RequestPairing : Command()
     data class Unknown(val type: String) : Command()
 }
 
@@ -324,6 +327,7 @@ fun parseCommand(jsonString: String): Command {
         
         when (envelope.type) {
             "ping" -> Command.Ping
+            "request_pairing" -> Command.RequestPairing
             "command" -> {
                 when (envelope.action) {
                     "play" -> {
@@ -574,3 +578,10 @@ fun createPongJson(): String {
 fun createContextJson(active: String): String {
     return """{"type":"context","active":"$active"}"""
 }
+
+/**
+ * Create JSON string for request_pairing message (Phone → TV).
+ * Sent before auth so the TV opens its PairingScreen and displays the PIN
+ * while the user is reading it from the screen to type on the phone.
+ */
+fun createRequestPairingJson(): String = """{"type":"request_pairing"}"""

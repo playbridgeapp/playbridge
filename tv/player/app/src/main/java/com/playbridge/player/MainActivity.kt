@@ -20,34 +20,36 @@ import androidx.tv.material3.Surface
 import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.server.WebSocketServer
-import com.playbridge.player.ui.HomeScreen
 import com.playbridge.player.ui.LibraryScreen
 import com.playbridge.player.ui.PairingScreen
 import com.playbridge.player.ui.SettingsScreen
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.player.data.HistoryStore
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var pairingStore: PairingStore
     private lateinit var historyStore: HistoryStore
-    
+
+    // Passed into MainContent so that onNewIntent can trigger a navigation to PairingScreen
+    // from outside the Compose tree (e.g. when the background service fires ACTION_OPEN_PAIRING).
+    private val _openPairingRequest = mutableStateOf(false)
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
+    ) { _ ->
         // Start service regardless of permission results, features will just be degraded
         ServerService.start(this)
     }
-    
+
     @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         pairingStore = PairingStore(applicationContext)
         historyStore = HistoryStore(applicationContext)
-        
+
         val permissionsToRequest = mutableListOf<String>()
 
         // Request notification permission on Android 13+
@@ -83,6 +85,12 @@ class MainActivity : ComponentActivity() {
             startActivity(intent)
         }
 
+        // If launched via ACTION_OPEN_PAIRING (e.g. app was not running when a phone connected),
+        // signal MainContent to navigate to PairingScreen on first composition.
+        if (intent?.action == ServerService.ACTION_OPEN_PAIRING) {
+            _openPairingRequest.value = true
+        }
+
         setContent {
             PlayBridgeTVTheme {
                 Surface(
@@ -91,16 +99,31 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MainContent(
                         pairingStore = pairingStore,
-                        historyStore = historyStore
+                        historyStore = historyStore,
+                        openPairingRequest = _openPairingRequest
                     )
                 }
             }
         }
     }
+
+    /**
+     * Called when the app is already running (foreground or backgrounded) and receives a new
+     * Intent — e.g. when ServerService fires ACTION_OPEN_PAIRING because a phone is connecting.
+     * FLAG_ACTIVITY_SINGLE_TOP ensures this is called instead of re-creating the activity.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == ServerService.ACTION_OPEN_PAIRING) {
+            _openPairingRequest.value = true
+        }
+    }
 }
 
+// Screen.Home has been removed. The PairingScreen is now shown both on first launch
+// (no devices ever paired) and when navigating to "Pair New Device" from the Library.
 enum class Screen {
-    Home,
     Pairing,
     Library,
     Settings
@@ -109,24 +132,32 @@ enum class Screen {
 @Composable
 fun MainContent(
     pairingStore: PairingStore,
-    historyStore: HistoryStore
+    historyStore: HistoryStore,
+    openPairingRequest: MutableState<Boolean>
 ) {
-    // Initial State determination
-    var currentScreen by remember { mutableStateOf(Screen.Home) }
+    // Default to Library; overridden below once we know whether any device has paired.
+    var currentScreen by remember { mutableStateOf(Screen.Library) }
     var isInitialCheckDone by remember { mutableStateOf(false) }
-    
+
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
-    
-    // Check initial state once
+
+    // On first launch: show PairingScreen if no device has ever connected, Library otherwise.
     LaunchedEffect(pairedDevices) {
-        if (!isInitialCheckDone && pairedDevices.isNotEmpty()) {
-            currentScreen = Screen.Library
+        if (!isInitialCheckDone) {
+            currentScreen = if (pairedDevices.isEmpty()) Screen.Pairing else Screen.Library
             isInitialCheckDone = true
-        } else if (!isInitialCheckDone && pairedDevices.isEmpty()) {
-            // Keep default Home
-             isInitialCheckDone = true
+        }
+    }
+
+    // Handle background-triggered navigation: a phone started connecting → show PairingScreen
+    // so the user can see the PIN before typing it on the phone.
+    val shouldOpenPairing by openPairingRequest
+    LaunchedEffect(shouldOpenPairing) {
+        if (shouldOpenPairing) {
+            currentScreen = Screen.Pairing
+            openPairingRequest.value = false
         }
     }
 
@@ -137,7 +168,7 @@ fun MainContent(
     var deviceId by remember { mutableStateOf("") }
 
     val currentContext = androidx.compose.ui.platform.LocalContext.current
-    
+
     // Load initial values
     LaunchedEffect(Unit) {
         val appCtx = currentContext.applicationContext ?: currentContext
@@ -151,27 +182,27 @@ fun MainContent(
             deviceName = name
         }
     }
-    
-    // Auto-navigate to Library when a phone connects (if not already there)
+
+    // When a phone successfully connects while the PairingScreen is visible, navigate to Library.
+    // (The pairing is done — now let the user see their history/favourites.)
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketServer.ConnectionState.Connected) {
-             // If we are on Home (Pairing status page), go to Library
-             if (currentScreen == Screen.Home) {
-                 currentScreen = Screen.Library
-             }
+            if (currentScreen == Screen.Pairing) {
+                currentScreen = Screen.Library
+            }
         }
     }
-    
+
     when (currentScreen) {
-        Screen.Home -> {
-            HomeScreen(
-                connectionState = connectionState,
-                serverIp = serverIp,
-                serverPort = serverPort,
-                connectedCount = connectedCount,
-                deviceId = deviceId,
+        Screen.Pairing -> {
+            PairingScreen(
+                ip = serverIp ?: "unknown",
+                port = serverPort ?: com.playbridge.protocol.Config.DEFAULT_PORT,
                 token = authToken,
-                deviceName = deviceName
+                deviceName = deviceName,
+                deviceId = deviceId,
+                connectionState = connectionState,
+                connectedCount = connectedCount
             )
         }
         Screen.Library -> {
@@ -195,7 +226,7 @@ fun MainContent(
                         putExtra(ServerService.EXTRA_TITLE, item.title)
                         putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)
                         if (item.headers != null) {
-                             putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(item.headers))
+                            putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(item.headers))
                         }
                         // Restore playlist context if this item was part of a playlist
                         if (item.playlistJson != null) {
@@ -226,35 +257,17 @@ fun MainContent(
                 }
             )
         }
-        Screen.Pairing -> {
-            PairingScreen(
-                ip = serverIp ?: "unknown",
-                port = serverPort ?: com.playbridge.protocol.Config.DEFAULT_PORT,
-                token = authToken,
-                deviceName = deviceName,
-                deviceId = deviceId,
-                connectionState = connectionState,
-                connectedCount = connectedCount
-            )
-        }
         Screen.Settings -> {
             SettingsScreen(
                 onBack = { currentScreen = Screen.Library }
             )
         }
     }
-    
-    // Handle back button for navigation
-    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library && pairedDevices.isNotEmpty()) {
+
+    // Universal back handler: any screen that isn't Library goes back to Library.
+    // Library itself has no handler, so the system back gesture exits the app normally.
+    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library) {
         currentScreen = Screen.Library
-    }
-    // Handle back from Settings to Library
-    androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Settings) {
-        currentScreen = Screen.Library
-    }
-    // Also handle back from Pairing to Home if no history
-    androidx.activity.compose.BackHandler(enabled = currentScreen == Screen.Pairing && pairedDevices.isEmpty()) {
-        currentScreen = Screen.Home
     }
 }
 
@@ -270,7 +283,7 @@ private fun getLocalIpAddress(context: android.content.Context): String? {
         while (interfaces.hasMoreElements()) {
             val networkInterface = interfaces.nextElement()
             if (networkInterface.isLoopback || !networkInterface.isUp) continue
-            
+
             val addresses = networkInterface.inetAddresses
             while (addresses.hasMoreElements()) {
                 val address = addresses.nextElement()

@@ -51,6 +51,11 @@ class WebSocketServer(
     // Command flow for UI to observe
     private val _commands = MutableSharedFlow<Command>(replay = 0)
     val commands = _commands.asSharedFlow()
+
+    // Fires whenever a new client starts a connection attempt (before auth completes).
+    // ServerService observes this to auto-open the PairingScreen when the app is backgrounded.
+    private val _connectionAttemptFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val connectionAttemptFlow = _connectionAttemptFlow.asSharedFlow()
     
     sealed class ConnectionState {
         data object Stopped : ConnectionState()
@@ -175,6 +180,9 @@ class WebSocketServer(
     private suspend fun handleConnection(session: WebSocketServerSession) {
         val clientId = java.util.UUID.randomUUID().toString()
         FileLogger.i(TAG, "New connection attempt: $clientId")
+        // NOTE: connectionAttemptFlow is only emitted when request_pairing is received below,
+        // NOT unconditionally here. Emitting on every connection would re-open PairingScreen
+        // whenever a paired phone reconnects with its saved token.
 
         try {
             // Localhost connections (e.g. PlayBridge Browser app on the same device) skip auth
@@ -199,7 +207,18 @@ class WebSocketServer(
                         session.send(Frame.Text(createPongJson()))
                         continue
                     }
-                    
+
+                    // request_pairing: phone is about to show its PIN dialog and wants the TV
+                    // to open PairingScreen so the user can read the PIN before typing it.
+                    // No credentials required — we ack and close; the phone reconnects with the PIN.
+                    if (text.contains("\"type\":\"request_pairing\"")) {
+                        FileLogger.i(TAG, "request_pairing received from $clientId — waking PairingScreen")
+                        _connectionAttemptFlow.tryEmit(Unit)
+                        try { session.send(Frame.Text("{\"type\":\"pairing_ack\"}")) } catch (_: Exception) {}
+                        session.close(CloseReason(CloseReason.Codes.NORMAL, "pairing_requested"))
+                        return
+                    }
+
                     try {
                         // Robust JSON parsing
                         val authMessage = com.playbridge.protocol.protocolJson.decodeFromString<com.playbridge.protocol.AuthMessage>(text)

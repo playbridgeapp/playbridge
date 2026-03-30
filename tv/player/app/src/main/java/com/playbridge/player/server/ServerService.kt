@@ -190,6 +190,52 @@ class ServerService : Service() {
                         handleCommand(command)
                     }
                 }
+
+                // When the phone sends request_pairing, bring the app to the foreground showing
+                // PairingScreen so the user can read the PIN before typing it on the phone.
+                launch {
+                    var lastPairingLaunchMs = 0L
+                    val pairingCooldownMs = 8_000L  // ignore repeat signals within 8 s
+
+                    server.connectionAttemptFlow.collect {
+                        val now = System.currentTimeMillis()
+
+                        // ── Spam guard ──────────────────────────────────────────────────────────
+                        // Ignore if we launched the pairing screen very recently. This covers
+                        // rapid taps on the phone or AuthFailed retries that fire quickly.
+                        if (now - lastPairingLaunchMs < pairingCooldownMs) {
+                            FileLogger.d(TAG, "request_pairing ignored — cooldown active (${now - lastPairingLaunchMs} ms ago)")
+                            return@collect
+                        }
+
+                        // ── Context guard ────────────────────────────────────────────────────────
+                        // Don't interrupt active playback or browsing. The phone still shows the
+                        // PIN dialog so the user can pair manually once they're done watching.
+                        when (activeContext) {
+                            "player", "external_player" -> {
+                                FileLogger.d(TAG, "request_pairing ignored — video is playing")
+                                return@collect
+                            }
+                            "browser" -> {
+                                FileLogger.d(TAG, "request_pairing ignored — browser is active")
+                                return@collect
+                            }
+                        }
+
+                        lastPairingLaunchMs = now
+
+                        // Raise the invisible overlay window BEFORE calling startActivity().
+                        // Without this, Android 14+ BAL restrictions block the launch because
+                        // connectionState is still Running (not Connected) at this point.
+                        // The connectionState observer hides the overlay if auth ultimately fails.
+                        overlayWindow.show()
+                        val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                            action = ACTION_OPEN_PAIRING
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        }
+                        launchActivityFromBackground(intent, "New device connecting — showing pairing screen")
+                    }
+                }
             }
             
             FileLogger.i(TAG, "Server started at $ip:$port")
@@ -486,6 +532,9 @@ class ServerService : Service() {
             is Command.Ping -> {
                 // Handled by WebSocketServer
             }
+            is Command.RequestPairing -> {
+                // Handled in WebSocketServer's auth loop before this point — should never arrive here
+            }
             is Command.Unknown -> {
                 FileLogger.w(TAG, "Unknown command: ${command.type}")
             }
@@ -726,6 +775,9 @@ class ServerService : Service() {
         const val EXTRA_CUSTOM_FILTER_VALUES = "custom_filter_values"
         const val ACTION_QUEUE_ADD = "com.playbridge.player.ACTION_QUEUE_ADD"
         const val ACTION_PLAYLIST_JUMP = "com.playbridge.player.ACTION_PLAYLIST_JUMP"
+        // Sent to MainActivity (via startActivity) to navigate to the PairingScreen.
+        // Fired whenever a new device starts a connection attempt while the app is backgrounded.
+        const val ACTION_OPEN_PAIRING = "com.playbridge.player.ACTION_OPEN_PAIRING"
         const val EXTRA_QUEUE_ITEM_URL = "queue_item_url"
         const val EXTRA_QUEUE_ITEM_TITLE = "queue_item_title"
         const val EXTRA_QUEUE_ITEM_CONTENT_TYPE = "queue_item_content_type"
