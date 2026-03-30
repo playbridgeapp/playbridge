@@ -9,12 +9,15 @@ This is a natively built Web Extension specifically targeted for **Firefox (Desk
 ```
 extension/src/
 ├── background.js        (Video detection logic, WebSocket client for direct TV connection, TV commands)
+├── config.js            (Shared configuration constants)
 ├── content.js           (In-page video UI, Shadow DOM floating button)
 ├── hls-parser.js        (Parses HLS manifests for quality selection)
 ├── icon.png             (Extension icon)
 ├── manifest.json        (Firefox Manifest V2 configuration)
 └── ui/                  (Extension popup user interface)
     ├── fonts/           (Outfit fonts and CSS)
+    │   ├── outfit-latin-ext.woff2
+    │   ├── outfit-latin.woff2
     │   └── outfit.css   (Outfit font face CSS definitions)
     ├── popup.css        (Popup styling)
     ├── popup.html       (Popup layout)
