@@ -248,9 +248,6 @@ object VideoDetector {
                 connection.readTimeout = 5000
                 connection.instanceFollowRedirects = true
                 
-                // Apply captured headers (User-Agent, Cookie, Referer, etc.)
-                // Range is excluded — sending it on a HEAD request can trigger 206/416 responses
-                // from strict servers, corrupting the Content-Length and isPlayable result.
                 connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
                 video.headers?.forEach { (key, value) ->
                     if (!key.equals("Range", ignoreCase = true)) {
@@ -492,9 +489,6 @@ object VideoDetector {
                                 .filter { !video.url.startsWith(it) }
                             ignoredUrls.addAll(safeSegmentPrefixes)
 
-                            // Only remove existing items when we have a confirmed tab ID.
-                            // Without one (UI-triggered parse) we must not mutate the live list —
-                            // that would cause the stream the user is looking at to vanish.
                             if (kotlinTabId != null) {
                                 val prefixes = playlist.segmentPrefixes
                                 tabVideos[kotlinTabId]?.removeAll { detected ->

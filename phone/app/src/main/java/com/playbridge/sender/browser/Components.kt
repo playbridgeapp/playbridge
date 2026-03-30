@@ -250,17 +250,13 @@ object Components {
     
     // Store extension and port for later use
     private var videoDetectorExtension: GeckoWebExtension? = null
-    private var extensionPort: GeckoWebExtension.Port? = null
-    
+
     /**
      * Connect to extension for bidirectional messaging
      */
     private fun connectToExtension(extension: GeckoWebExtension) {
         Log.i(TAG, "Connecting to extension port...")
         
-        // The native app can't directly call extension's background script
-        // Instead, we receive messages when the extension sends them
-        // Start polling for videos periodically
         startVideoPolling()
     }
     
@@ -319,10 +315,6 @@ object Components {
                     Handler(Looper.getMainLooper()).post {
                         // Find the session for the tab and load error page
                         val sessionToLoad = if (tabId != null) {
-                            // The extension tabId matches our session keys if it's the internal Gecko ID
-                            // However, we need to map Gecko tabId back to our Kotlin UUID tabId
-                            // For now, let's load it into the selected tab if it's the current one,
-                            // or search for the matching session.
                             tabManager?.sessions?.get(resolveKotlinTabId(jsonObject))
                         } else {
                             tabManager?.sessions?.get(store.state.selectedTabId)
@@ -383,72 +375,4 @@ object Components {
         return "_unknown"
     }
     
-    /**
-     * Set up message delegate to receive messages from the extension's background script
-     */
-    private fun setupNativeMessaging(extension: GeckoWebExtension) {
-        Log.i(TAG, "Setting up message delegate for ${extension.id}")
-        
-        val messageDelegate = object : GeckoWebExtension.MessageDelegate {
-            override fun onConnect(port: GeckoWebExtension.Port) {
-                Log.i(TAG, "Port connected from extension: ${port.name}")
-                
-                port.setDelegate(object : GeckoWebExtension.PortDelegate {
-                    override fun onPortMessage(message: Any, port: GeckoWebExtension.Port) {
-                        Log.i(TAG, "Port message received: $message")
-                        
-                        try {
-                            val jsonString = when (message) {
-                                is JSONObject -> message.toString()
-                                is String -> message
-                                else -> message.toString()
-                            }
-                            
-                            val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
-                            if (jsonObject != null) {
-                                VideoDetector.onMessageReceived(jsonObject)
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error processing port message", e)
-                        }
-                    }
-                    
-                    override fun onDisconnect(port: GeckoWebExtension.Port) {
-                        Log.i(TAG, "Port disconnected")
-                    }
-                })
-            }
-            
-            override fun onMessage(
-                nativeApp: String,
-                message: Any,
-                sender: GeckoWebExtension.MessageSender
-            ): GeckoResult<Any>? {
-                Log.i(TAG, "Direct message received from extension: $message")
-                
-                try {
-                    val jsonString = when (message) {
-                        is JSONObject -> message.toString()
-                        is String -> message
-                        else -> message.toString()
-                    }
-                    
-                    val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
-                    if (jsonObject != null) {
-                        VideoDetector.onMessageReceived(jsonObject)
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error processing message", e)
-                }
-                
-                return null
-            }
-        }
-        
-        // Register delegate for background script messages
-        Handler(Looper.getMainLooper()).post {
-            extension.setMessageDelegate(messageDelegate, "browser")
-            Log.i(TAG, "Message delegate registered for background script (port: browser)")
-        }
-    }
 }

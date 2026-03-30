@@ -232,9 +232,6 @@ class AdBlocker(private val context: Context) {
 
         // Handle domain-anchored rules: ||domain
         if (pattern.startsWith("||")) {
-            // Check if this is a FULL domain block or a specific path
-            // Full domain blocks end with ^ or are just the domain
-            // Rules with / (like ||example.com/ad.js) are NOT full domain blocks
 
             val cleanPattern = pattern.substring(2)
             val isFullDomain = cleanPattern.endsWith("^") ||

@@ -67,9 +67,6 @@ class GeckoViewEngine(
                 callback?.invoke(null)
             }
         } else {
-            // GeckoView does not have a native `evaluateJavascript`.
-            // The `javascript:` URI scheme is the only reliable fallback for arbitrary script injection
-            // without a WebExtension. We optimize the encoding here.
             try {
                 val clean = script.trim()
                 val encoded = android.util.Base64.encodeToString(clean.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
@@ -161,10 +158,6 @@ class GeckoViewEngine(
             { e -> Log.e(TAG, "Failed to install uBlock Origin extension", e) }
         )
 
-        // Install PB Bridge extension for native JS evaluation.
-        // ensureBuiltIn() returns the extension whether this is a first install or a restart,
-        // so a separate list() pre-check is unnecessary and was causing registerBridgeDelegate()
-        // to be called twice — the second call replaced the first delegate, orphaning its port.
         runtime.webExtensionController.ensureBuiltIn(
             "resource://android/assets/extensions/pb_bridge/",
             "pb-bridge@playbridge.com"

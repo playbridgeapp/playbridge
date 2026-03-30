@@ -33,9 +33,6 @@ class PlayBridgeApplication : Application() {
         installCrashHandler()
     }
 
-    // -------------------------------------------------------------------------
-    // Crash handler
-    // -------------------------------------------------------------------------
 
     private fun installCrashHandler() {
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
@@ -47,18 +44,11 @@ class PlayBridgeApplication : Application() {
             val isMainThread = thread == Looper.getMainLooper().thread
 
             if (isMainThread) {
-                // Main-thread crash: we cannot safely continue — delegate to the OS.
-                // The ServerService is a separate foreground service; Android will restart
-                // it automatically because we use START_STICKY.
                 FileLogger.e(TAG, "Crash on main thread — delegating to system handler")
                 defaultHandler?.uncaughtException(thread, throwable)
                 return@setDefaultUncaughtExceptionHandler
             }
 
-            // Non-main-thread crash (e.g. ExoPlayer:Playback, GeckoView threads):
-            // Finish the foreground activity so we return cleanly to the home screen,
-            // but do NOT kill the process — the ServerService keeps running and the TV
-            // stays ready to receive the next play/browser command.
             FileLogger.w(TAG, "Crash on background thread '${thread.name}' — finishing current activity")
 
             val activity = currentActivity
@@ -81,9 +71,6 @@ class PlayBridgeApplication : Application() {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Activity lifecycle tracking
-    // -------------------------------------------------------------------------
 
     private val activityLifecycleCallbacks = object : ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: Activity) {

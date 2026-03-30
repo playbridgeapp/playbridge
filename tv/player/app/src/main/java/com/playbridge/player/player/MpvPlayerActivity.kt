@@ -73,18 +73,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // Position to seek to once MPV_EVENT_FILE_LOADED fires
     private var pendingResumePositionMs: Long = 0L
 
-    // True while we've issued a new loadfile command but FILE_LOADED hasn't fired yet.
-    // Suppresses the finish() that would otherwise trigger on the END_FILE event for the
-    // previous stream when switching mid-playback via onNewIntent.
     private var isLoadingNewStream = false
 
     // Seek-stuck detection: if MPV_EVENT_PLAYBACK_RESTART doesn't follow a seek within this
     // window, ffmpeg is looping on a failed range request (e.g. "partial file" from the server).
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val seekTimeoutMs = 10_000L
-    // Position captured just before each seek — used by the timeout to recover to a known-good
-    // position. We cannot use positionMs at timeout time: MPV updates time-pos to the seek
-    // target while seeking, so positionMs reflects the failing target, not where we came from.
     private var preSeePositionMs: Long = 0L
     private val seekTimeoutRunnable = Runnable {
         FileLogger.w(TAG, "Seek timeout — MPV stuck retrying failed range request. Recovering to ${preSeePositionMs}ms.")
@@ -128,9 +122,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
         preSeePositionMs = positionMs
         val seconds = position / 1000.0
-        // keyframes = snap to nearest keyframe, same as ExoPlayer's CLOSEST_SYNC.
-        // This makes interactive seeking as fast as ExoPlayer vs the default exact seek
-        // which decodes every frame between the keyframe and the target position.
         MPVLib.command("seek", seconds.toString(), "absolute+keyframes")
     }
 
@@ -178,9 +169,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
     }
 
-    // libmpv event IDs (from mpv/client.h):
-    //   MPV_EVENT_END_FILE = 7, MPV_EVENT_FILE_LOADED = 8,
-    //   MPV_EVENT_SEEK = 20,    MPV_EVENT_PLAYBACK_RESTART = 21
     override fun event(eventId: Int, data: MPVNode) {
         when (eventId) {
             8 -> { // MPV_EVENT_FILE_LOADED
@@ -655,9 +643,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         headers["User-Agent"]?.let { MPVLib.setOptionString("user-agent", it) }
         headers["Referer"]?.let { MPVLib.setOptionString("referrer", it) }
 
-        // Exclude headers that MPV manages itself (Range), browser-only fetch-metadata headers
-        // (Sec-Fetch-*), and headers whose values contain commas (Accept) — MPV's
-        // http-header-fields is a comma-separated list, so a comma in a value would corrupt it.
         val skipKeys = setOf("User-Agent", "Referer", "Range", "Accept", "Accept-Language",
             "Sec-Fetch-Dest", "Sec-Fetch-Site", "Sec-Fetch-Mode")
         val extra = headers.filterKeys { it !in skipKeys }

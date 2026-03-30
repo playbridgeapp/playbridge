@@ -52,9 +52,6 @@ class BluetoothServer(
 
             try {
                 val uuid = UUID.fromString(BluetoothConstants.SERVICE_UUID_STRING)
-                // Use insecure RFCOMM so the client doesn't have to negotiate
-                // link-level encryption — this avoids a second auth failure path
-                // on clients that connect without a bonded-secure session.
                 serverSocket = bluetoothAdapter.listenUsingInsecureRfcommWithServiceRecord(
                     BluetoothConstants.SERVICE_NAME,
                     uuid

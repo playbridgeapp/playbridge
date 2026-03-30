@@ -42,9 +42,6 @@ abstract class PlayerActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    // -------------------------------------------------------------------------
-    // Dynamic buffer configuration
-    // -------------------------------------------------------------------------
 
     /**
      * Buffer caps computed from the device's current available memory.

@@ -153,9 +153,6 @@ class WebSocketServer(
 // ... (handleConnection remains same)
 
     fun stop() {
-        // Stop the server immediately in the current scope if possible, or block until done
-        // We use runBlocking here to ensure the server is actually stopped before we return
-        // This is crucial for service restarts.
         try {
             runBlocking {
                 clients.values.forEach { session ->
@@ -208,9 +205,6 @@ class WebSocketServer(
                         continue
                     }
 
-                    // request_pairing: phone is about to show its PIN dialog and wants the TV
-                    // to open PairingScreen so the user can read the PIN before typing it.
-                    // No credentials required — we ack and close; the phone reconnects with the PIN.
                     if (text.contains("\"type\":\"request_pairing\"")) {
                         FileLogger.i(TAG, "request_pairing received from $clientId — waking PairingScreen")
                         _connectionAttemptFlow.tryEmit(Unit)

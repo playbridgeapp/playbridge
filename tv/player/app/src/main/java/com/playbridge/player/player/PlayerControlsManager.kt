@@ -75,13 +75,6 @@ class PlayerControlsManager(
     /**
      * Helper to show UI on focus.
      */
-    private fun ensureUIVisibleOnFocus(view: View) {
-        view.setOnFocusChangeListener { v, hasFocus ->
-            if (hasFocus && (v == playPauseButton || v == tracksButton)) {
-                showControlsUI()
-            }
-        }
-    }
 
     fun setupControls() {
         // Play/pause button

@@ -10,9 +10,6 @@ class AdBlockerTest {
 
     @Before
     fun setUp() {
-        // AdBlocker uses context for cacheDir and logging (mocked via testOptions)
-        // Since we aren't testing caching yet, a null context is fine for unit tests
-        // if we don't call loadFilterLists()
         adBlocker = AdBlocker(null as Any as android.content.Context)
     }
 

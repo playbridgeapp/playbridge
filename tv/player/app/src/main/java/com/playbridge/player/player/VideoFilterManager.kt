@@ -55,9 +55,6 @@ class VideoFilterManager(private val playerView: PlayerView) {
     }
 
     private fun applyMatrixToPlayer(matrix: android.graphics.ColorMatrix) {
-        // Only engage the ExoPlayer VideoFrameProcessor pipeline if we actually have an active filter.
-        // Using the pipeline unconditionally causes `glError: out of memory` on low-end TV devices
-        // because it allocates a 1080p GL texture buffer.
         exoPlayer?.setVideoEffects(listOf(colorMatrixEffect))
         colorMatrixEffect.setMatrix(matrix)
     }
