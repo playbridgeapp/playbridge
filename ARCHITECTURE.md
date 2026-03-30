@@ -194,16 +194,21 @@ PlayBridge/
 ├── .github/
 │   ├── workflows/
 │   │   ├── android_build.yml
+│   │   └── extension_build.yml  # NEW
 │   └── ISSUE_TEMPLATE/          # NEW
+│       ├── bug_report.md
+│       └── feature_request.md
 ├── publish_releases.sh          # Script to automate GitHub releases using gh CLI
 ├── update_ublock.sh             # Script to update uBlock Origin assets in TV GeckoView
 ├── test_script.sh               # General testing utility script
 ├── extension/                   # Standalone Desktop Web Extension (Firefox native)
 │   └── src/                     # Extension source code
-│       ├── manifest.json
 │       ├── background.js
+│       ├── config.js            # Shared configuration constants
 │       ├── content.js
 │       ├── hls-parser.js        # Parses HLS manifests
+│       ├── icon.png
+│       ├── manifest.json
 │       └── ui/
 ├── protocol/                    # Shared module
 │   ├── build.gradle.kts
@@ -269,6 +274,74 @@ PlayBridge/
 │   │       │   └── ui/
 │   │       └── assets/extensions/video_detector/  # Embedded legacy phone extension
 │   └── build.gradle.kts
+└── tv/
+    ├── browser/
+    │   ├── app/
+    │   │   └── src/main/
+    │   │       └── java/com/playbridge/browser/
+    │   │           ├── logging/
+    │   │           │   └── FileLogger.kt
+    │   │           ├── AdBlocker.kt
+    │   │           ├── BrowserActivity.kt
+    │   │           ├── BrowserEngine.kt
+    │   │           ├── GeckoViewEngine.kt
+    │   │           ├── PlayBridgeBrowserApplication.kt
+    │   │           └── SystemWebViewEngine.kt
+    │   └── build.gradle.kts
+    └── player/
+        ├── app/
+        │   └── src/main/
+        │       └── java/com/playbridge/player/
+        │           ├── data/
+        │           │   └── HistoryStore.kt
+        │           ├── logging/
+        │           │   └── FileLogger.kt
+        │           ├── model/
+        │           │   └── PairedDevice.kt
+        │           ├── pairing/
+        │           │   ├── PairingStore.kt
+        │           │   └── QRGenerator.kt
+        │           ├── player/
+        │           │   ├── BufferSeekBar.kt
+        │           │   ├── ColorMatrixEffect.kt
+        │           │   ├── ContentSniffer.kt
+        │           │   ├── ExoPlayerActivity.kt (~1385 lines)
+        │           │   ├── InputHandler.kt
+        │           │   ├── M3uParser.kt
+        │           │   ├── MpvControlsManager.kt
+        │           │   ├── MpvPlayerActivity.kt
+        │           │   ├── MpvTrackSelectionDialog.kt
+        │           │   ├── PlayerActivity.kt   (~33 lines, slimmed down base class)
+        │           │   ├── PlayerControlsManager.kt
+        │           │   ├── PlaylistPickerDialog.kt
+        │           │   ├── PlaylistStore.kt
+        │           │   ├── ProgressManager.kt
+        │           │   ├── SubtitleManager.kt
+        │           │   ├── TrackSelectionDialog.kt
+        │           │   ├── VideoFilter.kt
+        │           │   ├── VideoFilterDialog.kt
+        │           │   ├── VideoFilterManager.kt
+        │           │   ├── VlcControlsManager.kt
+        │           │   ├── VlcPlayerActivity.kt (~753 lines)
+        │           │   └── VlcTrackSelectionDialog.kt
+        │           ├── server/
+        │           │   ├── BluetoothServer.kt
+        │           │   ├── OverlayWindowHelper.kt
+        │           │   ├── ServerService.kt    (~586 lines)
+        │           │   └── WebSocketServer.kt
+        │           ├── ui/
+        │           │   ├── theme/
+        │           │   │   ├── Color.kt
+        │           │   │   ├── Theme.kt
+        │           │   │   └── Type.kt
+        │           │   ├── HomeScreen.kt
+        │           │   ├── LibraryScreen.kt
+        │           │   ├── PairingScreen.kt
+        │           │   └── SettingsScreen.kt
+        │           ├── BootReceiver.kt
+        │           ├── MainActivity.kt
+        │           └── PlayBridgeApplication.kt
+        └── build.gradle.kts
 └── tv/
     ├── app/
     │   └── src/main/
