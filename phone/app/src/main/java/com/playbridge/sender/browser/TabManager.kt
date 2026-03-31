@@ -118,6 +118,17 @@ class TabManager {
         // Yield to allow UI to draw first frame
         delay(10)
 
+        // 1b. Pause media in all background sessions now that we know the new selected tab.
+        // Background GeckoSessions stay alive within MAX_ALIVE_SESSIONS and would otherwise
+        // keep playing video/audio after the user switches away.
+        if (selectedTabId != null) {
+            sessions.forEach { (tabId, session) ->
+                if (tabId != selectedTabId) {
+                    pauseMedia(session)
+                }
+            }
+        }
+
         // 2. Cull the LRU tracker
         // Remove any tabs that were closed by the user
         recentlyActiveTabIds.retainAll(allValidTabIds)
@@ -196,6 +207,26 @@ class TabManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error accessing GeckoSession", e)
             null
+        }
+    }
+
+    // ── Media helpers ────────────────────────────────────────────────
+
+    /**
+     * Pause all `<video>` and `<audio>` elements in [session] by executing
+     * a javascript: URI via the underlying GeckoSession.
+     *
+     * This is the GeckoView-public replacement for the removed
+     * `EngineSession.evaluateJavascript` API.
+     */
+    fun pauseMedia(session: EngineSession) {
+        val geckoSession = getGeckoSession(session) ?: return
+        try {
+            geckoSession.loadUri(
+                "javascript:document.querySelectorAll('video,audio').forEach(function(m){try{m.pause();}catch(e){}});void 0;"
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "pauseMedia: failed to execute JS", e)
         }
     }
 

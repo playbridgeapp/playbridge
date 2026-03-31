@@ -1971,6 +1971,7 @@ class BrowserActivity : ComponentActivity() {
 
                                         if (sent) {
                                             tvActiveContext = "player"
+                                            session?.let { tabManager.pauseMedia(it) }
                                             Toast.makeText(
                                                 this@BrowserActivity,
                                                 "Playing on ${state.serverName}",
