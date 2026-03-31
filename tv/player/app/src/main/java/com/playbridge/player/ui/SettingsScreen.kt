@@ -58,7 +58,11 @@ fun SettingsScreen(
         isRestarting = true
         scope.launch {
             ServerService.stop(context)
-            delay(600)            // Give the foreground service time to fully stop
+            // 1 500 ms gap: stopService() triggers onDestroy() which calls nsdManager.unregisterService()
+            // asynchronously.  If the new service registers before the mDNS daemon finishes tearing
+            // down the old record it returns FAILURE_INTERNAL_ERROR (code 0) and the TV becomes
+            // permanently undiscoverable.  600 ms was too tight on slower devices; 1 500 ms is safe.
+            delay(1500)
             ServerService.start(context)
             delay(1200)           // Give it time to come back up before re-enabling the button
             isRestarting = false

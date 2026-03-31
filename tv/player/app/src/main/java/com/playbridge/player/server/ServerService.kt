@@ -82,14 +82,16 @@ class ServerService : Service() {
     
     private fun registerNsdService(port: Int) {
         if (registrationListener != null) return // Already registered
-        
-        val deviceName = android.provider.Settings.Global.getString(contentResolver, android.provider.Settings.Global.DEVICE_NAME) ?: Build.MODEL
-        
+
+        val deviceName = android.provider.Settings.Global.getString(
+            contentResolver, android.provider.Settings.Global.DEVICE_NAME
+        ) ?: android.os.Build.MODEL
+
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val deviceId = pairingStore.getOrCreateDeviceId()
             val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
             val preferredIp = prefs.getString("preferred_ip", "auto")
-            
+
             val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
                 serviceName = deviceName
                 serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
@@ -99,31 +101,62 @@ class ServerService : Service() {
                     setAttribute("custom_ip", preferredIp)
                 }
             }
-            
-            registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
-                override fun onServiceRegistered(NsdServiceInfo: android.net.nsd.NsdServiceInfo) {
-                    FileLogger.d(TAG, "Service registered: ${NsdServiceInfo.serviceName}")
-                }
 
-                override fun onRegistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                    FileLogger.e(TAG, "Registration failed: $errorCode")
-                }
+            doRegisterNsdService(serviceInfo, attempt = 1, maxAttempts = 4)
+        }
+    }
 
-                override fun onServiceUnregistered(arg0: android.net.nsd.NsdServiceInfo) {
-                    FileLogger.d(TAG, "Service unregistered")
-                }
+    /**
+     * Attempts to register the NSD service, retrying up to [maxAttempts] times with
+     * increasing back-off (3 s, 6 s, 9 s …) on FAILURE_INTERNAL_ERROR (code 0).
+     *
+     * This handles the race that can occur when a server restart unregisters the old
+     * NSD entry asynchronously — if the mDNS daemon hasn't finished tearing down the
+     * previous record when the new registration arrives, Android returns error 0 and
+     * the TV silently becomes undiscoverable.  Retrying after a short delay resolves it.
+     */
+    private fun doRegisterNsdService(
+        serviceInfo: android.net.nsd.NsdServiceInfo,
+        attempt: Int,
+        maxAttempts: Int
+    ) {
+        registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
+            override fun onServiceRegistered(nsdServiceInfo: android.net.nsd.NsdServiceInfo) {
+                FileLogger.i(TAG, "NSD service registered: ${nsdServiceInfo.serviceName} (attempt $attempt)")
+            }
 
-                override fun onUnregistrationFailed(serviceInfo: android.net.nsd.NsdServiceInfo, errorCode: Int) {
-                    FileLogger.e(TAG, "Unregistration failed: $errorCode")
+            override fun onRegistrationFailed(si: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                FileLogger.e(TAG, "NSD registration failed (attempt $attempt/$maxAttempts): error $errorCode")
+                registrationListener = null
+                if (attempt < maxAttempts) {
+                    val delayMs = 3_000L * attempt   // 3 s, 6 s, 9 s
+                    FileLogger.i(TAG, "Retrying NSD registration in ${delayMs / 1000}s…")
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        kotlinx.coroutines.delay(delayMs)
+                        // Only retry if nobody else re-registered in the meantime
+                        if (registrationListener == null) {
+                            doRegisterNsdService(serviceInfo, attempt + 1, maxAttempts)
+                        }
+                    }
+                } else {
+                    FileLogger.e(TAG, "NSD registration gave up after $maxAttempts attempts — device not discoverable via NSD. Use 'Restart Server' in Settings to try again.")
                 }
             }
-            
-            nsdManager.registerService(
-                serviceInfo,
-                android.net.nsd.NsdManager.PROTOCOL_DNS_SD,
-                registrationListener
-            )
+
+            override fun onServiceUnregistered(arg0: android.net.nsd.NsdServiceInfo) {
+                FileLogger.d(TAG, "NSD service unregistered")
+            }
+
+            override fun onUnregistrationFailed(si: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                FileLogger.e(TAG, "NSD unregistration failed: $errorCode")
+            }
         }
+
+        nsdManager.registerService(
+            serviceInfo,
+            android.net.nsd.NsdManager.PROTOCOL_DNS_SD,
+            registrationListener
+        )
     }
     
     private fun startServer() {

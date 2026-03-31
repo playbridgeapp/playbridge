@@ -37,6 +37,14 @@ fun ConnectionScreen(
 ) {
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
+
+    // Filter out devices that are already in Known Devices to avoid duplicates
+    val knownUuids = history.map { it.uuid }.filter { it.isNotEmpty() }.toSet()
+    val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
+    val newDiscoveredDevices = discoveredDevices.filter { device ->
+        if (device.uuid.isNotEmpty()) device.uuid !in knownUuids
+        else "${device.ip}:${device.port}" !in knownIpPorts
+    }
     val connectionState by viewModel.connectionState.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
@@ -49,7 +57,7 @@ fun ConnectionScreen(
         }
     }
 
-    var showPinDialog by remember { mutableStateOf<Triple<String, Int, String>?>(null) } // IP, Port, UUID
+    var showPinDialog by remember { mutableStateOf<TvDevice?>(null) } // pending device (token not yet entered)
     var pinDialogShowError by remember { mutableStateOf(false) }
     var showManualDialog by remember { mutableStateOf(false) }
 
@@ -64,7 +72,7 @@ fun ConnectionScreen(
                 // away after the failed attempt closed the WebSocket connection).
                 viewModel.requestPairing(device.ip, device.port)
                 pinDialogShowError = true
-                showPinDialog = Triple(device.ip, device.port, device.uuid)
+                showPinDialog = device
             }
         }
     }
@@ -83,7 +91,7 @@ fun ConnectionScreen(
             viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
         } else {
             viewModel.requestPairing(ip, port)
-            showPinDialog = Triple(ip, port, uuid)
+            showPinDialog = TvDevice(ip = ip, port = port, token = "", name = name, uuid = uuid)
         }
     }
 
@@ -116,7 +124,8 @@ fun ConnectionScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
 
@@ -239,7 +248,7 @@ fun ConnectionScreen(
                 )
             }
 
-            if (discoveredDevices.isEmpty()) {
+            if (newDiscoveredDevices.isEmpty()) {
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -265,7 +274,7 @@ fun ConnectionScreen(
                     }
                 }
             } else {
-                items(discoveredDevices) { device ->
+                items(newDiscoveredDevices) { device ->
                     DeviceItem(
                         name = device.name,
                         ip = device.ip,
@@ -287,7 +296,7 @@ fun ConnectionScreen(
             if (history.isNotEmpty()) {
                 item {
                     Text(
-                        text = "Recent Connections",
+                        text = "Known Devices",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
@@ -310,11 +319,11 @@ fun ConnectionScreen(
     }
     
     // PIN Dialog
-    showPinDialog?.let { (ip, port, uuid) ->
+    showPinDialog?.let { pendingDevice ->
         PinEntryDialog(
-            ip = ip,
-            port = port,
-            uuid = uuid,
+            ip = pendingDevice.ip,
+            port = pendingDevice.port,
+            uuid = pendingDevice.uuid,
             showError = pinDialogShowError,
             onDismiss = {
                 showPinDialog = null
@@ -323,13 +332,7 @@ fun ConnectionScreen(
             onConfirm = { pin ->
                 showPinDialog = null
                 pinDialogShowError = false
-                viewModel.connect(TvDevice(
-                    ip = ip,
-                    port = port,
-                    token = pin,
-                    name = "TV ($ip)",
-                    uuid = uuid
-                ))
+                viewModel.connect(pendingDevice.copy(token = pin))
             }
         )
     }
