@@ -21,6 +21,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.model.TvDevice
@@ -92,8 +95,14 @@ fun ConnectionScreen(
             TopAppBar(
                 title = { Text("TV Connection") },
                 navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(Icons.Default.Menu, "Menu")
+                    IconButton(
+                        onClick = onMenuClick,
+                        modifier = Modifier.semantics {
+                            contentDescription = "Menu"
+                            role = androidx.compose.ui.semantics.Role.Button
+                        }
+                    ) {
+                        Icon(Icons.Default.Menu, contentDescription = null)
                     }
                 }
             )
@@ -401,10 +410,16 @@ fun DeviceItem(
             }
             
             if (onRemove != null) {
-                IconButton(onClick = onRemove) {
+                IconButton(
+                    onClick = onRemove,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Remove"
+                        role = androidx.compose.ui.semantics.Role.Button
+                    }
+                ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
-                        contentDescription = "Remove",
+                        contentDescription = null,
                         tint = MaterialTheme.colorScheme.error
                     )
                 }
