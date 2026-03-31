@@ -125,12 +125,6 @@ com.playbridge.player/
 
 ### 🔴 Critical Issues (Likely to Cause Rejection)
 
-#### 1. SSL Certificate Bypass (`ContentSniffer.kt`)
-- **Problem**: `getUnsafeOkHttpClient()` trusts ALL certificates and disables hostname verification
-- **Policy**: Google Play [prohibits](https://support.google.com/faqs/answer/7188426) custom `TrustManager` implementations that skip validation
-- **Impact**: Automatic rejection by automated scanner
-- **Fix**: Scope SSL bypass to private/local IPs only (`192.168.*`, `10.*`, `172.16-31.*`), or make opt-in via settings
-
 #### 2. Cleartext Traffic Globally Enabled (`network_security_config.xml`)
 - **Problem**: `<base-config cleartextTrafficPermitted="true">` allows HTTP on ALL domains (comment says "Remove this in production builds")
 - **Impact**: Security review flag
@@ -157,6 +151,9 @@ com.playbridge.player/
 | **`isMinifyEnabled = false`** | No R8/ProGuard minification for release builds. App size is large due to GeckoView |
 | **ProGuard rules empty** | Default template only — needs rules for kotlinx.serialization, Ktor, protocol classes if minification is enabled |
 | **ABI splits exclude x86** | `armeabi-v7a` and `arm64-v8a` only — Intel-based Android TV devices unsupported |
+
+### ✅ Already Good
+- **Unsafe SSL in ContentSniffer (TV App)**
 
 ### ✅ Play Store Publishing Checklist
 
