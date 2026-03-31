@@ -18,7 +18,6 @@ data class ExportedTab(
 
 @Serializable
 data class ExportedSettings(
-    val showInbuiltExtensions: Boolean? = null,
     val debridProvider: String? = null,
     val debridApiKey: String? = null,
     val tmdbApiKey: String? = null,

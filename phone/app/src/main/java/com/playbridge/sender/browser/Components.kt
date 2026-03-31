@@ -214,15 +214,8 @@ object Components {
                     // Store extension reference
                     videoDetectorExtension = extension
 
-                    // Show toast and set up message delegate on the main thread
+                    // Set up message delegate on the extension to receive messages
                     Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(
-                            appContext,
-                            "Video Detector extension installed!",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                        // Set up message delegate on the extension to receive messages
                         extension.setMessageDelegate(globalMessageDelegate, "browser")
                         Log.i(TAG, "Message delegate registered on extension")
 

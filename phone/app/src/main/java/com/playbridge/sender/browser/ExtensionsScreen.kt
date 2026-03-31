@@ -55,14 +55,7 @@ fun ExtensionsScreen(
                         Log.d(TAG, "Found ${extensions?.size ?: 0} installed extensions")
 
                         val allExtensions = extensions?.toList() ?: emptyList()
-                        val prefs = Components.applicationContext.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE)
-                        val showInbuilt = prefs.getBoolean("show_inbuilt_extensions", false)
-
-                        installedExtensions = if (showInbuilt) {
-                            allExtensions
-                        } else {
-                            allExtensions.filter { it.id != "video-detector@playbridge" }
-                        }
+                        installedExtensions = allExtensions.filter { it.id != "video-detector@playbridge" }
 
                         isLoading = false
                         org.mozilla.geckoview.GeckoResult.fromValue(null)
@@ -228,10 +221,7 @@ fun ExtensionsScreen(
                                                 Handler(Looper.getMainLooper()).post {
                                                     Components.runtime.webExtensionController.list().then({ exts ->
                                                         val allExtensions = exts?.toList() ?: emptyList()
-                                                        val prefs = Components.applicationContext.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE)
-                                                        val showInbuilt = prefs.getBoolean("show_inbuilt_extensions", false)
-                                                        installedExtensions = if (showInbuilt) allExtensions
-                                                        else allExtensions.filter { it.id != "video-detector@playbridge" }
+                                                        installedExtensions = allExtensions.filter { it.id != "video-detector@playbridge" }
                                                         org.mozilla.geckoview.GeckoResult.fromValue(null)
                                                     }, { _ ->
                                                         org.mozilla.geckoview.GeckoResult.fromValue(null)

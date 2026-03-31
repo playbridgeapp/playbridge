@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -15,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.data.debrid.*
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -23,8 +21,7 @@ import kotlinx.coroutines.launch
 fun DebridLibraryScreen(
     onMenuClick: () -> Unit,
     onCopyUrl: (String) -> Unit,
-    onPlayOnTv: (String, String, List<String>?) -> Unit, // url, title, subtitles
-    onPlayPlaylistOnTv: (List<com.playbridge.protocol.PlayPayload>) -> Unit = {},
+    onShowCastSheet: (DetectedVideo) -> Unit,
     onRemoteClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -41,8 +38,6 @@ fun DebridLibraryScreen(
     var unrestrictError by remember { mutableStateOf<String?>(null) }
     
     var showBottomSheet by remember { mutableStateOf(false) }
-    var showCastSheet by remember { mutableStateOf(false) }
-    var detectedVideoForSheet by remember { mutableStateOf<DetectedVideo?>(null) }
 
     fun loadTorrents() {
         scope.launch {
@@ -204,22 +199,21 @@ fun DebridLibraryScreen(
                                                 playlistItems.add(
                                                     com.playbridge.protocol.PlayPayload(
                                                         url = unrestrictResponse.downloadUrl,
-                                                        title = file.path
+                                                        title = file.path.substringAfterLast('/')
                                                     )
                                                 )
                                             }
                                             
-                                            detectedVideoForSheet = DetectedVideo(
-                                                url = "playlist://debrid", // Dummy URL
+                                            showBottomSheet = false
+                                            onShowCastSheet(DetectedVideo(
+                                                url = "playlist://debrid",
                                                 tabId = -1,
                                                 timestamp = System.currentTimeMillis(),
                                                 isPlayable = true,
                                                 contentType = null,
                                                 detectedBy = "debrid_playlist",
                                                 playlistPayload = playlistItems
-                                            )
-                                            showBottomSheet = false
-                                            showCastSheet = true
+                                            ))
                                         } catch (e: Exception) {
                                             Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_LONG).show()
                                         } finally {
@@ -249,7 +243,7 @@ fun DebridLibraryScreen(
                         LazyColumn(modifier = Modifier.fillMaxWidth()) {
                             items(files) { file ->
                                 ListItem(
-                                    headlineContent = { Text(file.path, maxLines = 2, style = MaterialTheme.typography.bodyMedium) },
+                                    headlineContent = { Text(file.path.substringAfterLast('/'), maxLines = 2, style = MaterialTheme.typography.bodyMedium) },
                                     supportingContent = { Text("${file.bytes / (1024 * 1024)} MB", style = MaterialTheme.typography.bodySmall) },
                                     leadingContent = { Icon(Icons.Default.Movie, contentDescription = null) },
                                     trailingContent = {
@@ -293,17 +287,16 @@ fun DebridLibraryScreen(
                                                         }
 
                                                         val unrestrictResponse = provider.unrestrictLink(linkToUnrestrict)
-                                                        detectedVideoForSheet = DetectedVideo(
+                                                        showBottomSheet = false
+                                                        onShowCastSheet(DetectedVideo(
                                                             url = unrestrictResponse.downloadUrl,
                                                             tabId = -1,
                                                             timestamp = System.currentTimeMillis(),
                                                             isPlayable = true,
-                                                            contentType = null, // Let TV guess
+                                                            contentType = null,
                                                             detectedBy = "debrid_library",
                                                             originalMessage = null
-                                                        )
-                                                        showBottomSheet = false
-                                                        showCastSheet = true
+                                                        ))
                                                     } catch (e: Exception) {
                                                         Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_LONG).show()
                                                     }
@@ -324,31 +317,4 @@ fun DebridLibraryScreen(
         }
     }
 
-    if (showCastSheet && detectedVideoForSheet != null) {
-        CastSheet(
-            videos = listOf(detectedVideoForSheet!!),
-            onDismiss = {
-                showCastSheet = false
-                detectedVideoForSheet = null
-            },
-            onVideoClick = { video, subtitles ->
-                if (video.playlistPayload != null) {
-                    onPlayPlaylistOnTv(video.playlistPayload)
-                } else {
-                    onPlayOnTv(video.url, selectedTorrent?.filename ?: "Debrid Stream", subtitles)
-                }
-                showCastSheet = false
-                detectedVideoForSheet = null
-            },
-            onDownload = { video ->
-                onCopyUrl(video.url)
-                Toast.makeText(context, "URL copied for download", Toast.LENGTH_SHORT).show()
-                showCastSheet = false
-            },
-            onClear = {
-                showCastSheet = false
-                detectedVideoForSheet = null
-            }
-        )
-    }
 }

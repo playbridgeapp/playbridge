@@ -66,7 +66,6 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 val imported = Json { ignoreUnknownKeys = true }.decodeFromString<ExportedSettings>(jsonString)
 
                 val prefsEdit = prefs.edit()
-                if (imported.showInbuiltExtensions != null) prefsEdit.putBoolean("show_inbuilt_extensions", imported.showInbuiltExtensions)
                 if (imported.tvPlayerMode != null) prefsEdit.putString("tv_player_mode", imported.tvPlayerMode)
                 if (imported.tvBrowserMode != null) prefsEdit.putString("tv_browser_mode", imported.tvBrowserMode)
                 prefsEdit.apply()
@@ -179,7 +178,6 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 } else null
 
                 val exported = ExportedSettings(
-                    showInbuiltExtensions = if (exportUiPrefs) prefs.getBoolean("show_inbuilt_extensions", false) else null,
                     debridProvider = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) else null,
                     debridApiKey = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") else null,
                     tmdbApiKey = if (exportTmdb) tmdbPrefs.getString("tmdb_api_key", "") else null,

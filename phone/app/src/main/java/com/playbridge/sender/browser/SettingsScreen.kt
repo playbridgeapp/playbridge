@@ -88,10 +88,6 @@ private fun SettingsHubContent(
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
-    var showInbuiltExtensions by remember {
-        mutableStateOf(prefs.getBoolean("show_inbuilt_extensions", false))
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -110,32 +106,6 @@ private fun SettingsHubContent(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Show Inbuilt Extensions", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "Display system extensions in the extensions list",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = showInbuiltExtensions,
-                    onCheckedChange = { checked ->
-                        showInbuiltExtensions = checked
-                        prefs.edit().putBoolean("show_inbuilt_extensions", checked).apply()
-                    }
-                )
-            }
-
-            HorizontalDivider()
-
             SettingsNavItem(
                 icon = Icons.Default.VideoLibrary,
                 title = "Library",

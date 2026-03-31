@@ -1419,7 +1419,8 @@ class BrowserActivity : ComponentActivity() {
                                                 }
                                                 
                                                 // Draggable Video FAB
-                                                if (!isEditing) {
+                                                val tabUrl = selectedTab?.content?.url.orEmpty()
+                                                if (!isEditing && tabUrl.isNotEmpty() && tabUrl != "about:blank") {
                                                     FloatingActionButton(
                                                         onClick = { showVideoSheet = true },
                                                         containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -1886,47 +1887,9 @@ class BrowserActivity : ComponentActivity() {
                                                     clipboardManager.setText(AnnotatedString(linkUrl))
                                                     Toast.makeText(this@BrowserActivity, "Link copied", Toast.LENGTH_SHORT).show()
                                                 },
-                                                onPlayOnTv = { playUrl, title, subtitles ->
-                                                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                                        val cmd = com.playbridge.protocol.createPlayCommandJson(
-                                                            url = playUrl,
-                                                            title = title,
-                                                            subtitles = subtitles,
-                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
-                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
-                                                        )
-                                                        connectionViewModel.sendCommandAndRecord(cmd, "play", playUrl, title ?: "Video")
-                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                },
-                                                onPlayPlaylistOnTv = { items ->
-                                                    val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
-                                                    val itemsWithMode = items.map {
-                                                        it.copy(
-                                                            playerMode = playerMode,
-                                                            preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
-                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                                            defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" }
-                                                        )
-                                                    }
-
-                                                    val detectedVideo = DetectedVideo(
-                                                        url = "playlist://debrid",
-                                                        tabId = -1,
-                                                        timestamp = System.currentTimeMillis(),
-                                                        isPlayable = true,
-                                                        detectedBy = "debrid_playlist",
-                                                        playlistPayload = itemsWithMode
-                                                    )
-
-                                                    scope.launch {
-                                                        forcePlaylistSheet = detectedVideo
-                                                        showVideoSheet = true
-                                                    }
+                                                onShowCastSheet = { video ->
+                                                    forcedVideos = listOf(video)
+                                                    showVideoSheet = true
                                                 }
                                             )
                                         }
