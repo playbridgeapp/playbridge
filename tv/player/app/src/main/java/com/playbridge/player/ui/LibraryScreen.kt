@@ -27,6 +27,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -80,8 +83,14 @@ fun LibraryScreen(
                         Text("Clear History")
                     }
                     
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    IconButton(
+                        onClick = onNavigateToSettings,
+                        modifier = Modifier.semantics {
+                            contentDescription = "Settings"
+                            role = androidx.compose.ui.semantics.Role.Button
+                        }
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null)
                     }
                 }
             }
