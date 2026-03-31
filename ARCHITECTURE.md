@@ -99,11 +99,6 @@ Details on the shared protocol and communication flow between Phone and TV have 
 
 ### 🟡 Moderate Issues
 
-#### 4. Hardcoded Values
-- Port `8765` hardcoded across both apps
-- Retry counts (60), delays (5s) embedded in code
-- **Recommendation**: Move to a `config` object or DataStore preferences
-
 #### 5. Missing Error Handling in Extensions
 - Browser extension silently catches errors in [background.js](phone/app/src/main/assets/extensions/video_detector/background.js) (e.g. lines 109, 267, 273, 297)
 - **Recommendation**: Add proper error logging/reporting
@@ -125,6 +120,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 ### ✅ Already Good
 - **Unsafe SSL in ContentSniffer (TV App)**
 - **Dangerous Permissions**: `CAMERA` and `RECORD_AUDIO` were successfully removed from TV manifest.
+- **Hardcoded Values**
 - [x] Build pipeline uses AAB (Android App Bundle) for TV release
 - [x] `CONTRIBUTING.md` created with contribution guidelines
 - [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
@@ -342,40 +338,6 @@ PlayBridge/
         │           ├── MainActivity.kt
         │           └── PlayBridgeApplication.kt
         └── build.gradle.kts
-└── tv/
-    ├── app/
-    │   └── src/main/
-    │       ├── java/com/playbridge/receiver/
-    │       │   ├── browser/
-    │       │   ├── logging/
-    │       │   │   └── FileLogger.kt
-    │       │   ├── pairing/
-    │       │   ├── player/
-    │       │   │   ├── PlayerActivity.kt   (~33 lines, slimmed down base class)
-    │       │   │   ├── ColorMatrixEffect.kt
-    │       │   │   ├── ContentSniffer.kt
-    │       │   │   ├── ExoPlayerActivity.kt (~1385 lines)
-    │       │   │   ├── M3uParser.kt
-    │       │   │   ├── PlayerControlsManager.kt
-    │       │   │   ├── PlaylistPickerDialog.kt
-    │       │   │   ├── PlaylistStore.kt
-    │       │   │   ├── ProgressManager.kt
-    │       │   │   ├── InputHandler.kt
-    │       │   │   ├── SubtitleManager.kt
-    │       │   │   ├── TrackSelectionDialog.kt
-    │       │   │   ├── VideoFilter.kt
-    │       │   │   ├── VideoFilterDialog.kt
-    │       │   │   ├── VideoFilterManager.kt
-    │       │   │   ├── VlcControlsManager.kt
-    │       │   │   ├── VlcPlayerActivity.kt (~753 lines)
-    │       │   │   └── VlcTrackSelectionDialog.kt
-    │       │   ├── server/
-    │       │   │   ├── BluetoothServer.kt
-    │       │   │   ├── ServerService.kt    (~586 lines)
-    │       │   ├── ui/
-    │       │   └── model/
-    │       └── res/layout/
-    └── build.gradle.kts
 ```
 
 ---
