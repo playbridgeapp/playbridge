@@ -83,10 +83,6 @@ fun MovieDetailScreen(
                         if (prefLang.isNotEmpty()) {
                             try {
                                 val allSubs = subtitleService.getSubtitlesForMovie(imdbId)
-                                // We can either filter by language or just pass all and let the player select it
-                                // OpenSubtitles v3 addon doesn't expose language info easily without parsing,
-                                // but Stremio player usually handles it. Actually, it does expose language in the 'id' or url sometimes,
-                                // but just passing all detected subs from the addon is safest.
                                 allSubs.mapNotNull { it.url }
                             } catch (e: Exception) {
                                 emptyList()

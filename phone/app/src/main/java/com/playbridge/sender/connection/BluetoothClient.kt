@@ -151,9 +151,6 @@ class BluetoothClient(private val context: Context) {
             return it
         }
 
-        // Both SDP-based attempts failed (channel typically comes back as -1, meaning the
-        // Android Bluetooth stack has a stale/empty SDP cache for this device).
-        // Force a fresh SDP fetch from the remote device and wait up to 3s for the result.
         Log.d(TAG, "SDP returned channel -1 for ${device.name}; forcing fresh SDP fetch...")
         val sdpRefreshed = fetchUuidsWithSdp(device)
         if (sdpRefreshed) {
@@ -236,10 +233,6 @@ class BluetoothClient(private val context: Context) {
             }
         }
 
-        // Immediately send a ping so the RFCOMM link has data flowing right away.
-        // Some Android TV Bluetooth stacks drop the link after a few seconds of silence
-        // (radio-level supervision timeout); this prevents that from happening before the
-        // user's first interaction.
         sendChannel.trySend(createPingJson())
 
         // Keep the link alive with a periodic ping every 2 seconds whenever the channel
@@ -259,10 +252,6 @@ class BluetoothClient(private val context: Context) {
         send(createRemoteCommandJson(key))
     }
 
-    // Mouse moves are accumulated and flushed at most once per 16ms (~60fps).
-    // Multiple pointer events between flushes are summed so no movement is lost,
-    // but we send far fewer packets — one per frame instead of one per pointer event.
-    // Must be called from the main thread (Compose pointer input callbacks satisfy this).
     fun sendMouseCommand(event: String, dx: Float = 0f, dy: Float = 0f) {
         if (event == "move") {
             pendingDx += dx

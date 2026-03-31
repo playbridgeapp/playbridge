@@ -38,12 +38,6 @@ fun PairingScreen(
     connectedCount: Int = 0,
     modifier: Modifier = Modifier
 ) {
-    // Use the first 4 chars of the token as the PIN for display
-    // In a real app, we'd generate a separate 4-digit PIN and map it to the token
-    // For this implementation, we'll assume the token passed in IS the PIN (or we derive it)
-    // To make it simple, let's just display the first 4 characters of the token as the PIN
-    // The server will need to handle this mapping or we just use a 4-char token.
-    // For now, let's display the token directly (assuming it's short) or a substring.
     val pinDisplay = token.take(4).uppercase()
 
     Box(

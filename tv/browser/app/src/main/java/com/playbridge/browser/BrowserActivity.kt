@@ -107,9 +107,6 @@ class BrowserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Always enable hardware acceleration. HTML5 video in WebView requires it.
-        // While some Android emulator images without discrete GPUs may crash (EGL_BAD_CONFIG),
-        // disabling hardware acceleration completely breaks video playback for all emulators.
         window.setFlags(
             android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
@@ -620,9 +617,6 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Finish the activity when the user backgrounds the app (presses Home).
-        // WebView/GeckoView are heavy — clearing them keeps only the lightweight
-        // The next browser command will create a fresh instance.
         if (!isFinishing && !isChangingConfigurations) {
             finish()
         }
@@ -712,19 +706,3 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
-    private fun isEmulator(): Boolean {
-        return (Build.FINGERPRINT.startsWith("generic")
-                || Build.FINGERPRINT.startsWith("unknown")
-                || Build.MODEL.contains("google_sdk")
-                || Build.MODEL.contains("Emulator")
-                || Build.MODEL.contains("Android SDK built for x86")
-                || Build.MANUFACTURER.contains("Genymotion")
-                || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
-                || "google_sdk" == Build.PRODUCT
-                || Build.PRODUCT.contains("sdk_gphone")
-                || Build.HARDWARE.contains("goldfish")
-                || Build.HARDWARE.contains("ranchu")
-                || Build.HARDWARE.contains("cutf_cvm")
-                || Build.BOARD.lowercase() == "goldfish")
-    }
-}

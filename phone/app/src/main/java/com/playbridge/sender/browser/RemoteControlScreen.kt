@@ -188,9 +188,6 @@ fun RemoteControlScreen(
     }
 }
 
-// ─────────────────────────────────────────────
-// Toggle Pill
-// ─────────────────────────────────────────────
 
 @Composable
 private fun TogglePill(isTouchpad: Boolean, onToggle: (Boolean) -> Unit) {
@@ -253,9 +250,6 @@ private fun PillOption(
     }
 }
 
-// ─────────────────────────────────────────────
-// Touchpad Area (Hero)
-// ─────────────────────────────────────────────
 
 @Composable
 private fun TouchpadArea(
@@ -328,9 +322,6 @@ private fun TouchpadArea(
     }
 }
 
-// ─────────────────────────────────────────────
-// D-Pad Area (Hero)
-// ─────────────────────────────────────────────
 
 @Composable
 private fun DpadArea(onRemoteKey: (String) -> Unit) {
@@ -386,9 +377,6 @@ private fun DpadBtn(icon: ImageVector, desc: String, onClick: () -> Unit) {
     }
 }
 
-// ─────────────────────────────────────────────
-// Navigation Row (Back + Home)
-// ─────────────────────────────────────────────
 
 @Composable
 private fun NavigationRow(onRemoteKey: (String) -> Unit) {
@@ -418,9 +406,6 @@ private fun NavigationRow(onRemoteKey: (String) -> Unit) {
     }
 }
 
-// ─────────────────────────────────────────────
-// Media Control Row (Player mode)
-// ─────────────────────────────────────────────
 
 @Composable
 private fun MediaControlRow(onPlayerControl: (String) -> Unit) {
@@ -485,9 +470,6 @@ private fun MediaControlRow(onPlayerControl: (String) -> Unit) {
     }
 }
 
-// ─────────────────────────────────────────────
-// Browser Context Row
-// ─────────────────────────────────────────────
 
 @Composable
 private fun BrowserContextRow(onBrowserControl: (String) -> Unit) {
@@ -529,9 +511,6 @@ private fun BrowserContextRow(onBrowserControl: (String) -> Unit) {
     }
 }
 
-// ─────────────────────────────────────────────
-// Labeled Icon Button
-// ─────────────────────────────────────────────
 
 @Composable
 private fun LabeledIconButton(

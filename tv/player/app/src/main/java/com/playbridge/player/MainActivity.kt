@@ -72,11 +72,6 @@ class MainActivity : ComponentActivity() {
             ServerService.start(this)
         }
 
-        // SYSTEM_ALERT_WINDOW lets us keep a tiny invisible overlay window visible while
-        // the phone is connected. This makes callingUidHasNonAppVisibleWindow=true in
-        // Android's BAL check, allowing startActivity() from ServerService to work even
-        // when the TV app is backgrounded (pressed Home). Without this, Android 14+ blocks
-        // background activity launches entirely, even from foreground services.
         if (!Settings.canDrawOverlays(this)) {
             val intent = Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,

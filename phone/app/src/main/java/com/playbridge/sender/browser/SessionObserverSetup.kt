@@ -237,12 +237,6 @@ fun SessionObserverSetup(
 
                                 if (blockPopups && !isWhitelisted) {
                                     Log.d(TAG, "Popup blocked from $openerHost: $uri")
-                                    // Create the session upfront (same pattern as the whitelisted
-                                    // flow) so GeckoView can replay the original navigation —
-                                    // preserving POST body, cookies, and headers — in the
-                                    // background while the user decides.  The session is NOT
-                                    // attached to a tab yet; that happens on Allow.  On Dismiss
-                                    // the caller closes the rawGeckoSession.
                                     val rawGeckoSession = GeckoSession()
                                     val newEngineSession = GeckoEngineSession(
                                         runtime = Components.runtime,
@@ -261,18 +255,6 @@ fun SessionObserverSetup(
                                 }
 
                                 Log.d(TAG, "Auto-opening new tab for popup: $uri")
-                                // Create a raw GeckoSession (not yet opened) and return it to
-                                // GeckoView. GeckoView will open it and replay the original
-                                // navigation — preserving POST bodies, cookies, and headers that
-                                // a loadUrl() GET would discard (e.g. apne.co → finzesty.com
-                                // POSTs id+channel params required for the video to load).
-                                //
-                                // We can't return a session from GeckoEngine.createSession() here
-                                // because that already opens the GeckoSession, and GeckoView
-                                // crashes if you hand it an already-open session via onNewSession.
-                                // Instead we construct GeckoEngineSession directly with
-                                // openGeckoSession=false so the session is set up (delegates
-                                // registered) but not yet opened.
                                 val rawGeckoSession = GeckoSession()
                                 val newEngineSession = GeckoEngineSession(
                                     runtime = Components.runtime,
@@ -398,11 +380,6 @@ fun SessionObserverSetup(
                         gs.contentDelegate = fullscreenDelegate
                     }
                     
-                    // PermissionDelegate — grant autoplay and media key system access so
-                    // video players on sites like apnetv.xyz embedded articles work the
-                    // same as in Firefox. All other permission types are denied by default
-                    // (same as GeckoView's unhandled behaviour) to avoid granting location
-                    // or notifications without user interaction.
                     originalPermissionDelegate = gs.permissionDelegate
                     gs.permissionDelegate = object : GeckoSession.PermissionDelegate {
                         override fun onContentPermissionRequest(

@@ -79,20 +79,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var pendingResumeTime: Long? = null
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    // Timestamp of the most recently committed seek. Each seek captures this value in a closure;
-    // if the value has changed by the time the resync runnable fires, a newer seek superseded it
-    // and the resync is skipped.
     private var lastSeekCommitTime = 0L
 
     private val performSeekRunnable = Runnable {
         pendingSeekTime?.let { targetTime ->
             mediaPlayer?.time = targetTime
             pendingSeekTime = null
-            // Do NOT clear the pending seek time in the controls manager yet.
-            // VLC's seek is async — player.time still reflects the pre-seek position until VLC
-            // confirms it. Clearing activePendingSeekTime here would let the 1s poll snap the
-            // seekbar back to the old position. Instead, keep showing the target and let
-            // VlcControlsManager.updateProgress() auto-clear once player.time catches up.
             schedulePostSeekVideoResync()
         }
     }
@@ -267,9 +259,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         controlsManager.attachPlayer()
 
-        // Single unified event listener — VlcControlsManager.handleEvent() handles UI state;
-        // activity-level logic (EndReached, pendingResumeTime) is handled here.
-        // Must be set AFTER controlsManager is initialised so handleEvent() is safe to call.
         mediaPlayer?.setEventListener { event ->
             controlsManager.handleEvent(event)
             when (event.type) {
@@ -288,9 +277,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         pendingResumeTime = null
                         runOnUiThread { mediaPlayer?.time = resumeAt }
                     }
-                    // Auto-select preferred audio/subtitle language if the user hasn't already
-                    // made a manual selection for this stream (i.e., no specific track ID was
-                    // restored from history). VLC exposes track language via IMedia.Track.language.
                     runOnUiThread { applyPreferredLanguages() }
                 }
 
@@ -591,9 +577,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val player = mediaPlayer ?: return
         when (mode) {
             "Fit" -> { player.scale = 0f; player.aspectRatio = null }
-            // Fill: force the surface's aspect ratio so VLC crops to fill without letterboxing.
-            // TVs are universally 16:9; using the surface dimensions would be more precise but
-            // requires a layout pass — 16:9 is a safe default for the TV target.
             "Fill" -> { player.scale = 0f; player.aspectRatio = "16:9" }
             "16:9" -> { player.scale = 0f; player.aspectRatio = "16:9" }
             "4:3"  -> { player.scale = 0f; player.aspectRatio = "4:3" }
@@ -660,9 +643,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         lifecycleScope.launch {
             val historyItem = progressManager.restoreProgress(url)
 
-            // Fallback: if playlist context wasn't available when handleIntent() ran
-            // (e.g. PlaylistStore was cleared between MainActivity setting it and this
-            // activity reading it), restore the playlist directly from the history item.
             if (playlistItems.isEmpty() && historyItem?.playlistJson != null) {
                 try {
                     val decoded = com.playbridge.protocol.protocolJson.decodeFromString(
@@ -709,12 +689,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             val media = Media(libVLC, Uri.parse(url)).apply {
                 setHWDecoderEnabled(true, false)
 
-                // Apply headers to VLC.
-                // user-agent, referer, and cookie have dedicated VLC options and must NOT also
-                // appear in :http-extra-headers (VLC would send them twice).
-                // Everything else goes into :http-extra-headers, which the VLC HTTP module parses
-                // more reliably than the deprecated :http-custom-headers — particularly for values
-                // that contain colons (e.g. "Authorization: Bearer <token>").
                 val extraHeaders = mutableListOf<String>()
                 headers?.forEach { (key, value) ->
                     when (key.lowercase()) {

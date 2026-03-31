@@ -19,8 +19,7 @@ class ConnectionStore(private val context: Context) {
     
     companion object {
         private val TV_DEVICE = stringPreferencesKey("tv_device")
-        private val DISCOVERED_DEVICES = stringPreferencesKey("discovered_devices")
-        private val DEVICE_HISTORY = stringPreferencesKey("device_history")
+                private val DEVICE_HISTORY = stringPreferencesKey("device_history")
     }
     
     /**

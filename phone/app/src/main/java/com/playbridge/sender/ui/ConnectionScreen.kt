@@ -79,9 +79,6 @@ fun ConnectionScreen(
             // Already have token, connect directly. Update IP and name if changed.
             viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
         } else {
-            // No token — user will need to enter the PIN.
-            // Signal the TV first so it opens its PairingScreen and shows the PIN
-            // *before* the user looks at it to type it here.
             viewModel.requestPairing(ip, port)
             showPinDialog = Triple(ip, port, uuid)
         }

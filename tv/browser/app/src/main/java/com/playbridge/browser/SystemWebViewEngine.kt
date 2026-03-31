@@ -66,18 +66,7 @@ class SystemWebViewEngine(
         webView.destroy()
     }
 
-    private fun isEmulator(): Boolean {
-        return (Build.FINGERPRINT.contains("generic") ||
-                Build.FINGERPRINT.contains("emulator") ||
-                Build.MODEL.contains("Emulator") ||
-                Build.MODEL.contains("Android SDK built for") ||
-                Build.MODEL.contains("google_atv") ||
-                Build.MANUFACTURER.contains("Genymotion") ||
-                Build.PRODUCT.contains("sdk") ||
-                Build.PRODUCT.contains("emulator") ||
-                Build.HARDWARE.contains("goldfish") ||
-                Build.HARDWARE.contains("ranchu"))
-    }
+
 
     override fun scrollBy(dx: Int, dy: Int) {
         webView.scrollBy(dx, dy)
@@ -245,15 +234,9 @@ class SystemWebViewEngine(
 
                 // Block JS-initiated popups
                 javaScriptCanOpenWindowsAutomatically = false
-                // Use setSupportMultipleWindows(true) for security:
-                // With false, javascript: URLs in iframes can execute in top context.
-                // With true + onCreateWindow returning false, popups are securely blocked.
                 setSupportMultipleWindows(true)
             }
 
-            // Hardware acceleration is strictly required for WebView HTML5 video playback.
-            // We previously forced SOFTWARE layers on emulators to prevent EGL_BAD_CONFIG
-            // crashes on broken AVDs, but that completely disables video decoding.
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
             // Set high renderer priority for better video performance
@@ -351,10 +334,6 @@ class SystemWebViewEngine(
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             super.onPageStarted(view, url, favicon)
-            // Do NOT inject scripts here — evaluateJavascript runs against the OLD page's JS
-            // context until the new document is committed, so any injection here is wasted and
-            // can set window.__pbAdblockInjected on the wrong page. onPageFinished is the right
-            // place for reliable injection.
         }
 
         override fun onPageFinished(view: WebView?, url: String?) {
@@ -395,9 +374,6 @@ class SystemWebViewEngine(
 
         override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
             Log.e(TAG, "WebView render process crashed (didCrash=${detail?.didCrash()}, priority=${detail?.rendererPriorityAtExit()})")
-            // After a render process death the WebView instance is unusable — calling loadUrl()
-            // on it has no effect. Signal the host activity to destroy this engine and create
-            // a fresh one, then reload the last known URL.
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 onEngineRecreateRequired(currentUrl)
             }

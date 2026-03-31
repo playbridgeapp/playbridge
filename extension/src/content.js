@@ -230,4 +230,3 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
 });
 
-console.log('[VideoDetector Content] Loaded');

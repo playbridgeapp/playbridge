@@ -60,9 +60,6 @@ class VlcControlsManager(
             MediaPlayer.Event.Playing -> {
                 handler.post {
                     playPauseButton.setImageResource(android.R.drawable.ic_media_pause)
-                    // Do NOT hide the buffering spinner here — the Buffering event (buffering==100f)
-                    // is the correct signal. Hiding it on Playing causes the spinner to vanish
-                    // before VLC has finished re-buffering at the seeked position.
                     hideControls()
                 }
             }
@@ -158,9 +155,6 @@ class VlcControlsManager(
         if (time != null) {
             updatePendingSeekProgress(time)
         }
-        // When time is null (seek committed), do NOT call updateProgress() — VLC's seek is async
-        // and player.time still reflects the pre-seek position at this point, which would snap
-        // the seekbar back. The 1s poll loop will pick up the real position once VLC confirms it.
     }
 
     fun attachPlayer() {
@@ -279,9 +273,6 @@ class VlcControlsManager(
 
         val target = activePendingSeekTime
         if (target != null) {
-            // Keep showing the committed seek target until VLC confirms the seek by advancing
-            // player.time to within 3 seconds of the target. Without this, the 1s poll would
-            // snap the seekbar back to the pre-seek position while VLC's async seek is in flight.
             if (position > 0 && Math.abs(position - target) < 3000L) {
                 activePendingSeekTime = null
             } else {

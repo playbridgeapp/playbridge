@@ -237,13 +237,6 @@ object HlsParser {
         sb.append("BANDWIDTH=${selectedQuality.bandwidth}")
         selectedQuality.averageBandwidth?.let { sb.append(",AVERAGE-BANDWIDTH=$it") }
         
-        // Reconstruct resolution string from "1080p" if needed, but we don't store raw WxH easily in VideoQuality unless we change it.
-        // Actually we do store raw resolution string if we parsed it, but we modified it to "1080p".
-        // Let's rely on the fact that for playback, BANDWIDTH and URL are critical.
-        // If we want exact resolution we might want to store raw attributes in VideoQuality map? 
-        // For now, let's omit RESOLUTION if we don't have the original string, or just don't worry as players usually adapt or just play the URL.
-        // HOWEVER, ExoPlayer uses these attributes for track selection.
-        // Let's assume the user just wants THIS stream.
         
         selectedQuality.codecs?.let { sb.append(",CODECS=\"$it\"") }
         selectedQuality.frameRate?.let { sb.append(",FRAME-RATE=$it") }

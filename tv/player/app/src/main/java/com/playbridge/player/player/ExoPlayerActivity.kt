@@ -355,9 +355,6 @@ class ExoPlayerActivity : PlayerActivity() {
         val bufCfg = computeBufferConfig()
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
-            // No setBackBuffer: back-buffer allocation shares the same DefaultAllocator pool
-            // as the forward buffer, so e.g. 30 s back at 25 Mbps ≈ 94 MB eats into the cap
-            // and causes the forward buffer to oscillate ("reset" symptom on Hisense TVs).
             .setTargetBufferBytes(bufCfg.targetBytes)
             // Time-based primary: let maxBufferMs drive loading; targetBytes is a safety
             // ceiling only (prevents runaway allocation on 4K REMUX / 100 Mbps streams).
@@ -518,9 +515,6 @@ class ExoPlayerActivity : PlayerActivity() {
         }
         FileLogger.i(TAG, "CURL COMMAND: $curlBuilder")
 
-        // 2. Create Data Source Factory
-        // DefaultHttpDataSource (Android's HttpURLConnection) is used instead of OkHttp because
-        // some CDNs perform TLS fingerprint (JA3) validation and reject OkHttp clients.
         val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
             .setUserAgent(userAgent)
             .setDefaultRequestProperties(requestProperties)
@@ -536,9 +530,6 @@ class ExoPlayerActivity : PlayerActivity() {
         val bufCfg = computeBufferConfig()
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
-            // No setBackBuffer: back-buffer allocation shares the same DefaultAllocator pool
-            // as the forward buffer, so e.g. 30 s back at 25 Mbps ≈ 94 MB eats into the cap
-            // and causes the forward buffer to oscillate ("reset" symptom on Hisense TVs).
             .setTargetBufferBytes(bufCfg.targetBytes)
             // Time-based primary: let maxBufferMs drive loading; targetBytes is a safety
             // ceiling only (prevents runaway allocation on 4K REMUX / 100 Mbps streams).
@@ -615,9 +606,6 @@ class ExoPlayerActivity : PlayerActivity() {
                 playerView.player = exoPlayer
                 videoFilterManager.setPlayer(exoPlayer)
 
-                // Initialize the VideoFrameProcessor pipeline early by providing an effect BEFORE playback starts.
-                // This forces ExoPlayer to route frames through OpenGL instead of directly to the decoder surface,
-                // which allows hot-swapping filters later.
                 videoFilterManager.reapplyFilter()
 
                 exoPlayer.setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
@@ -696,10 +684,6 @@ class ExoPlayerActivity : PlayerActivity() {
                     FileLogger.d(TAG, "Buffering...")
                     if (player?.playWhenReady == true) {
                         controlsManager.showBuffering()
-                        // Watchdog: detect a dead connection vs legitimate slow buffering.
-                        // A 4K file buffering slowly will have an advancing bufferedPosition
-                        // (bytes arriving). A dropped CDN connection produces a completely flat
-                        // bufferedPosition — no bytes at all. Only seek forward in the latter case.
                         val lastBuffered = player?.bufferedPosition ?: 0L
                         scheduleStuckBufferCheck(lastBuffered)
                     }
@@ -814,9 +798,6 @@ class ExoPlayerActivity : PlayerActivity() {
                             putStringArrayListExtra(com.playbridge.player.server.ServerService.EXTRA_SUBTITLES, ArrayList(subtitleUrls))
                         }
 
-                        // Pass along headers
-                        // If we are playing a playlist item, the headers are stored in the active item.
-                        // Otherwise, we fallback to the raw intent extras.
                         val currentHeaders = if (playlistItems.isNotEmpty()) {
                             playlistItems.getOrNull(playlistIndex)?.headers ?: emptyMap()
                         } else {
@@ -832,9 +813,6 @@ class ExoPlayerActivity : PlayerActivity() {
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_HEADERS, HashMap(currentHeaders))
                         }
 
-                        // If ExoPlayer was navigating a playlist, pass the playlist context so
-                        // VLC can continue from the same position. PlaylistStore.currentPlaylist
-                        // is already populated; VLC just needs the flag and index to use it.
                         if (playlistItems.isNotEmpty()) {
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_IS_PLAYLIST, true)
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_PLAYLIST_INDEX, playlistIndex)
@@ -848,13 +826,6 @@ class ExoPlayerActivity : PlayerActivity() {
 
             FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
 
-            // Malformed container data (e.g. corrupt MKV cluster mid-stream) — seek past the bad
-            // segment and re-prepare. Each retry skips an extra 5s further to avoid re-hitting
-            // adjacent corrupt data. Recovery is fast because the load policy no longer wastes
-            // time retrying contentIsMalformed errors at the network level.
-            // An UnexpectedLoaderException wrapping a runtime crash (e.g. ArrayIndexOutOfBounds
-            // from a negative srcPos due to EBML integer overflow) also means corrupt container
-            // data — treat it the same as a contentIsMalformed ParserException.
             val isExtractorCrash = error.cause is androidx.media3.exoplayer.upstream.Loader.UnexpectedLoaderException &&
                 error.cause?.cause is RuntimeException
             val isMalformedContent =
@@ -976,9 +947,6 @@ class ExoPlayerActivity : PlayerActivity() {
         // Progress save with thumbnail is now handled by onPause asynchronously.
         // We ensure player releases cleanly.
         releasePlayer()
-        // Finish the activity when the user backgrounds the app (presses Home).
-        // This keeps memory clean — only the lightweight ServerService stays running.
-        // The next play command from the phone will create a fresh PlayerActivity.
         if (!isFinishing && !isChangingConfigurations) {
             finish()
         }
@@ -995,9 +963,6 @@ class ExoPlayerActivity : PlayerActivity() {
     private fun releasePlayer() {
         stuckBufferHandler.removeCallbacksAndMessages(null)
         try {
-            // Workaround for Media3 GL resource leakage when using VideoFrameProcessor
-            // with hardware layer surfaces like Exoplayer's playerView.surfaceView.
-            // Force the player to clear its surface before releasing the GL pipeline.
             player?.clearVideoSurface()
             videoFilterManager.setPlayer(null)
             player?.release()
@@ -1560,9 +1525,6 @@ class ExoPlayerActivity : PlayerActivity() {
 
             if (exception is androidx.media3.common.ParserException) {
                 if (exception.contentIsMalformed) {
-                    // The segment data is genuinely corrupt — retrying the same bytes won't help.
-                    // Escalate immediately to onPlayerError so the seek-forward recovery runs
-                    // instead of wasting 5×2s retries + ExoPlayer's internal load timeout.
                     FileLogger.w(TAG, "Malformed content, escalating to player-level recovery")
                     return androidx.media3.common.C.TIME_UNSET
                 }
@@ -1581,9 +1543,6 @@ class ExoPlayerActivity : PlayerActivity() {
                 return androidx.media3.common.C.TIME_UNSET
             }
 
-            // Debrid servers (and CDNs) sometimes return 429 (rate-limit), 502, or 503 under
-            // load. These are transient — back off exponentially up to 5 attempts rather than
-            // immediately escalating to onPlayerError.
             if (exception is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
                 val code = exception.responseCode
                 if (code == 429 || code == 502 || code == 503) {

@@ -155,12 +155,6 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Ensure sessions are synced when coming back from background (e.g. lock screen).
-        // IMPORTANT: read store state inside the coroutine body, NOT here in onResume().
-        // If we capture state here and DB restore runs before the coroutine executes,
-        // we'd call syncSessions(emptyList, null) which calls retainAll(emptySet) and
-        // wipes recentlyActiveTabIds — racing with and killing the LaunchedEffect's
-        // concurrent syncSessions call that was about to create the selected session.
         Log.d("PB_STARTUP", "onResume: existingSessions=${tabManager.sessions.size}")
         lifecycleScope.launch(Dispatchers.Main) {
             val state = Components.store.state   // read CURRENT state when coroutine runs
@@ -320,22 +314,11 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            // store.flow() only delivers FUTURE emissions — if restoreTabs() dispatched
-            // all 400+ tabs before this collector subscribed (fast DB read), browserState
-            // would stay empty forever. Force-sync once restoration is marked complete
-            // so we never miss a bulk insert that happened before we started collecting.
             LaunchedEffect(tabsRestoredOrReady.value) {
                 Log.d("PB_STARTUP", "Compose: tabsRestoredOrReady=${tabsRestoredOrReady.value} — force-syncing browserState from store (${store.state.tabs.size} tabs, selectedTabId=${store.state.selectedTabId})")
                 browserState = store.state
             }
 
-            // Sync sessions with tabs.
-            // Key on tab IDs (not full TabSessionState) so content changes (URL, title, loading
-            // state) during navigation do NOT re-trigger syncSessions — only structural changes
-            // (tabs added/removed) or selection changes do. Keying on the full list caused
-            // syncSessions to be cancelled and restarted on every navigation event, which
-            // prevented the LRU tracker from being updated and caused sessions to be hibernated
-            // unexpectedly, resulting in page reloads on every tab switch.
             val tabIds = browserState.tabs.map { it.id }
             LaunchedEffect(tabIds, browserState.selectedTabId) {
                 Log.d("PB_STARTUP", "Compose: syncSessions triggered — tabCount=${browserState.tabs.size}, selectedTabId=${browserState.selectedTabId}")
@@ -354,9 +337,6 @@ class BrowserActivity : ComponentActivity() {
             // State for download dialog
             var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
 
-            // If no session is available (e.g. during init), we normally show loading.
-            // However, if we are in the Tabs screen, we can render the tabs screen standalone
-            // without needing a selected session.
             if (session == null) {
                 Log.d("PB_STARTUP", "Compose: session==null path — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, tabsRestored=${tabsRestoredOrReady.value}, sessionsInMap=${sessions.keys.joinToString()}")
                 if (currentScreen == Screen.Tabs) {
@@ -2002,9 +1982,6 @@ class BrowserActivity : ComponentActivity() {
                                             ).show()
                                         }
                                     } else {
-                                        // Use mediaHeaders() to strip browser-context headers (Sec-Fetch-*, etc.)
-                                        // that cause CDN token validation to reject requests from non-browser clients.
-                                        // Cookie, Referer, Origin, and User-Agent are preserved.
                                         val headers = VideoDetector.mediaHeaders(video)
 
                                         // Fall back to originUrl as Referer if not captured in request headers
@@ -2103,10 +2080,6 @@ class BrowserActivity : ComponentActivity() {
                     val popupPrefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
 
                     fun openPopupTab() {
-                        // The GeckoSession was already created and returned to GeckoView in
-                        // onNewSession, so GeckoView is already replaying the original navigation
-                        // (POST body, cookies, headers intact).  All we need to do is wire the
-                        // pre-created engineSession into a new tab so it becomes visible.
                         scope.launch(Dispatchers.Main) {
                             val tabId = tabManager.createTab(
                                 url = popup.popupUrl,
@@ -2261,9 +2234,6 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onDestroy() {
         Log.d("PB_STARTUP", "onDestroy: isFinishing=$isFinishing, sessions=${tabManager.sessions.size}")
-        // Close all engine sessions to free GeckoView resources and prevent stale sessions
-        // accumulating across Android Studio "Apply Changes" relaunches, which reuse the
-        // same process without re-creating the Application but do call Activity.onCreate again.
         tabManager.sessions.values.forEach { it.close() }
         // webSocketClient destruction is now handled by ConnectionViewModel's onCleared
         super.onDestroy()
