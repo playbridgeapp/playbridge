@@ -10,3 +10,5 @@
 ## 2026-02-01 - [Kotlin] Regex compilation in loops
 **Learning:** Instantiating `Regex` objects inside loops or frequently called methods causes redundant CPU overhead and memory allocations.
 **Action:** Pre-compile and cache `Regex` instances as private constants in a `companion object` or a singleton `object`.
+## 2026-04-01 - [Optimize Regex Instantiation] **Learning:** Repeatedly instantiating Regex objects inside loops or frequently called methods (like  or ) causes unnecessary CPU overhead and garbage collection in Kotlin. **Action:** Always extract static Regex patterns into top-level constants () to prevent redundant compilation.
+## 2026-04-01 - [Optimize Regex Instantiation] **Learning:** Repeatedly instantiating Regex objects inside loops or frequently called methods (like `onTitleChange` or `sortedBy`) causes unnecessary CPU overhead and garbage collection in Kotlin. **Action:** Always extract static Regex patterns into top-level constants (`private val REGEX_NAME = Regex(...)`) to prevent redundant compilation.
