@@ -20,6 +20,10 @@ import com.playbridge.sender.data.debrid.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private val REGEX_SO_TYPO = Regex("so(\\d+)")
+private val REGEX_EO_TYPO = Regex("eo(\\d+)")
+private val REGEX_NUMBER_PAD = Regex("\\d+")
+
 enum class MagnetSheetState {
     ADDING,
     SELECTING_FILES,
@@ -338,9 +342,9 @@ private suspend fun startResolvingFlow(
             // Sort files with a natural alphanumeric key: pad numbers to 6 digits and handle common "so"/"eo" typos.
             onSuccess(resolved.sortedBy { link -> 
                 link.filename.lowercase()
-                    .replace(Regex("so(\\d+)")) { "s0${it.groupValues[1]}" }
-                    .replace(Regex("eo(\\d+)")) { "e0${it.groupValues[1]}" }
-                    .replace(Regex("\\d+")) { it.value.padStart(6, '0') }
+                    .replace(REGEX_SO_TYPO) { "s0${it.groupValues[1]}" }
+                    .replace(REGEX_EO_TYPO) { "e0${it.groupValues[1]}" }
+                    .replace(REGEX_NUMBER_PAD) { it.value.padStart(6, '0') }
             })
         }
     } catch (e: Exception) {

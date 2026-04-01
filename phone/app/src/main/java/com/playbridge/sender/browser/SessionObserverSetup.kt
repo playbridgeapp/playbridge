@@ -23,6 +23,8 @@ import com.playbridge.sender.data.history.HistoryDao
 import com.playbridge.sender.data.history.HistoryEntity
 import androidx.compose.runtime.LaunchedEffect
 
+private val REGEX_PLAYBRIDGE_TITLE = Regex("\\[PlayBridge:(\\d+)\\]")
+
 /**
  * Sets up the [EngineSession.Observer] and GeckoSession delegate proxies
  * (NavigationDelegate, ContentDelegate) for the active browser session.
@@ -139,7 +141,7 @@ fun SessionObserverSetup(
                         )
                     )
                 }
-                val match = Regex("\\[PlayBridge:(\\d+)\\]").find(title)
+                val match = REGEX_PLAYBRIDGE_TITLE.find(title)
                 if (match != null) {
                     val count = match.groupValues[1].toIntOrNull() ?: 0
                     Log.d(TAG, "PlayBridge video count detected: $count")
