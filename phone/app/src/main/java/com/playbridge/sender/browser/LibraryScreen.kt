@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -181,7 +182,7 @@ fun LibraryScreen(
                         keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
                         modifier = Modifier.width(100.dp),
                         textStyle = MaterialTheme.typography.bodyMedium,
-                        shape = RoundedCornerShape(16.dp),
+                        shape = CircleShape,
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -607,7 +608,7 @@ private fun PosterCard(
         modifier = Modifier
             .width(130.dp)
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column {
@@ -647,7 +648,7 @@ private fun PosterCard(
                 // Rating badge
                 if (rating.isNotBlank() && rating != "0.0") {
                     Surface(
-                        shape = RoundedCornerShape(bottomEnd = 12.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f),
                         modifier = Modifier.align(Alignment.TopStart)
                     ) {
@@ -729,7 +730,7 @@ private fun SearchResultItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(20.dp)
     ) {
         Row(
             modifier = Modifier
@@ -791,7 +792,7 @@ private fun SearchResultItem(
                             )
                         }
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
+                            shape = RoundedCornerShape(20.dp),
                             color = if (result.isMovie)
                                 MaterialTheme.colorScheme.primaryContainer
                             else
@@ -827,7 +828,7 @@ private fun ApiKeyPrompt() {
             modifier = Modifier
                 .padding(32.dp)
                 .fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp)
+            shape = RoundedCornerShape(20.dp)
         ) {
             Column(
                 modifier = Modifier.padding(24.dp),

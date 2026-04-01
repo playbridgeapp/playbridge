@@ -2,10 +2,25 @@ package com.playbridge.player.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// === Surface Hierarchy ===
+val Surface            = Color(0xFF0D072E)
+val SurfaceContainerLow    = Color(0xFF120C37)
+val SurfaceContainer       = Color(0xFF181241)
+val SurfaceContainerHigh   = Color(0xFF1E1748)
+val SurfaceContainerHighest = Color(0xFF241D54)
+val SurfaceBright          = Color(0xFF2A2660)
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// === Brand Colors ===
+val Primary            = Color(0xFF9EA7FF)
+val PrimaryDim         = Color(0xFF5565F2)
+val OnPrimary          = Color(0xFF0D072E)
+val PrimaryFixedDim    = Color(0xFF7B84E0)
+
+// === Secondary ===
+val SecondaryContainer    = Color(0xFF2E3480)
+val OnSecondaryContainer  = Color(0xFFBFC6FF)
+
+// === Content Colors ===
+val OnSurface          = Color(0xFFE7E2FF)
+val OnSurfaceVariant   = Color(0xFFB0A8D8)
+val OutlineVariant     = Color(0xFF3D3770)

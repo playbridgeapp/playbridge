@@ -89,7 +89,7 @@ fun VideoFilterDialog(
                 .padding(bottom = 20.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color(0xE8101020))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
+                .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -213,12 +213,12 @@ private fun FilterChip(
 
     val bgColor = when {
         isActive -> Color(0xFF00D9FF).copy(alpha = 0.15f)
-        isFocused -> Color.White.copy(alpha = 0.08f)
+        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
         else -> Color(0xFF1E1E38)
     }
     val borderColor = when {
         isActive -> Color(0xFF00D9FF).copy(alpha = 0.5f)
-        isFocused -> Color.White.copy(alpha = 0.15f)
+        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
         else -> Color.Transparent
     }
 
@@ -246,7 +246,7 @@ private fun FilterChip(
     ) {
         Text(
             text = if (isActive) "✓ ${filter.label}" else filter.label,
-            color = if (isActive) Color(0xFF00D9FF) else Color.White,
+            color = if (isActive) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
             fontSize = 11.sp,
             fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
             textAlign = TextAlign.Center,

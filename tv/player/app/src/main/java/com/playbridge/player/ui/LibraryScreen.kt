@@ -223,7 +223,7 @@ fun HistoryItemCard(
                 modifier = Modifier
                     .fillMaxHeight()
                     .aspectRatio(16f / 9f)
-                    .background(Color.Black),
+                    .background(MaterialTheme.colorScheme.surface),
                 contentAlignment = Alignment.Center
             ) {
                 if (item.thumbnailPath != null) {
@@ -239,7 +239,7 @@ fun HistoryItemCard(
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    Text("▶", color = Color.White)
+                    Text("▶", color = MaterialTheme.colorScheme.onSurface)
                 }
             }
 
@@ -250,7 +250,7 @@ fun HistoryItemCard(
                 Text(
                     text = item.title ?: "Unknown Title",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

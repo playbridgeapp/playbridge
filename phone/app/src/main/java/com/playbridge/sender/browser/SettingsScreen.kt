@@ -156,7 +156,7 @@ private fun SettingsHubContent(
                 }
             }
             if (versionName != null) {
-                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()

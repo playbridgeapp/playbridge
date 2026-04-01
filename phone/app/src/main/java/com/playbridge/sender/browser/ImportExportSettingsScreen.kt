@@ -277,7 +277,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 }
             }
 
-            HorizontalDivider()
+            Spacer(modifier = Modifier.height(12.dp))
 
             Text(
                 "Export settings to a file or clipboard.",

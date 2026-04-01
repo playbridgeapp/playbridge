@@ -113,7 +113,7 @@ fun VideoPreviewSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
-                    .background(Color.Black)
+                    .background(MaterialTheme.colorScheme.surface)
             ) {
                 AndroidView(
                     factory = { ctx ->
@@ -133,7 +133,7 @@ fun VideoPreviewSheet(
                 if (isBuffering && errorMessage == null) {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center),
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
 
@@ -141,20 +141,20 @@ fun VideoPreviewSheet(
                 if (errorMessage != null) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
-                        color = Color.Black.copy(alpha = 0.7f)
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
                                     text = "Playback failed",
                                     style = MaterialTheme.typography.titleSmall,
-                                    color = Color.White
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
                                     text = errorMessage!!,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White.copy(alpha = 0.7f),
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -212,7 +212,7 @@ fun VideoPreviewSheet(
                             onSendToTv()
                         },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(20.dp)
                     ) {
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))

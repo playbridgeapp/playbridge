@@ -44,7 +44,7 @@ fun HomeScreen(
             Text(
                 text = "PlayBridge",
                 style = MaterialTheme.typography.displayMedium,
-                color = Color.White
+                color = MaterialTheme.colorScheme.onSurface
             )
             
             Spacer(modifier = Modifier.height(16.dp))
@@ -78,7 +78,7 @@ fun HomeScreen(
                         is WebSocketServer.ConnectionState.Stopped -> "Server stopped"
                     },
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
             
@@ -129,7 +129,7 @@ fun HomeScreen(
                     Text(
                         text = pinDisplay,
                         fontSize = 96.sp,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         letterSpacing = 20.sp,
                         fontWeight = FontWeight.Bold
                     )

@@ -204,7 +204,7 @@ fun MovieDetailScreen(
                     if (movie.imdbId != null) {
                         Surface(
                             modifier = Modifier.padding(16.dp),
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(20.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
                             Row(
@@ -762,13 +762,13 @@ private fun BackdropSection(
                 if (omdbDetails?.imdbRating != null && omdbDetails.imdbRating != "N/A") {
                     Surface(
                         color = Color(0xFFF5C518),
-                        shape = RoundedCornerShape(4.dp)
+                        shape = RoundedCornerShape(20.dp)
                     ) {
                         Text(
                             text = "IMDb ${omdbDetails.imdbRating}",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color.Black,
+                            color = MaterialTheme.colorScheme.surface,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                         )
                     }
@@ -776,13 +776,13 @@ private fun BackdropSection(
                 if (omdbDetails?.rottenTomatoesRating != null && omdbDetails.rottenTomatoesRating != "N/A") {
                     Surface(
                         color = Color(0xFFFA320A),
-                        shape = RoundedCornerShape(4.dp)
+                        shape = RoundedCornerShape(20.dp)
                     ) {
                         Text(
                             text = "🍅 ${omdbDetails.rottenTomatoesRating}",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                         )
                     }
@@ -820,7 +820,7 @@ private fun PlayButton(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .height(48.dp),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(20.dp)
     ) {
         Icon(
             Icons.Default.PlayArrow,
@@ -849,7 +849,7 @@ private fun EpisodeItem(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
         Row(

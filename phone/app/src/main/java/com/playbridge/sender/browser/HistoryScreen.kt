@@ -75,7 +75,7 @@ fun HistoryScreen(
             ) {
                 items(historyItems, key = { it.id }) { item ->
                     HistoryItem(item = item, onClick = { onItemClick(item.url) })
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
         }

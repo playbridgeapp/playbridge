@@ -167,7 +167,7 @@ fun TVSettingsScreen(
                 }
             }
 
-            HorizontalDivider()
+            Spacer(modifier = Modifier.height(12.dp))
 
             Text("Diagnostics", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
 

@@ -71,7 +71,7 @@ fun PlaylistPickerDialog(
                 Text(
                     text = "Playlist",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
@@ -93,7 +93,7 @@ fun PlaylistPickerDialog(
 
                     val backgroundColor = when {
                         isCurrent -> Color(0xFF00D9FF).copy(alpha = 0.2f)
-                        isFocused -> Color.White.copy(alpha = 0.1f)
+                        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
                         else -> Color.Transparent
                     }
 
@@ -135,7 +135,7 @@ fun PlaylistPickerDialog(
                             color = when {
                                 isFailed -> Color.Red.copy(alpha = 0.8f)
                                 isCurrent -> Color(0xFF00D9FF)
-                                else -> Color.White
+                                else -> MaterialTheme.colorScheme.onSurface
                             },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

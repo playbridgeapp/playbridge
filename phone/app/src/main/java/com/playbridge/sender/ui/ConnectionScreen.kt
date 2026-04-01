@@ -208,7 +208,7 @@ fun ConnectionScreen(
 
                 item {
                     Spacer(modifier = Modifier.height(8.dp))
-                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(12.dp))
                     Spacer(modifier = Modifier.height(8.dp))
                 }
             } else if (connectionState is WebSocketClient.ConnectionState.Connecting) {
@@ -288,7 +288,7 @@ fun ConnectionScreen(
 
             item {
                 Spacer(modifier = Modifier.height(8.dp))
-                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
                 Spacer(modifier = Modifier.height(8.dp))
             }
 

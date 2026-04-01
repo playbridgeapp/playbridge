@@ -81,7 +81,7 @@ fun PairingScreen(
                         is WebSocketServer.ConnectionState.Stopped -> "Server stopped"
                     },
                     style = MaterialTheme.typography.bodyLarge,
-                    color = if (connectionState is WebSocketServer.ConnectionState.Connected) Color(0xFF00FF88) else Color.White
+                    color = if (connectionState is WebSocketServer.ConnectionState.Connected) Color(0xFF00FF88) else MaterialTheme.colorScheme.onSurface
                 )
             }
             
@@ -101,7 +101,7 @@ fun PairingScreen(
                     text = pinDisplay,
                     style = MaterialTheme.typography.displayLarge,
                     fontSize = 120.sp,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     letterSpacing = 24.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                 )
@@ -115,7 +115,7 @@ fun PairingScreen(
                 Text(
                     text = deviceName,
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 
                 Text(

@@ -94,7 +94,7 @@ fun SettingsScreen(
             Text(
                 text = "Settings",
                 style = MaterialTheme.typography.displaySmall,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold
             )
 
@@ -147,7 +147,7 @@ fun SettingsScreen(
                         .background(if (isFocused) Color(0xFF2A2A4A) else Color(0xFF1E1E38))
                         .border(
                             if (isFocused) 1.5.dp else 1.dp,
-                            if (isFocused) Color(0xFF00D9FF).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f),
+                            if (isFocused) Color(0xFF00D9FF).copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
                             RoundedCornerShape(10.dp)
                         )
                         .onKeyEvent { event ->
@@ -162,7 +162,7 @@ fun SettingsScreen(
                 ) {
                     Text(
                         text = if (customIp.isEmpty() || customIp == "auto") "Automatic (Recommended)" else customIp,
-                        color = if (isFocused) Color(0xFF00D9FF) else Color.White,
+                        color = if (isFocused) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
                         fontSize = 14.sp
                     )
                 }
@@ -224,7 +224,7 @@ fun SettingsScreen(
         var tempIp by remember { mutableStateOf(if (customIp == "auto") "" else customIp) }
 
         androidx.compose.foundation.layout.Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)),
+            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)),
             contentAlignment = Alignment.Center
         ) {
             Column(
@@ -246,9 +246,9 @@ fun SettingsScreen(
                     onValueChange = { tempIp = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.White, RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.onSurface, RoundedCornerShape(8.dp))
                         .padding(16.dp),
-                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.Black, fontSize = 16.sp)
+                    textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.surface, fontSize = 16.sp)
                 )
 
                 Row(
@@ -312,7 +312,7 @@ private fun SettingsDropdown(
                     .background(if (isFocused) Color(0xFF2A2A4A) else Color(0xFF1E1E38))
                     .border(
                         if (isFocused) 1.5.dp else 1.dp,
-                        if (isFocused) Color(0xFF00D9FF).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f),
+                        if (isFocused) Color(0xFF00D9FF).copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
                         RoundedCornerShape(10.dp)
                     )
                     .onKeyEvent { event ->
@@ -332,7 +332,7 @@ private fun SettingsDropdown(
                 ) {
                     Text(
                         text = selectedLabel,
-                        color = if (isFocused) Color(0xFF00D9FF) else Color.White,
+                        color = if (isFocused) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
                         fontSize = 14.sp
                     )
                     Text(
@@ -412,7 +412,7 @@ private fun DropdownOption(
             .background(
                 when {
                     isFocused -> Color(0xFF00D9FF).copy(alpha = 0.15f)
-                    isSelected -> Color.White.copy(alpha = 0.04f)
+                    isSelected -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f)
                     else -> Color.Transparent
                 }
             )
@@ -443,7 +443,7 @@ private fun DropdownOption(
                 text = label,
                 color = when {
                     isFocused -> Color(0xFF00D9FF)
-                    isSelected -> Color.White
+                    isSelected -> MaterialTheme.colorScheme.onSurface
                     else -> Color.LightGray
                 },
                 fontSize = 14.sp,

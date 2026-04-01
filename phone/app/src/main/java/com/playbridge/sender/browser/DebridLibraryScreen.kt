@@ -143,7 +143,7 @@ fun DebridLibraryScreen(
                                 }
                             }
                         )
-                        HorizontalDivider()
+                        Spacer(modifier = Modifier.height(12.dp))
                     }
                 }
             }
@@ -307,7 +307,7 @@ fun DebridLibraryScreen(
                                         }
                                     }
                                 )
-                                HorizontalDivider()
+                                Spacer(modifier = Modifier.height(12.dp))
                             }
                         }
                     }
