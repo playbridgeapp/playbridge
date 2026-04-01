@@ -608,7 +608,7 @@ private fun PosterCard(
         modifier = Modifier
             .width(130.dp)
             .clickable(onClick = onClick),
-        shape = CircleShape,
+        shape = RoundedCornerShape(20.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column {
@@ -649,7 +649,7 @@ private fun PosterCard(
                 if (rating.isNotBlank() && rating != "0.0") {
                     Surface(
                         shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f),
                         modifier = Modifier.align(Alignment.TopStart)
                     ) {
                         Row(
@@ -794,9 +794,9 @@ private fun SearchResultItem(
                         Surface(
                             shape = RoundedCornerShape(20.dp),
                             color = if (result.isMovie)
-                                MaterialTheme.colorScheme.primaryContainer
+                                MaterialTheme.colorScheme.secondaryContainer
                             else
-                                MaterialTheme.colorScheme.tertiaryContainer
+                                MaterialTheme.colorScheme.surfaceContainerHighest
                         ) {
                             Text(
                                 text = if (result.isMovie) "Movie" else "TV",

@@ -113,7 +113,7 @@ fun VideoPreviewSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
-                    .background(MaterialTheme.colorScheme.surface)
+                    .background(Color.Black)
             ) {
                 AndroidView(
                     factory = { ctx ->
@@ -133,7 +133,7 @@ fun VideoPreviewSheet(
                 if (isBuffering && errorMessage == null) {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center),
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = Color.White
                     )
                 }
 
@@ -141,20 +141,20 @@ fun VideoPreviewSheet(
                 if (errorMessage != null) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        color = Color.Black.copy(alpha = 0.7f)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
                                     text = "Playback failed",
                                     style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = Color.White
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
                                     text = errorMessage!!,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                                    color = Color.White.copy(alpha = 0.7f),
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )

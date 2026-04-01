@@ -841,7 +841,7 @@ private fun EpisodeItem(
     onPlay: (() -> Unit)? = null
 ) {
     val containerColor = when {
-        isPlaying -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+        isPlaying -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
         isInActivePlaylist -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
         else -> MaterialTheme.colorScheme.surface
     }

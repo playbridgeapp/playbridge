@@ -1149,43 +1149,44 @@ class BrowserActivity : ComponentActivity() {
                         }
                     }
                 ) { innerPadding ->
-                    val isOwnTopBar = currentScreen !in listOf(Screen.Browser, Screen.Tabs, Screen.Extensions)
-                    val resolvedPadding = if (isOwnTopBar) {
-                        PaddingValues(
-                            start = innerPadding.calculateStartPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
-                            top = 0.dp,
-                            end = innerPadding.calculateEndPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
-                            bottom = innerPadding.calculateBottomPadding()
-                        )
-                    } else {
-                        innerPadding
-                    }
-
-                    Box(modifier = Modifier.padding(resolvedPadding)) {
-                            // content
-                            AnimatedContent(
-                                targetState = currentScreen,
-                                transitionSpec = {
-                                    if (targetState == Screen.Tabs && initialState == Screen.Browser) {
-                                        slideInVertically { height -> height } + fadeIn() togetherWith
-                                                slideOutVertically { height -> -height } + fadeOut()
-                                    } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
-                                        slideInVertically { height -> -height } + fadeIn() togetherWith
-                                                slideOutVertically { height -> height } + fadeOut()
-                                    } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.MovieDetail || targetState is Screen.TvShowDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary || initialState == Screen.Connection)) {
-                                         androidx.compose.animation.slideInHorizontally { width -> width } + fadeIn() togetherWith
-                                                androidx.compose.animation.slideOutHorizontally { width -> -width } + fadeOut()
-                                    } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary || targetState == Screen.Connection) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.MovieDetail || initialState is Screen.TvShowDetail)) {
-                                         androidx.compose.animation.slideInHorizontally { width -> -width } + fadeIn() togetherWith
-                                                androidx.compose.animation.slideOutHorizontally { width -> width } + fadeOut()
-                                    } else {
-                                        // Default fade for other transitions (e.g. settings)
-                                        fadeIn() togetherWith fadeOut()
-                                    }
-                                },
-                                label = "ScreenTransition"
-                            ) { targetScreen ->
-                                Box(modifier = Modifier.fillMaxSize()) {
+                    // content
+                    AnimatedContent(
+                        targetState = currentScreen,
+                        transitionSpec = {
+                            if (targetState == Screen.Tabs && initialState == Screen.Browser) {
+                                slideInVertically { height -> height } + fadeIn() togetherWith
+                                        slideOutVertically { height -> -height } + fadeOut()
+                            } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
+                                slideInVertically { height -> -height } + fadeIn() togetherWith
+                                        slideOutVertically { height -> height } + fadeOut()
+                            } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.MovieDetail || targetState is Screen.TvShowDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary || initialState == Screen.Connection)) {
+                                 androidx.compose.animation.slideInHorizontally { width -> width } + fadeIn() togetherWith
+                                        androidx.compose.animation.slideOutHorizontally { width -> -width } + fadeOut()
+                            } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary || targetState == Screen.Connection) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.MovieDetail || initialState is Screen.TvShowDetail)) {
+                                 androidx.compose.animation.slideInHorizontally { width -> -width } + fadeIn() togetherWith
+                                        androidx.compose.animation.slideOutHorizontally { width -> width } + fadeOut()
+                            } else {
+                                // Default fade for other transitions (e.g. settings)
+                                fadeIn() togetherWith fadeOut()
+                            }
+                        },
+                        label = "ScreenTransition"
+                    ) { targetScreen ->
+                        // Resolve padding per-screen inside AnimatedContent (based on targetScreen,
+                        // not currentScreen) so the outgoing screen keeps its correct top offset
+                        // during the transition and the outer toolbar is never double-rendered.
+                        val isOwnTopBar = targetScreen !in listOf(Screen.Browser, Screen.Tabs, Screen.Extensions)
+                        val resolvedPadding = if (isOwnTopBar) {
+                            PaddingValues(
+                                start = innerPadding.calculateStartPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                                top = 0.dp,
+                                end = innerPadding.calculateEndPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                                bottom = innerPadding.calculateBottomPadding()
+                            )
+                        } else {
+                            innerPadding
+                        }
+                        Box(modifier = Modifier.padding(resolvedPadding).fillMaxSize()) {
                                     when (targetScreen) {
                                         Screen.Browser -> {
                                             // Fullscreen back handler — takes priority
@@ -1896,9 +1897,9 @@ class BrowserActivity : ComponentActivity() {
                                     }
                                 }
                             }
+                        }
                     }
-                }
-                
+
                 // Video detection bottom sheet
                 if (showVideoSheet) {
                     CastSheet(
@@ -2193,7 +2194,7 @@ class BrowserActivity : ComponentActivity() {
             }
         }
     }
-    }
+
 
 
     override fun onDestroy() {

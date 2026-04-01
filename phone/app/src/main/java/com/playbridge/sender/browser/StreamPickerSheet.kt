@@ -75,7 +75,7 @@ fun StreamPickerSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        shape = RoundedCornerShape(20.dp)
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
     ) {
         Column(
             modifier = Modifier
@@ -322,7 +322,7 @@ private fun StreamItem(
                     stream.estimateMbps(episodeRuntimeMinutes)?.let { mbps ->
                         Surface(
                             shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.tertiaryContainer
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest
                         ) {
                             Text(
                                 text = mbps,
