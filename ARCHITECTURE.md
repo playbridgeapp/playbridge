@@ -191,9 +191,7 @@ PlayBridge/
 │   ├── workflows/
 │   │   ├── android_build.yml
 │   │   └── extension_build.yml  # NEW
-│   └── ISSUE_TEMPLATE/          # NEW
-│       ├── bug_report.md
-│       └── feature_request.md
+│   └── PULL_REQUEST_TEMPLATE.md # NEW
 ├── publish_releases.sh          # Script to automate GitHub releases using gh CLI
 ├── update_ublock.sh             # Script to update uBlock Origin assets in TV GeckoView
 ├── test_script.sh               # General testing utility script

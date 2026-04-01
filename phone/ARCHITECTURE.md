@@ -108,7 +108,7 @@ com.playbridge.sender/
 | TMDB Client | TmdbRepository.kt | Coroutine-based client for TMDB API v3 |
 | OMDB Client | OmdbRepository.kt | Client for OMDB API (ratings and metadata) |
 | Stream Selection | StreamPickerSheet.kt | Bottom sheet displaying resolved Addon streams |
-| Video Actions | DetectedVideosSheet.kt | Unified bottom sheet handling all 'Play on TV' actions (Browser, TMDB, Debrid, Magnets), routing single videos (Videos/Subtitles tabs) and multi-item playlists (`playlistPayload`). |
+| Video Actions | VideoPreviewSheet.kt | Unified bottom sheet handling all 'Play on TV' actions (Browser, TMDB, Debrid, Magnets), routing single videos (Videos/Subtitles tabs) and multi-item playlists (`playlistPayload`). |
 | Debrid Integration | DebridProvider.kt | Abstract interface for Debrid magnet and `.torrent` parsing |
 | Debrid Clients | RealDebrid, AllDebrid, Premiumize | API implementations for major Debrid services |
 | Magnet UI | MagnetParsingSheet.kt | Bottom sheet UI for selecting files from intercepted magnets/torrents |
