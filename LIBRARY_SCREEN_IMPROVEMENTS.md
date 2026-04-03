@@ -10,8 +10,8 @@ The library screen currently has two implicit modes (curated rows vs. filtered d
 
 ---
 
-## 1. Tab Bar — Home | Browse
-**Effort:** Medium (~half a day) | **Impact:** High | **Risk:** Low
+## 1. ~~Tab Bar — Home | Browse~~ ✅ Done
+**Effort:** Medium (~half a day) | **Impact:** High | **Risk:** Low | **Completed:** 2026-04-03
 
 **What:** Add a `TabRow` with two tabs at the top of the library screen:
 - **Home** — shows the current curated horizontal rows (Trending Today, Popular Movies, Popular TV Shows)
@@ -29,8 +29,8 @@ The library screen currently has two implicit modes (curated rows vs. filtered d
 
 ---
 
-## 2. 3-Column Vertical Grid in Browse Mode
-**Effort:** Low (~2 hours) | **Impact:** High | **Risk:** Low
+## 2. ~~3-Column Vertical Grid in Browse Mode~~ ✅ Done
+**Effort:** Low (~2 hours) | **Impact:** High | **Risk:** Low | **Completed:** 2026-04-03
 
 **What:** When in Browse/discovery mode, replace the horizontal `LazyRow` sections with a single `LazyVerticalGrid(GridCells.Fixed(3))`.
 
@@ -46,47 +46,17 @@ The library screen currently has two implicit modes (curated rows vs. filtered d
 
 ---
 
-## 3. Filter Count Badge on Filter Button
-**Effort:** Low (~1 hour) | **Impact:** Medium | **Risk:** None
+## 3. ~~Filter Count Badge on Filter Button~~ ✅ Done
+**Effort:** Low (~1 hour) | **Impact:** Medium | **Risk:** None | **Completed:** 2026-04-02
 
-**What:** Show an active filter count on the filter `IconButton` in the `TopAppBar`, e.g. a small badge reading `(2)` or a filled dot, so users know filters are active.
-
-**Why:** Currently there's no visual feedback that filters are set. Users can leave filters on without realising, then wonder why results look wrong.
-
-**How:**
-- Compute `activeFilterCount` in `LibraryScreen`:
-  ```kotlin
-  val activeFilterCount = listOf(
-      selectedGenres.isNotEmpty(),
-      selectedMediaType != LibraryMediaType.ALL,
-      selectedSortBy != LibrarySortBy.POPULARITY_DESC,
-      selectedYear.isNotBlank()
-  ).count { it }
-  ```
-- Wrap the filter `IconButton` content in a `BadgedBox` from Material3:
-  ```kotlin
-  BadgedBox(badge = {
-      if (activeFilterCount > 0) Badge { Text("$activeFilterCount") }
-  }) {
-      Icon(Icons.Default.FilterList, "Filter")
-  }
-  ```
-
-**No ViewModel changes needed.**
+`activeFilterCount` (counts genres, media type, sort, year) is computed in `LibraryScreen` and the filter `IconButton` now wraps its icon in a `BadgedBox` — a Material3 `Badge` appears when any filter is active. No ViewModel changes.
 
 ---
 
-## 4. Inline Sort + Media Type Chips Above Browse Grid
-**Effort:** Low (~2 hours) | **Impact:** Medium | **Risk:** Low
+## 4. ~~Inline Sort + Media Type Chips Above Browse Grid~~ ✅ Done
+**Effort:** Low (~2 hours) | **Impact:** Medium | **Risk:** Low | **Completed:** 2026-04-02
 
-**What:** In Browse mode, show a persistent horizontal chip row above the grid for the two most-used filter options — Media Type and Sort By — so users don't have to open the bottom sheet for common adjustments. Keep Genres in the sheet.
-
-**Why:** Plezy shows `TV Shows | Filters (1) | Sort` as always-visible chips. Burying sort and type in a sheet adds unnecessary friction.
-
-**How:**
-- Add a `Row` with `FilterChip`s for `ALL / MOVIE / TV_SHOW` and a `SortChip` (or dropdown) for sort order, placed above the grid in the Browse tab body
-- The bottom sheet then only needs to contain Genres + Year + the "Match All" toggle
-- The filter badge (improvement #3) now only counts genres + year since type/sort are inline
+A permanent chip strip (`All | Movies | TV Shows … [Sort ▾]`) is now the first `item {}` in the main `LazyColumn`, always visible. Tapping type chips or the sort dropdown triggers discovery mode directly. The bottom sheet was slimmed down to Year + Genres only. `activeFilterCount` badge was updated to count only genres + year.
 
 ---
 
@@ -108,8 +78,8 @@ The library screen currently has two implicit modes (curated rows vs. filtered d
 
 ---
 
-## 6. Hero Featured Banner (Home Tab)
-**Effort:** High (~1 day) | **Impact:** Very High | **Risk:** Low
+## 6. ~~Hero Featured Banner (Home Tab)~~ ✅ Done
+**Effort:** High (~1 day) | **Impact:** Very High | **Risk:** Low | **Completed:** 2026-04-03
 
 **What:** At the top of the Home tab, show a full-bleed hero card using the backdrop image of the #1 trending item, with a gradient overlay, title, rating, year, content rating, and a "Play" button. Optionally auto-cycle through the top 3–5 trending items with dot indicators.
 
@@ -140,12 +110,12 @@ The library screen currently has two implicit modes (curated rows vs. filtered d
 
 | # | Feature | Effort | Impact | ViewModel change? |
 |---|---------|--------|--------|-------------------|
-| 1 | Tab bar (Home \| Browse) | Medium | High | No |
-| 2 | 3-col vertical grid in Browse | Low | High | No |
-| 3 | Filter count badge | Low | Medium | No |
-| 4 | Inline Sort + Type chips | Low | Medium | No |
+| 1 | ~~Tab bar (Home \| Browse)~~ ✅ | Medium | High | No |
+| 2 | ~~3-col vertical grid in Browse~~ ✅ | Low | High | No |
+| 3 | ~~Filter count badge~~ ✅ | Low | Medium | No |
+| 4 | ~~Inline Sort + Type chips~~ ✅ | Low | Medium | No |
 | 5 | Watched checkmark badge | Medium | Medium | Yes + possible migration |
-| 6 | Hero featured banner | High | Very High | No (maybe data model) |
+| 6 | ~~Hero featured banner~~ ✅ | High | Very High | No (maybe data model) |
 
 **Recommended order to tackle:** 3 → 4 → 2 → 1 → 6 → 5
 

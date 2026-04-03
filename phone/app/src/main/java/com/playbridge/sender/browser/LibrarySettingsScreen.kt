@@ -4,12 +4,14 @@ import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -30,6 +32,8 @@ fun LibrarySettingsScreen(
 
     var omdbApiKey by remember { mutableStateOf(tmdbPrefs.getString("omdb_api_key", "") ?: "") }
     var showOmdbKey by remember { mutableStateOf(false) }
+
+    var showCardTextOverlay by remember { mutableStateOf(tmdbPrefs.getBoolean("show_card_text_overlay", false)) }
 
     Scaffold(
         topBar = {
@@ -94,6 +98,35 @@ fun LibrarySettingsScreen(
                 },
                 modifier = Modifier.fillMaxWidth()
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+            Text("Display Options", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { 
+                        showCardTextOverlay = !showCardTextOverlay
+                        tmdbPrefs.edit().putBoolean("show_card_text_overlay", showCardTextOverlay).apply()
+                    }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Details on Library Cards", style = MaterialTheme.typography.titleSmall)
+                    Text("Display movie rating, title, and year permanently over the poster cards", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(
+                    checked = showCardTextOverlay,
+                    onCheckedChange = { isChecked ->
+                        showCardTextOverlay = isChecked
+                        tmdbPrefs.edit().putBoolean("show_card_text_overlay", isChecked).apply()
+                    }
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
             OutlinedButton(
                 onClick = onAddonSettings,

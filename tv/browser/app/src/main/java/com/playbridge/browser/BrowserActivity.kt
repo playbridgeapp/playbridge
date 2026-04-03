@@ -730,4 +730,5 @@ class BrowserActivity : ComponentActivity() {
             canvas.drawCircle(0f, 0f, radius, borderPaint)
         }
     }
+}
 

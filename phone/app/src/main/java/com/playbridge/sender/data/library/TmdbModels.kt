@@ -189,6 +189,7 @@ data class TmdbMultiSearchResult(
     val displayTitle: String get() = title ?: name ?: ""
     val year: String get() = (releaseDate ?: firstAirDate ?: "").take(4)
     val posterUrl: String? get() = posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
+    val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w780$it" }
     val isMovie: Boolean get() = mediaType == "movie"
     val isTvShow: Boolean get() = mediaType == "tv"
 }

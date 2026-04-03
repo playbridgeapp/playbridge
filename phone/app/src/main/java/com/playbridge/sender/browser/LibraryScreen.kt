@@ -2,6 +2,9 @@ package com.playbridge.sender.browser
 
 import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -11,8 +14,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -31,6 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -51,6 +60,8 @@ import kotlinx.coroutines.launch
 /**
  * Main Library screen — browse popular movies, TV shows, trending, and search.
  */
+val LocalShowCardTextOverlay = compositionLocalOf { false }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
@@ -64,7 +75,51 @@ fun LibraryScreen(
     onNowPlayingClick: () -> Unit = {},
     onRemoteClick: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val browserPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
+    var showCardTextOverlay by remember { mutableStateOf(browserPrefs.getBoolean("show_card_text_overlay", false)) }
+
+    DisposableEffect(browserPrefs) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == "show_card_text_overlay") {
+                showCardTextOverlay = prefs.getBoolean(key, false)
+            }
+        }
+        browserPrefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { browserPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
+    CompositionLocalProvider(LocalShowCardTextOverlay provides showCardTextOverlay) {
+        LibraryScreenContent(
+            viewModel = viewModel,
+            onMenuClick = onMenuClick,
+            onMovieClick = onMovieClick,
+            onTvShowClick = onTvShowClick,
+            nowPlayingTvId = nowPlayingTvId,
+            nowPlayingSeason = nowPlayingSeason,
+            nowPlayingEpisode = nowPlayingEpisode,
+            onNowPlayingClick = onNowPlayingClick,
+            onRemoteClick = onRemoteClick
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LibraryScreenContent(
+    viewModel: LibraryViewModel,
+    onMenuClick: () -> Unit,
+    onMovieClick: (Int) -> Unit,
+    onTvShowClick: (Int) -> Unit,
+    nowPlayingTvId: Int? = null,
+    nowPlayingSeason: Int? = null,
+    nowPlayingEpisode: Int? = null,
+    onNowPlayingClick: () -> Unit = {},
+    onRemoteClick: (() -> Unit)? = null
+) {
     val keyboardController = LocalSoftwareKeyboardController.current
+
+    var activeHeroBackdropUrl by remember { mutableStateOf<String?>(null) }
 
     // Check if API key is configured
     val isConfigured by viewModel.isConfigured.collectAsState()
@@ -109,7 +164,14 @@ fun LibraryScreen(
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
 
     var showFilterSheet by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableIntStateOf(0) }
     var yearInput by remember(selectedYear) { mutableStateOf(selectedYear) }
+
+    // Type and Sort are now inline chips — badge only counts genres + year
+    val activeFilterCount = listOf(
+        selectedGenres.isNotEmpty(),
+        selectedYear.isNotBlank()
+    ).count { it }
 
     // Debounce year input
     LaunchedEffect(yearInput) {
@@ -135,41 +197,19 @@ fun LibraryScreen(
                     .padding(bottom = 16.dp)
             ) {
                 Text(
-                    "Filters & Sorting",
+                    "Filters",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
 
-                // Type Filter
-                Text("Media Type", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                // Year filter (type + sort are now inline chips above the grid)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedMediaType == LibraryMediaType.ALL,
-                        onClick = { viewModel.setMediaType(LibraryMediaType.ALL) },
-                        label = { Text("All") }
-                    )
-                    FilterChip(
-                        selected = selectedMediaType == LibraryMediaType.MOVIE,
-                        onClick = { viewModel.setMediaType(LibraryMediaType.MOVIE) },
-                        label = { Text("Movies") }
-                    )
-                    FilterChip(
-                        selected = selectedMediaType == LibraryMediaType.TV_SHOW,
-                        onClick = { viewModel.setMediaType(LibraryMediaType.TV_SHOW) },
-                        label = { Text("TV Shows") }
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Sort By", style = MaterialTheme.typography.titleMedium)
+                    Text("Year", style = MaterialTheme.typography.titleMedium)
 
                     OutlinedTextField(
                         value = yearInput,
@@ -189,27 +229,6 @@ fun LibraryScreen(
                             unfocusedBorderColor = Color.Transparent,
                             focusedBorderColor = MaterialTheme.colorScheme.primary
                         )
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedSortBy == LibrarySortBy.POPULARITY_DESC,
-                        onClick = { viewModel.setSortBy(LibrarySortBy.POPULARITY_DESC) },
-                        label = { Text("Popularity") }
-                    )
-                    FilterChip(
-                        selected = selectedSortBy == LibrarySortBy.VOTE_AVERAGE_DESC,
-                        onClick = { viewModel.setSortBy(LibrarySortBy.VOTE_AVERAGE_DESC) },
-                        label = { Text("Rating") }
-                    )
-                    FilterChip(
-                        selected = selectedSortBy == LibrarySortBy.PRIMARY_RELEASE_DATE_DESC,
-                        onClick = { viewModel.setSortBy(LibrarySortBy.PRIMARY_RELEASE_DATE_DESC) },
-                        label = { Text("Release Date") }
                     )
                 }
 
@@ -242,7 +261,7 @@ fun LibraryScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(TmdbCommonGenres.list) { genre ->
+                    gridItems(TmdbCommonGenres.list) { genre ->
                         val isSelected = selectedGenres.contains(genre.id)
                         FilterChip(
                             selected = isSelected,
@@ -266,42 +285,51 @@ fun LibraryScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    if (isSearching) {
-                        TextField(
-                            value = searchQuery,
-                            onValueChange = { viewModel.setSearchQuery(it) },
-                            placeholder = { Text("Search movies & TV shows...") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(
-                                onSearch = {
-                                    keyboardController?.hide()
-                                    viewModel.performSearch()
-                                }
-                            ),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    } else {
-                        Text("Library")
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
+            Column {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    title = {
                         if (isSearching) {
-                            viewModel.setIsSearching(false)
-                        } else {
-                            onMenuClick()
+                            TextField(
+                                value = searchQuery,
+                                onValueChange = { viewModel.setSearchQuery(it) },
+                                placeholder = { Text("Search movies & TV shows...") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(
+                                    onSearch = {
+                                        keyboardController?.hide()
+                                        viewModel.performSearch()
+                                    }
+                                ),
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
-                    }) {
-                        if (isSearching) Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") else Icon(Icons.Default.Menu, "Menu")
+                    },
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            if (isSearching) {
+                                viewModel.setIsSearching(false)
+                            } else {
+                                onMenuClick()
+                            }
+                        }
+                    ) {
+                        if (isSearching) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                        } else {
+                            Icon(Icons.Default.Menu, "Menu")
+                        }
                     }
                 },
                 actions = {
@@ -337,22 +365,71 @@ fun LibraryScreen(
                                 Icon(Icons.Default.Gamepad, "Remote Control", tint = MaterialTheme.colorScheme.primary)
                             }
                         }
-                        IconButton(onClick = { showFilterSheet = true }) {
-                            Icon(Icons.Default.FilterList, "Filter")
+                        if (selectedTab == 1) {
+                            IconButton(onClick = { showFilterSheet = true }) {
+                                BadgedBox(badge = {
+                                    if (activeFilterCount > 0) Badge { Text("$activeFilterCount") }
+                                }) {
+                                    Icon(Icons.Default.FilterList, "Filter")
+                                }
+                            }
                         }
                         IconButton(onClick = { viewModel.setIsSearching(true) }) {
                             Icon(Icons.Default.Search, "Search")
                         }
-                    }
-                }
-            )
-        }
+                    } // closes if
+                } // closes actions
+            ) // closes TopAppBar
+            } // closes Column
+        } // closes topBar
     ) { innerPadding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .background(MaterialTheme.colorScheme.background)
         ) {
+            // Dynamic Ambient Background behind TopAppBar
+            if (selectedTab == 0 && !isSearching) {
+                Box(modifier = Modifier.fillMaxWidth().height(350.dp)) {
+                    AnimatedContent(
+                        targetState = activeHeroBackdropUrl,
+                        transitionSpec = {
+                            fadeIn(tween(800)) togetherWith fadeOut(tween(800))
+                        },
+                        label = "HeroAmbientBackground"
+                    ) { targetUrl ->
+                        if (targetUrl != null) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(targetUrl)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .alpha(0.6f)
+                                    .blur(60.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                            )
+                        } else {
+                            Box(modifier = Modifier.fillMaxSize())
+                        }
+                    }
+                    
+                    // Gradient overlay applies persistently on top of the changing images
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Black.copy(alpha = 0.5f), MaterialTheme.colorScheme.background)
+                                )
+                            )
+                    )
+                }
+            }
+
+            val contentBottomPadding = innerPadding.calculateBottomPadding() + 80.dp
             if (!isConfigured) {
                 // No API key — show setup prompt
                 ApiKeyPrompt()
@@ -393,132 +470,157 @@ fun LibraryScreen(
                 }
             } else {
                 // Main catalog
-                LazyColumn(
-                    state = viewModel.mainListState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 8.dp)
-                ) {
-                    val isFiltering = selectedGenres.isNotEmpty() || selectedMediaType != LibraryMediaType.ALL || selectedSortBy != LibrarySortBy.POPULARITY_DESC || selectedYear.isNotBlank()
-
-                    if (isFiltering) {
-                        if (isDiscoveryLoading) {
+                if (selectedTab == 1) {
+                    Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
+                        DiscoverGrid(
+                            movies = discoveredMovies,
+                            tvShows = discoveredTvShows,
+                            gridState = viewModel.discoverGridState,
+                            selectedMediaType = selectedMediaType,
+                            isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
+                            hasMoreMovies = hasMoreDiscoveredMovies,
+                            isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
+                            hasMoreTvShows = hasMoreDiscoveredTvShows,
+                            isDiscoveryLoading = isDiscoveryLoading,
+                            onMovieClick = onMovieClick,
+                            onTvShowClick = onTvShowClick,
+                            onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
+                            onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() },
+                            filterChips = {
+                                FilterChipsRow(
+                                    selectedMediaType = selectedMediaType,
+                                    setMediaType = { viewModel.setMediaType(it) },
+                                    selectedSortBy = selectedSortBy,
+                                    setSortBy = { viewModel.setSortBy(it) }
+                                )
+                            }
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        state = viewModel.mainListState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(top = innerPadding.calculateTopPadding(), bottom = contentBottomPadding)
+                    ) {
+                        if (trending.isNotEmpty()) {
                             item {
-                                Box(
-                                    modifier = Modifier.fillMaxWidth().padding(32.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator()
-                                }
-                            }
-                        } else {
-                            if (discoveredMovies.isNotEmpty()) {
-                                item {
-                                    MediaRow(
-                                        title = "✨ Discovered Movies",
-                                        items = discoveredMovies,
-                                        listState = viewModel.discoveredMoviesListState,
-                                        onItemClick = { onMovieClick(it.id) },
-                                        posterUrl = { it.posterUrl },
-                                        displayTitle = { it.title },
-                                        year = { it.year },
-                                        rating = { it.rating },
-                                        onLoadMore = { viewModel.loadMoreDiscoveredMovies() },
-                                        isLoadingMore = isLoadingMoreDiscoveredMovies,
-                                        hasMore = hasMoreDiscoveredMovies
-                                    )
-                                }
-                            }
-                            if (discoveredTvShows.isNotEmpty()) {
-                                item {
-                                    MediaRow(
-                                        title = "✨ Discovered TV Shows",
-                                        items = discoveredTvShows,
-                                        listState = viewModel.discoveredTvShowsListState,
-                                        onItemClick = { onTvShowClick(it.id) },
-                                        posterUrl = { it.posterUrl },
-                                        displayTitle = { it.name },
-                                        year = { it.year },
-                                        rating = { it.rating },
-                                        onLoadMore = { viewModel.loadMoreDiscoveredTvShows() },
-                                        isLoadingMore = isLoadingMoreDiscoveredTvShows,
-                                        hasMore = hasMoreDiscoveredTvShows
-                                    )
-                                }
-                            }
-                            if (discoveredMovies.isEmpty() && discoveredTvShows.isEmpty()) {
-                                item {
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth().padding(32.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            "No results found for selected filters.",
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
+                                HeroBannerCarousel(
+                                    items = trending,
+                                    onMovieClick = onMovieClick,
+                                    onTvShowClick = onTvShowClick,
+                                    onHeroItemChanged = { activeHeroBackdropUrl = it }
+                                )
                             }
                         }
-                    } else {
-                    // Trending Today
-                    if (trending.isNotEmpty()) {
-                        item {
-                            MediaRow(
-                                title = "🔥 Trending Today",
-                                items = trending,
-                                listState = viewModel.trendingListState,
-                                onItemClick = { item ->
-                                    if (item.isMovie) onMovieClick(item.id)
-                                    else onTvShowClick(item.id)
-                                },
-                                posterUrl = { it.posterUrl },
-                                displayTitle = { it.displayTitle },
-                                year = { it.year },
-                                rating = { String.format("%.1f", it.voteAverage) },
-                                onLoadMore = { viewModel.loadMoreTrending() },
-                                isLoadingMore = isLoadingMoreTrending,
-                                hasMore = hasMoreTrending
-                            )
-                        }
-                    }
 
-                    // Popular Movies
-                    if (popularMovies.isNotEmpty()) {
-                        item {
-                            MediaRow(
-                                title = "🎬 Popular Movies",
-                                items = popularMovies,
-                                listState = viewModel.popularMoviesListState,
-                                onItemClick = { onMovieClick(it.id) },
-                                posterUrl = { it.posterUrl },
-                                displayTitle = { it.title },
-                                year = { it.year },
-                                rating = { it.rating },
-                                onLoadMore = { viewModel.loadMorePopularMovies() },
-                                isLoadingMore = isLoadingMorePopularMovies,
-                                hasMore = hasMorePopularMovies
-                            )
+                        // Trending Today
+                        if (trending.isNotEmpty()) {
+                            item {
+                                MediaRow(
+                                    title = "🔥 Trending Today",
+                                    items = trending,
+                                    listState = viewModel.trendingListState,
+                                    onItemClick = { item ->
+                                        if (item.isMovie) onMovieClick(item.id)
+                                        else onTvShowClick(item.id)
+                                    },
+                                    posterUrl = { it.posterUrl },
+                                    displayTitle = { it.displayTitle },
+                                    year = { it.year },
+                                    rating = { String.format("%.1f", it.voteAverage) },
+                                    onLoadMore = { viewModel.loadMoreTrending() },
+                                    isLoadingMore = isLoadingMoreTrending,
+                                    hasMore = hasMoreTrending
+                                )
+                            }
                         }
-                    }
 
-                    // Popular TV Shows
-                    if (popularTvShows.isNotEmpty()) {
-                        item {
-                            MediaRow(
-                                title = "📺 Popular TV Shows",
-                                items = popularTvShows,
-                                listState = viewModel.popularTvShowsListState,
-                                onItemClick = { onTvShowClick(it.id) },
-                                posterUrl = { it.posterUrl },
-                                displayTitle = { it.name },
-                                year = { it.year },
-                                rating = { it.rating },
-                                onLoadMore = { viewModel.loadMorePopularTvShows() },
-                                isLoadingMore = isLoadingMorePopularTvShows,
-                                hasMore = hasMorePopularTvShows
-                            )
+                        // Popular Movies
+                        if (popularMovies.isNotEmpty()) {
+                            item {
+                                MediaRow(
+                                    title = "🎬 Popular Movies",
+                                    items = popularMovies,
+                                    listState = viewModel.popularMoviesListState,
+                                    onItemClick = { onMovieClick(it.id) },
+                                    posterUrl = { it.posterUrl },
+                                    displayTitle = { it.title },
+                                    year = { it.year },
+                                    rating = { it.rating },
+                                    onLoadMore = { viewModel.loadMorePopularMovies() },
+                                    isLoadingMore = isLoadingMorePopularMovies,
+                                    hasMore = hasMorePopularMovies
+                                )
+                            }
+                        }
+
+                        // Popular TV Shows
+                        if (popularTvShows.isNotEmpty()) {
+                            item {
+                                MediaRow(
+                                    title = "📺 Popular TV Shows",
+                                    items = popularTvShows,
+                                    listState = viewModel.popularTvShowsListState,
+                                    onItemClick = { onTvShowClick(it.id) },
+                                    posterUrl = { it.posterUrl },
+                                    displayTitle = { it.name },
+                                    year = { it.year },
+                                    rating = { it.rating },
+                                    onLoadMore = { viewModel.loadMorePopularTvShows() },
+                                    isLoadingMore = isLoadingMorePopularTvShows,
+                                    hasMore = hasMorePopularTvShows
+                                )
+                            }
                         }
                     }
+                }
+            }
+
+            // Floating Navigation Pill
+            if (!isSearching && isConfigured) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = innerPadding.calculateBottomPadding() + 16.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(32.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                        tonalElevation = 8.dp,
+                        shadowElevation = 8.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val homeSelected = selectedTab == 0
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = if (homeSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                modifier = Modifier.clickable { selectedTab = 0 }
+                            ) {
+                                Text(
+                                    "Home",
+                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (homeSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            val browseSelected = selectedTab == 1
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = if (browseSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                modifier = Modifier.clickable { selectedTab = 1 }
+                            ) {
+                                Text(
+                                    "Browse",
+                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (browseSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -527,6 +629,232 @@ fun LibraryScreen(
 }
 
 // ==================== Reusable Components ====================
+
+@Composable
+private fun FilterChipsRow(
+    selectedMediaType: LibraryMediaType,
+    setMediaType: (LibraryMediaType) -> Unit,
+    selectedSortBy: LibrarySortBy,
+    setSortBy: (LibrarySortBy) -> Unit
+) {
+    var showSortMenu by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FilterChip(
+            selected = selectedMediaType == LibraryMediaType.ALL,
+            onClick = { setMediaType(LibraryMediaType.ALL) },
+            label = { Text("All") }
+        )
+        FilterChip(
+            selected = selectedMediaType == LibraryMediaType.MOVIE,
+            onClick = { setMediaType(LibraryMediaType.MOVIE) },
+            label = { Text("Movies") }
+        )
+        FilterChip(
+            selected = selectedMediaType == LibraryMediaType.TV_SHOW,
+            onClick = { setMediaType(LibraryMediaType.TV_SHOW) },
+            label = { Text("TV Shows") }
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        Box {
+            val sortLabel = when (selectedSortBy) {
+                LibrarySortBy.POPULARITY_DESC -> "Popular"
+                LibrarySortBy.VOTE_AVERAGE_DESC -> "Rating"
+                LibrarySortBy.PRIMARY_RELEASE_DATE_DESC -> "Newest"
+            }
+            FilterChip(
+                selected = selectedSortBy != LibrarySortBy.POPULARITY_DESC,
+                onClick = { showSortMenu = true },
+                label = { Text(sortLabel) },
+                trailingIcon = {
+                    Icon(
+                        Icons.Default.ArrowDropDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(FilterChipDefaults.IconSize)
+                    )
+                }
+            )
+            DropdownMenu(
+                expanded = showSortMenu,
+                onDismissRequest = { showSortMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Popular") },
+                    onClick = {
+                        setSortBy(LibrarySortBy.POPULARITY_DESC)
+                        showSortMenu = false
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Rating") },
+                    onClick = {
+                        setSortBy(LibrarySortBy.VOTE_AVERAGE_DESC)
+                        showSortMenu = false
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Newest") },
+                    onClick = {
+                        setSortBy(LibrarySortBy.PRIMARY_RELEASE_DATE_DESC)
+                        showSortMenu = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverGrid(
+    movies: List<TmdbMovie>,
+    tvShows: List<TmdbTvShow>,
+    gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    selectedMediaType: LibraryMediaType,
+    isLoadingMoreMovies: Boolean,
+    hasMoreMovies: Boolean,
+    isLoadingMoreTvShows: Boolean,
+    hasMoreTvShows: Boolean,
+    isDiscoveryLoading: Boolean,
+    onMovieClick: (Int) -> Unit,
+    onTvShowClick: (Int) -> Unit,
+    onLoadMoreMovies: () -> Unit,
+    onLoadMoreTvShows: () -> Unit,
+    filterChips: @Composable () -> Unit
+) {
+    if (isDiscoveryLoading) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            filterChips()
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(32.dp).weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+        return
+    }
+
+    val hasMovies = movies.isNotEmpty()
+    val hasTvShows = tvShows.isNotEmpty()
+
+    if (!hasMovies && !hasTvShows) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            filterChips()
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(32.dp).weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "No results found for selected filters.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
+    val isNearEnd by remember {
+        derivedStateOf {
+            val totalItems = gridState.layoutInfo.totalItemsCount
+            val lastVisibleItemIndex = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            totalItems > 0 && lastVisibleItemIndex >= totalItems - 6
+        }
+    }
+
+    LaunchedEffect(isNearEnd, isLoadingMoreMovies, hasMoreMovies, isLoadingMoreTvShows, hasMoreTvShows) {
+        if (isNearEnd) {
+            when (selectedMediaType) {
+                LibraryMediaType.MOVIE -> {
+                    if (!isLoadingMoreMovies && hasMoreMovies) onLoadMoreMovies()
+                }
+                LibraryMediaType.TV_SHOW -> {
+                    if (!isLoadingMoreTvShows && hasMoreTvShows) onLoadMoreTvShows()
+                }
+                LibraryMediaType.ALL -> {
+                    // Try loading both if we hit the bottom
+                    if (!isLoadingMoreMovies && hasMoreMovies) onLoadMoreMovies()
+                    if (!isLoadingMoreTvShows && hasMoreTvShows) onLoadMoreTvShows()
+                }
+            }
+        }
+    }
+
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        state = gridState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            filterChips()
+        }
+
+        if (hasMovies) {
+            if (selectedMediaType == LibraryMediaType.ALL) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        text = "✨ Discovered Movies",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+            }
+            gridItems(movies) { item ->
+                PosterCard(
+                    posterUrl = item.posterUrl,
+                    title = item.title,
+                    year = item.year,
+                    rating = item.rating,
+                    onClick = { onMovieClick(item.id) }
+                )
+            }
+            if (isLoadingMoreMovies && hasMoreMovies) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+            }
+        }
+
+        if (hasTvShows) {
+            if (selectedMediaType == LibraryMediaType.ALL) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        text = "✨ Discovered TV Shows",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+            }
+            gridItems(tvShows) { item ->
+                PosterCard(
+                    posterUrl = item.posterUrl,
+                    title = item.name,
+                    year = item.year,
+                    rating = item.rating,
+                    onClick = { onTvShowClick(item.id) }
+                )
+            }
+            if (isLoadingMoreTvShows && hasMoreTvShows) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun <T> MediaRow(
@@ -604,53 +932,63 @@ private fun PosterCard(
     rating: String,
     onClick: () -> Unit
 ) {
+    val showTextOverlay = LocalShowCardTextOverlay.current
+
     Card(
         modifier = Modifier
             .width(130.dp)
+            .height(195.dp)
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
-        Column {
+        Box(modifier = Modifier.fillMaxSize()) {
             // Poster image
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(195.dp)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-            ) {
-                if (posterUrl != null) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(posterUrl)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+            if (posterUrl != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(posterUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Movie,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(40.dp)
                     )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Movie,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(40.dp)
-                        )
-                    }
                 }
+            }
 
-                // Rating badge
+            // Rating badge
+            if (showTextOverlay) {
+                // Gradient overlay
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)),
+                                startY = 50f
+                            )
+                        )
+                )
+
                 if (rating.isNotBlank() && rating != "0.0") {
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f),
-                        modifier = Modifier.align(Alignment.TopStart)
+                        modifier = Modifier.align(Alignment.TopStart).padding(6.dp)
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
@@ -672,25 +1010,28 @@ private fun PosterCard(
                         }
                     }
                 }
-            }
 
-            // Title & Year
-            Column(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    minLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = if (year.isNotBlank()) year else " ",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // Title & Year
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(horizontal = 8.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        maxLines = 2,
+                        minLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (year.isNotBlank()) year else " ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                }
             }
         }
     }
@@ -856,6 +1197,173 @@ private fun ApiKeyPrompt() {
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun HeroBannerCarousel(
+    items: List<TmdbMultiSearchResult>,
+    onMovieClick: (Int) -> Unit,
+    onTvShowClick: (Int) -> Unit,
+    onHeroItemChanged: (String?) -> Unit
+) {
+    if (items.isEmpty()) {
+        LaunchedEffect(Unit) { onHeroItemChanged(null) }
+        return
+    }
+
+    val heroItems = items.take(5)
+    val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { heroItems.size })
+
+    // Auto-cycle
+
+    LaunchedEffect(pagerState.settledPage) {
+        if (heroItems.size > 1) {
+            delay(5000)
+            val nextPage = (pagerState.currentPage + 1) % heroItems.size
+            pagerState.animateScrollToPage(nextPage)
+        }
+    }
+
+    LaunchedEffect(pagerState.currentPage) {
+        onHeroItemChanged(heroItems.getOrNull(pagerState.currentPage)?.backdropUrl)
+    }
+
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val heroHeight = (configuration.screenHeightDp * 0.45).dp
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(heroHeight)
+            .padding(vertical = 8.dp)
+    ) {
+        androidx.compose.foundation.pager.HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 24.dp),
+            pageSpacing = 12.dp
+        ) { page ->
+            val item = heroItems[page]
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable {
+                        if (item.isMovie) onMovieClick(item.id) else onTvShowClick(item.id)
+                    }
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                if (item.backdropUrl != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(item.backdropUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = item.displayTitle,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant))
+                }
+
+                // Gradient overlay
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f)),
+                                startY = 100f
+                            )
+                        )
+                )
+
+                // Info content
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = item.displayTitle,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary)
+                                Text(
+                                    text = String.format("%.1f", item.voteAverage),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                        if (item.year.isNotBlank()) {
+                            Text(
+                                text = item.year,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.LightGray
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color.White.copy(alpha = 0.2f)
+                        ) {
+                            Text(
+                                text = if (item.isMovie) "MOVIE" else "TV",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                } // Box 
+            } // Card
+        } // HorizontalPager
+        
+        // Pager indicators
+        if (heroItems.size > 1) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                repeat(heroItems.size) { iteration ->
+                    val isSelected = pagerState.currentPage == iteration
+                    val color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.4f)
+                    val width = if (isSelected) 16.dp else 6.dp
+                    Box(
+                        modifier = Modifier
+                            .size(height = 6.dp, width = width)
+                            .clip(CircleShape)
+                            .background(color)
+                    )
+                }
+            }
             }
         }
     }

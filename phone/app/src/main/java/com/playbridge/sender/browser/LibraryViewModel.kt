@@ -8,6 +8,7 @@ import com.playbridge.sender.data.library.TmdbMultiSearchResult
 import com.playbridge.sender.data.library.TmdbRepository
 import com.playbridge.sender.data.library.TmdbTvShow
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +24,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val popularTvShowsListState = LazyListState()
     val discoveredMoviesListState = LazyListState()
     val discoveredTvShowsListState = LazyListState()
+    val discoverGridState = LazyGridState()
     val searchResultsListState = LazyListState()
 
     private val _isConfigured = MutableStateFlow(tmdb.isConfigured())
@@ -141,6 +143,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 // Handle error if needed
             } finally {
                 _isLoading.value = false
+                triggerDiscovery()
             }
         }
     }
@@ -268,15 +271,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         val genres = _selectedGenres.value
         val mediaType = _selectedMediaType.value
         val year = _selectedYear.value
-        if (genres.isEmpty() && mediaType == LibraryMediaType.ALL && _selectedSortBy.value == LibrarySortBy.POPULARITY_DESC && year.isBlank()) {
-            _discoveredMovies.value = emptyList()
-            _discoveredTvShows.value = emptyList()
-            discoveredMoviesPage = 1
-            discoveredTvShowsPage = 1
-            _hasMoreDiscoveredMovies.value = true
-            _hasMoreDiscoveredTvShows.value = true
-            return
-        }
 
         viewModelScope.launch {
             _isDiscoveryLoading.value = true
