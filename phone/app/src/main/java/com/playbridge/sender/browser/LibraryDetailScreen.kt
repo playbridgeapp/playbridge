@@ -47,6 +47,7 @@ fun MovieDetailScreen(
     movieId: Int,
     addonRepository: AddonRepository,
     onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
+    viewModel: LibraryViewModel,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -74,6 +75,8 @@ fun MovieDetailScreen(
         }
         isLoading = false
     }
+
+    val isWatchlisted by viewModel.isWatchlisted(movieId).collectAsState(initial = false)
 
     // Stream picker sheet
     if (showStreamPicker) {
@@ -178,7 +181,21 @@ fun MovieDetailScreen(
                 }
 
                 item {
-                    ActionButtons()
+                    ActionButtons(
+                        isWatchlisted = isWatchlisted,
+                        onToggleWatchlist = {
+                            details?.let { movie ->
+                                viewModel.toggleWatchlist(
+                                    tmdbId = movie.id,
+                                    mediaType = "movie",
+                                    title = movie.title,
+                                    posterUrl = movie.posterUrl,
+                                    year = movie.year,
+                                    rating = movie.rating
+                                )
+                            }
+                        }
+                    )
                 }
 
                 // Overview
@@ -273,6 +290,7 @@ fun TvShowDetailScreen(
     onNowPlayingStarted: (tvId: Int, season: Int, startEpisode: Int) -> Unit = { _, _, _ -> },
     highlightSeason: Int? = null,
     highlightEpisode: Int? = null,
+    viewModel: LibraryViewModel,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -326,6 +344,8 @@ fun TvShowDetailScreen(
             isSeasonLoading = false
         }
     }
+
+    val isWatchlisted by viewModel.isWatchlisted(tvId).collectAsState(initial = false)
 
     // Stream picker sheet — when seasonQueueContext is set, picking a stream for Ep1
     // triggers the throttled queue for the rest of the season
@@ -526,7 +546,21 @@ fun TvShowDetailScreen(
                 }
                 
                 item {
-                    ActionButtons()
+                    ActionButtons(
+                        isWatchlisted = isWatchlisted,
+                        onToggleWatchlist = {
+                            details?.let { show ->
+                                viewModel.toggleWatchlist(
+                                    tmdbId = show.id,
+                                    mediaType = "tv",
+                                    title = show.name,
+                                    posterUrl = show.posterUrl,
+                                    year = show.year,
+                                    rating = show.rating
+                                )
+                            }
+                        }
+                    )
                 }
 
                 // Overview
@@ -929,7 +963,10 @@ private fun PlayButton(
 }
 
 @Composable
-private fun ActionButtons() {
+private fun ActionButtons(
+    isWatchlisted: Boolean,
+    onToggleWatchlist: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -939,11 +976,19 @@ private fun ActionButtons() {
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            // Use alpha for the tint not background
+            modifier = Modifier.clickable { onToggleWatchlist() }
         ) {
-            Icon(Icons.Default.BookmarkBorder, contentDescription = "Add to Watchlist", tint = Color.White.copy(alpha=0.7f))
+            Icon(
+                if (isWatchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder, 
+                contentDescription = if (isWatchlisted) "Remove from Watchlist" else "Add to Watchlist", 
+                tint = if (isWatchlisted) MaterialTheme.colorScheme.primary else Color.White.copy(alpha=0.7f)
+            )
             Spacer(modifier = Modifier.height(4.dp))
-            Text("Add to Watchlist", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha=0.7f))
+            Text(
+                if (isWatchlisted) "In Watchlist" else "Add to Watchlist", 
+                style = MaterialTheme.typography.labelSmall, 
+                color = if (isWatchlisted) MaterialTheme.colorScheme.primary else Color.White.copy(alpha=0.7f)
+            )
         }
         Spacer(modifier = Modifier.width(48.dp))
         Column(

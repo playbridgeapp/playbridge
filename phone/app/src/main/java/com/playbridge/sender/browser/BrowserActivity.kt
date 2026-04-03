@@ -1751,6 +1751,7 @@ class BrowserActivity : ComponentActivity() {
                                             MovieDetailScreen(
                                                 movieId = movieId,
                                                 addonRepository = addonRepository,
+                                                viewModel = libraryViewModel,
                                                 onPlayStream = { url, title, subtitles ->
                                                     val mainVideo = DetectedVideo(
                                                         url = url,
@@ -1851,6 +1852,7 @@ class BrowserActivity : ComponentActivity() {
                                                     tvPlaylistState?.let { nowPlayingEpisodeStart + it.currentIndex }
                                                 } else null,
                                                 playlistState = tvPlaylistState,
+                                                viewModel = libraryViewModel,
                                                 onBack = { currentScreen = Screen.Library }
                                             )
                                         }

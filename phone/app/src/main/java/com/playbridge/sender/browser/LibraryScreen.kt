@@ -532,191 +532,215 @@ private fun LibraryScreenContent(
                     )
                 }
             }
+        }
 
-            val contentBottomPadding = innerPadding.calculateBottomPadding() + 80.dp
-            if (!isConfigured) {
-                // No API key — show setup prompt
-                ApiKeyPrompt()
-            } else if (isLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator()
-                }
-            } else if (isSearching) {
-                // Search results
-                if (isSearchLoading) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                } else if (searchResults.isEmpty() && searchQuery.isNotBlank()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "No results found",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+        val watchlist by viewModel.watchlist.collectAsState()
+
+        val contentBottomPadding = innerPadding.calculateBottomPadding() + 80.dp
+        if (!isConfigured) {
+        // No API key — show setup prompt
+        ApiKeyPrompt()
+    } else if (isLoading) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
+    } else if (isSearching) {
+        // Search results
+        if (isSearchLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        } else if (searchResults.isEmpty() && searchQuery.isNotBlank()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "No results found",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            SearchResultsList(
+                listState = viewModel.searchResultsListState,
+                results = searchResults,
+                contentPadding = PaddingValues(
+                    top = innerPadding.calculateTopPadding() + 8.dp,
+                    bottom = contentBottomPadding + 8.dp,
+                    start = 8.dp,
+                    end = 8.dp
+                ),
+                onMovieClick = onMovieClick,
+                onTvShowClick = onTvShowClick
+            )
+        }
+    } else {
+        // Main catalog
+        AnimatedContent(
+            targetState = selectedTab,
+            transitionSpec = {
+                if (targetState > initialState) {
+                    // Moving from Home to Browse: Slide left to show new content coming from right
+                    (slideInHorizontally { width -> width } + fadeIn(tween(400)))
+                        .togetherWith(slideOutHorizontally { width -> -width } + fadeOut(tween(400))) 
                 } else {
-                    SearchResultsList(
-                        listState = viewModel.searchResultsListState,
-                        results = searchResults,
-                        contentPadding = PaddingValues(
-                            top = innerPadding.calculateTopPadding() + 8.dp,
-                            bottom = contentBottomPadding + 8.dp,
-                            start = 8.dp,
-                            end = 8.dp
-                        ),
+                    // Moving from Browse to Home: Slide right to show new content coming from left
+                    (slideInHorizontally { width -> -width } + fadeIn(tween(400)))
+                        .togetherWith(slideOutHorizontally { width -> width } + fadeOut(tween(400)))
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            label = "TabAnimation"
+        ) { tab ->
+            if (tab == 1) {
+                Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
+                    DiscoverGrid(
+                        movies = discoveredMovies,
+                        tvShows = discoveredTvShows,
+                        gridState = viewModel.discoverGridState,
+                        selectedMediaType = selectedMediaType,
+                        isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
+                        hasMoreMovies = hasMoreDiscoveredMovies,
+                        isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
+                        hasMoreTvShows = hasMoreDiscoveredTvShows,
+                        isDiscoveryLoading = isDiscoveryLoading,
                         onMovieClick = onMovieClick,
-                        onTvShowClick = onTvShowClick
+                        onTvShowClick = onTvShowClick,
+                        onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
+                        onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() }
                     )
                 }
             } else {
-                // Main catalog
-                AnimatedContent(
-                    targetState = selectedTab,
-                    transitionSpec = {
-                        if (targetState > initialState) {
-                            // Moving from Home to Browse: Slide left to show new content coming from right
-                            (slideInHorizontally { width -> width } + fadeIn(tween(400)))
-                                .togetherWith(slideOutHorizontally { width -> -width } + fadeOut(tween(400))) 
-                        } else {
-                            // Moving from Browse to Home: Slide right to show new content coming from left
-                            (slideInHorizontally { width -> -width } + fadeIn(tween(400)))
-                                .togetherWith(slideOutHorizontally { width -> width } + fadeOut(tween(400)))
-                        }
-                    },
+                LazyColumn(
+                    state = viewModel.mainListState,
                     modifier = Modifier.fillMaxSize(),
-                    label = "TabAnimation"
-                ) { tab ->
-                    if (tab == 1) {
-                        Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
-                            DiscoverGrid(
-                                movies = discoveredMovies,
-                                tvShows = discoveredTvShows,
-                                gridState = viewModel.discoverGridState,
-                                selectedMediaType = selectedMediaType,
-                                isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
-                                hasMoreMovies = hasMoreDiscoveredMovies,
-                                isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
-                                hasMoreTvShows = hasMoreDiscoveredTvShows,
-                                isDiscoveryLoading = isDiscoveryLoading,
+                    contentPadding = PaddingValues(top = innerPadding.calculateTopPadding(), bottom = contentBottomPadding)
+                ) {
+                    if (trendingWeek.isNotEmpty()) {
+                        item {
+                            HeroBannerCarousel(
+                                items = trendingWeek,
                                 onMovieClick = onMovieClick,
                                 onTvShowClick = onTvShowClick,
-                                onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
-                                onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() }
+                                onHeroItemChanged = { activeHeroBackdropUrl = it }
                             )
                         }
-                    } else {
-                        LazyColumn(
-                            state = viewModel.mainListState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(top = innerPadding.calculateTopPadding(), bottom = contentBottomPadding)
-                        ) {
-                            if (trendingWeek.isNotEmpty()) {
-                                item {
-                                    HeroBannerCarousel(
-                                        items = trendingWeek,
-                                        onMovieClick = onMovieClick,
-                                        onTvShowClick = onTvShowClick,
-                                        onHeroItemChanged = { activeHeroBackdropUrl = it }
-                                    )
-                                }
-                            }
+                    }
 
-                            // Trending Today
-                            if (trendingDay.isNotEmpty()) {
-                                item {
-                                    MediaRow(
-                                        title = "Trending Today",
-                                        items = trendingDay,
-                                        listState = viewModel.trendingDayListState,
-                                        onItemClick = { item ->
-                                            if (item.isMovie) onMovieClick(item.id)
-                                            else onTvShowClick(item.id)
-                                        },
-                                        posterUrl = { it.posterUrl },
-                                        displayTitle = { it.displayTitle },
-                                        year = { it.year },
-                                        rating = { String.format("%.1f", it.voteAverage) },
-                                        onLoadMore = { viewModel.loadMoreTrendingDay() },
-                                        isLoadingMore = isLoadingMoreTrendingDay,
-                                        hasMore = hasMoreTrendingDay
-                                    )
-                                }
-                            }
+                    // My Watchlist
+                    if (watchlist.isNotEmpty()) {
+                        item {
+                            MediaRow(
+                                title = "My Watchlist",
+                                items = watchlist,
+                                listState = rememberLazyListState(),
+                                onItemClick = { item ->
+                                    if (item.mediaType == "movie") onMovieClick(item.tmdbId)
+                                    else onTvShowClick(item.tmdbId)
+                                },
+                                posterUrl = { it.posterUrl },
+                                displayTitle = { it.title },
+                                year = { it.year },
+                                rating = { it.rating },
+                                hasMore = false,
+                                isLoadingMore = false,
+                                onLoadMore = {}
+                            )
+                        }
+                    }
 
-                            // Popular Movies
-                            if (popularMovies.isNotEmpty()) {
-                                item {
-                                    MediaRow(
-                                        title = "Popular Movies",
-                                        items = popularMovies,
-                                        listState = viewModel.popularMoviesListState,
-                                        onItemClick = { onMovieClick(it.id) },
-                                        posterUrl = { it.posterUrl },
-                                        displayTitle = { it.title },
-                                        year = { it.year },
-                                        rating = { it.rating },
-                                        onLoadMore = { viewModel.loadMorePopularMovies() },
-                                        isLoadingMore = isLoadingMorePopularMovies,
-                                        hasMore = hasMorePopularMovies
-                                    )
-                                }
-                            }
+                    // Trending Today
+                    if (trendingDay.isNotEmpty()) {
+                        item {
+                            MediaRow(
+                                title = "Trending Today",
+                                items = trendingDay,
+                                listState = viewModel.trendingDayListState,
+                                onItemClick = { item ->
+                                    if (item.isMovie) onMovieClick(item.id)
+                                    else onTvShowClick(item.id)
+                                },
+                                posterUrl = { it.posterUrl },
+                                displayTitle = { it.displayTitle },
+                                year = { it.year },
+                                rating = { String.format("%.1f", it.voteAverage) },
+                                onLoadMore = { viewModel.loadMoreTrendingDay() },
+                                isLoadingMore = isLoadingMoreTrendingDay,
+                                hasMore = hasMoreTrendingDay
+                            )
+                        }
+                    }
 
-                            // Popular TV Shows
-                            if (popularTvShows.isNotEmpty()) {
-                                item {
-                                    MediaRow(
-                                        title = "Popular TV Shows",
-                                        items = popularTvShows,
-                                        listState = viewModel.popularTvShowsListState,
-                                        onItemClick = { onTvShowClick(it.id) },
-                                        posterUrl = { it.posterUrl },
-                                        displayTitle = { it.name },
-                                        year = { it.year },
-                                        rating = { it.rating },
-                                        onLoadMore = { viewModel.loadMorePopularTvShows() },
-                                        isLoadingMore = isLoadingMorePopularTvShows,
-                                        hasMore = hasMorePopularTvShows
-                                    )
-                                }
-                            }
+                    // Popular Movies
+                    if (popularMovies.isNotEmpty()) {
+                        item {
+                            MediaRow(
+                                title = "Popular Movies",
+                                items = popularMovies,
+                                listState = viewModel.popularMoviesListState,
+                                onItemClick = { onMovieClick(it.id) },
+                                posterUrl = { it.posterUrl },
+                                displayTitle = { it.title },
+                                year = { it.year },
+                                rating = { it.rating },
+                                onLoadMore = { viewModel.loadMorePopularMovies() },
+                                isLoadingMore = isLoadingMorePopularMovies,
+                                hasMore = hasMorePopularMovies
+                            )
+                        }
+                    }
 
-                            // New & Upcoming (Merged)
-                            if (newReleases.isNotEmpty()) {
-                                item {
-                                    MediaRow(
-                                        title = "New & Upcoming",
-                                        items = newReleases,
-                                        listState = viewModel.newReleasesListState,
-                                        onItemClick = { onMovieClick(it.id) },
-                                        posterUrl = { it.posterUrl },
-                                        displayTitle = { it.title },
-                                        year = { it.year },
-                                        rating = { it.rating },
-                                        badgeText = { item ->
-                                            if (nowPlayingMovieIds.contains(item.id)) "In Theaters" else null
-                                        },
-                                        onLoadMore = { viewModel.loadMoreNewReleases() },
-                                        isLoadingMore = isLoadingMoreNewReleases,
-                                        hasMore = hasMoreNewReleases
-                                    )
-                                }
-                            }
+                    // Popular TV Shows
+                    if (popularTvShows.isNotEmpty()) {
+                        item {
+                            MediaRow(
+                                title = "Popular TV Shows",
+                                items = popularTvShows,
+                                listState = viewModel.popularTvShowsListState,
+                                onItemClick = { onTvShowClick(it.id) },
+                                posterUrl = { it.posterUrl },
+                                displayTitle = { it.name },
+                                year = { it.year },
+                                rating = { it.rating },
+                                onLoadMore = { viewModel.loadMorePopularTvShows() },
+                                isLoadingMore = isLoadingMorePopularTvShows,
+                                hasMore = hasMorePopularTvShows
+                            )
+                        }
+                    }
+
+                    // New & Upcoming (Merged)
+                    if (newReleases.isNotEmpty()) {
+                        item {
+                            MediaRow(
+                                title = "New & Upcoming",
+                                items = newReleases,
+                                listState = viewModel.newReleasesListState,
+                                onItemClick = { onMovieClick(it.id) },
+                                posterUrl = { it.posterUrl },
+                                displayTitle = { it.title },
+                                year = { it.year },
+                                rating = { it.rating },
+                                badgeText = { item ->
+                                    if (nowPlayingMovieIds.contains(item.id)) "In Theaters" else null
+                                },
+                                onLoadMore = { viewModel.loadMoreNewReleases() },
+                                isLoadingMore = isLoadingMoreNewReleases,
+                                hasMore = hasMoreNewReleases
+                            )
                         }
                     }
                 }
             }
         }
+    }
     }
 }
 
@@ -1385,11 +1409,12 @@ private fun HeroBannerCarousel(
                             )
                         }
                     }
-                } // Box 
-            } // Card
-        } // HorizontalPager
+                }
+            }
+        }
+    }
         
-        // Pager indicators
+    // Pager indicators
         if (heroItems.size > 1) {
             Row(
                 modifier = Modifier
@@ -1408,7 +1433,6 @@ private fun HeroBannerCarousel(
                             .background(color)
                     )
                 }
-            }
             }
         }
     }

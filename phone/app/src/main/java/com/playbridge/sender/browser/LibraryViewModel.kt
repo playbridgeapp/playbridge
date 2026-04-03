@@ -12,10 +12,19 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.playbridge.sender.data.history.DatabaseProvider
+import com.playbridge.sender.data.library.WatchlistEntity
 
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdb = TmdbRepository(application)
+    private val watchlistDao = DatabaseProvider.getDatabase(application).watchlistDao()
+
+    val watchlist: StateFlow<List<WatchlistEntity>> = watchlistDao.getAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // UI Scroll States
     val mainListState = LazyListState()
@@ -432,6 +441,38 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 }
             } finally {
                 _isLoadingMoreDiscoveredTvShows.value = false
+            }
+        }
+    }
+
+    fun isWatchlisted(tmdbId: Int): Flow<Boolean> {
+        return watchlistDao.isWatchlisted(tmdbId)
+    }
+
+    fun toggleWatchlist(
+        tmdbId: Int,
+        mediaType: String,
+        title: String,
+        posterUrl: String?,
+        year: String,
+        rating: String
+    ) {
+        viewModelScope.launch {
+            val currentWatchlist = watchlist.value
+            val existing = currentWatchlist.find { it.tmdbId == tmdbId }
+            if (existing != null) {
+                watchlistDao.delete(existing)
+            } else {
+                watchlistDao.insert(
+                    WatchlistEntity(
+                        tmdbId = tmdbId,
+                        mediaType = mediaType,
+                        title = title,
+                        posterUrl = posterUrl,
+                        year = year,
+                        rating = rating
+                    )
+                )
             }
         }
     }
