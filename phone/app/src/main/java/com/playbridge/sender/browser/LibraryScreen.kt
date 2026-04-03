@@ -464,6 +464,12 @@ private fun LibraryScreenContent(
                     SearchResultsList(
                         listState = viewModel.searchResultsListState,
                         results = searchResults,
+                        contentPadding = PaddingValues(
+                            top = innerPadding.calculateTopPadding() + 8.dp,
+                            bottom = contentBottomPadding + 8.dp,
+                            start = 8.dp,
+                            end = 8.dp
+                        ),
                         onMovieClick = onMovieClick,
                         onTvShowClick = onTvShowClick
                     )
@@ -1041,13 +1047,14 @@ private fun PosterCard(
 private fun SearchResultsList(
     listState: LazyListState = rememberLazyListState(),
     results: List<TmdbMultiSearchResult>,
+    contentPadding: PaddingValues = PaddingValues(8.dp),
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit
 ) {
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(8.dp),
+        contentPadding = contentPadding,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(results) { result ->
