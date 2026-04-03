@@ -574,7 +574,32 @@ class BrowserActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+
         val url = intent.getStringExtra(EXTRA_URL)
+        val requestedMode = intent.getStringExtra(EXTRA_BROWSER_MODE)
+
+        // Resolve which engine the incoming browse command wants, using the same
+        // logic as initializeEngine() so the two stay in sync.
+        val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        val tvPref = if (prefs.contains("browser_mode")) {
+            prefs.getString("browser_mode", "phone") ?: "phone"
+        } else {
+            if (prefs.getBoolean("use_gecko", false)) "gecko" else "phone"
+        }
+        val resolvedMode = if (tvPref == "phone") {
+            if (requestedMode != null && requestedMode != "tv") requestedMode else "webview"
+        } else {
+            tvPref
+        }
+        val wantsGecko = resolvedMode == "gecko"
+        val hasGecko  = engine is GeckoViewEngine
+
+        // Only reinitialize when the engine type actually needs to change.
+        if (wantsGecko != hasGecko) {
+            Log.d(TAG, "onNewIntent: engine switch required (${ if (hasGecko) "gecko" else "webview" } → $resolvedMode)")
+            initializeEngine()
+        }
+
         if (!url.isNullOrEmpty()) {
             Log.d(TAG, "Loading new URL: $url")
             currentUrl = url
