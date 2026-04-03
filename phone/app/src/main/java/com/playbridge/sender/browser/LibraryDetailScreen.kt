@@ -2,10 +2,13 @@ package com.playbridge.sender.browser
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -14,9 +17,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -100,72 +110,40 @@ fun MovieDetailScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(details?.title ?: "Movie") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    Box(modifier = Modifier.fillMaxSize()) {
+        TranslucentBackground(backdropUrl = details?.backdropUrl)
         if (isLoading) {
             Box(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator()
             }
         } else if (details == null) {
             Box(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Failed to load movie details")
+                Text("Failed to load movie details", color = Color.White)
             }
         } else {
             val movie = details!!
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 32.dp)
             ) {
                 // Backdrop
                 item {
                     BackdropSection(
                         backdropUrl = movie.backdropUrl,
+                        logoUrl = movie.logoUrl,
                         title = movie.title,
                         year = movie.year,
+                        certification = movie.certification,
                         rating = movie.rating,
                         runtime = movie.runtimeFormatted,
                         genres = movie.genres.map { it.name },
                         omdbDetails = omdbDetails
-                    )
-                }
-
-                // Tagline
-                item {
-                    if (movie.tagline.isNotBlank()) {
-                        Text(
-                            text = movie.tagline,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-                    }
-                }
-
-                // Overview
-                item {
-                    Text(
-                        text = movie.overview,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
@@ -194,7 +172,38 @@ fun MovieDetailScreen(
                             text = "No IMDB ID available — cannot resolve streams",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(horizontal = 16.dp)
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+
+                item {
+                    ActionButtons()
+                }
+
+                // Overview
+                item {
+                    Text(
+                        text = movie.overview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                        color = Color.White
+                    )
+                    
+                    if (movie.cast.isNotEmpty()) {
+                        Text(
+                            text = "Starring: ${movie.cast.joinToString(", ")}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                        )
+                    }
+                    if (movie.director.isNotBlank()) {
+                        Text(
+                            text = "Director: ${movie.director}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
                         )
                     }
                 }
@@ -203,9 +212,9 @@ fun MovieDetailScreen(
                 item {
                     if (movie.imdbId != null) {
                         Surface(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
                             shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
                         ) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
@@ -215,13 +224,13 @@ fun MovieDetailScreen(
                                 Icon(
                                     Icons.Default.Info,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = Color.White.copy(alpha = 0.7f),
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Text(
                                     text = "IMDB: ${movie.imdbId}",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = Color.White.copy(alpha = 0.7f)
                                 )
                             }
                         }
@@ -231,6 +240,19 @@ fun MovieDetailScreen(
                 item { Spacer(modifier = Modifier.height(32.dp)) }
             }
         }
+        
+        TopAppBar(
+            title = { },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = Color.Transparent,
+                scrolledContainerColor = Color.Transparent
+            )
+        )
     }
 }
 
@@ -426,47 +448,38 @@ fun TvShowDetailScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(details?.name ?: "TV Show") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    Box(modifier = Modifier.fillMaxSize()) {
+        TranslucentBackground(backdropUrl = details?.backdropUrl)
         if (isLoading) {
             Box(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator()
             }
         } else if (details == null) {
             Box(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Failed to load TV show details")
+                Text("Failed to load TV show details", color = Color.White)
             }
         } else {
             val show = details!!
             val imdbId = show.imdbId
 
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 32.dp)
             ) {
                 // Backdrop
                 item {
                     BackdropSection(
                         backdropUrl = show.backdropUrl,
+                        logoUrl = show.logoUrl,
                         title = show.name,
                         year = show.year,
+                        certification = show.certification,
                         rating = show.rating,
                         runtime = "${show.numberOfSeasons} Season${if (show.numberOfSeasons != 1) "s" else ""}",
                         genres = show.genres.map { it.name },
@@ -474,71 +487,14 @@ fun TvShowDetailScreen(
                     )
                 }
 
-                // Tagline
-                item {
-                    if (show.tagline.isNotBlank()) {
-                        Text(
-                            text = show.tagline,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-                    }
-                }
-
-                // Overview
-                item {
-                    Text(
-                        text = show.overview,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                // Season tabs
-                item {
-                    val seasons = show.seasons.filter { it.seasonNumber > 0 }
-                    if (seasons.isNotEmpty()) {
-                        Text(
-                            text = "Seasons",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                        )
-
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(seasons) { season ->
-                                FilterChip(
-                                    selected = selectedSeason == season.seasonNumber,
-                                    onClick = {
-                                        selectedSeason = season.seasonNumber
-                                        scope.launch {
-                                            isSeasonLoading = true
-                                            seasonDetails = tmdb.getSeasonDetails(tvId, season.seasonNumber)
-                                            isSeasonLoading = false
-                                        }
-                                    },
-                                    label = { Text("S${season.seasonNumber}") },
-                                    modifier = Modifier.height(36.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Play Season button
+                // Play Top-Level button (Plays selected season)
                 item {
                     val episodes = seasonDetails?.episodes ?: emptyList()
-                    if (imdbId != null && episodes.isNotEmpty() && !isSeasonLoading) {
-                        PlayButton(
-                            label = if (isResolvingSeason) seasonResolveProgress else "Play Season $selectedSeason (${episodes.size} episodes)",
-                            enabled = !isResolvingSeason,
-                            onClick = {
+                    PlayButton(
+                        label = if (isResolvingSeason) seasonResolveProgress else "Play",
+                        enabled = imdbId != null && episodes.isNotEmpty() && !isSeasonLoading && !isResolvingSeason,
+                        onClick = {
+                            if (imdbId != null && episodes.isNotEmpty()) {
                                 val ep1 = episodes.firstOrNull() ?: return@PlayButton
                                 val runtimeMap = episodes.associate { ep ->
                                     ep.episodeNumber to (ep.runtime ?: 45)
@@ -565,17 +521,94 @@ fun TvShowDetailScreen(
                                     runtimeMap = runtimeMap
                                 )
                             }
+                        }
+                    )
+                }
+                
+                item {
+                    ActionButtons()
+                }
+
+                // Overview
+                item {
+                    Text(
+                        text = show.overview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                        color = Color.White
+                    )
+                    
+                    if (show.cast.isNotEmpty()) {
+                        Text(
+                            text = "Starring: ${show.cast.joinToString(", ")}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
                         )
                     }
                 }
 
-                // Queuing progress — slim bar below the Play Season button
+                // Season Dropdown
+                item {
+                    val seasons = show.seasons.filter { it.seasonNumber > 0 }
+                    if (seasons.isNotEmpty()) {
+                        var dropdownExpanded by remember { mutableStateOf(false) }
+                        
+                        Box(modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.clickable { dropdownExpanded = true }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                                ) {
+                                    Text(
+                                        text = "Season $selectedSeason",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Icon(
+                                        Icons.Default.ArrowDropDown, 
+                                        contentDescription = "Select Season",
+                                        tint = Color.White
+                                    )
+                                }
+                            }
+                            
+                            DropdownMenu(
+                                expanded = dropdownExpanded,
+                                onDismissRequest = { dropdownExpanded = false },
+                            ) {
+                                seasons.forEach { season ->
+                                    DropdownMenuItem(
+                                        text = { Text("Season ${season.seasonNumber}") },
+                                        onClick = {
+                                            selectedSeason = season.seasonNumber
+                                            dropdownExpanded = false
+                                            scope.launch {
+                                                isSeasonLoading = true
+                                                seasonDetails = tmdb.getSeasonDetails(tvId, season.seasonNumber)
+                                                isSeasonLoading = false
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Queuing progress — slim bar
                 if (isQueueing && queueTotalCount > 0) {
                     item {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
+                                .padding(horizontal = 24.dp)
                                 .padding(bottom = 8.dp)
                         ) {
                             LinearProgressIndicator(
@@ -583,12 +616,13 @@ fun TvShowDetailScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(2.dp)
-                                    .clip(RoundedCornerShape(1.dp))
+                                    .clip(RoundedCornerShape(1.dp)),
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
                             )
                             Text(
                                 text = "Queuing $queuedCount / $queueTotalCount episodes…",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = Color.White.copy(alpha=0.7f),
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
@@ -663,6 +697,19 @@ fun TvShowDetailScreen(
                 item { Spacer(modifier = Modifier.height(32.dp)) }
             }
         }
+        
+        TopAppBar(
+            title = { },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = Color.Transparent,
+                scrolledContainerColor = Color.Transparent
+            )
+        )
     }
 }
 
@@ -671,138 +718,181 @@ fun TvShowDetailScreen(
 @Composable
 private fun BackdropSection(
     backdropUrl: String?,
+    logoUrl: String?,
     title: String,
     year: String,
+    certification: String,
     rating: String,
     runtime: String,
     genres: List<String>,
     omdbDetails: OmdbResponse? = null
 ) {
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    val height = (config.screenHeightDp * 0.65).dp
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(220.dp)
+            .height(height)
     ) {
-        if (backdropUrl != null) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(backdropUrl)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-            )
-        }
-
-        // Gradient overlay
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.7f),
-                            MaterialTheme.colorScheme.background
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color.Black, Color.Transparent),
+                            startY = size.height * 0.4f,
+                            endY = size.height
                         ),
-                        startY = 50f
+                        blendMode = BlendMode.DstIn
                     )
+                }
+        ) {
+            if (backdropUrl != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(backdropUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
-        )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surface)
+                )
+            }
+        }
 
-        // Info overlay at bottom
+        // Contents at bottom
         Column(
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(16.dp)
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
+            if (logoUrl != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(logoUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth(0.7f)
+                        .height(130.dp)
+                )
+            } else {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Black,
+                    color = Color.White,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (genres.isNotEmpty()) {
+                Text(
+                    text = genres.take(3).joinToString("  "),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White.copy(alpha = 0.7f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .horizontalScroll(rememberScrollState())
             ) {
                 if (year.isNotBlank()) {
                     Text(
                         text = year,
                         style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = Color.White.copy(alpha = 0.5f),
+                        modifier = Modifier.align(Alignment.CenterVertically)
                     )
                 }
-                if (rating.isNotBlank() && rating != "0.0") {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Star,
-                            contentDescription = null,
-                            tint = Color(0xFFFFD700),
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = rating,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                    }
-                }
-                if (omdbDetails?.imdbRating != null && omdbDetails.imdbRating != "N/A") {
+                if (certification.isNotBlank()) {
                     Surface(
-                        color = Color(0xFFF5C518),
-                        shape = RoundedCornerShape(20.dp)
+                        shape = RoundedCornerShape(4.dp),
+                        color = Color.White.copy(alpha = 0.2f),
+                        modifier = Modifier.align(Alignment.CenterVertically)
                     ) {
                         Text(
-                            text = "IMDb ${omdbDetails.imdbRating}",
+                            text = certification,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
-                if (omdbDetails?.rottenTomatoesRating != null && omdbDetails.rottenTomatoesRating != "N/A") {
-                    Surface(
-                        color = Color(0xFFFA320A),
-                        shape = RoundedCornerShape(20.dp)
-                    ) {
-                        Text(
-                            text = "🍅 ${omdbDetails.rottenTomatoesRating}",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                        )
-                    }
-                }
+                
                 if (runtime.isNotBlank()) {
                     Text(
                         text = runtime,
                         style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = Color.White.copy(alpha = 0.5f),
+                        modifier = Modifier.align(Alignment.CenterVertically)
                     )
                 }
+                
+                if (rating.isNotBlank() && rating != "0.0") {
+                    RatingBadge("TMDB", rating, Color(0xFF01B4E4))
+                }
+
+                if (omdbDetails != null) {
+                    val imdb = omdbDetails.imdbRating
+                    val rt = omdbDetails.rottenTomatoesRating
+
+                    if (!imdb.isNullOrBlank() && imdb != "N/A") {
+                        RatingBadge("IMDb", imdb, Color(0xFFF5C518))
+                    }
+
+                    if (!rt.isNullOrBlank() && rt != "N/A") {
+                        val color = if (rt.contains("%") && rt.replace("%", "").toIntOrNull() ?: 0 >= 60) {
+                            Color(0xFFFA320A) // Fresh red
+                        } else {
+                            Color(0xFF43C00A) // Rotten green splat
+                        }
+                        RatingBadge("RT", rt, color)
+                    }
+                }
             }
-            if (genres.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = genres.joinToString(" • "),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        }
+    }
+}
+
+@Composable
+private fun RatingBadge(provider: String, value: String, color: Color) {
+    Surface(
+        shape = RoundedCornerShape(4.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.5f)),
+        color = Color.Transparent
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(provider, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = color)
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(value, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
         }
     }
 }
@@ -818,17 +908,51 @@ private fun PlayButton(
         enabled = enabled,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .height(48.dp),
-        shape = RoundedCornerShape(20.dp)
+            .padding(horizontal = 24.dp)
+            .height(52.dp),
+        shape = RoundedCornerShape(8.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+            disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f)
+        )
     ) {
         Icon(
             Icons.Default.PlayArrow,
             contentDescription = null,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(24.dp)
         )
         Spacer(modifier = Modifier.width(8.dp))
-        Text(label, fontWeight = FontWeight.Bold)
+        Text(label, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+@Composable
+private fun ActionButtons() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp, bottom = 24.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            // Use alpha for the tint not background
+        ) {
+            Icon(Icons.Default.BookmarkBorder, contentDescription = "Add to Watchlist", tint = Color.White.copy(alpha=0.7f))
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("Add to Watchlist", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha=0.7f))
+        }
+        Spacer(modifier = Modifier.width(48.dp))
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(Icons.Default.Movie, contentDescription = "Play Trailer", tint = Color.White.copy(alpha=0.7f)) 
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("Play Trailer", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha=0.7f))
+        }
     }
 }
 
@@ -843,26 +967,24 @@ private fun EpisodeItem(
     val containerColor = when {
         isPlaying -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
         isInActivePlaylist -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-        else -> MaterialTheme.colorScheme.surface
+        else -> Color.Transparent
     }
-    Card(
+    
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor)
+            .background(containerColor)
+            .clickable(enabled = hasAddon && onPlay != null) { onPlay?.invoke() }
+            .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Episode still image
+            // Episode Image with badge
             Box(
                 modifier = Modifier
-                    .width(120.dp)
-                    .height(68.dp)
+                    .width(140.dp)
+                    .height(80.dp)
                     .clip(RoundedCornerShape(8.dp))
             ) {
                 if (episode.stillUrl != null) {
@@ -879,72 +1001,73 @@ private fun EpisodeItem(
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            "E${episode.episodeNumber}",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White.copy(alpha = 0.5f))
                     }
+                }
+                
+                // Badge overlay
+                Surface(
+                    color = Color.Black.copy(alpha = 0.8f),
+                    shape = RoundedCornerShape(bottomEnd = 8.dp),
+                    modifier = Modifier.align(Alignment.TopStart)
+                ) {
+                    Text(
+                        text = episode.episodeNumber.toString(),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+
+                if (isPlaying) {
+                     Icon(Icons.Default.PlayArrow, contentDescription = "Playing", tint = Color.White, modifier = Modifier.align(Alignment.Center).size(32.dp))
                 }
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(16.dp))
 
+            // Title, Date, Runtime
             Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                modifier = Modifier.weight(1f)
             ) {
                 Text(
-                    text = "${episode.episodeNumber}. ${episode.name}",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+                    text = episode.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (episode.runtime != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                if (!episode.airDate.isNullOrBlank()) {
                     Text(
-                        text = "${episode.runtime} min",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = episode.airDate,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.7f)
                     )
                 }
-                Text(
-                    text = episode.overview,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            // Action button
-            if (hasAddon && onPlay != null) {
-                when {
-                    isPlaying -> Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "Now playing",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp)
+                Spacer(modifier = Modifier.height(4.dp))
+                if (episode.runtime != null) {
+                    Text(
+                        text = "${episode.runtime}m",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.5f)
                     )
-                    isInActivePlaylist -> IconButton(onClick = onPlay) {
-                        Icon(
-                            Icons.Default.PlayCircleOutline,
-                            contentDescription = "Jump to episode",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                    else -> IconButton(onClick = onPlay) {
-                        Icon(
-                            Icons.Default.PlayCircle,
-                            contentDescription = "Play episode",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+         // Description
+        Text(
+            text = episode.overview,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.7f),
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -970,3 +1093,33 @@ data class PlaylistUiState(
     val totalCount: Int = 0
 )
 
+@Composable
+fun TranslucentBackground(backdropUrl: String?) {
+    if (backdropUrl != null) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(backdropUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(100.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+            )
+            // Apply a uniform dark tint that retains the vibrant color of the blurred backdrop
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.65f))
+            )
+        }
+    } else {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+        )
+    }
+}

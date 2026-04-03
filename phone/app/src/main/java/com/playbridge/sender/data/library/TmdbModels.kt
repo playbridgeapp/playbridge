@@ -1,7 +1,71 @@
 package com.playbridge.sender.data.library
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+
+// ==================== Images & Logos ====================
+
+@Serializable
+data class TmdbImages(
+    val logos: List<TmdbLogo> = emptyList()
+)
+
+@Serializable
+data class TmdbLogo(
+    @SerialName("file_path") val filePath: String
+) {
+    val logoUrl: String get() = "https://image.tmdb.org/t/p/w500$filePath"
+}
+
+// ==================== Credits (Cast/Crew) ====================
+
+@Serializable
+data class TmdbCredits(
+    val cast: List<TmdbCast> = emptyList(),
+    val crew: List<TmdbCrew> = emptyList()
+)
+
+@Serializable
+data class TmdbCast(
+    val name: String,
+    @SerialName("known_for_department") val knownForDepartment: String = ""
+)
+
+@Serializable
+data class TmdbCrew(
+    val name: String,
+    val job: String
+)
+
+// ==================== Content Ratings ====================
+
+@Serializable
+data class TmdbMovieReleaseDates(
+    val results: List<TmdbMovieReleaseDateResult> = emptyList()
+)
+
+@Serializable
+data class TmdbMovieReleaseDateResult(
+    @SerialName("iso_3166_1") val iso31661: String,
+    @SerialName("release_dates") val releaseDates: List<TmdbMovieReleaseDateItem> = emptyList()
+)
+
+@Serializable
+data class TmdbMovieReleaseDateItem(
+    val certification: String = ""
+)
+
+@Serializable
+data class TmdbTvContentRatings(
+    val results: List<TmdbTvContentRatingResult> = emptyList()
+)
+
+@Serializable
+data class TmdbTvContentRatingResult(
+    @SerialName("iso_3166_1") val iso31661: String,
+    val rating: String = ""
+)
 
 // ==================== TMDB API Responses ====================
 
@@ -82,16 +146,27 @@ data class TmdbMovieDetails(
     @SerialName("imdb_id") val imdbId: String? = null,
     val runtime: Int? = null,
     val genres: List<TmdbGenre> = emptyList(),
-    val tagline: String = ""
+    val tagline: String = "",
+    val credits: TmdbCredits? = null,
+    val images: TmdbImages? = null,
+    val release_dates: TmdbMovieReleaseDates? = null
 ) {
     val year: String get() = releaseDate.take(4)
     val posterUrl: String? get() = posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
-    val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w780$it" }
+    val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
     val rating: String get() = String.format("%.1f", voteAverage)
     val runtimeFormatted: String get() {
         val r = runtime ?: return ""
         return "${r / 60}h ${r % 60}m"
     }
+    
+    val logoUrl: String? get() = images?.logos?.firstOrNull()?.logoUrl
+    val certification: String get() {
+        val usDates = release_dates?.results?.firstOrNull { it.iso31661 == "US" }
+        return usDates?.releaseDates?.firstOrNull { it.certification.isNotBlank() }?.certification ?: ""
+    }
+    val director: String get() = credits?.crew?.firstOrNull { it.job == "Director" }?.name ?: ""
+    val cast: List<String> get() = credits?.cast?.take(6)?.map { it.name } ?: emptyList()
 }
 
 // ==================== TV Show Details ====================
@@ -110,13 +185,22 @@ data class TmdbTvDetails(
     val genres: List<TmdbGenre> = emptyList(),
     val seasons: List<TmdbSeason> = emptyList(),
     @SerialName("external_ids") val externalIds: TmdbExternalIds? = null,
-    val tagline: String = ""
+    val tagline: String = "",
+    val credits: TmdbCredits? = null,
+    val images: TmdbImages? = null,
+    val content_ratings: TmdbTvContentRatings? = null
 ) {
     val year: String get() = firstAirDate.take(4)
     val posterUrl: String? get() = posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
-    val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w780$it" }
+    val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
     val rating: String get() = String.format("%.1f", voteAverage)
     val imdbId: String? get() = externalIds?.imdbId
+    
+    val logoUrl: String? get() = images?.logos?.firstOrNull()?.logoUrl
+    val certification: String get() {
+        return content_ratings?.results?.firstOrNull { it.iso31661 == "US" }?.rating ?: ""
+    }
+    val cast: List<String> get() = credits?.cast?.take(6)?.map { it.name } ?: emptyList()
 }
 
 @Serializable

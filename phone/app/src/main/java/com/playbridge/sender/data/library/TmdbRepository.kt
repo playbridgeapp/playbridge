@@ -59,7 +59,7 @@ class TmdbRepository(private val context: Context) {
     }
 
     suspend fun getMovieDetails(movieId: Int): TmdbMovieDetails? {
-        return fetch("$BASE_URL/movie/$movieId?language=en-US")
+        return fetch("$BASE_URL/movie/$movieId?language=en-US&append_to_response=credits,release_dates,images&include_image_language=en,null")
     }
 
     // ==================== TV Shows ====================
@@ -76,7 +76,7 @@ class TmdbRepository(private val context: Context) {
     }
 
     suspend fun getTvDetails(tvId: Int): TmdbTvDetails? {
-        return fetch("$BASE_URL/tv/$tvId?language=en-US&append_to_response=external_ids")
+        return fetch("$BASE_URL/tv/$tvId?language=en-US&append_to_response=external_ids,credits,content_ratings,images&include_image_language=en,null")
     }
 
     suspend fun getSeasonDetails(tvId: Int, seasonNumber: Int): TmdbSeason? {
