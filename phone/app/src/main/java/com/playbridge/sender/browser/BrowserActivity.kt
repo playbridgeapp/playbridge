@@ -577,13 +577,13 @@ class BrowserActivity : ComponentActivity() {
                     contextMenuUrlState.value = null
                 },
                 onOpenInNewTab = { linkUrl ->
-                    tabManager.createTab(linkUrl, store)
+                    tabManager.createTab(linkUrl, store, parentId = store.state.selectedTabId)
                     Toast.makeText(this@BrowserActivity, "Opened in new tab", Toast.LENGTH_SHORT).show()
                     contextMenuUrl = null
                     contextMenuUrlState.value = null
                 },
                 onOpenInBackground = { linkUrl ->
-                    tabManager.createTab(linkUrl, store, select = false)
+                    tabManager.createTab(linkUrl, store, parentId = store.state.selectedTabId, select = false)
                     Toast.makeText(this@BrowserActivity, "Opened in background", Toast.LENGTH_SHORT).show()
                     contextMenuUrl = null
                     contextMenuUrlState.value = null
