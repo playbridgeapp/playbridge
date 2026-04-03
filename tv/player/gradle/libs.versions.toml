@@ -1,4 +1,5 @@
 [versions]
+composeUiTextGoogleFonts = "1.6.4"
 agp = "9.0.1"
 coreKtx = "1.17.0"
 appcompat = "1.6.1"
@@ -19,6 +20,7 @@ coil = "3.3.0"
 libvlc = "4.0.0-eap24"
 
 [libraries]
+androidx-compose-ui-text-google-fonts = { group = "androidx.compose.ui", name = "ui-text-google-fonts", version.ref = "composeUiTextGoogleFonts" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

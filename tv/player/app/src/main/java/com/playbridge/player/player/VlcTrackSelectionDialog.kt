@@ -72,7 +72,7 @@ fun VlcTrackSelectionDialog(
                 Text(
                     text = "Settings",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
                 )

@@ -76,7 +76,7 @@ fun MpvTrackSelectionDialog(
                 Text(
                     text = "Settings",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
                 )
@@ -122,7 +122,7 @@ private fun MpvTabButton(text: String, isSelected: Boolean, onClick: () -> Unit)
     var focused by remember { mutableStateOf(false) }
     val bg = when {
         isSelected -> Color(0xFF4A90D9)
-        focused    -> Color.White.copy(alpha = 0.12f)
+        focused    -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
         else       -> Color.Transparent
     }
     Box(
@@ -142,7 +142,7 @@ private fun MpvTabButton(text: String, isSelected: Boolean, onClick: () -> Unit)
     ) {
         Text(
             text = text,
-            color = if (isSelected) Color.White else Color.LightGray,
+            color = if (isSelected) MaterialTheme.colorScheme.onSurface else Color.LightGray,
             fontSize = 13.sp,
             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
@@ -157,7 +157,7 @@ private fun MpvTrackItem(name: String, isSelected: Boolean, onClick: () -> Unit)
     var focused by remember { mutableStateOf(false) }
     val bg = when {
         isSelected -> Color(0xFF4A90D9).copy(alpha = 0.3f)
-        focused    -> Color.White.copy(alpha = 0.08f)
+        focused    -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
         else       -> Color.Transparent
     }
     Row(
@@ -181,7 +181,7 @@ private fun MpvTrackItem(name: String, isSelected: Boolean, onClick: () -> Unit)
         }
         Text(
             text = name,
-            color = if (isSelected) Color.White else Color.LightGray,
+            color = if (isSelected) MaterialTheme.colorScheme.onSurface else Color.LightGray,
             fontSize = 13.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis

@@ -255,7 +255,7 @@ private fun StreamItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(20.dp)
     ) {
         Row(
             modifier = Modifier
@@ -307,7 +307,7 @@ private fun StreamItem(
                     // File size
                     stream.fileSizeFormatted?.let { size ->
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
+                            shape = RoundedCornerShape(20.dp),
                             color = MaterialTheme.colorScheme.secondaryContainer
                         ) {
                             Text(
@@ -321,8 +321,8 @@ private fun StreamItem(
                     // Estimated Mbps
                     stream.estimateMbps(episodeRuntimeMinutes)?.let { mbps ->
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = MaterialTheme.colorScheme.tertiaryContainer
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest
                         ) {
                             Text(
                                 text = mbps,

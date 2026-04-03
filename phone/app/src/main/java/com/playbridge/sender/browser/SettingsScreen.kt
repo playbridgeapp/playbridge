@@ -17,9 +17,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.playbridge.sender.ui.theme.AppTheme
 
 private sealed class SettingsSection {
     object Hub : SettingsSection()
+    object Appearance : SettingsSection()
     object Library : SettingsSection()
     object Debrid : SettingsSection()
     object Playback : SettingsSection()
@@ -44,12 +46,16 @@ fun SettingsScreen(
     when (section) {
         SettingsSection.Hub -> SettingsHubContent(
             onBack = onBack,
+            onAppearance = { section = SettingsSection.Appearance },
             onLibrary = { section = SettingsSection.Library },
             onDebrid = { section = SettingsSection.Debrid },
             onPlayback = { section = SettingsSection.Playback },
             onTV = { section = SettingsSection.TV },
             onImportExport = { section = SettingsSection.ImportExport },
             onPopupBlocker = { section = SettingsSection.PopupBlocker }
+        )
+        SettingsSection.Appearance -> AppearanceSettingsScreen(
+            onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.PopupBlocker -> PopupBlockerSettingsScreen(
             onBack = { section = SettingsSection.Hub }
@@ -79,6 +85,7 @@ fun SettingsScreen(
 @Composable
 private fun SettingsHubContent(
     onBack: () -> Unit,
+    onAppearance: () -> Unit,
     onLibrary: () -> Unit,
     onDebrid: () -> Unit,
     onPlayback: () -> Unit,
@@ -106,6 +113,13 @@ private fun SettingsHubContent(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
+            SettingsNavItem(
+                icon = Icons.Default.Palette,
+                title = "Appearance",
+                subtitle = "Theme: ${AppTheme.fromPrefs(context).label}",
+                onClick = onAppearance
+            )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
             SettingsNavItem(
                 icon = Icons.Default.VideoLibrary,
                 title = "Library",
@@ -156,7 +170,7 @@ private fun SettingsHubContent(
                 }
             }
             if (versionName != null) {
-                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()

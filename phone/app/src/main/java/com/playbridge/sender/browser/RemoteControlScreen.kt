@@ -191,7 +191,7 @@ fun RemoteControlScreen(
 
 @Composable
 private fun TogglePill(isTouchpad: Boolean, onToggle: (Boolean) -> Unit) {
-    val shape = RoundedCornerShape(50)
+    val shape = RoundedCornerShape(20.dp)
     Row(
         modifier = Modifier
             .clip(shape)
@@ -234,7 +234,7 @@ private fun PillOption(
 
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(50),
+        shape = RoundedCornerShape(20.dp),
         color = bg,
         contentColor = fg,
         modifier = Modifier.height(40.dp)

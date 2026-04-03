@@ -2,6 +2,7 @@ package com.playbridge.sender.browser
 
 import android.content.Context
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -82,7 +83,7 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
                         }
                     )
                 }
-                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
             }
 
             if (blockPopups) {
@@ -184,7 +185,7 @@ fun PopupBlockedBar(
 ) {
     Surface(
         color = MaterialTheme.colorScheme.inverseSurface,
-        shape = MaterialTheme.shapes.medium,
+        shape = CircleShape,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp)

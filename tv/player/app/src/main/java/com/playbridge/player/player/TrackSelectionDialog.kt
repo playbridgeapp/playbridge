@@ -67,7 +67,7 @@ fun TrackSelectionDialog(
                 Text(
                     text = "Settings",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
                 )
@@ -158,7 +158,7 @@ fun TrackTypeButton(
 
     val backgroundColor = when {
         isSelected -> Color(0xFF00D9FF).copy(alpha = 0.2f)
-        isFocused -> Color.White.copy(alpha = 0.1f)
+        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
         else -> Color.Transparent
     }
 
@@ -175,7 +175,7 @@ fun TrackTypeButton(
         Text(
             text = text,
             fontSize = 13.sp,
-            color = if (isSelected) Color(0xFF00D9FF) else Color.White,
+            color = if (isSelected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
         )
     }
@@ -421,7 +421,7 @@ fun TrackItem(
     var isFocused by remember { mutableStateOf(false) }
 
     val backgroundColor = when {
-        isFocused -> Color.White.copy(alpha = 0.1f)
+        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
         else -> Color.Transparent
     }
 
@@ -453,7 +453,7 @@ fun TrackItem(
             Text(
                 text = name,
                 fontSize = 13.sp,
-                color = if (isSelected) Color(0xFF00D9FF) else Color.White,
+                color = if (isSelected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )

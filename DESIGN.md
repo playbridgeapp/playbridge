@@ -1,5 +1,5 @@
 # PlayBridge Design System
-_Design Specification v1.0 — Last verified: 2026-03-29_
+_Design Specification v1.1 — Last verified: 2026-04-01_
 
 This document defines the canonical visual language for all PlayBridge UI surfaces — Phone (sender), TV (receiver), and any future platforms. It is the single source of truth for color tokens, typography, component rules, and structural principles. All Compose UI in `phone/app/src/main/java/com/playbridge/sender/ui/theme/` and `tv/app/src/main/java/com/playbridge/receiver/ui/theme/` must conform to this specification.
 
@@ -16,11 +16,15 @@ The PlayBridge interface is not a utility tool — it is an **ambient companion*
 
 ---
 
-## 2. Color Tokens (Dark-Mode-First)
+## 2. Color Tokens
 
-All surfaces use a deep indigo/muted violet palette. Content "pops" via luminance, not contrast.
+Three built-in palettes share the same brand identity (indigo/violet). Switching is a user preference stored under key `"app_theme"` in SharedPreferences (`"browser_prefs"`). See §12 for the Theme System implementation.
 
-### Surface Hierarchy
+### 2.1 Dark (default)
+
+Deep indigo — the canonical PlayBridge look. Optimised for dim/dark environments.
+
+#### Surface Hierarchy
 
 | Token | Hex | Role |
 | :--- | :--- | :--- |
@@ -31,7 +35,7 @@ All surfaces use a deep indigo/muted violet palette. Content "pops" via luminanc
 | `surface_container_highest` | `#241d54` | Floating elements and active states |
 | `surface_bright` | `#2a2660` | Glassmorphic overlays at 60% opacity |
 
-### Brand & Content Colors
+#### Brand & Content Colors
 
 | Token | Hex | Role |
 | :--- | :--- | :--- |
@@ -45,11 +49,65 @@ All surfaces use a deep indigo/muted violet palette. Content "pops" via luminanc
 | `on_surface_variant` | `#b0a8d8` | Placeholder text, secondary labels (at 60% opacity for inputs) |
 | `outline_variant` | `#3d3770` | Ghost borders (accessibility only, at 15% opacity) |
 
-### Gradients
+---
+
+### 2.2 AMOLED
+
+True-black surfaces for OLED screens. Identical brand colours to Dark; only the surface hierarchy changes. Saves battery on OLED panels and maximises perceived contrast.
+
+#### Surface Hierarchy
+
+| Token | Hex | Role |
+| :--- | :--- | :--- |
+| `surface` | `#000000` | Pure black — OLED pixel off |
+| `surface_container_low` | `#06051a` | Faint lift |
+| `surface_container` | `#0c0a28` | Cards |
+| `surface_container_high` | `#121038` | Hover/focus |
+| `surface_container_highest` | `#181548` | Floating elements |
+| `surface_bright` | `#1e1a58` | Glassmorphic overlays at 60% opacity |
+
+#### Brand & Content Colors
+
+Same as Dark — `primary`, `on_primary`, `secondary_container`, `on_secondary_container`, `on_surface`, `on_surface_variant`, `outline_variant` are all unchanged.
+
+---
+
+### 2.3 Light
+
+Soft violet-white surfaces for bright environments. The brand hue is preserved; primary is darkened to meet ≥4.5:1 contrast on light backgrounds.
+
+#### Surface Hierarchy
+
+| Token | Hex | Role |
+| :--- | :--- | :--- |
+| `surface` | `#f4f1ff` | Near-white with faint violet tint |
+| `surface_container_low` | `#ede9ff` | Sectioning |
+| `surface_container` | `#e3deff` | Cards |
+| `surface_container_high` | `#d8d2ff` | Hover/focus |
+| `surface_container_highest` | `#ccc5ff` | Floating elements |
+| `surface_bright` | `#ffffff` | Pure white overlays |
+
+#### Brand & Content Colors
+
+| Token | Hex | Role |
+| :--- | :--- | :--- |
+| `primary` | `#3040cc` | Darkened for ≥4.5:1 contrast on light bg |
+| `primary_dim` | `#1c2bad` | CTA gradient start |
+| `on_primary` | `#ffffff` | Text on primary buttons |
+| `primary_fixed_dim` | `#4a5adb` | Secondary icons |
+| `secondary_container` | `#c5caff` | Selected filter chips |
+| `on_secondary_container` | `#0d1780` | Text within secondary containers |
+| `on_surface` | `#0a0720` | Body text |
+| `on_surface_variant` | `#403a6a` | Placeholder text, secondary labels |
+| `outline_variant` | `#c0bbe0` | Ghost borders |
+
+---
+
+### Gradients (apply to all palettes)
 
 | Name | Definition | Usage |
 | :--- | :--- | :--- |
-| CTA Gradient | `#5565f2` → `#9ea7ff` at 135° | Primary buttons, hero CTAs |
+| CTA Gradient | `primary_dim` → `primary` at 135° | Primary buttons, hero CTAs |
 | Glassmorphism | `surface_container` at 80% opacity + 16dp backdrop blur | Navigation bars, top app bars |
 | Floating Overlay | `surface_bright` at 60% opacity | Bottom sheets when video is beneath |
 
@@ -296,6 +354,58 @@ on_surface            → Text/Primary
 on_surface_variant    → Text/Secondary
 outline_variant       → Border/Ghost
 ```
+
+---
+
+## 12. Theme System
+
+### Enum
+
+```kotlin
+enum class AppTheme(val label: String) {
+    DARK("Dark"),
+    AMOLED("AMOLED"),
+    LIGHT("Light")
+}
+```
+
+Defined in `ui/theme/Theme.kt` in both `phone` and `tv` modules.
+
+### Persistence
+
+- **Key**: `"app_theme"` in SharedPreferences named `"browser_prefs"`
+- **Values**: `"DARK"` | `"AMOLED"` | `"LIGHT"` (default: `"DARK"`)
+- Same key used in both the phone and TV apps.
+
+### How the theme is applied
+
+`PlayBridgeTheme` (phone) and `PlayBridgeTVTheme` (TV) each read the preference internally via `LocalContext.current`. No prop-threading required at call sites.
+
+```kotlin
+@Composable
+fun PlayBridgeTheme(content: @Composable () -> Unit) {
+    val context = LocalContext.current
+    val theme = remember {
+        val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        AppTheme.entries.find { it.name == (prefs.getString("app_theme", "DARK") ?: "DARK") }
+            ?: AppTheme.DARK
+    }
+    val colorScheme = when (theme) {
+        AppTheme.DARK  -> DarkColorScheme
+        AppTheme.AMOLED -> AmoledColorScheme
+        AppTheme.LIGHT -> LightColorScheme
+    }
+    MaterialTheme(colorScheme = colorScheme, typography = AppTypography, content = content)
+}
+```
+
+### Changing the theme
+
+Save the new value to SharedPreferences, then call `(context as Activity).recreate()` to restart the composition with the new scheme. This is the standard Android pattern — users expect a brief visual reset on theme change.
+
+### TV Platform Note
+
+All three palettes must scale font sizes by **1.25×** on TV (see §10). The colour tokens are identical to the phone; only surface and content colours differ per palette.
 
 ---
 

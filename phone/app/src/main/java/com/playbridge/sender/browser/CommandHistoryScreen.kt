@@ -82,7 +82,7 @@ fun CastHistoryScreen(
                         onClick = { onItemClick(item) },
                         onDelete = { onDelete(item) }
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
         }

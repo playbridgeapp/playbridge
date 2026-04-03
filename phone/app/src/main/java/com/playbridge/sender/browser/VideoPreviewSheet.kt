@@ -212,7 +212,7 @@ fun VideoPreviewSheet(
                             onSendToTv()
                         },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(20.dp)
                     ) {
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))

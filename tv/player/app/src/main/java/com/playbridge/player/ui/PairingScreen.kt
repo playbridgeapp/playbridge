@@ -43,7 +43,7 @@ fun PairingScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF1A1A2E)),
+            .background(MaterialTheme.colorScheme.background),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -64,7 +64,7 @@ fun PairingScreen(
                                 is WebSocketServer.ConnectionState.Connected -> Color(0xFF00FF88)
                                 is WebSocketServer.ConnectionState.Running -> Color(0xFFFFAA00)
                                 is WebSocketServer.ConnectionState.Error -> Color(0xFFFF4444)
-                                else -> Color(0xFF666666)
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                         )
                 )
@@ -81,7 +81,7 @@ fun PairingScreen(
                         is WebSocketServer.ConnectionState.Stopped -> "Server stopped"
                     },
                     style = MaterialTheme.typography.bodyLarge,
-                    color = if (connectionState is WebSocketServer.ConnectionState.Connected) Color(0xFF00FF88) else Color.White
+                    color = if (connectionState is WebSocketServer.ConnectionState.Connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 )
             }
             
@@ -93,7 +93,7 @@ fun PairingScreen(
                 Text(
                     text = "Enter this PIN on your phone",
                     style = MaterialTheme.typography.headlineSmall,
-                    color = Color.Gray
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 
                 // PIN Display
@@ -101,7 +101,7 @@ fun PairingScreen(
                     text = pinDisplay,
                     style = MaterialTheme.typography.displayLarge,
                     fontSize = 120.sp,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     letterSpacing = 24.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                 )
@@ -115,7 +115,7 @@ fun PairingScreen(
                 Text(
                     text = deviceName,
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 
                 Text(
@@ -129,7 +129,7 @@ fun PairingScreen(
                     Text(
                         text = "ID: $deviceId",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(top = 4.dp)
                     )
@@ -140,7 +140,7 @@ fun PairingScreen(
                 Text(
                     text = "Or connect manually using the IP address above",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.Gray.copy(alpha = 0.7f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
             }
         }

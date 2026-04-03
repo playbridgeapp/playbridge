@@ -51,7 +51,7 @@ fun LibraryScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F0F23))
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Column(
             modifier = Modifier
@@ -71,7 +71,7 @@ fun LibraryScreen(
                         else "$connectedCount devices connected"
                     } else "Not connected",
                     style = MaterialTheme.typography.titleLarge,
-                    color = if (connectedCount > 0) Color(0xFF00FF88) else Color.Gray
+                    color = if (connectedCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -130,7 +130,7 @@ fun LibraryScreen(
                     Text(
                         text = if (selectedTabIndex == 1) "No favorites yet. Long press an item in History to favorite it." else "No history yet. Pair a phone and play a video!",
                         style = MaterialTheme.typography.bodyLarge,
-                        color = Color.Gray
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else {
@@ -162,7 +162,7 @@ fun LibraryScreen(
             ) {
                 Column(
                     modifier = Modifier
-                        .background(Color(0xFF1E1E38), androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant, androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
                         .padding(32.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
@@ -170,7 +170,7 @@ fun LibraryScreen(
                     Text(
                         "Are you sure you want to clear your entire playback history? This action cannot be undone.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.LightGray
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     Row(
@@ -213,8 +213,7 @@ fun HistoryItemCard(
     ) {
         Row(
             modifier = Modifier
-                .fillMaxSize()
-                .background(Color.DarkGray.copy(alpha = 0.3f)),
+                .fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -223,7 +222,7 @@ fun HistoryItemCard(
                 modifier = Modifier
                     .fillMaxHeight()
                     .aspectRatio(16f / 9f)
-                    .background(Color.Black),
+                    .background(MaterialTheme.colorScheme.surface),
                 contentAlignment = Alignment.Center
             ) {
                 if (item.thumbnailPath != null) {
@@ -239,7 +238,7 @@ fun HistoryItemCard(
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    Text("▶", color = Color.White)
+                    Text("▶", color = MaterialTheme.colorScheme.onSurface)
                 }
             }
 
@@ -250,7 +249,7 @@ fun HistoryItemCard(
                 Text(
                     text = item.title ?: "Unknown Title",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -258,7 +257,7 @@ fun HistoryItemCard(
                 Text(
                     text = truncateUrl(item.url),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -271,7 +270,7 @@ fun HistoryItemCard(
                             .fillMaxWidth()
                             .padding(top = 4.dp)
                             .height(4.dp)
-                            .background(Color.Gray.copy(alpha = 0.5f))
+                            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
                     ) {
                         Box(
                             modifier = Modifier

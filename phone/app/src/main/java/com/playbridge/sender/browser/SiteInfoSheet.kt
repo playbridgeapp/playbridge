@@ -77,7 +77,7 @@ fun SiteInfoSheet(
             // Certificate details (only for secure)
             if (info.isSecure && (info.certIssuer != null || info.certValidUntil != null)) {
                 Spacer(Modifier.height(20.dp))
-                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
                 Spacer(Modifier.height(16.dp))
 
                 Text(

@@ -1,58 +1,112 @@
 package com.playbridge.sender.ui.theme
 
 import android.app.Activity
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
+import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowInsetsControllerCompat
+
+enum class AppTheme(val label: String) {
+    DARK("Dark"),
+    AMOLED("AMOLED"),
+    LIGHT("Light");
+
+    companion object {
+        fun fromPrefs(context: Context): AppTheme {
+            val stored = context
+                .getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                .getString("app_theme", "DARK") ?: "DARK"
+            return entries.find { it.name == stored } ?: DARK
+        }
+    }
+}
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    background = Surface,
+    surface = Surface,
+    surfaceVariant = SurfaceContainerLow,
+    surfaceContainerLow = SurfaceContainerLow,
+    surfaceContainer = SurfaceContainer,
+    surfaceContainerHigh = SurfaceContainerHigh,
+    surfaceContainerHighest = SurfaceContainerHighest,
+    primary = Primary,
+    onPrimary = OnPrimary,
+    secondaryContainer = SecondaryContainer,
+    onSecondaryContainer = OnSecondaryContainer,
+    onSurface = OnSurface,
+    onSurfaceVariant = OnSurfaceVariant,
+    outlineVariant = OutlineVariant
+)
+
+private val AmoledColorScheme = darkColorScheme(
+    background = AmoledSurface,
+    surface = AmoledSurface,
+    surfaceVariant = AmoledSurfaceContainerLow,
+    surfaceContainerLow = AmoledSurfaceContainerLow,
+    surfaceContainer = AmoledSurfaceContainer,
+    surfaceContainerHigh = AmoledSurfaceContainerHigh,
+    surfaceContainerHighest = AmoledSurfaceContainerHighest,
+    primary = Primary,
+    onPrimary = OnPrimary,
+    secondaryContainer = SecondaryContainer,
+    onSecondaryContainer = OnSecondaryContainer,
+    onSurface = OnSurface,
+    onSurfaceVariant = OnSurfaceVariant,
+    outlineVariant = OutlineVariant
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    background = LightSurface,
+    surface = LightSurface,
+    surfaceVariant = LightSurfaceContainerLow,
+    surfaceContainerLow = LightSurfaceContainerLow,
+    surfaceContainer = LightSurfaceContainer,
+    surfaceContainerHigh = LightSurfaceContainerHigh,
+    surfaceContainerHighest = LightSurfaceContainerHighest,
+    primary = LightPrimary,
+    onPrimary = LightOnPrimary,
+    secondaryContainer = LightSecondaryContainer,
+    onSecondaryContainer = LightOnSecondaryContainer,
+    onSurface = LightOnSurface,
+    onSurfaceVariant = LightOnSurfaceVariant,
+    outlineVariant = LightOutlineVariant
 )
 
 @Composable
 fun PlayBridgeTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
+    val context = LocalContext.current
+    val theme = remember { AppTheme.fromPrefs(context) }
+    val colorScheme = when (theme) {
+        AppTheme.DARK   -> DarkColorScheme
+        AppTheme.AMOLED -> AmoledColorScheme
+        AppTheme.LIGHT  -> LightColorScheme
+    }
 
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+    // Flip status-bar and nav-bar icons to dark on light theme so they're
+    // visible against the light background. SideEffect runs after every
+    // successful composition, keeping it in sync if the Activity is recreated.
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window ?: return@SideEffect
+            val controller = WindowInsetsControllerCompat(window, view)
+            val isLight = theme == AppTheme.LIGHT
+            controller.isAppearanceLightStatusBars = isLight
+            controller.isAppearanceLightNavigationBars = isLight
+        }
     }
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography,
+        typography = AppTypography,
         content = content
     )
 }

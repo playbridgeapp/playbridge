@@ -702,7 +702,7 @@ fun CastSheet(
                                         }
                                     }
                                 )
-                                HorizontalDivider()
+                                Spacer(modifier = Modifier.height(12.dp))
                             }
                         }
                     }
@@ -996,7 +996,7 @@ private fun VideoItemDetailed(
             // Qualities List
             if (isHls) {
                 Spacer(modifier = Modifier.height(8.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(12.dp))
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 Text(
@@ -1052,7 +1052,7 @@ private fun VideoItemDetailed(
             if (video.playlistPayload == null) {
                 // Compact Action Row
                 Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
