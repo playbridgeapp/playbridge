@@ -1,5 +1,5 @@
 # Extension — AI Context
-_Last verified: 2026-03-30_
+_Last verified: 2026-04-03_
 
 ## Ownership
 The `extension/` directory houses the standalone Desktop Web Extension (primarily targeting Firefox). It intercepts media requests in desktop browsers to cast directly to the PlayBridge TV, mirroring the functionality of the native Phone app's built-in `video_detector`. It does NOT own Android application code.
@@ -19,7 +19,7 @@ WARNING: The extension must manually format JSON messages to match `protocol/src
 WARNING: Firefox extension UI changes should be tested using Playwright and `mock` for `window.browser` if opening local HTML files directly.
 
 ## Current State
-_As of 2026-03-30:_
+_As of 2026-04-03:_
 - Working: Basic structure
 - Broken/degraded: nothing critical
 - In progress: Standalone Desktop Web Extension integration

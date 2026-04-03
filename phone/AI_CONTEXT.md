@@ -1,5 +1,5 @@
 # Phone App — AI Context
-_Last verified: 2026-03-30_
+_Last verified: 2026-04-03_
 
 ## Ownership
 The `phone/` module handles all UI and networking for the Android sender application. It provides a full-featured GeckoView web browser, Debrid integration, history tracking, and connects directly to the TV application via WebSockets to send video payloads. It does NOT own protocol data structures.
@@ -20,8 +20,8 @@ WARNING: The `video_detector` extension is embedded in `assets/extensions/video_
 WARNING: Debrid APIs (Real-Debrid, Premiumize) logic is highly sensitive to token management; ensure credentials are not accidentally logged.
 
 ## Current State
-_As of 2026-03-30:_
-- Working: Core Infrastructure, Browser Setup, WebSocket Client, WebExtension Support (Phase 1 & 2 complete)
+_As of 2026-04-03:_
+- Working: Core Infrastructure, Browser Setup, WebSocket Client, WebExtension Support, QR Scanner, URL bar, Extension Management
 - Broken/degraded: nothing critical
-- In progress: Video Detection WebExtension, Video Detection UI (Phases 3 & 4)
+- In progress: TabManager, TabsScreen, Native App Integration for Video Detector, Video FAB & Bottom Sheet, Send to TV UI
 - Blockers: none
