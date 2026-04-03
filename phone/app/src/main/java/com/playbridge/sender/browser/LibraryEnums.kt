@@ -8,6 +8,5 @@ enum class LibraryMediaType {
 
 enum class LibrarySortBy(val apiValue: String) {
     POPULARITY_DESC("popularity.desc"),
-    VOTE_AVERAGE_DESC("vote_average.desc"),
     PRIMARY_RELEASE_DATE_DESC("primary_release_date.desc")
 }

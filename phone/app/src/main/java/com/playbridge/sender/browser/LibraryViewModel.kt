@@ -19,9 +19,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     // UI Scroll States
     val mainListState = LazyListState()
-    val trendingListState = LazyListState()
+    val trendingDayListState = LazyListState()
     val popularMoviesListState = LazyListState()
     val popularTvShowsListState = LazyListState()
+    val newReleasesListState = LazyListState()
     val discoveredMoviesListState = LazyListState()
     val discoveredTvShowsListState = LazyListState()
     val discoverGridState = LazyGridState()
@@ -51,14 +52,36 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _hasMorePopularTvShows = MutableStateFlow(true)
     val hasMorePopularTvShows: StateFlow<Boolean> = _hasMorePopularTvShows.asStateFlow()
 
-    // Trending
-    private val _trending = MutableStateFlow<List<TmdbMultiSearchResult>>(emptyList())
-    val trending: StateFlow<List<TmdbMultiSearchResult>> = _trending.asStateFlow()
-    private var trendingPage = 1
-    private val _isLoadingMoreTrending = MutableStateFlow(false)
-    val isLoadingMoreTrending: StateFlow<Boolean> = _isLoadingMoreTrending.asStateFlow()
-    private val _hasMoreTrending = MutableStateFlow(true)
-    val hasMoreTrending: StateFlow<Boolean> = _hasMoreTrending.asStateFlow()
+    // Trending Week (Carousel)
+    private val _trendingWeek = MutableStateFlow<List<TmdbMultiSearchResult>>(emptyList())
+    val trendingWeek: StateFlow<List<TmdbMultiSearchResult>> = _trendingWeek.asStateFlow()
+    private var trendingWeekPage = 1
+
+    // Trending Day
+    private val _trendingDay = MutableStateFlow<List<TmdbMultiSearchResult>>(emptyList())
+    val trendingDay: StateFlow<List<TmdbMultiSearchResult>> = _trendingDay.asStateFlow()
+    private var trendingDayPage = 1
+    private val _isLoadingMoreTrendingDay = MutableStateFlow(false)
+    val isLoadingMoreTrendingDay: StateFlow<Boolean> = _isLoadingMoreTrendingDay.asStateFlow()
+    private val _hasMoreTrendingDay = MutableStateFlow(true)
+    val hasMoreTrendingDay: StateFlow<Boolean> = _hasMoreTrendingDay.asStateFlow()
+
+    // New & Upcoming (Merged)
+    private val _newReleases = MutableStateFlow<List<TmdbMovie>>(emptyList())
+    val newReleases: StateFlow<List<TmdbMovie>> = _newReleases.asStateFlow()
+    private val _nowPlayingMovieIds = MutableStateFlow<Set<Int>>(emptySet())
+    val nowPlayingMovieIds: StateFlow<Set<Int>> = _nowPlayingMovieIds.asStateFlow()
+
+    private var nowPlayingMoviesPage = 1
+    private var upcomingMoviesPage = 1
+    private val _isLoadingMoreNewReleases = MutableStateFlow(false)
+    val isLoadingMoreNewReleases: StateFlow<Boolean> = _isLoadingMoreNewReleases.asStateFlow()
+    private val _hasMoreNewReleases = MutableStateFlow(true)
+    val hasMoreNewReleases: StateFlow<Boolean> = _hasMoreNewReleases.asStateFlow()
+
+    // Internal raw lists used for the merge
+    private val _nowPlayingRaw = MutableStateFlow<List<TmdbMovie>>(emptyList())
+    private val _upcomingRaw = MutableStateFlow<List<TmdbMovie>>(emptyList())
 
     // Search state
     private val _searchQuery = MutableStateFlow("")
@@ -72,6 +95,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _isSearchLoading = MutableStateFlow(false)
     val isSearchLoading: StateFlow<Boolean> = _isSearchLoading.asStateFlow()
+
+    // Navigation state
+    private val _selectedTab = MutableStateFlow(0)
+    val selectedTab: StateFlow<Int> = _selectedTab.asStateFlow()
+
+    fun setSelectedTab(tab: Int) {
+        _selectedTab.value = tab
+    }
 
     // Discovery state
     private val _selectedMediaType = MutableStateFlow(LibraryMediaType.ALL)
@@ -116,7 +147,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         val configured = tmdb.isConfigured()
         _isConfigured.value = configured
 
-        if (configured && _popularMovies.value.isEmpty() && _trending.value.isEmpty()) {
+        if (configured && _popularMovies.value.isEmpty() && _trendingDay.value.isEmpty()) {
             loadInitialData()
         } else if (!configured) {
             _isLoading.value = false
@@ -129,7 +160,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val movies = tmdb.getPopularMovies(page = 1)
                 val tvShows = tmdb.getPopularTvShows(page = 1)
-                val trend = tmdb.getTrending(page = 1)
+                val trendDay = tmdb.getTrending(page = 1, timeWindow = "day")
+                val trendWeek = tmdb.getTrending(page = 1, timeWindow = "week")
+                val upcoming = tmdb.getUpcomingMovies(page = 1)
+                val nowPlaying = tmdb.getNowPlayingMovies(page = 1)
 
                 _popularMovies.value = movies.results
                 popularMoviesPage = 1
@@ -137,8 +171,20 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 _popularTvShows.value = tvShows.results
                 popularTvShowsPage = 1
 
-                _trending.value = trend.results.filter { it.isMovie || it.isTvShow }
-                trendingPage = 1
+                _trendingDay.value = trendDay.results.filter { it.isMovie || it.isTvShow }
+                trendingDayPage = 1
+
+                _trendingWeek.value = trendWeek.results.filter { it.isMovie || it.isTvShow }
+                trendingWeekPage = 1
+
+                _nowPlayingRaw.value = nowPlaying.results
+                _upcomingRaw.value = upcoming.results
+                _nowPlayingMovieIds.value = nowPlaying.results.map { it.id }.toSet()
+                _newReleases.value = (nowPlaying.results + upcoming.results).distinctBy { it.id }
+                
+                nowPlayingMoviesPage = 1
+                upcomingMoviesPage = 1
+                _hasMoreNewReleases.value = nowPlaying.results.isNotEmpty() || upcoming.results.isNotEmpty()
             } catch (e: Exception) {
                 // Handle error if needed
             } finally {
@@ -188,22 +234,56 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun loadMoreTrending() {
-        if (_isLoadingMoreTrending.value || !_hasMoreTrending.value) return
+    fun loadMoreTrendingDay() {
+        if (_isLoadingMoreTrendingDay.value || !_hasMoreTrendingDay.value) return
 
         viewModelScope.launch {
-            _isLoadingMoreTrending.value = true
+            _isLoadingMoreTrendingDay.value = true
             try {
-                val nextPage = trendingPage + 1
-                val newTrending = tmdb.getTrending(page = nextPage)
+                val nextPage = trendingDayPage + 1
+                val newTrending = tmdb.getTrending(page = nextPage, timeWindow = "day")
                 if (newTrending.results.isNotEmpty()) {
-                    _trending.value = _trending.value + newTrending.results.filter { it.isMovie || it.isTvShow }
-                    trendingPage = nextPage
+                    _trendingDay.value = _trendingDay.value + newTrending.results.filter { it.isMovie || it.isTvShow }
+                    trendingDayPage = nextPage
                 } else {
-                    _hasMoreTrending.value = false
+                    _hasMoreTrendingDay.value = false
                 }
             } finally {
-                _isLoadingMoreTrending.value = false
+                _isLoadingMoreTrendingDay.value = false
+            }
+        }
+    }
+
+    fun loadMoreNewReleases() {
+        if (_isLoadingMoreNewReleases.value || !_hasMoreNewReleases.value) return
+
+        viewModelScope.launch {
+            _isLoadingMoreNewReleases.value = true
+            try {
+                // To keep it simple, we fetch both next pages and re-merge
+                val nextNowPlayingPage = nowPlayingMoviesPage + 1
+                val nextUpcomingPage = upcomingMoviesPage + 1
+                
+                val newNowPlaying = tmdb.getNowPlayingMovies(page = nextNowPlayingPage)
+                val newUpcoming = tmdb.getUpcomingMovies(page = nextUpcomingPage)
+                
+                if (newNowPlaying.results.isNotEmpty() || newUpcoming.results.isNotEmpty()) {
+                    _nowPlayingRaw.value = _nowPlayingRaw.value + newNowPlaying.results
+                    _upcomingRaw.value = _upcomingRaw.value + newUpcoming.results
+                    
+                    // Update the label set
+                    _nowPlayingMovieIds.value = _nowPlayingMovieIds.value + newNowPlaying.results.map { it.id }
+                    
+                    // Re-merge
+                    _newReleases.value = (_nowPlayingRaw.value + _upcomingRaw.value).distinctBy { it.id }
+                    
+                    nowPlayingMoviesPage = nextNowPlayingPage
+                    upcomingMoviesPage = nextUpcomingPage
+                } else {
+                    _hasMoreNewReleases.value = false
+                }
+            } finally {
+                _isLoadingMoreNewReleases.value = false
             }
         }
     }

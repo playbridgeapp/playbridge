@@ -1527,22 +1527,16 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Connection -> {
-                                            BackHandler {
-                                                val currentTime = System.currentTimeMillis()
-                                                if (currentTime - backPressedTime > 2000) {
-                                                    backPressedTime = currentTime
-                                                    Toast.makeText(
-                                                        this@BrowserActivity,
-                                                        "Press back again to exit",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                } else {
-                                                    finish()
-                                                }
-                                            }
+                                            BackHandler { currentScreen = Screen.Browser }
                                             ConnectionScreen(
                                                 viewModel = connectionViewModel,
-                                                onMenuClick = { scope.launch { drawerState.open() } }
+                                                onMenuClick = { scope.launch { drawerState.open() } },
+                                                onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                                    {
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
+                                                        currentScreen = Screen.Remote
+                                                    }
+                                                } else null
                                             )
                                         }
                                         Screen.Downloads -> {
@@ -1735,12 +1729,6 @@ class BrowserActivity : ComponentActivity() {
                                             LibraryScreen(
                                                 viewModel = libraryViewModel,
                                                 onMenuClick = { scope.launch { drawerState.open() } },
-                                                onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                                    {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
-                                                        currentScreen = Screen.Remote
-                                                    }
-                                                } else null,
                                                 nowPlayingTvId = nowPlayingTvId,
                                                 nowPlayingSeason = nowPlayingSeason,
                                                 nowPlayingEpisode = nowPlayingEp,
@@ -1878,12 +1866,6 @@ class BrowserActivity : ComponentActivity() {
                                             BackHandler { finish() }
                                             DebridLibraryScreen(
                                                 onMenuClick = { scope.launch { drawerState.open() } },
-                                                onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                                    {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
-                                                        currentScreen = Screen.Remote
-                                                    }
-                                                } else null,
                                                 onCopyUrl = { linkUrl ->
                                                     clipboardManager.setText(AnnotatedString(linkUrl))
                                                     Toast.makeText(this@BrowserActivity, "Link copied", Toast.LENGTH_SHORT).show()

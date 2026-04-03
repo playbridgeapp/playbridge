@@ -21,8 +21,7 @@ import kotlinx.coroutines.launch
 fun DebridLibraryScreen(
     onMenuClick: () -> Unit,
     onCopyUrl: (String) -> Unit,
-    onShowCastSheet: (DetectedVideo) -> Unit,
-    onRemoteClick: (() -> Unit)? = null
+    onShowCastSheet: (DetectedVideo) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -72,11 +71,6 @@ fun DebridLibraryScreen(
                     }
                 },
                 actions = {
-                    if (onRemoteClick != null) {
-                        IconButton(onClick = onRemoteClick) {
-                            Icon(Icons.Default.Gamepad, "Remote Control", tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
                     IconButton(onClick = { loadTorrents() }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }

@@ -8,8 +8,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Gamepad
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,7 +34,8 @@ import com.playbridge.sender.model.TvDevice
 fun ConnectionScreen(
     viewModel: ConnectionViewModel,
     onMenuClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onRemoteClick: (() -> Unit)? = null
 ) {
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
@@ -108,6 +110,13 @@ fun ConnectionScreen(
                         }
                     ) {
                         Icon(Icons.Default.Menu, contentDescription = null)
+                    }
+                },
+                actions = {
+                    if (onRemoteClick != null) {
+                        IconButton(onClick = onRemoteClick) {
+                            Icon(Icons.Default.Gamepad, contentDescription = "Remote Control", tint = MaterialTheme.colorScheme.primary)
+                        }
                     }
                 }
             )

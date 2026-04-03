@@ -51,7 +51,14 @@ class TmdbRepository(private val context: Context) {
     suspend fun discoverMovies(page: Int = 1, withGenres: String? = null, sortBy: String = "popularity.desc", year: String? = null): TmdbPagedResponse<TmdbMovie> {
         val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
         val yearParam = year?.let { "&primary_release_year=$it" } ?: ""
-        return fetchPaged("$BASE_URL/discover/movie?language=en-US&page=$page&sort_by=$sortBy$genresParam$yearParam")
+        
+        // Stremio-style curation: Capping to today and adding relevance thresholds for newest
+        val relevanceParams = if (sortBy.contains("primary_release_date")) {
+            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+            "&primary_release_date.lte=$today&vote_count.gte=10"
+        } else ""
+
+        return fetchPaged("$BASE_URL/discover/movie?language=en-US&page=$page&sort_by=$sortBy$genresParam$yearParam$relevanceParams&include_video=false&include_adult=false&with_runtime.gte=60")
     }
 
     suspend fun getPopularMovies(page: Int = 1): TmdbPagedResponse<TmdbMovie> {
@@ -68,11 +75,26 @@ class TmdbRepository(private val context: Context) {
         val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
         val yearParam = year?.let { "&first_air_date_year=$it" } ?: ""
         val tvSortBy = if (sortBy == "primary_release_date.desc") "first_air_date.desc" else sortBy
-        return fetchPaged("$BASE_URL/discover/tv?language=en-US&page=$page&sort_by=$tvSortBy$genresParam$yearParam")
+        
+        // Stremio-style curation: Capping to today and adding relevance thresholds
+        val relevanceParams = if (tvSortBy.contains("first_air_date")) {
+            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+            "&first_air_date.lte=$today&vote_count.gte=5"
+        } else ""
+
+        return fetchPaged("$BASE_URL/discover/tv?language=en-US&page=$page&sort_by=$tvSortBy$genresParam$yearParam$relevanceParams&include_video=false&include_adult=false")
     }
 
     suspend fun getPopularTvShows(page: Int = 1): TmdbPagedResponse<TmdbTvShow> {
         return fetchPaged("$BASE_URL/tv/popular?language=en-US&page=$page")
+    }
+
+    suspend fun getUpcomingMovies(page: Int = 1): TmdbPagedResponse<TmdbMovie> {
+        return fetchPaged("$BASE_URL/movie/upcoming?language=en-US&page=$page")
+    }
+
+    suspend fun getNowPlayingMovies(page: Int = 1): TmdbPagedResponse<TmdbMovie> {
+        return fetchPaged("$BASE_URL/movie/now_playing?language=en-US&page=$page")
     }
 
     suspend fun getTvDetails(tvId: Int): TmdbTvDetails? {
@@ -85,8 +107,8 @@ class TmdbRepository(private val context: Context) {
 
     // ==================== Trending ====================
 
-    suspend fun getTrending(page: Int = 1): TmdbPagedResponse<TmdbMultiSearchResult> {
-        return fetchPaged("$BASE_URL/trending/all/day?language=en-US&page=$page")
+    suspend fun getTrending(page: Int = 1, timeWindow: String = "day"): TmdbPagedResponse<TmdbMultiSearchResult> {
+        return fetchPaged("$BASE_URL/trending/all/$timeWindow?language=en-US&page=$page")
     }
 
     // ==================== Search ====================

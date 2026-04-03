@@ -1,12 +1,15 @@
 package com.playbridge.sender.browser
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -34,6 +37,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +54,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -133,9 +138,16 @@ private fun LibraryScreenContent(
     val isLoadingMorePopularTvShows by viewModel.isLoadingMorePopularTvShows.collectAsState()
     val hasMorePopularTvShows by viewModel.hasMorePopularTvShows.collectAsState()
 
-    val trending by viewModel.trending.collectAsState()
-    val isLoadingMoreTrending by viewModel.isLoadingMoreTrending.collectAsState()
-    val hasMoreTrending by viewModel.hasMoreTrending.collectAsState()
+    val trendingDay by viewModel.trendingDay.collectAsState()
+    val trendingWeek by viewModel.trendingWeek.collectAsState()
+    val newReleases by viewModel.newReleases.collectAsState()
+    val nowPlayingMovieIds by viewModel.nowPlayingMovieIds.collectAsState()
+
+    val isLoadingMoreTrendingDay by viewModel.isLoadingMoreTrendingDay.collectAsState()
+    val hasMoreTrendingDay by viewModel.hasMoreTrendingDay.collectAsState()
+
+    val isLoadingMoreNewReleases by viewModel.isLoadingMoreNewReleases.collectAsState()
+    val hasMoreNewReleases by viewModel.hasMoreNewReleases.collectAsState()
 
     val isLoading by viewModel.isLoading.collectAsState()
 
@@ -162,9 +174,13 @@ private fun LibraryScreenContent(
     val selectedYear by viewModel.selectedYear.collectAsState()
 
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
+    
+    BackHandler(enabled = isSearching) {
+        viewModel.setIsSearching(false)
+    }
 
     var showFilterSheet by remember { mutableStateOf(false) }
-    var selectedTab by remember { mutableIntStateOf(0) }
+    val selectedTab by viewModel.selectedTab.collectAsState()
     var yearInput by remember(selectedYear) { mutableStateOf(selectedYear) }
 
     // Type and Sort are now inline chips — badge only counts genres + year
@@ -203,7 +219,46 @@ private fun LibraryScreenContent(
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
 
-                // Year filter (type + sort are now inline chips above the grid)
+                // Type Filter
+                Text("Type", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val mediaTypes = listOf(
+                        LibraryMediaType.ALL to "All",
+                        LibraryMediaType.MOVIE to "Movies",
+                        LibraryMediaType.TV_SHOW to "TV Shows"
+                    )
+                    mediaTypes.forEach { (type, label) ->
+                        FilterChip(
+                            selected = selectedMediaType == type,
+                            onClick = { viewModel.setMediaType(type) },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+
+                // Sort By Filter
+                Text("Sort By", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val sortOptions = listOf(
+                        LibrarySortBy.POPULARITY_DESC to "Popular",
+                        LibrarySortBy.PRIMARY_RELEASE_DATE_DESC to "Newest"
+                    )
+                    sortOptions.forEach { (sort, label) ->
+                        FilterChip(
+                            selected = selectedSortBy == sort,
+                            onClick = { viewModel.setSortBy(sort) },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+
+                // Year filter
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -283,12 +338,32 @@ private fun LibraryScreenContent(
         }
     }
 
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        floatingActionButtonPosition = androidx.compose.material3.FabPosition.End,
+        floatingActionButton = {
+            if (selectedTab == 1 && !isSearching) {
+                FloatingActionButton(
+                    onClick = { showFilterSheet = true },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    BadgedBox(badge = {
+                        if (activeFilterCount > 0) Badge { Text("$activeFilterCount") }
+                    }) {
+                        Icon(Icons.Default.FilterList, "Filter")
+                    }
+                }
+            }
+        },
         topBar = {
             Column {
-                TopAppBar(
+                CenterAlignedTopAppBar(
+                    scrollBehavior = scrollBehavior,
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = Color.Transparent,
+                        scrolledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
                         titleContentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     title = {
@@ -313,6 +388,44 @@ private fun LibraryScreenContent(
                                 ),
                                 modifier = Modifier.fillMaxWidth()
                             )
+                        } else if (isConfigured) {
+                            Surface(
+                                shape = RoundedCornerShape(32.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val homeSelected = selectedTab == 0
+                                    Surface(
+                                        shape = RoundedCornerShape(24.dp),
+                                        color = if (homeSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                        modifier = Modifier.clip(RoundedCornerShape(24.dp)).clickable { viewModel.setSelectedTab(0) }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Home,
+                                            contentDescription = "Home",
+                                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                                            tint = if (homeSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    val browseSelected = selectedTab == 1
+                                    Surface(
+                                        shape = RoundedCornerShape(24.dp),
+                                        color = if (browseSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                        modifier = Modifier.clip(RoundedCornerShape(24.dp)).clickable { viewModel.setSelectedTab(1) }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Explore,
+                                            contentDescription = "Browse",
+                                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                                            tint = if (browseSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
                         }
                     },
                 navigationIcon = {
@@ -360,22 +473,13 @@ private fun LibraryScreenContent(
                                 }
                             }
                         }
-                        if (onRemoteClick != null) {
-                            IconButton(onClick = onRemoteClick) {
-                                Icon(Icons.Default.Gamepad, "Remote Control", tint = MaterialTheme.colorScheme.primary)
-                            }
-                        }
                         if (selectedTab == 1) {
-                            IconButton(onClick = { showFilterSheet = true }) {
-                                BadgedBox(badge = {
-                                    if (activeFilterCount > 0) Badge { Text("$activeFilterCount") }
-                                }) {
-                                    Icon(Icons.Default.FilterList, "Filter")
-                                }
+                            IconButton(onClick = { viewModel.setIsSearching(true) }) {
+                                Icon(Icons.Default.Search, "Search")
                             }
-                        }
-                        IconButton(onClick = { viewModel.setIsSearching(true) }) {
-                            Icon(Icons.Default.Search, "Search")
+                        } else {
+                            // Spacer to balance the Search icon on the Browse tab
+                            Spacer(modifier = Modifier.width(48.dp))
                         }
                     } // closes if
                 } // closes actions
@@ -476,240 +580,141 @@ private fun LibraryScreenContent(
                 }
             } else {
                 // Main catalog
-                if (selectedTab == 1) {
-                    Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
-                        DiscoverGrid(
-                            movies = discoveredMovies,
-                            tvShows = discoveredTvShows,
-                            gridState = viewModel.discoverGridState,
-                            selectedMediaType = selectedMediaType,
-                            isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
-                            hasMoreMovies = hasMoreDiscoveredMovies,
-                            isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
-                            hasMoreTvShows = hasMoreDiscoveredTvShows,
-                            isDiscoveryLoading = isDiscoveryLoading,
-                            onMovieClick = onMovieClick,
-                            onTvShowClick = onTvShowClick,
-                            onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
-                            onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() },
-                            filterChips = {
-                                FilterChipsRow(
-                                    selectedMediaType = selectedMediaType,
-                                    setMediaType = { viewModel.setMediaType(it) },
-                                    selectedSortBy = selectedSortBy,
-                                    setSortBy = { viewModel.setSortBy(it) }
-                                )
-                            }
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        state = viewModel.mainListState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(top = innerPadding.calculateTopPadding(), bottom = contentBottomPadding)
-                    ) {
-                        if (trending.isNotEmpty()) {
-                            item {
-                                HeroBannerCarousel(
-                                    items = trending,
-                                    onMovieClick = onMovieClick,
-                                    onTvShowClick = onTvShowClick,
-                                    onHeroItemChanged = { activeHeroBackdropUrl = it }
-                                )
-                            }
+                AnimatedContent(
+                    targetState = selectedTab,
+                    transitionSpec = {
+                        if (targetState > initialState) {
+                            // Moving from Home to Browse: Slide left to show new content coming from right
+                            (slideInHorizontally { width -> width } + fadeIn(tween(400)))
+                                .togetherWith(slideOutHorizontally { width -> -width } + fadeOut(tween(400))) 
+                        } else {
+                            // Moving from Browse to Home: Slide right to show new content coming from left
+                            (slideInHorizontally { width -> -width } + fadeIn(tween(400)))
+                                .togetherWith(slideOutHorizontally { width -> width } + fadeOut(tween(400)))
                         }
-
-                        // Trending Today
-                        if (trending.isNotEmpty()) {
-                            item {
-                                MediaRow(
-                                    title = "🔥 Trending Today",
-                                    items = trending,
-                                    listState = viewModel.trendingListState,
-                                    onItemClick = { item ->
-                                        if (item.isMovie) onMovieClick(item.id)
-                                        else onTvShowClick(item.id)
-                                    },
-                                    posterUrl = { it.posterUrl },
-                                    displayTitle = { it.displayTitle },
-                                    year = { it.year },
-                                    rating = { String.format("%.1f", it.voteAverage) },
-                                    onLoadMore = { viewModel.loadMoreTrending() },
-                                    isLoadingMore = isLoadingMoreTrending,
-                                    hasMore = hasMoreTrending
-                                )
-                            }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                    label = "TabAnimation"
+                ) { tab ->
+                    if (tab == 1) {
+                        Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
+                            DiscoverGrid(
+                                movies = discoveredMovies,
+                                tvShows = discoveredTvShows,
+                                gridState = viewModel.discoverGridState,
+                                selectedMediaType = selectedMediaType,
+                                isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
+                                hasMoreMovies = hasMoreDiscoveredMovies,
+                                isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
+                                hasMoreTvShows = hasMoreDiscoveredTvShows,
+                                isDiscoveryLoading = isDiscoveryLoading,
+                                onMovieClick = onMovieClick,
+                                onTvShowClick = onTvShowClick,
+                                onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
+                                onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() }
+                            )
                         }
-
-                        // Popular Movies
-                        if (popularMovies.isNotEmpty()) {
-                            item {
-                                MediaRow(
-                                    title = "🎬 Popular Movies",
-                                    items = popularMovies,
-                                    listState = viewModel.popularMoviesListState,
-                                    onItemClick = { onMovieClick(it.id) },
-                                    posterUrl = { it.posterUrl },
-                                    displayTitle = { it.title },
-                                    year = { it.year },
-                                    rating = { it.rating },
-                                    onLoadMore = { viewModel.loadMorePopularMovies() },
-                                    isLoadingMore = isLoadingMorePopularMovies,
-                                    hasMore = hasMorePopularMovies
-                                )
-                            }
-                        }
-
-                        // Popular TV Shows
-                        if (popularTvShows.isNotEmpty()) {
-                            item {
-                                MediaRow(
-                                    title = "📺 Popular TV Shows",
-                                    items = popularTvShows,
-                                    listState = viewModel.popularTvShowsListState,
-                                    onItemClick = { onTvShowClick(it.id) },
-                                    posterUrl = { it.posterUrl },
-                                    displayTitle = { it.name },
-                                    year = { it.year },
-                                    rating = { it.rating },
-                                    onLoadMore = { viewModel.loadMorePopularTvShows() },
-                                    isLoadingMore = isLoadingMorePopularTvShows,
-                                    hasMore = hasMorePopularTvShows
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Floating Navigation Pill
-            if (!isSearching && isConfigured) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = innerPadding.calculateBottomPadding() + 16.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(32.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
-                        tonalElevation = 8.dp,
-                        shadowElevation = 8.dp
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(4.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    } else {
+                        LazyColumn(
+                            state = viewModel.mainListState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(top = innerPadding.calculateTopPadding(), bottom = contentBottomPadding)
                         ) {
-                            val homeSelected = selectedTab == 0
-                            Surface(
-                                shape = RoundedCornerShape(24.dp),
-                                color = if (homeSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                modifier = Modifier.clickable { selectedTab = 0 }
-                            ) {
-                                Text(
-                                    "Home",
-                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (homeSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            if (trendingWeek.isNotEmpty()) {
+                                item {
+                                    HeroBannerCarousel(
+                                        items = trendingWeek,
+                                        onMovieClick = onMovieClick,
+                                        onTvShowClick = onTvShowClick,
+                                        onHeroItemChanged = { activeHeroBackdropUrl = it }
+                                    )
+                                }
                             }
 
-                            val browseSelected = selectedTab == 1
-                            Surface(
-                                shape = RoundedCornerShape(24.dp),
-                                color = if (browseSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                modifier = Modifier.clickable { selectedTab = 1 }
-                            ) {
-                                Text(
-                                    "Browse",
-                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (browseSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            // Trending Today
+                            if (trendingDay.isNotEmpty()) {
+                                item {
+                                    MediaRow(
+                                        title = "Trending Today",
+                                        items = trendingDay,
+                                        listState = viewModel.trendingDayListState,
+                                        onItemClick = { item ->
+                                            if (item.isMovie) onMovieClick(item.id)
+                                            else onTvShowClick(item.id)
+                                        },
+                                        posterUrl = { it.posterUrl },
+                                        displayTitle = { it.displayTitle },
+                                        year = { it.year },
+                                        rating = { String.format("%.1f", it.voteAverage) },
+                                        onLoadMore = { viewModel.loadMoreTrendingDay() },
+                                        isLoadingMore = isLoadingMoreTrendingDay,
+                                        hasMore = hasMoreTrendingDay
+                                    )
+                                }
+                            }
+
+                            // Popular Movies
+                            if (popularMovies.isNotEmpty()) {
+                                item {
+                                    MediaRow(
+                                        title = "Popular Movies",
+                                        items = popularMovies,
+                                        listState = viewModel.popularMoviesListState,
+                                        onItemClick = { onMovieClick(it.id) },
+                                        posterUrl = { it.posterUrl },
+                                        displayTitle = { it.title },
+                                        year = { it.year },
+                                        rating = { it.rating },
+                                        onLoadMore = { viewModel.loadMorePopularMovies() },
+                                        isLoadingMore = isLoadingMorePopularMovies,
+                                        hasMore = hasMorePopularMovies
+                                    )
+                                }
+                            }
+
+                            // Popular TV Shows
+                            if (popularTvShows.isNotEmpty()) {
+                                item {
+                                    MediaRow(
+                                        title = "Popular TV Shows",
+                                        items = popularTvShows,
+                                        listState = viewModel.popularTvShowsListState,
+                                        onItemClick = { onTvShowClick(it.id) },
+                                        posterUrl = { it.posterUrl },
+                                        displayTitle = { it.name },
+                                        year = { it.year },
+                                        rating = { it.rating },
+                                        onLoadMore = { viewModel.loadMorePopularTvShows() },
+                                        isLoadingMore = isLoadingMorePopularTvShows,
+                                        hasMore = hasMorePopularTvShows
+                                    )
+                                }
+                            }
+
+                            // New & Upcoming (Merged)
+                            if (newReleases.isNotEmpty()) {
+                                item {
+                                    MediaRow(
+                                        title = "New & Upcoming",
+                                        items = newReleases,
+                                        listState = viewModel.newReleasesListState,
+                                        onItemClick = { onMovieClick(it.id) },
+                                        posterUrl = { it.posterUrl },
+                                        displayTitle = { it.title },
+                                        year = { it.year },
+                                        rating = { it.rating },
+                                        badgeText = { item ->
+                                            if (nowPlayingMovieIds.contains(item.id)) "In Theaters" else null
+                                        },
+                                        onLoadMore = { viewModel.loadMoreNewReleases() },
+                                        isLoadingMore = isLoadingMoreNewReleases,
+                                        hasMore = hasMoreNewReleases
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-// ==================== Reusable Components ====================
-
-@Composable
-private fun FilterChipsRow(
-    selectedMediaType: LibraryMediaType,
-    setMediaType: (LibraryMediaType) -> Unit,
-    selectedSortBy: LibrarySortBy,
-    setSortBy: (LibrarySortBy) -> Unit
-) {
-    var showSortMenu by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        FilterChip(
-            selected = selectedMediaType == LibraryMediaType.ALL,
-            onClick = { setMediaType(LibraryMediaType.ALL) },
-            label = { Text("All") }
-        )
-        FilterChip(
-            selected = selectedMediaType == LibraryMediaType.MOVIE,
-            onClick = { setMediaType(LibraryMediaType.MOVIE) },
-            label = { Text("Movies") }
-        )
-        FilterChip(
-            selected = selectedMediaType == LibraryMediaType.TV_SHOW,
-            onClick = { setMediaType(LibraryMediaType.TV_SHOW) },
-            label = { Text("TV Shows") }
-        )
-        Spacer(modifier = Modifier.weight(1f))
-        Box {
-            val sortLabel = when (selectedSortBy) {
-                LibrarySortBy.POPULARITY_DESC -> "Popular"
-                LibrarySortBy.VOTE_AVERAGE_DESC -> "Rating"
-                LibrarySortBy.PRIMARY_RELEASE_DATE_DESC -> "Newest"
-            }
-            FilterChip(
-                selected = selectedSortBy != LibrarySortBy.POPULARITY_DESC,
-                onClick = { showSortMenu = true },
-                label = { Text(sortLabel) },
-                trailingIcon = {
-                    Icon(
-                        Icons.Default.ArrowDropDown,
-                        contentDescription = null,
-                        modifier = Modifier.size(FilterChipDefaults.IconSize)
-                    )
-                }
-            )
-            DropdownMenu(
-                expanded = showSortMenu,
-                onDismissRequest = { showSortMenu = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Popular") },
-                    onClick = {
-                        setSortBy(LibrarySortBy.POPULARITY_DESC)
-                        showSortMenu = false
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Rating") },
-                    onClick = {
-                        setSortBy(LibrarySortBy.VOTE_AVERAGE_DESC)
-                        showSortMenu = false
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Newest") },
-                    onClick = {
-                        setSortBy(LibrarySortBy.PRIMARY_RELEASE_DATE_DESC)
-                        showSortMenu = false
-                    }
-                )
             }
         }
     }
@@ -729,12 +734,10 @@ private fun DiscoverGrid(
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
     onLoadMoreMovies: () -> Unit,
-    onLoadMoreTvShows: () -> Unit,
-    filterChips: @Composable () -> Unit
+    onLoadMoreTvShows: () -> Unit
 ) {
     if (isDiscoveryLoading) {
         Column(modifier = Modifier.fillMaxSize()) {
-            filterChips()
             Box(
                 modifier = Modifier.fillMaxWidth().padding(32.dp).weight(1f),
                 contentAlignment = Alignment.Center
@@ -750,7 +753,6 @@ private fun DiscoverGrid(
 
     if (!hasMovies && !hasTvShows) {
         Column(modifier = Modifier.fillMaxSize()) {
-            filterChips()
             Box(
                 modifier = Modifier.fillMaxWidth().padding(32.dp).weight(1f),
                 contentAlignment = Alignment.Center
@@ -798,63 +800,78 @@ private fun DiscoverGrid(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            filterChips()
-        }
 
-        if (hasMovies) {
-            if (selectedMediaType == LibraryMediaType.ALL) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text = "✨ Discovered Movies",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        if (selectedMediaType == LibraryMediaType.ALL) {
+            val maxLen = maxOf(movies.size, tvShows.size)
+            val mixed = buildList {
+                for (i in 0 until maxLen) {
+                    if (i < movies.size) add(Pair(movies[i], true))
+                    if (i < tvShows.size) add(Pair(tvShows[i], false))
+                }
+            }
+            gridItems(mixed) { pair ->
+                if (pair.second) {
+                    val movie = pair.first as TmdbMovie
+                    PosterCard(
+                        posterUrl = movie.posterUrl,
+                        title = movie.title,
+                        year = movie.year,
+                        rating = movie.rating,
+                        onClick = { onMovieClick(movie.id) }
+                    )
+                } else {
+                    val tvShow = pair.first as TmdbTvShow
+                    PosterCard(
+                        posterUrl = tvShow.posterUrl,
+                        title = tvShow.name,
+                        year = tvShow.year,
+                        rating = tvShow.rating,
+                        onClick = { onTvShowClick(tvShow.id) }
                     )
                 }
             }
-            gridItems(movies) { item ->
-                PosterCard(
-                    posterUrl = item.posterUrl,
-                    title = item.title,
-                    year = item.year,
-                    rating = item.rating,
-                    onClick = { onMovieClick(item.id) }
-                )
-            }
-            if (isLoadingMoreMovies && hasMoreMovies) {
+            if ((isLoadingMoreMovies && hasMoreMovies) || (isLoadingMoreTvShows && hasMoreTvShows)) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
                 }
             }
-        }
-
-        if (hasTvShows) {
-            if (selectedMediaType == LibraryMediaType.ALL) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text = "✨ Discovered TV Shows",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        } else if (selectedMediaType == LibraryMediaType.MOVIE) {
+            if (hasMovies) {
+                gridItems(movies) { item ->
+                    PosterCard(
+                        posterUrl = item.posterUrl,
+                        title = item.title,
+                        year = item.year,
+                        rating = item.rating,
+                        onClick = { onMovieClick(item.id) }
                     )
                 }
+                if (isLoadingMoreMovies && hasMoreMovies) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                }
             }
-            gridItems(tvShows) { item ->
-                PosterCard(
-                    posterUrl = item.posterUrl,
-                    title = item.name,
-                    year = item.year,
-                    rating = item.rating,
-                    onClick = { onTvShowClick(item.id) }
-                )
-            }
-            if (isLoadingMoreTvShows && hasMoreTvShows) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
+        } else if (selectedMediaType == LibraryMediaType.TV_SHOW) {
+            if (hasTvShows) {
+                gridItems(tvShows) { item ->
+                    PosterCard(
+                        posterUrl = item.posterUrl,
+                        title = item.name,
+                        year = item.year,
+                        rating = item.rating,
+                        onClick = { onTvShowClick(item.id) }
+                    )
+                }
+                if (isLoadingMoreTvShows && hasMoreTvShows) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
                     }
                 }
             }
@@ -872,6 +889,7 @@ private fun <T> MediaRow(
     displayTitle: (T) -> String,
     year: (T) -> String,
     rating: (T) -> String,
+    badgeText: (T) -> String? = { null },
     onLoadMore: () -> Unit = {},
     isLoadingMore: Boolean = false,
     hasMore: Boolean = true
@@ -911,6 +929,7 @@ private fun <T> MediaRow(
                     title = displayTitle(item),
                     year = year(item),
                     rating = rating(item),
+                    label = badgeText(item),
                     onClick = { onItemClick(item) }
                 )
             }
@@ -936,6 +955,7 @@ private fun PosterCard(
     title: String,
     year: String,
     rating: String,
+    label: String? = null,
     onClick: () -> Unit
 ) {
     val showTextOverlay = LocalShowCardTextOverlay.current
@@ -976,7 +996,7 @@ private fun PosterCard(
                 }
             }
 
-            // Rating badge
+            // Badges & Info Overlay
             if (showTextOverlay) {
                 // Gradient overlay
                 Box(
@@ -990,6 +1010,7 @@ private fun PosterCard(
                         )
                 )
 
+                // Rating badge (Top Start)
                 if (rating.isNotBlank() && rating != "0.0") {
                     Surface(
                         shape = RoundedCornerShape(20.dp),
@@ -1011,13 +1032,30 @@ private fun PosterCard(
                                 text = rating,
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                         }
                     }
                 }
 
-                // Title & Year
+                // Custom Label badge (Top End)
+                if (!label.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.95f),
+                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+
+                // Title & Year (Bottom Start)
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
