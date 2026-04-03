@@ -26,7 +26,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import android.app.Activity
 import com.playbridge.player.server.ServerService
+import com.playbridge.player.ui.theme.AppTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -51,6 +53,11 @@ fun SettingsScreen(
 
     // Tracks whether the server restart cycle is in progress
     var isRestarting by remember { mutableStateOf(false) }
+
+    // Theme preference
+    var themeStr by remember {
+        mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK")
+    }
 
     // Restarts the WebSocket server + NSD advertisement so any changed settings (e.g. custom IP)
     // take effect immediately without having to kill and relaunch the whole app.
@@ -82,7 +89,7 @@ fun SettingsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F0F23))
+            .background(MaterialTheme.colorScheme.background)
             .padding(48.dp)
     ) {
         Column(
@@ -134,7 +141,7 @@ fun SettingsScreen(
                 Text(
                     text = "Custom Network IP Address",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.LightGray
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 var isFocused by remember { mutableStateOf(false) }
@@ -144,7 +151,7 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .height(44.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(if (isFocused) Color(0xFF2A2A4A) else Color(0xFF1E1E38))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
                         .border(
                             if (isFocused) 1.5.dp else 1.dp,
                             if (isFocused) Color(0xFF00D9FF).copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
@@ -170,7 +177,7 @@ fun SettingsScreen(
                 Text(
                     text = "Set a custom IP to advertise. Useful for emulator port forwarding (e.g. adb forward). Leave empty for Automatic. Saving triggers an automatic server restart.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -181,7 +188,7 @@ fun SettingsScreen(
                 Text(
                     text = "Server",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.LightGray
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Button(
@@ -194,9 +201,27 @@ fun SettingsScreen(
                 Text(
                     text = "Stops and restarts the WebSocket server and network discovery (NSD). Use this after changing the Custom IP, or if phones can't connect.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+
+            // ── Appearance ──
+            SettingsDropdown(
+                label = "Theme",
+                description = when (themeStr) {
+                    "DARK"   -> "Deep indigo — easy on the eyes in dark environments."
+                    "AMOLED" -> "True black — saves battery on OLED screens."
+                    "LIGHT"  -> "Soft violet-white — for bright environments."
+                    else     -> ""
+                },
+                options = AppTheme.entries.map { it.name to it.label },
+                selected = themeStr,
+                onSelected = { selected ->
+                    themeStr = selected
+                    prefs.edit().putString("app_theme", selected).apply()
+                    (context as? Activity)?.recreate()
+                }
+            )
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -210,7 +235,7 @@ fun SettingsScreen(
             Text(
                 text = "Version: $versionName",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color.Gray
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Button(onClick = onBack) {
@@ -229,7 +254,7 @@ fun SettingsScreen(
         ) {
             Column(
                 modifier = Modifier
-                    .background(Color(0xFF1E1E38), RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
                     .padding(32.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -237,7 +262,7 @@ fun SettingsScreen(
                 Text(
                     "Useful for emulator port forwarding (e.g. adb forward). Leave empty for Automatic. Saving will restart the server so the new IP takes effect immediately.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.LightGray
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 // We use basic compose text field, but we need to ensure the standard foundation is available
@@ -296,7 +321,7 @@ private fun SettingsDropdown(
         Text(
             text = label,
             style = MaterialTheme.typography.titleMedium,
-            color = Color.LightGray
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         if (!expanded) {
@@ -309,7 +334,7 @@ private fun SettingsDropdown(
                     .fillMaxWidth()
                     .height(44.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(if (isFocused) Color(0xFF2A2A4A) else Color(0xFF1E1E38))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .border(
                         if (isFocused) 1.5.dp else 1.dp,
                         if (isFocused) Color(0xFF00D9FF).copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
@@ -337,7 +362,7 @@ private fun SettingsDropdown(
                     )
                     Text(
                         text = "▼",
-                        color = if (isFocused) Color(0xFF00D9FF) else Color.Gray,
+                        color = if (isFocused) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
                 }
@@ -348,7 +373,7 @@ private fun SettingsDropdown(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF1E1E38))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .border(1.dp, Color(0xFF00D9FF).copy(alpha = 0.3f), RoundedCornerShape(10.dp)),
                 verticalArrangement = Arrangement.spacedBy(0.dp)
             ) {
@@ -373,7 +398,7 @@ private fun SettingsDropdown(
         Text(
             text = description,
             style = MaterialTheme.typography.bodySmall,
-            color = Color.Gray
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -444,7 +469,7 @@ private fun DropdownOption(
                 color = when {
                     isFocused -> Color(0xFF00D9FF)
                     isSelected -> MaterialTheme.colorScheme.onSurface
-                    else -> Color.LightGray
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
                 fontSize = 14.sp,
                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal

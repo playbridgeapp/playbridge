@@ -1,12 +1,16 @@
 package com.playbridge.sender.ui.theme
 
+import android.app.Activity
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowInsetsControllerCompat
 
 enum class AppTheme(val label: String) {
     DARK("Dark"),
@@ -85,6 +89,21 @@ fun PlayBridgeTheme(
         AppTheme.AMOLED -> AmoledColorScheme
         AppTheme.LIGHT  -> LightColorScheme
     }
+
+    // Flip status-bar and nav-bar icons to dark on light theme so they're
+    // visible against the light background. SideEffect runs after every
+    // successful composition, keeping it in sync if the Activity is recreated.
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window ?: return@SideEffect
+            val controller = WindowInsetsControllerCompat(window, view)
+            val isLight = theme == AppTheme.LIGHT
+            controller.isAppearanceLightStatusBars = isLight
+            controller.isAppearanceLightNavigationBars = isLight
+        }
+    }
+
     MaterialTheme(
         colorScheme = colorScheme,
         typography = AppTypography,

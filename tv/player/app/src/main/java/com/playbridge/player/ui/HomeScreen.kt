@@ -33,7 +33,7 @@ fun HomeScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF0F0F23)),
+            .background(MaterialTheme.colorScheme.background),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -64,7 +64,7 @@ fun HomeScreen(
                                 is WebSocketServer.ConnectionState.Running -> Color(0xFFFFAA00)
                                 is WebSocketServer.ConnectionState.Starting -> Color(0xFFFFAA00)
                                 is WebSocketServer.ConnectionState.Error -> Color(0xFFFF4444)
-                                is WebSocketServer.ConnectionState.Stopped -> Color(0xFF666666)
+                                is WebSocketServer.ConnectionState.Stopped -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                         )
                 )
@@ -87,7 +87,7 @@ fun HomeScreen(
                 Text(
                     text = if (connectedCount == 1) "1 device connected" else "$connectedCount devices connected",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF00FF88),
+                    color = MaterialTheme.colorScheme.primary,
                     fontSize = 14.sp
                 )
             }
@@ -105,7 +105,7 @@ fun HomeScreen(
                         Text(
                             text = "ID: $deviceId",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF888888),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp,
                             modifier = Modifier.padding(top = 4.dp)
                         )
@@ -124,7 +124,7 @@ fun HomeScreen(
                     Text(
                         text = "Enter this PIN on your phone",
                         style = MaterialTheme.typography.titleMedium,
-                        color = Color.Gray
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
                         text = pinDisplay,
@@ -136,7 +136,7 @@ fun HomeScreen(
                     Text(
                         text = deviceName,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -152,7 +152,7 @@ fun HomeScreen(
                         "Open PlayBridge on your phone and enter the PIN above."
                 },
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
         }
