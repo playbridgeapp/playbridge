@@ -80,7 +80,8 @@ data class PlaylistJumpPayload(
 @Serializable
 data class BrowserPayload(
     val url: String,
-    val browserMode: String? = null
+    val browserMode: String? = null,
+    val desktopMode: Boolean? = null
 )
 
 /**
@@ -300,7 +301,7 @@ sealed class Command {
         val preferredSubtitleLanguage: String? = null,
         val defaultVideoQuality: String? = null
     ) : Command()
-    data class Browser(val url: String, val browserMode: String?) : Command()
+    data class Browser(val url: String, val browserMode: String?, val desktopMode: Boolean? = null) : Command()
     data class Control(val command: String) : Command()
     data class Remote(val key: String) : Command()
     data class Mouse(val event: String, val dx: Float, val dy: Float) : Command()
@@ -353,7 +354,8 @@ fun parseCommand(jsonString: String): Command {
                         }
                         Command.Browser(
                             url = payload?.url ?: "",
-                            browserMode = payload?.browserMode
+                            browserMode = payload?.browserMode,
+                            desktopMode = payload?.desktopMode
                         )
                     }
                     "control" -> {
@@ -451,10 +453,10 @@ fun createPlayCommandJson(
     )
 }
 
-fun createBrowserCommandJson(url: String, browserMode: String? = null): String {
+fun createBrowserCommandJson(url: String, browserMode: String? = null, desktopMode: Boolean? = null): String {
     return protocolJson.encodeToString(
         BrowserCommand.serializer(),
-        BrowserCommand(payload = BrowserPayload(url = url, browserMode = browserMode))
+        BrowserCommand(payload = BrowserPayload(url = url, browserMode = browserMode, desktopMode = desktopMode))
     )
 }
 

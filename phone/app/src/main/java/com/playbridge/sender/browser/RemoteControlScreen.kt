@@ -3,6 +3,7 @@ package com.playbridge.sender.browser
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -48,6 +49,8 @@ fun RemoteControlScreen(
     onMouseMove: (dx: Float, dy: Float) -> Unit,
     onMouseClick: () -> Unit,
     onMouseScroll: (dx: Float, dy: Float) -> Unit,
+    onMouseDown: () -> Unit = {},
+    onMouseUp: () -> Unit = {},
     onBrowserControl: (String) -> Unit = {},
     onPlayerControl: (String) -> Unit = {}
 ) {
@@ -168,7 +171,9 @@ fun RemoteControlScreen(
                     TouchpadArea(
                         onMouseMove = onMouseMove,
                         onMouseClick = onMouseClick,
-                        onMouseScroll = onMouseScroll
+                        onMouseScroll = onMouseScroll,
+                        onMouseDown = onMouseDown,
+                        onMouseUp = onMouseUp
                     )
                 } else {
                     DpadArea(onRemoteKey = onRemoteKey)
@@ -255,9 +260,12 @@ private fun PillOption(
 private fun TouchpadArea(
     onMouseMove: (dx: Float, dy: Float) -> Unit,
     onMouseClick: () -> Unit,
-    onMouseScroll: (dx: Float, dy: Float) -> Unit
+    onMouseScroll: (dx: Float, dy: Float) -> Unit,
+    onMouseDown: () -> Unit = {},
+    onMouseUp: () -> Unit = {}
 ) {
     var isScrolling by remember { mutableStateOf(false) }
+    var isDragging by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -298,6 +306,31 @@ private fun TouchpadArea(
             }
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { onMouseClick() })
+            }
+            .pointerInput(Unit) {
+                // Long-press then drag → click-drag on the TV (e.g. seekbar scrubbing)
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        isDragging = true
+                        onMouseDown()
+                    },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        onMouseMove(dragAmount.x * 1.5f, dragAmount.y * 1.5f)
+                    },
+                    onDragEnd = {
+                        if (isDragging) {
+                            isDragging = false
+                            onMouseUp()
+                        }
+                    },
+                    onDragCancel = {
+                        if (isDragging) {
+                            isDragging = false
+                            onMouseUp()
+                        }
+                    }
+                )
             },
         contentAlignment = Alignment.Center
     ) {
@@ -313,7 +346,7 @@ private fun TouchpadArea(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "1 finger: move  •  2 fingers: scroll  •  Tap: click",
+                "1 finger: move  •  2 fingers: scroll  •  Tap: click  •  Long-press+drag: drag",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                 textAlign = TextAlign.Center

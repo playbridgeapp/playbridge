@@ -1690,6 +1690,22 @@ class BrowserActivity : ComponentActivity() {
                                                         connectionViewModel.webSocketClient.send(cmd)
                                                     }
                                                 },
+                                                onMouseDown = {
+                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
+                                                        connectionViewModel.bluetoothClient.sendMouseCommand("down", 0f, 0f)
+                                                    } else {
+                                                        val cmd = com.playbridge.protocol.createMouseCommandJson("down")
+                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                    }
+                                                },
+                                                onMouseUp = {
+                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
+                                                        connectionViewModel.bluetoothClient.sendMouseCommand("up", 0f, 0f)
+                                                    } else {
+                                                        val cmd = com.playbridge.protocol.createMouseCommandJson("up")
+                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                    }
+                                                },
                                                 onBrowserControl = { action ->
                                                     // Browser controls still go over websocket as they affect the TV browser, not OS mouse
                                                     val cmd = com.playbridge.protocol.createBrowserControlCommandJson(action)
@@ -2014,11 +2030,12 @@ class BrowserActivity : ComponentActivity() {
                         },
                         browseUrl = castSheetBrowseOverride ?: currentUrl,
                         initialMode = castSheetInitialMode,
-                        onBrowseClick = { selectedMode ->
+                        onBrowseClick = { selectedMode, desktopMode ->
                             val effectiveUrl = castSheetBrowseOverride ?: currentUrl
                             val cmd = com.playbridge.protocol.createBrowserCommandJson(
                                 effectiveUrl,
-                                browserMode = selectedMode.takeIf { it != "tv" }
+                                browserMode = selectedMode.takeIf { it != "tv" },
+                                desktopMode = desktopMode.takeIf { it }
                             )
                             connectionViewModel.sendCommandAndRecord(cmd, "browser", effectiveUrl, "Browser Page")
                             Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()

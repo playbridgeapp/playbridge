@@ -13,6 +13,7 @@ import org.mozilla.geckoview.WebExtension
 class GeckoViewEngine(
     private val context: Context,
     private val adBlocker: AdBlocker, // Kept for consistency, though GeckoView has own blocking
+    private val desktopMode: Boolean = false,
     private val onFullscreen: ((Boolean) -> Unit)? = null
 ) : BrowserEngine {
 
@@ -142,6 +143,11 @@ class GeckoViewEngine(
         // Settings
         session.settings.apply {
             useTrackingProtection = true
+            userAgentMode = if (desktopMode) {
+                org.mozilla.geckoview.GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+            } else {
+                org.mozilla.geckoview.GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+            }
         }
 
         // Install uBlock Origin from bundled assets

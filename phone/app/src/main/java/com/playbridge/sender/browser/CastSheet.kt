@@ -136,7 +136,7 @@ fun CastSheet(
     onTvChange: (TvDevice) -> Unit = {},
     tvConnectionState: Boolean? = null,  // true = connected, false = error, null = neutral
     browseUrl: String = "",
-    onBrowseClick: ((String) -> Unit)? = null,
+    onBrowseClick: ((String, Boolean) -> Unit)? = null,
     onOpenNewTab: ((String) -> Unit)? = null,
     initialMode: String = "play"
 ) {
@@ -193,6 +193,9 @@ fun CastSheet(
 
     // In-app preview state
     var previewVideo by remember { mutableStateOf<DetectedVideo?>(null) }
+
+    // Browse-mode desktop/mobile toggle
+    var browseDesktopMode by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -261,7 +264,7 @@ fun CastSheet(
 
                     if (sheetMode == "browse") {
                         IconButton(
-                            onClick = { onBrowseClick?.invoke(playerMode) }
+                            onClick = { onBrowseClick?.invoke(playerMode, browseDesktopMode) }
                         ) {
                             Icon(
                                 Icons.Default.Send,
@@ -355,6 +358,27 @@ fun CastSheet(
                     selectedValue = playerMode,
                     onSelect = onPlayerModeChange
                 )
+                if (sheetMode == "browse") {
+                    FilterChip(
+                        selected = browseDesktopMode,
+                        onClick = { browseDesktopMode = !browseDesktopMode },
+                        label = {
+                            Text(
+                                text = if (browseDesktopMode) "Desktop" else "Mobile",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        },
+                        leadingIcon = if (browseDesktopMode) {
+                            {
+                                Icon(
+                                    Icons.Default.Language,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(FilterChipDefaults.IconSize)
+                                )
+                            }
+                        } else null
+                    )
+                }
             }
 
             if (sheetMode == "browse") {

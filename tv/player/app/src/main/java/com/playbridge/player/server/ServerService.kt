@@ -431,6 +431,7 @@ class ServerService : Service() {
                 val browserIntent = Intent("com.playbridge.player.ACTION_BROWSER").apply {
                     putExtra("extra_url", command.url)
                     putExtra("extra_browser_mode", command.browserMode)
+                    putExtra("extra_desktop_mode", command.desktopMode ?: false)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
                 launchActivityFromBackground(browserIntent, "Opening browser")

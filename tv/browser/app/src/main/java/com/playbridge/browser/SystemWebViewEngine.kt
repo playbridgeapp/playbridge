@@ -22,6 +22,7 @@ import java.io.ByteArrayInputStream
 class SystemWebViewEngine(
     private val context: Context,
     private val adBlocker: AdBlocker,
+    private val desktopMode: Boolean = false,
     private val onFullscreen: (View, WebChromeClient.CustomViewCallback) -> Unit,
     private val onExitFullscreen: () -> Unit,
     private val onEngineRecreateRequired: (url: String?) -> Unit = {}
@@ -222,8 +223,12 @@ class SystemWebViewEngine(
                 allowContentAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
-                // Use standard Android Mobile User Agent to mimic a phone
-                userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                // User agent: desktop Chrome on Linux or mobile Android, driven by desktopMode flag
+                userAgentString = if (desktopMode) {
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                } else {
+                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                }
 
                 // Optimize for media streaming
                 cacheMode = WebSettings.LOAD_DEFAULT

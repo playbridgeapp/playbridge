@@ -42,6 +42,7 @@ class BrowserActivity : ComponentActivity() {
         private const val TAG = "TVBrowserActivity"
         const val EXTRA_URL = "extra_url"
         const val EXTRA_BROWSER_MODE = "extra_browser_mode"
+        const val EXTRA_DESKTOP_MODE = "extra_desktop_mode"
 
         const val ACTION_MOUSE = "com.playbridge.player.ACTION_MOUSE"
         const val ACTION_REMOTE = "com.playbridge.player.ACTION_REMOTE"
@@ -56,6 +57,10 @@ class BrowserActivity : ComponentActivity() {
     private var engine: BrowserEngine? = null
     private var canGoBack = false
     private var currentUrl: String? = null
+
+    // Drag state — tracks an in-progress click-drag (e.g. seekbar scrubbing)
+    private var isDragging = false
+    private var dragDownTime = 0L
 
     // Ad blocker
     private lateinit var adBlocker: AdBlocker
@@ -224,12 +229,14 @@ class BrowserActivity : ComponentActivity() {
         }
 
         val useGecko = finalMode == "gecko"
+        val desktopMode = intent.getBooleanExtra(EXTRA_DESKTOP_MODE, false)
 
         engine = if (useGecko) {
-            Log.d(TAG, "Initializing GeckoView Engine")
+            Log.d(TAG, "Initializing GeckoView Engine (desktop=$desktopMode)")
             GeckoViewEngine(
                 this,
                 adBlocker,
+                desktopMode = desktopMode,
                 onFullscreen = { isFullscreen ->
                     if (isFullscreen) {
                         enterGeckoFullscreen()
@@ -239,10 +246,11 @@ class BrowserActivity : ComponentActivity() {
                 }
             )
         } else {
-            Log.d(TAG, "Initializing System WebView Engine")
+            Log.d(TAG, "Initializing System WebView Engine (desktop=$desktopMode)")
             SystemWebViewEngine(
                 this,
                 adBlocker,
+                desktopMode = desktopMode,
                 onFullscreen = { view, callback ->
                     enterFullscreen(view, callback)
                 },
@@ -357,36 +365,27 @@ class BrowserActivity : ComponentActivity() {
     }
 
     /**
-     * Dispatch a touch event to the correct target view based on fullscreen state.
-     * In fullscreen: dispatches to the fullscreen view (or GeckoView).
-     * Otherwise: dispatches to the engine's WebView.
+     * Dispatch a single touch action (ACTION_DOWN, ACTION_MOVE, ACTION_UP) to the correct
+     * target view based on fullscreen state.
      */
-    private fun simulateClickOnActiveView(x: Float, y: Float) {
-        val downTime = android.os.SystemClock.uptimeMillis()
-        val eventTime = downTime
-
-        val downEvent = android.view.MotionEvent.obtain(
-            downTime, eventTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0
-        )
-        val upEvent = android.view.MotionEvent.obtain(
-            downTime, eventTime + 100, android.view.MotionEvent.ACTION_UP, x, y, 0
-        )
-
+    private fun dispatchTouchToActiveView(action: Int, x: Float, y: Float, downTime: Long, eventTime: Long) {
+        val event = android.view.MotionEvent.obtain(downTime, eventTime, action, x, y, 0)
         val targetView = when {
             fullscreenView != null -> fullscreenView
             isGeckoFullscreen -> engine?.getView()
-            else -> null
+            else -> engine?.getView()
         }
+        targetView?.dispatchTouchEvent(event)
+        event.recycle()
+    }
 
-        if (targetView != null) {
-            targetView.dispatchTouchEvent(downEvent)
-            targetView.dispatchTouchEvent(upEvent)
-        } else {
-            engine?.simulateClick(x, y)
-        }
-
-        downEvent.recycle()
-        upEvent.recycle()
+    /**
+     * Simulate a tap (ACTION_DOWN immediately followed by ACTION_UP) at the given position.
+     */
+    private fun simulateClickOnActiveView(x: Float, y: Float) {
+        val downTime = android.os.SystemClock.uptimeMillis()
+        dispatchTouchToActiveView(android.view.MotionEvent.ACTION_DOWN, x, y, downTime, downTime)
+        dispatchTouchToActiveView(android.view.MotionEvent.ACTION_UP, x, y, downTime, downTime + 100)
     }
 
     private fun handleMouseCommand(event: String?, dx: Float, dy: Float) {
@@ -397,6 +396,13 @@ class BrowserActivity : ComponentActivity() {
                 cursorX = (cursorX + dx).coerceIn(0f, displayMetrics.widthPixels.toFloat())
                 cursorY = (cursorY + dy).coerceIn(0f, displayMetrics.heightPixels.toFloat())
                 cursorView?.updatePosition(cursorX, cursorY)
+                // If a drag is in progress, also send ACTION_MOVE so the page feels it
+                if (isDragging) {
+                    val eventTime = android.os.SystemClock.uptimeMillis()
+                    dispatchTouchToActiveView(
+                        android.view.MotionEvent.ACTION_MOVE, cursorX, cursorY, dragDownTime, eventTime
+                    )
+                }
             }
             "click" -> {
                 showCursorAndResetTimer()
@@ -406,6 +412,29 @@ class BrowserActivity : ComponentActivity() {
             }
             "scroll" -> {
                 engine?.scrollBy(dx.toInt(), dy.toInt())
+            }
+            "down" -> {
+                // Start a click-drag: send ACTION_DOWN and remember the time
+                showCursorAndResetTimer()
+                dragDownTime = android.os.SystemClock.uptimeMillis()
+                isDragging = true
+                Log.d(TAG, "Drag start at ($cursorX, $cursorY)")
+                dispatchTouchToActiveView(
+                    android.view.MotionEvent.ACTION_DOWN, cursorX, cursorY, dragDownTime, dragDownTime
+                )
+                cursorView?.animateClick()
+            }
+            "up" -> {
+                // End a click-drag: send ACTION_UP and clear drag state
+                if (isDragging) {
+                    val eventTime = android.os.SystemClock.uptimeMillis()
+                    Log.d(TAG, "Drag end at ($cursorX, $cursorY)")
+                    dispatchTouchToActiveView(
+                        android.view.MotionEvent.ACTION_UP, cursorX, cursorY, dragDownTime, eventTime
+                    )
+                    isDragging = false
+                    dragDownTime = 0L
+                }
             }
         }
     }
