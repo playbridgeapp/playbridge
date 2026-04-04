@@ -1,7 +1,7 @@
 ---
 description: Android TV developer agent specialized in the TV receiver application
 mode: subagent
-model: opencode/gemini-3.1-pro
+model: opencode/qwen3.6-plus-free
 permission:
   edit: allow
   bash: allow

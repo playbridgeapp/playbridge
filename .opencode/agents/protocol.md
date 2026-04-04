@@ -1,7 +1,7 @@
 ---
 description: Kotlin architect agent specialized in the shared protocol module
 mode: subagent
-model: opencode/gemini-3.1-pro
+model: opencode/qwen3.6-plus-free
 permission:
   edit: allow
   bash: allow

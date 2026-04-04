@@ -1,7 +1,7 @@
 ---
 description: Web developer agent specialized in the Desktop Web Extension
 mode: subagent
-model: opencode/gemini-3.1-pro
+model: opencode/qwen3.6-plus-free
 permission:
   edit: allow
   bash: allow
