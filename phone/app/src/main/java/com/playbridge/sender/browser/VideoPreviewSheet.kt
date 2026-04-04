@@ -216,7 +216,7 @@ fun VideoPreviewSheet(
                     ) {
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Send to TV")
+                        Text("Send")
                     }
                 }
             }

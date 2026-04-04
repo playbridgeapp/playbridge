@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -217,41 +218,52 @@ fun CastSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                var modeDropdownExpanded by remember { mutableStateOf(false) }
-                Box {
-                    Row(
-                        modifier = Modifier.clickable { modeDropdownExpanded = true },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                FilterChip(
+                    selected = true,
+                    onClick = { sheetMode = if (sheetMode == "play") "browse" else "play" },
+                    label = {
                         Text(
-                            text = if (sheetMode == "browse") "Browse on TV" else "Play on TV",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface
+                            text = if (sheetMode == "play") "Play" else "Browse",
+                            style = MaterialTheme.typography.bodySmall
                         )
+                    },
+                    leadingIcon = {
                         Icon(
-                            Icons.Default.ArrowDropDown,
+                            imageVector = if (sheetMode == "play") Icons.Default.PlayArrow else Icons.Default.Language,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            modifier = Modifier.size(FilterChipDefaults.IconSize)
+                        )
+                    },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.SwapHoriz,
+                            contentDescription = "Switch mode",
+                            modifier = Modifier.size(FilterChipDefaults.IconSize)
                         )
                     }
-                    DropdownMenu(
-                        expanded = modeDropdownExpanded,
-                        onDismissRequest = { modeDropdownExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Play on TV", fontWeight = if (sheetMode == "play") FontWeight.Bold else FontWeight.Normal) },
-                            onClick = { sheetMode = "play"; modeDropdownExpanded = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Browse on TV", fontWeight = if (sheetMode == "browse") FontWeight.Bold else FontWeight.Normal) },
-                            onClick = { sheetMode = "browse"; modeDropdownExpanded = false }
-                        )
-                    }
-                }
+                )
 
                 Row(
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    val showTvDropdownHeader = availableTvDevices.size > 1 || (availableTvDevices.size == 1 && selectedTvDevice == null)
+                    if (showTvDropdownHeader) {
+                        val tvLabelColorHeader = when (tvConnectionState) {
+                            true  -> Color(0xFF4CAF50)
+                            false -> MaterialTheme.colorScheme.error
+                            null  -> Color.Unspecified
+                        }
+                        ChipDropdown(
+                            selectedLabel = selectedTvDevice?.name ?: "None",
+                            options = availableTvDevices.map { it.uuid to it.name },
+                            selectedValue = selectedTvDevice?.uuid ?: "",
+                            onSelect = { uuid ->
+                                availableTvDevices.find { it.uuid == uuid }?.let { onTvChange(it) }
+                            },
+                            chipLabelColor = tvLabelColorHeader
+                        )
+                    }
                     if (sheetMode == "play" && videos.isNotEmpty()) {
                         IconButton(onClick = onClear) {
                             Icon(
@@ -268,7 +280,7 @@ fun CastSheet(
                         ) {
                             Icon(
                                 Icons.Default.Send,
-                                contentDescription = "Browse on TV",
+                                contentDescription = "Browse",
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
@@ -301,7 +313,7 @@ fun CastSheet(
                         ) {
                             Icon(
                                 Icons.Default.Send,
-                                contentDescription = "Play on TV",
+                                contentDescription = "Play",
                                 tint = if (selectedVideo != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                             )
                         }
@@ -327,8 +339,6 @@ fun CastSheet(
                 )
             }
             val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
-            val showTvDropdown = availableTvDevices.size > 1 || (availableTvDevices.size == 1 && selectedTvDevice == null)
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -336,22 +346,6 @@ fun CastSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (showTvDropdown) {
-                    val tvLabelColor = when (tvConnectionState) {
-                        true  -> Color(0xFF4CAF50) // green
-                        false -> MaterialTheme.colorScheme.error
-                        null  -> Color.Unspecified
-                    }
-                    ChipDropdown(
-                        selectedLabel = selectedTvDevice?.name ?: "None",
-                        options = availableTvDevices.map { it.uuid to it.name },
-                        selectedValue = selectedTvDevice?.uuid ?: "",
-                        onSelect = { uuid ->
-                            availableTvDevices.find { it.uuid == uuid }?.let { onTvChange(it) }
-                        },
-                        chipLabelColor = tvLabelColor
-                    )
-                }
                 ChipDropdown(
                     selectedLabel = selectedPlayerLabel,
                     options = playerOptions,
@@ -376,7 +370,14 @@ fun CastSheet(
                                     modifier = Modifier.size(FilterChipDefaults.IconSize)
                                 )
                             }
-                        } else null
+                        } else null,
+                        trailingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.SwapHoriz,
+                                contentDescription = "Switch mode",
+                                modifier = Modifier.size(FilterChipDefaults.IconSize)
+                            )
+                        }
                     )
                 }
             }
