@@ -26,6 +26,15 @@ class BackupManager(private val context: Context) {
         const val KEY_SECRET_KEY = "backup_s3_secret_key"
         const val KEY_REGION = "backup_s3_region"
         const val KEY_ENABLED = "backup_enabled"
+        const val KEY_LAST_BACKUP = "backup_last_timestamp"
+    }
+
+    fun getLastBackupTimestamp(): Long {
+        return prefs.getLong(KEY_LAST_BACKUP, 0L)
+    }
+
+    fun saveLastBackupTimestamp() {
+        prefs.edit().putLong(KEY_LAST_BACKUP, System.currentTimeMillis()).apply()
     }
 
     fun isConfigured(): Boolean {

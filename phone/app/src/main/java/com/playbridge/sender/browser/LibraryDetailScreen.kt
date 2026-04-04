@@ -593,55 +593,29 @@ fun TvShowDetailScreen(
                     }
                 }
 
-                // Season Dropdown
+                // Season Chips
                 item {
                     val seasons = show.seasons.filter { it.seasonNumber > 0 }
                     if (seasons.isNotEmpty()) {
-                        var dropdownExpanded by remember { mutableStateOf(false) }
-                        
-                        Box(modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.clickable { dropdownExpanded = true }
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                                ) {
-                                    Text(
-                                        text = "Season $selectedSeason",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                    Spacer(modifier = Modifier.width(16.dp))
-                                    Icon(
-                                        Icons.Default.ArrowDropDown, 
-                                        contentDescription = "Select Season",
-                                        tint = Color.White
-                                    )
-                                }
-                            }
-                            
-                            DropdownMenu(
-                                expanded = dropdownExpanded,
-                                onDismissRequest = { dropdownExpanded = false },
-                            ) {
-                                seasons.forEach { season ->
-                                    DropdownMenuItem(
-                                        text = { Text("Season ${season.seasonNumber}") },
-                                        onClick = {
-                                            selectedSeason = season.seasonNumber
-                                            dropdownExpanded = false
-                                            scope.launch {
-                                                isSeasonLoading = true
-                                                seasonDetails = tmdb.getSeasonDetails(tvId, season.seasonNumber)
-                                                isSeasonLoading = false
-                                            }
+                        Row(
+                            modifier = Modifier
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 24.dp, vertical = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            seasons.forEach { season ->
+                                ElevatedFilterChip(
+                                    selected = selectedSeason == season.seasonNumber,
+                                    onClick = {
+                                        selectedSeason = season.seasonNumber
+                                        scope.launch {
+                                            isSeasonLoading = true
+                                            seasonDetails = tmdb.getSeasonDetails(tvId, season.seasonNumber)
+                                            isSeasonLoading = false
                                         }
-                                    )
-                                }
+                                    },
+                                    label = { Text("Season ${season.seasonNumber}") }
+                                )
                             }
                         }
                     }

@@ -3,6 +3,7 @@ package com.playbridge.sender.browser
 import android.content.Context
 import android.content.ClipboardManager
 import android.content.ClipData
+import android.content.SharedPreferences
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,7 +34,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import com.playbridge.sender.data.backup.BackupManager
 import com.playbridge.sender.data.backup.BackupUtils
-import com.playbridge.sender.data.backup.BackupTrigger
 import java.util.Date
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -136,6 +136,17 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
     
     var isCloudBackingUp by remember { mutableStateOf(false) }
     var isCloudRestoring by remember { mutableStateOf(false) }
+    var lastBackupTimestamp by remember { mutableStateOf(backupManager.getLastBackupTimestamp()) }
+
+    DisposableEffect(Unit) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == BackupManager.KEY_LAST_BACKUP) {
+                lastBackupTimestamp = backupManager.getLastBackupTimestamp()
+            }
+        }
+        backupPrefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { backupPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
 
     val triggerExport = {
         scope.launch {
@@ -388,9 +399,6 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     onCheckedChange = { 
                         isBackupEnabled = it
                         backupPrefs.edit().putBoolean(BackupManager.KEY_ENABLED, it).apply()
-                        if (it) {
-                            BackupTrigger(context, scope).start()
-                        }
                     }
                 )
             }
@@ -406,6 +414,8 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                             val json = BackupUtils.createExportJson(context)
                             val success = backupManager.uploadBackup(json)
                             if (success) {
+                                backupManager.saveLastBackupTimestamp()
+                                lastBackupTimestamp = backupManager.getLastBackupTimestamp()
                                 Toast.makeText(context, "Cloud backup successful", Toast.LENGTH_SHORT).show()
                             } else {
                                 Toast.makeText(context, "Cloud backup failed", Toast.LENGTH_LONG).show()
@@ -449,6 +459,17 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                         Text("Restore from Cloud")
                     }
                 }
+            }
+
+            if (lastBackupTimestamp > 0L) {
+                val formatter = SimpleDateFormat("MMM dd, yyyy 'at' hh:mm a", Locale.US)
+                val lastBackupText = "Last backup: ${formatter.format(Date(lastBackupTimestamp))}"
+                Text(
+                    text = lastBackupText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
         }
     }

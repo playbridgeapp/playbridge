@@ -18,17 +18,6 @@ class BackupTrigger(private val context: Context, private val scope: CoroutineSc
     }
 
     fun start() {
-        val enabled = prefs.getBoolean(BackupManager.KEY_ENABLED, false)
-        if (!enabled) {
-            Log.d(TAG, "Backup is disabled")
-            return
-        }
-        
-        if (!backupManager.isConfigured()) {
-            Log.w(TAG, "Backup is enabled but not configured correctly")
-            return
-        }
-
         Log.d(TAG, "Starting BackupTrigger")
         val db = DatabaseProvider.getDatabase(context)
         val tables = arrayOf("history", "bookmarks", "tabs", "installed_addons", "watchlist")
@@ -51,10 +40,22 @@ class BackupTrigger(private val context: Context, private val scope: CoroutineSc
             delay(DEBOUNCE_MS)
             if (isActive) {
                 try {
+                    val enabled = prefs.getBoolean(BackupManager.KEY_ENABLED, false)
+                    if (!enabled) {
+                        Log.d(TAG, "Backup is disabled, skipping")
+                        return@launch
+                    }
+
+                    if (!backupManager.isConfigured()) {
+                        Log.w(TAG, "Backup is enabled but not configured correctly")
+                        return@launch
+                    }
+
                     Log.d(TAG, "Executing scheduled backup")
                     val json = BackupUtils.createExportJson(context)
                     val success = backupManager.uploadBackup(json)
                     if (success) {
+                        backupManager.saveLastBackupTimestamp()
                         Log.d(TAG, "Automatic backup uploaded successfully")
                     } else {
                         Log.e(TAG, "Automatic backup upload failed")
