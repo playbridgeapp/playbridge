@@ -216,22 +216,34 @@ PlayBridge/
 │   │   └── src/main/
 │   │       ├── java/com/playbridge/sender/
 │   │       │   ├── browser/
+│   │       │   │   ├── BookmarksScreen.kt
 │   │       │   │   ├── BrowserActivity.kt    (~1721 lines, slimmed down)
 │   │       │   │   ├── BrowserToolbar.kt
 │   │       │   │   ├── TabManager.kt           (tab/session lifecycle)
 │   │       │   │   ├── SessionObserverSetup.kt (observer + delegates)
+│   │       │   │   ├── CastSheet.kt
+│   │       │   │   ├── CommandHistoryScreen.kt
+│   │       │   │   ├── Components.kt
+│   │       │   │   ├── DashParser.kt
+│   │       │   │   ├── DebridSettingsScreen.kt
 │   │       │   │   ├── DownloadConfirmDialog.kt
 │   │       │   │   ├── DownloadManagerSingleton.kt
+│   │       │   │   ├── DownloadUtils.kt
 │   │       │   │   ├── MediaDownloadService.kt
 │   │       │   │   ├── LinkContextMenu.kt
 │   │       │   │   ├── TabsScreen.kt
 │   │       │   │   ├── ExtensionsScreen.kt
+│   │       │   │   ├── ImportExportSettingsScreen.kt
+│   │       │   │   ├── LibrarySettingsScreen.kt
+│   │       │   │   ├── PlaybackSettingsScreen.kt
+│   │       │   │   ├── PopupBlockerSettingsScreen.kt
 │   │       │   │   ├── RemoteControlScreen.kt
 │   │       │   │   ├── DownloadsScreen.kt
 │   │       │   │   ├── HistoryScreen.kt
 │   │       │   │   ├── SettingsScreen.kt
 │   │       │   │   ├── StreamPickerSheet.kt    (bottom sheet for resolved Stremio streams)
 │   │       │   │   ├── SubtitlePreferences.kt  (Subtitle preferences UI/logic)
+│   │       │   │   ├── TVSettingsScreen.kt
 │   │       │   │   ├── ExportedSettings.kt     (serializable data models for settings import/export)
 │   │       │   │   ├── HlsParser.kt
 │   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
@@ -243,11 +255,21 @@ PlayBridge/
 │   │       │   │   ├── FindOnPageBar.kt
 │   │       │   │   ├── LibraryDetailScreen.kt
 │   │       │   │   ├── LibraryEnums.kt
+│   │       │   │   ├── SiteInfoSheet.kt
+│   │       │   │   ├── VideoDetector.kt
+│   │       │   │   └── VideoPreviewSheet.kt
 │   │       │   │   └── ...
 │   │       │   ├── connection/
 │   │       │   │   ├── BluetoothClient.kt
+│   │       │   │   ├── ConnectionStore.kt
 │   │       │   │   ├── ConnectionViewModel.kt
+│   │       │   │   ├── NsdHelper.kt
+│   │       │   │   └── WebSocketClient.kt
 │   │       │   ├── data/
+│   │       │   │   ├── backup/
+│   │       │   │   │   ├── BackupManager.kt
+│   │       │   │   │   ├── BackupTrigger.kt
+│   │       │   │   │   └── BackupUtils.kt
 │   │       │   │   ├── debrid/                 (Debrid integration clients/providers)
 │   │       │   │   ├── history/
 │   │       │   │   │   ├── BookmarkDao.kt
