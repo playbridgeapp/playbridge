@@ -6,6 +6,7 @@ com.playbridge.sender/
 ├── browser/
 │   ├── AddonInstallDialog.kt
 │   ├── AddonSettingsScreen.kt
+│   ├── AppearanceSettingsScreen.kt
 │   ├── BookmarksScreen.kt
 │   ├── BrowserActivity.kt
 │   ├── BrowserToolbar.kt
@@ -55,6 +56,10 @@ com.playbridge.sender/
 │   ├── NsdHelper.kt
 │   └── WebSocketClient.kt
 ├── data/
+│   ├── backup/
+│   │   ├── BackupManager.kt
+│   │   ├── BackupTrigger.kt
+│   │   └── BackupUtils.kt
 │   ├── debrid/
 │   │   ├── AllDebridClient.kt
 │   │   ├── DebridModels.kt
@@ -81,7 +86,9 @@ com.playbridge.sender/
 │       ├── OmdbRepository.kt
 │       ├── StremioSubtitleService.kt
 │       ├── TmdbModels.kt
-│       └── TmdbRepository.kt
+│       ├── TmdbRepository.kt
+│       ├── WatchlistDao.kt
+│       └── WatchlistEntity.kt
 ├── model/
 │   ├── Message.kt
 │   └── TvDevice.kt
