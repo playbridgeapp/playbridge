@@ -8,6 +8,9 @@ interface WatchlistDao {
     @Query("SELECT * FROM watchlist ORDER BY addedAt DESC")
     fun getAll(): Flow<List<WatchlistEntity>>
 
+    @Query("SELECT * FROM watchlist ORDER BY addedAt DESC")
+    suspend fun getAllSync(): List<WatchlistEntity>
+
     @Query("SELECT EXISTS(SELECT 1 FROM watchlist WHERE tmdbId = :tmdbId)")
     fun isWatchlisted(tmdbId: Int): Flow<Boolean>
 

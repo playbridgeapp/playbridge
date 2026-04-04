@@ -17,6 +17,17 @@ data class ExportedTab(
 )
 
 @Serializable
+data class ExportedWatchlist(
+    val tmdbId: Int,
+    val mediaType: String,
+    val title: String,
+    val posterUrl: String?,
+    val year: String,
+    val rating: String,
+    val addedAt: Long
+)
+
+@Serializable
 data class ExportedSettings(
     val debridProvider: String? = null,
     val debridApiKey: String? = null,
@@ -26,5 +37,6 @@ data class ExportedSettings(
     val tvBrowserMode: String? = null,
     val addonUrls: List<String> = emptyList(),
     val tabs: List<ExportedTab>? = null,
-    val bookmarks: List<ExportedBookmark>? = null
+    val bookmarks: List<ExportedBookmark>? = null,
+    val watchlist: List<ExportedWatchlist>? = null
 )

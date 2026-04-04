@@ -19,6 +19,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import com.playbridge.sender.data.debrid.DebridRepository
 import com.playbridge.sender.data.history.BookmarkEntity
 import com.playbridge.sender.data.history.DatabaseProvider
@@ -28,11 +31,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.playbridge.sender.data.backup.BackupManager
+import com.playbridge.sender.data.backup.BackupUtils
+import com.playbridge.sender.data.backup.BackupTrigger
+import java.util.Date
+import java.text.SimpleDateFormat
+import java.util.Locale
 import mozilla.components.browser.state.state.ContentState
 import mozilla.components.browser.state.state.TabSessionState
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,63 +67,22 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
 
     val importSettings = { jsonString: String ->
         isImporting = true
-        scope.launch(Dispatchers.IO) {
-            try {
-                val imported = Json { ignoreUnknownKeys = true }.decodeFromString<ExportedSettings>(jsonString)
-
-                val prefsEdit = prefs.edit()
-                if (imported.tvPlayerMode != null) prefsEdit.putString("tv_player_mode", imported.tvPlayerMode)
-                if (imported.tvBrowserMode != null) prefsEdit.putString("tv_browser_mode", imported.tvBrowserMode)
-                prefsEdit.apply()
-
-                val tmdbEdit = tmdbPrefs.edit()
-                if (imported.tmdbApiKey != null) tmdbEdit.putString("tmdb_api_key", imported.tmdbApiKey)
-                if (imported.omdbApiKey != null) tmdbEdit.putString("omdb_api_key", imported.omdbApiKey)
-                if (imported.debridProvider != null) tmdbEdit.putString(DebridRepository.KEY_DEBRID_PROVIDER, imported.debridProvider)
-                if (imported.debridApiKey != null) tmdbEdit.putString(DebridRepository.KEY_DEBRID_API_KEY, imported.debridApiKey)
-                tmdbEdit.apply()
-
-                if (imported.addonUrls.isNotEmpty()) {
-                    imported.addonUrls.forEach { url -> addonRepository.installAddon(url) }
-                }
-
-                if (imported.bookmarks != null && imported.bookmarks.isNotEmpty()) {
-                    val bookmarkDao = DatabaseProvider.getDatabase(context).bookmarkDao()
-                    imported.bookmarks.forEach { bookmark ->
-                        bookmarkDao.insert(BookmarkEntity(url = bookmark.url, title = bookmark.title))
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    if (imported.tabs != null && imported.tabs.isNotEmpty() && Components.isEngineInitialized()) {
-                        val currentUrls = Components.store.state.tabs.map { it.content.url }
-                        val hasDuplicates = imported.tabs.any { it.url in currentUrls }
-
-                        if (hasDuplicates) {
-                            importedTabsToRestore = imported.tabs
-                            showImportTabsDialog = true
-                        } else {
-                            val sessionTabs = imported.tabs.map { tab ->
-                                TabSessionState(
-                                    id = tab.id,
-                                    content = ContentState(url = tab.url, title = tab.title ?: ""),
-                                    parentId = tab.parentId
-                                )
-                            }
-                            Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
-                            Toast.makeText(context, "Settings imported, restoring tabs...", Toast.LENGTH_SHORT).show()
-                        }
+        scope.launch {
+            val result = BackupUtils.importFromJson(context, jsonString)
+            when (result) {
+                is BackupUtils.ImportResult.Success -> {
+                    if (result.hasDuplicates) {
+                        importedTabsToRestore = result.tabsToRestore
+                        showImportTabsDialog = true
                     } else {
                         Toast.makeText(context, "Settings imported successfully", Toast.LENGTH_SHORT).show()
                     }
                 }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Failed to import settings: ${e.message}", Toast.LENGTH_LONG).show()
+                is BackupUtils.ImportResult.Error -> {
+                    Toast.makeText(context, "Failed to import: ${result.message}", Toast.LENGTH_LONG).show()
                 }
-            } finally {
-                isImporting = false
             }
+            isImporting = false
         }
     }
 
@@ -130,14 +95,10 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                         withContext(Dispatchers.Main) {
                             Toast.makeText(context, "Settings exported successfully", Toast.LENGTH_SHORT).show()
                         }
-                    } else {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "No settings selected to export", Toast.LENGTH_SHORT).show()
-                        }
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Failed to export settings: ${e.message}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Failed to export: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 } finally {
                     pendingExportJson = ""
@@ -163,49 +124,35 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    val backupManager = remember { BackupManager(context) }
+    val backupPrefs = remember { context.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE) }
+    
+    var s3Endpoint by remember { mutableStateOf(backupPrefs.getString(BackupManager.KEY_ENDPOINT, "") ?: "") }
+    var s3Bucket by remember { mutableStateOf(backupPrefs.getString(BackupManager.KEY_BUCKET, "") ?: "") }
+    var s3AccessKey by remember { mutableStateOf(backupPrefs.getString(BackupManager.KEY_ACCESS_KEY, "") ?: "") }
+    var s3SecretKey by remember { mutableStateOf(backupPrefs.getString(BackupManager.KEY_SECRET_KEY, "") ?: "") }
+    var s3Region by remember { mutableStateOf(backupPrefs.getString(BackupManager.KEY_REGION, "us-east-1") ?: "") }
+    var isBackupEnabled by remember { mutableStateOf(backupPrefs.getBoolean(BackupManager.KEY_ENABLED, false)) }
+    
+    var isCloudBackingUp by remember { mutableStateOf(false) }
+    var isCloudRestoring by remember { mutableStateOf(false) }
+
     val triggerExport = {
-        scope.launch(Dispatchers.IO) {
+        scope.launch {
             try {
-                val addons = if (exportAddons) addonDao.getAllSync() else emptyList()
-                val database = DatabaseProvider.getDatabase(context)
-
-                val currentBookmarks = if (exportBookmarks) {
-                    database.bookmarkDao().getAllSync().map { ExportedBookmark(url = it.url, title = it.title) }
-                } else null
-
-                val currentTabs = if (exportTabs) {
-                    database.tabDao().getAll().map { ExportedTab(id = it.id, url = it.url, title = it.title, parentId = it.parentId) }
-                } else null
-
-                val exported = ExportedSettings(
-                    debridProvider = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE) else null,
-                    debridApiKey = if (exportDebrid) tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") else null,
-                    tmdbApiKey = if (exportTmdb) tmdbPrefs.getString("tmdb_api_key", "") else null,
-                    omdbApiKey = if (exportTmdb) tmdbPrefs.getString("omdb_api_key", "") else null,
-                    tvPlayerMode = if (exportTvDefaults) prefs.getString("tv_player_mode", "tv") else null,
-                    tvBrowserMode = if (exportTvDefaults) prefs.getString("tv_browser_mode", "tv") else null,
-                    addonUrls = if (exportAddons) addons.map { it.manifestUrl } else emptyList(),
-                    tabs = currentTabs,
-                    bookmarks = currentBookmarks
-                )
-
-                val jsonString = Json { prettyPrint = true; encodeDefaults = false }.encodeToString(exported)
-
-                withContext(Dispatchers.Main) {
-                    if (exportAction == "clipboard") {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("PlayBridge Settings", jsonString))
-                        Toast.makeText(context, "Settings copied to clipboard", Toast.LENGTH_SHORT).show()
-                    } else if (exportAction == "file") {
-                        pendingExportJson = jsonString
-                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                        exportLauncher.launch("playbridge_settings_$timestamp.json")
-                    }
+                val jsonString = BackupUtils.createExportJson(context)
+                
+                if (exportAction == "clipboard") {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("PlayBridge Settings", jsonString))
+                    Toast.makeText(context, "Settings copied to clipboard", Toast.LENGTH_SHORT).show()
+                } else if (exportAction == "file") {
+                    pendingExportJson = jsonString
+                    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                    exportLauncher.launch("playbridge_settings_$timestamp.json")
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Failed to prepare export: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
+                Toast.makeText(context, "Failed to prepare export: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -307,6 +254,200 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     }
                 ) {
                     Icon(Icons.Default.ContentCopy, contentDescription = "Copy settings to clipboard")
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Cloud Backup (S3 / Backblaze B2)",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                
+                IconButton(onClick = {
+                    try {
+                        val config = com.playbridge.sender.data.backup.CloudBackupConfig(
+                            endpoint = s3Endpoint,
+                            bucket = s3Bucket,
+                            accessKey = s3AccessKey,
+                            secretKey = s3SecretKey,
+                            region = s3Region
+                        )
+                        val json = Json.encodeToString(config)
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Cloud Backup Config", json))
+                        Toast.makeText(context, "Cloud config copied", Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Failed to copy config", Toast.LENGTH_SHORT).show()
+                    }
+                }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy cloud config")
+                }
+
+                IconButton(onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                    if (text != null) {
+                        try {
+                            val config = Json.decodeFromString<com.playbridge.sender.data.backup.CloudBackupConfig>(text)
+                            s3Endpoint = config.endpoint
+                            s3Bucket = config.bucket
+                            s3AccessKey = config.accessKey
+                            s3SecretKey = config.secretKey
+                            s3Region = config.region
+                            
+                            backupPrefs.edit().apply {
+                                putString(BackupManager.KEY_ENDPOINT, config.endpoint)
+                                putString(BackupManager.KEY_BUCKET, config.bucket)
+                                putString(BackupManager.KEY_ACCESS_KEY, config.accessKey)
+                                putString(BackupManager.KEY_SECRET_KEY, config.secretKey)
+                                putString(BackupManager.KEY_REGION, config.region)
+                                apply()
+                            }
+                            Toast.makeText(context, "Cloud config pasted", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Invalid cloud config in clipboard", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }) {
+                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste cloud config")
+                }
+            }
+
+
+            OutlinedTextField(
+                value = s3Endpoint,
+                onValueChange = { 
+                    s3Endpoint = it
+                    backupPrefs.edit().putString(BackupManager.KEY_ENDPOINT, it).apply()
+                },
+                label = { Text("Endpoint (e.g. s3.us-west-004.backblazeb2.com)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            OutlinedTextField(
+                value = s3Bucket,
+                onValueChange = { 
+                    s3Bucket = it
+                    backupPrefs.edit().putString(BackupManager.KEY_BUCKET, it).apply()
+                },
+                label = { Text("Bucket Name") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            OutlinedTextField(
+                value = s3AccessKey,
+                onValueChange = { 
+                    s3AccessKey = it
+                    backupPrefs.edit().putString(BackupManager.KEY_ACCESS_KEY, it).apply()
+                },
+                label = { Text("Access Key ID") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            OutlinedTextField(
+                value = s3SecretKey,
+                onValueChange = { 
+                    s3SecretKey = it
+                    backupPrefs.edit().putString(BackupManager.KEY_SECRET_KEY, it).apply()
+                },
+                label = { Text("Secret Access Key") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+            )
+
+            OutlinedTextField(
+                value = s3Region,
+                onValueChange = { 
+                    s3Region = it
+                    backupPrefs.edit().putString(BackupManager.KEY_REGION, it).apply()
+                },
+                label = { Text("Region (default: us-east-1)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Enable Automatic Backup", modifier = Modifier.weight(1f))
+                Switch(
+                    checked = isBackupEnabled,
+                    onCheckedChange = { 
+                        isBackupEnabled = it
+                        backupPrefs.edit().putBoolean(BackupManager.KEY_ENABLED, it).apply()
+                        if (it) {
+                            BackupTrigger(context, scope).start()
+                        }
+                    }
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = {
+                        isCloudBackingUp = true
+                        scope.launch {
+                            val json = BackupUtils.createExportJson(context)
+                            val success = backupManager.uploadBackup(json)
+                            if (success) {
+                                Toast.makeText(context, "Cloud backup successful", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Cloud backup failed", Toast.LENGTH_LONG).show()
+                            }
+                            isCloudBackingUp = false
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = !isCloudBackingUp && backupManager.isConfigured()
+                ) {
+                    if (isCloudBackingUp) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Backing up…")
+                    } else {
+                        Text("Backup Now")
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        isCloudRestoring = true
+                        scope.launch {
+                            val json = backupManager.downloadBackup()
+                            if (json != null) {
+                                importSettings(json)
+                            } else {
+                                Toast.makeText(context, "Failed to download backup", Toast.LENGTH_LONG).show()
+                            }
+                            isCloudRestoring = false
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = !isCloudRestoring && backupManager.isConfigured()
+                ) {
+                    if (isCloudRestoring) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Restoring…")
+                    } else {
+                        Text("Restore from Cloud")
+                    }
                 }
             }
         }
