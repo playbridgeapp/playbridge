@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -135,11 +136,13 @@ fun CastSheet(
     onTvChange: (TvDevice) -> Unit = {},
     tvConnectionState: Boolean? = null,  // true = connected, false = error, null = neutral
     browseUrl: String = "",
-    onBrowseClick: ((String) -> Unit)? = null
+    onBrowseClick: ((String) -> Unit)? = null,
+    onOpenNewTab: ((String) -> Unit)? = null,
+    initialMode: String = "play"
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
-    var sheetMode by remember { mutableStateOf("play") } // "play" or "browse"
+    var sheetMode by remember { mutableStateOf(initialMode) } // "play" or "browse"
     
     // Separate distinct videos and subtitles, and sort videos by priority
     val playableVideos = remember(videos) {
@@ -374,6 +377,48 @@ fun CastSheet(
                         modifier = Modifier.padding(16.dp),
                         maxLines = 4,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (onOpenNewTab != null) {
+                        AssistChip(
+                            onClick = { onOpenNewTab.invoke(browseUrl) },
+                            label = { Text("New Tab") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Tab,
+                                    contentDescription = "Open in new tab",
+                                    modifier = Modifier.size(AssistChipDefaults.IconSize)
+                                )
+                            }
+                        )
+                    }
+                    AssistChip(
+                        onClick = {
+                            try {
+                                val intent = android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse(browseUrl)
+                                )
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No browser found", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        label = { Text("External Browser") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.OpenInNew,
+                                contentDescription = "Open in external browser",
+                                modifier = Modifier.size(AssistChipDefaults.IconSize)
+                            )
+                        }
                     )
                 }
             } else {

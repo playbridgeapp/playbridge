@@ -67,6 +67,30 @@ data class TmdbTvContentRatingResult(
     val rating: String = ""
 )
 
+// ==================== Videos / Trailers ====================
+
+@Serializable
+data class TmdbVideo(
+    val key: String,
+    val site: String,
+    val type: String,
+    val official: Boolean = false
+) {
+    val youtubeUrl: String? get() = if (site == "YouTube") "https://www.youtube.com/watch?v=$key" else null
+}
+
+@Serializable
+data class TmdbVideoResult(
+    val results: List<TmdbVideo> = emptyList()
+) {
+    /** Best YouTube trailer URL: official trailers first, then any YouTube clip. */
+    val bestTrailerUrl: String? get() = results
+        .filter { it.site == "YouTube" && it.type == "Trailer" }
+        .maxByOrNull { if (it.official) 1 else 0 }
+        ?.youtubeUrl
+        ?: results.firstOrNull { it.site == "YouTube" }?.youtubeUrl
+}
+
 // ==================== TMDB API Responses ====================
 
 @Serializable

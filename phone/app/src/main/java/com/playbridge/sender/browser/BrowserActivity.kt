@@ -433,6 +433,8 @@ class BrowserActivity : ComponentActivity() {
             var sheetPlayerMode by remember { mutableStateOf(prefs.getString("tv_player_mode", "tv") ?: "tv") }
             var forcePlaylistSheet by remember { mutableStateOf<DetectedVideo?>(null) }
             var forcedVideos by remember { mutableStateOf<List<DetectedVideo>?>(null) }
+            var castSheetInitialMode by remember { mutableStateOf("play") }
+            var castSheetBrowseOverride by remember { mutableStateOf<String?>(null) }
             val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
                 derivedStateOf {
                     // Read processingVersion so this re-derives whenever any video's
@@ -1752,6 +1754,11 @@ class BrowserActivity : ComponentActivity() {
                                                 movieId = movieId,
                                                 addonRepository = addonRepository,
                                                 viewModel = libraryViewModel,
+                                                onPlayTrailer = { trailerUrl ->
+                                                    castSheetInitialMode = "browse"
+                                                    castSheetBrowseOverride = trailerUrl
+                                                    showVideoSheet = true
+                                                },
                                                 onPlayStream = { url, title, subtitles ->
                                                     val mainVideo = DetectedVideo(
                                                         url = url,
@@ -1786,6 +1793,11 @@ class BrowserActivity : ComponentActivity() {
                                             TvShowDetailScreen(
                                                 tvId = tvId,
                                                 addonRepository = addonRepository,
+                                                onPlayTrailer = { trailerUrl ->
+                                                    castSheetInitialMode = "browse"
+                                                    castSheetBrowseOverride = trailerUrl
+                                                    showVideoSheet = true
+                                                },
                                                 onPlayStream = { url, title, subtitles ->
                                                     val mainVideo = DetectedVideo(
                                                         url = url,
@@ -1892,6 +1904,8 @@ class BrowserActivity : ComponentActivity() {
                             showVideoSheet = false
                             forcePlaylistSheet = null
                             forcedVideos = null
+                            castSheetInitialMode = "play"
+                            castSheetBrowseOverride = null
                         },
                         playerMode = sheetPlayerMode,
                         onPlayerModeChange = { mode ->
@@ -1998,16 +2012,27 @@ class BrowserActivity : ComponentActivity() {
                                 video.headers?.get("Referer") ?: video.originUrl
                             )
                         },
-                        browseUrl = currentUrl,
+                        browseUrl = castSheetBrowseOverride ?: currentUrl,
+                        initialMode = castSheetInitialMode,
                         onBrowseClick = { selectedMode ->
+                            val effectiveUrl = castSheetBrowseOverride ?: currentUrl
                             val cmd = com.playbridge.protocol.createBrowserCommandJson(
-                                currentUrl,
+                                effectiveUrl,
                                 browserMode = selectedMode.takeIf { it != "tv" }
                             )
-                            connectionViewModel.sendCommandAndRecord(cmd, "browser", currentUrl, "Browser Page")
+                            connectionViewModel.sendCommandAndRecord(cmd, "browser", effectiveUrl, "Browser Page")
                             Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                             showVideoSheet = false
                             forcePlaylistSheet = null
+                            castSheetInitialMode = "play"
+                            castSheetBrowseOverride = null
+                        },
+                        onOpenNewTab = { url ->
+                            tabManager.createTab(url, Components.store)
+                            showVideoSheet = false
+                            castSheetInitialMode = "play"
+                            castSheetBrowseOverride = null
+                            currentScreen = Screen.Browser
                         }
                     )
                 }

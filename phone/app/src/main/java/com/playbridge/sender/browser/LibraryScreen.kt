@@ -58,6 +58,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -506,6 +507,7 @@ private fun LibraryScreenContent(
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalContext.current)
                                     .data(targetUrl)
+                                    .size(400, 225) // blurred — no need for full resolution
                                     .crossfade(true)
                                     .build(),
                                 contentDescription = null,
@@ -1002,6 +1004,8 @@ private fun PosterCard(
                         .build(),
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
+                    placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                    error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -1159,6 +1163,8 @@ private fun SearchResultItem(
                         model = result.posterUrl,
                         contentDescription = result.displayTitle,
                         contentScale = ContentScale.Crop,
+                        placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                        error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -1335,6 +1341,8 @@ private fun HeroBannerCarousel(
                             .build(),
                         contentDescription = item.displayTitle,
                         contentScale = ContentScale.Crop,
+                        placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                        error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {

@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
 import kotlinx.coroutines.launch
 
@@ -47,6 +48,7 @@ fun MovieDetailScreen(
     movieId: Int,
     addonRepository: AddonRepository,
     onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
+    onPlayTrailer: ((String) -> Unit)? = null,
     viewModel: LibraryViewModel,
     onBack: () -> Unit
 ) {
@@ -59,6 +61,7 @@ fun MovieDetailScreen(
     var details by remember { mutableStateOf<TmdbMovieDetails?>(null) }
     var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var trailerUrl by remember { mutableStateOf<String?>(null) }
 
     // Stream resolution state
     var resolvedStreams by remember { mutableStateOf<List<ResolvedStream>>(emptyList()) }
@@ -74,6 +77,7 @@ fun MovieDetailScreen(
             omdbDetails = omdb.getDetailsByImdbId(imdbId)
         }
         isLoading = false
+        trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
     }
 
     val isWatchlisted by viewModel.isWatchlisted(movieId).collectAsState(initial = false)
@@ -194,7 +198,9 @@ fun MovieDetailScreen(
                                     rating = movie.rating
                                 )
                             }
-                        }
+                        },
+                        trailerUrl = trailerUrl,
+                        onPlayTrailer = onPlayTrailer
                     )
                 }
 
@@ -283,6 +289,7 @@ fun TvShowDetailScreen(
     tvId: Int,
     addonRepository: AddonRepository,
     onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
+    onPlayTrailer: ((String) -> Unit)? = null,
     onPlayPlaylist: (items: List<com.playbridge.protocol.PlayPayload>) -> Unit,
     onQueueAdd: (com.playbridge.protocol.PlayPayload) -> Unit = {},
     onPlaylistJump: (Int) -> Unit = {},
@@ -302,6 +309,7 @@ fun TvShowDetailScreen(
     var details by remember { mutableStateOf<TmdbTvDetails?>(null) }
     var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var trailerUrl by remember { mutableStateOf<String?>(null) }
     var selectedSeason by remember { mutableIntStateOf(highlightSeason ?: 1) }
     var seasonDetails by remember { mutableStateOf<TmdbSeason?>(null) }
     var isSeasonLoading by remember { mutableStateOf(false) }
@@ -335,6 +343,7 @@ fun TvShowDetailScreen(
             omdbDetails = omdb.getDetailsByImdbId(imdbId)
         }
         isLoading = false
+        trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
 
         // Auto-load first season (skip specials if possible)
         details?.seasons?.firstOrNull { it.seasonNumber > 0 }?.let { firstSeason ->
@@ -559,7 +568,9 @@ fun TvShowDetailScreen(
                                     rating = show.rating
                                 )
                             }
-                        }
+                        },
+                        trailerUrl = trailerUrl,
+                        onPlayTrailer = onPlayTrailer
                     )
                 }
 
@@ -793,6 +804,8 @@ private fun BackdropSection(
                         .build(),
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
+                    placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                    error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -820,6 +833,8 @@ private fun BackdropSection(
                         .build(),
                     contentDescription = title,
                     contentScale = ContentScale.Fit,
+                    placeholder = ColorPainter(Color.Transparent),
+                    error = ColorPainter(Color.Transparent),
                     modifier = Modifier
                         .fillMaxWidth(0.7f)
                         .height(130.dp)
@@ -965,8 +980,11 @@ private fun PlayButton(
 @Composable
 private fun ActionButtons(
     isWatchlisted: Boolean,
-    onToggleWatchlist: () -> Unit
+    onToggleWatchlist: () -> Unit,
+    trailerUrl: String? = null,
+    onPlayTrailer: ((String) -> Unit)? = null
 ) {
+    val trailerReady = trailerUrl != null && onPlayTrailer != null
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -979,24 +997,33 @@ private fun ActionButtons(
             modifier = Modifier.clickable { onToggleWatchlist() }
         ) {
             Icon(
-                if (isWatchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder, 
-                contentDescription = if (isWatchlisted) "Remove from Watchlist" else "Add to Watchlist", 
+                if (isWatchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                contentDescription = if (isWatchlisted) "Remove from Watchlist" else "Add to Watchlist",
                 tint = if (isWatchlisted) MaterialTheme.colorScheme.primary else Color.White.copy(alpha=0.7f)
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                if (isWatchlisted) "In Watchlist" else "Add to Watchlist", 
-                style = MaterialTheme.typography.labelSmall, 
+                if (isWatchlisted) "In Watchlist" else "Add to Watchlist",
+                style = MaterialTheme.typography.labelSmall,
                 color = if (isWatchlisted) MaterialTheme.colorScheme.primary else Color.White.copy(alpha=0.7f)
             )
         }
         Spacer(modifier = Modifier.width(48.dp))
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = if (trailerReady) Modifier.clickable { onPlayTrailer!!(trailerUrl!!) } else Modifier
         ) {
-            Icon(Icons.Default.Movie, contentDescription = "Play Trailer", tint = Color.White.copy(alpha=0.7f)) 
+            Icon(
+                Icons.Default.Movie,
+                contentDescription = "Play Trailer",
+                tint = if (trailerReady) Color.White else Color.White.copy(alpha = 0.3f)
+            )
             Spacer(modifier = Modifier.height(4.dp))
-            Text("Play Trailer", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha=0.7f))
+            Text(
+                if (trailerReady) "Play Trailer" else "No Trailer",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (trailerReady) Color.White else Color.White.copy(alpha = 0.3f)
+            )
         }
     }
 }
@@ -1037,6 +1064,8 @@ private fun EpisodeItem(
                         model = episode.stillUrl,
                         contentDescription = episode.name,
                         contentScale = ContentScale.Crop,
+                        placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                        error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -1145,6 +1174,7 @@ fun TranslucentBackground(backdropUrl: String?) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(backdropUrl)
+                    .size(400, 225) // blurred — no need for full resolution
                     .crossfade(true)
                     .build(),
                 contentDescription = null,

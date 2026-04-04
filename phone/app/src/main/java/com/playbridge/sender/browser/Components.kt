@@ -5,6 +5,10 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import coil.Coil
+import coil.ImageLoader
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -110,6 +114,25 @@ object Components {
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
+
+        // Configure Coil with explicit memory + disk cache so poster images survive
+        // screen rotations (memory) and app restarts (disk) without re-downloading.
+        Coil.setImageLoader(
+            ImageLoader.Builder(appContext)
+                .memoryCache {
+                    MemoryCache.Builder(appContext)
+                        .maxSizePercent(0.20) // 20% of available RAM
+                        .build()
+                }
+                .diskCache {
+                    DiskCache.Builder()
+                        .directory(appContext.cacheDir.resolve("tmdb_image_cache"))
+                        .maxSizeBytes(150L * 1024 * 1024) // 150 MB
+                        .build()
+                }
+                .crossfade(true)
+                .build()
+        )
         
         // Set up WebExtension prompt delegate to handle AMO installs
         runtime.webExtensionController.promptDelegate = object : WebExtensionController.PromptDelegate {

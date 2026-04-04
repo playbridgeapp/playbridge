@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.library.WatchlistEntity
+import coil.Coil
+import coil.request.ImageRequest
 
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdb = TmdbRepository(application)
@@ -190,10 +192,20 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 _upcomingRaw.value = upcoming.results
                 _nowPlayingMovieIds.value = nowPlaying.results.map { it.id }.toSet()
                 _newReleases.value = (nowPlaying.results + upcoming.results).distinctBy { it.id }
-                
+
                 nowPlayingMoviesPage = 1
                 upcomingMoviesPage = 1
                 _hasMoreNewReleases.value = nowPlaying.results.isNotEmpty() || upcoming.results.isNotEmpty()
+
+                // Prefetch the first page of poster images so they're in cache before
+                // the user scrolls — trending week first (carousel), then popular.
+                val posterUrls = buildList {
+                    addAll(trendWeek.results.mapNotNull { it.posterUrl })
+                    addAll(movies.results.mapNotNull { it.posterUrl })
+                    addAll(tvShows.results.mapNotNull { it.posterUrl })
+                    addAll(trendDay.results.mapNotNull { it.posterUrl })
+                }.distinct()
+                prefetchPosters(posterUrls)
             } catch (e: Exception) {
                 // Handle error if needed
             } finally {
@@ -442,6 +454,21 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             } finally {
                 _isLoadingMoreDiscoveredTvShows.value = false
             }
+        }
+    }
+
+    /**
+     * Fires-and-forgets Coil enqueue requests for a list of poster URLs so they land
+     * in the disk/memory cache before the user scrolls to them.
+     * Takes the first 60 distinct URLs to avoid hammering the network.
+     */
+    private fun prefetchPosters(urls: List<String>) {
+        val context = getApplication<android.app.Application>()
+        val imageLoader = Coil.imageLoader(context)
+        urls.take(60).forEach { url ->
+            imageLoader.enqueue(
+                ImageRequest.Builder(context).data(url).build()
+            )
         }
     }
 
