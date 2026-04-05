@@ -1,15 +1,23 @@
 package com.playbridge.sender.browser
 
 import android.app.Notification
-import androidx.media3.common.util.NotificationUtil
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadNotificationHelper
 import androidx.media3.exoplayer.offline.DownloadService
-import androidx.media3.exoplayer.scheduler.PlatformScheduler
 import androidx.media3.exoplayer.scheduler.Scheduler
 import com.playbridge.sender.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 @UnstableApi
 class MediaDownloadService : DownloadService(
@@ -20,12 +28,75 @@ class MediaDownloadService : DownloadService(
     R.string.download_channel_description
 ) {
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Listener attached to DownloadManager — this is the correct hook for completion events.
+    // DownloadService itself does not expose onDownloadChanged as an overridable method.
+    private val downloadListener = object : DownloadManager.Listener {
+        override fun onDownloadChanged(
+            downloadManager: DownloadManager,
+            download: Download,
+            finalException: Exception?
+        ) {
+            Log.d(TAG, "onDownloadChanged: state=${download.state} url=${download.request.uri}")
+
+            if (download.state != Download.STATE_COMPLETED) return
+
+            val url = download.request.uri.toString()
+            val title = String(download.request.data).ifEmpty { "HLS Video" }
+            Log.d(TAG, "Download COMPLETED: title=$title url=$url")
+
+            // Guard: skip if already exported or in progress
+            val existing = HlsExportRegistry.get(url)
+            if (existing?.state == HlsExportRegistry.ExportState.DONE ||
+                existing?.state == HlsExportRegistry.ExportState.EXPORTING) {
+                Log.d(TAG, "Skipping export — already ${existing.state}")
+                return
+            }
+
+            HlsExportRegistry.markExporting(url)
+            Log.d(TAG, "Starting export for: $title")
+
+            serviceScope.launch {
+                val cache = DownloadManagerSingleton.getDownloadCache(this@MediaDownloadService)
+                Log.d(TAG, "Cache retrieved, starting HlsExporter")
+                val path = HlsExporter.export(
+                    context = this@MediaDownloadService,
+                    hlsUrl = url,
+                    title = title,
+                    cache = cache
+                )
+                if (path != null) {
+                    Log.d(TAG, "Export SUCCESS: $path")
+                    HlsExportRegistry.markDone(url, path)
+                    showExportNotification(title, success = true)
+                } else {
+                    Log.e(TAG, "Export FAILED for: $url")
+                    HlsExportRegistry.markFailed(url)
+                    showExportNotification(title, success = false)
+                }
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        Log.d(TAG, "Service created — attaching download listener")
+        DownloadManagerSingleton.getDownloadManager(this).addListener(downloadListener)
+    }
+
+    override fun onDestroy() {
+        Log.d(TAG, "Service destroyed — removing download listener")
+        DownloadManagerSingleton.getDownloadManager(this).removeListener(downloadListener)
+        super.onDestroy()
+    }
+
     override fun getDownloadManager(): DownloadManager {
         return DownloadManagerSingleton.getDownloadManager(this)
     }
 
     override fun getScheduler(): Scheduler? {
-        return null // PlatformScheduler requires significant boilerplate, skipping for now
+        return null
     }
 
     override fun getForegroundNotification(
@@ -43,9 +114,33 @@ class MediaDownloadService : DownloadService(
             )
     }
 
+    private fun showExportNotification(title: String, success: Boolean) {
+        val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                EXPORT_CHANNEL_ID,
+                "Export notifications",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+            notifManager.createNotificationChannel(channel)
+        }
+
+        val notification = NotificationCompat.Builder(this, EXPORT_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(if (success) "Saved to Downloads" else "Export failed")
+            .setContentText(title)
+            .setAutoCancel(true)
+            .build()
+
+        notifManager.notify(title.hashCode(), notification)
+    }
+
     companion object {
         const val CHANNEL_ID = "download_channel"
+        const val EXPORT_CHANNEL_ID = "export_channel"
         const val FOREGROUND_NOTIFICATION_ID = 1
         const val JOB_ID = 1
+        const val TAG = "HlsExport"
     }
 }

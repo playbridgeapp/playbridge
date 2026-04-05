@@ -28,11 +28,15 @@ object DownloadUtils {
             
             if (isHls && !url.startsWith("data:")) {
                 // Use ExoPlayer DownloadService
+                // Derive a clean display name — never store the raw URL
+                val displayName = fileName?.takeIf { it.isNotEmpty() }
+                    ?: url.substringAfterLast("/").substringBefore("?").takeIf { it.isNotBlank() }
+                    ?: "video"
                 val downloadRequest = androidx.media3.exoplayer.offline.DownloadRequest.Builder(
                     url,
                     Uri.parse(url)
                 ).setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
-                 .setData(fileName?.toByteArray() ?: url.toByteArray()) // Store filename in data
+                 .setData(displayName.toByteArray())
                  .build()
                 
                 androidx.media3.exoplayer.offline.DownloadService.sendAddDownload(
@@ -57,10 +61,16 @@ object DownloadUtils {
             // Determine filename if not provided
             var finalFileName = fileName
             if (finalFileName.isNullOrEmpty()) {
-                 finalFileName = url.substringAfterLast("/", "download")
-                 if (finalFileName.contains("?")) {
-                     finalFileName = finalFileName.substringBefore("?")
-                 }
+                finalFileName = url.substringAfterLast("/", "download")
+                if (finalFileName.contains("?")) {
+                    finalFileName = finalFileName.substringBefore("?")
+                }
+            }
+
+            // If the filename has no extension, derive one from the MIME type
+            if (!finalFileName.isNullOrEmpty() && !finalFileName.contains('.') && mimeType != null) {
+                val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+                if (!ext.isNullOrEmpty()) finalFileName = "$finalFileName.$ext"
             }
 
             // Set destination

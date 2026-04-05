@@ -2,6 +2,7 @@ package com.playbridge.sender.browser
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
 import android.widget.Toast
@@ -18,12 +19,15 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.core.content.FileProvider
 import com.playbridge.sender.browser.DownloadManagerSingleton
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadCursor
+import java.io.File
 import java.io.IOException
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -41,6 +46,7 @@ data class DownloadItem(
     val title: String,
     val status: Int,
     val uri: String?,
+    val localUri: String? = null, // Local file path for system downloads (file:// URI)
     val mediaType: String?,
     val totalSize: Long,
     val bytesDownloaded: Long,
@@ -187,15 +193,45 @@ fun DownloadsScreen(
     }
 }
 
+fun openInExternalPlayer(context: Context, localUri: String, mediaType: String?) {
+    try {
+        val parsedUri = Uri.parse(localUri)
+        val mimeType = mediaType?.takeIf { it.isNotBlank() } ?: "video/*"
+
+        // content:// URIs (MediaStore on Android 10+) can be used directly.
+        // file:// URIs need to go through FileProvider for cross-app sharing.
+        val contentUri = if (parsedUri.scheme == "content") {
+            parsedUri
+        } else {
+            val file = File(parsedUri.path ?: return)
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        }
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(contentUri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Open with"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "No player found for this file", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun DownloadItemRow(
-    item: DownloadItem, 
+    item: DownloadItem,
     onPlayOnTv: (String, String) -> Unit,
     onDelete: () -> Unit,
     onErrorClick: () -> Unit
 ) {
+    val context = LocalContext.current
     val progress = if (item.totalSize > 0) item.bytesDownloaded.toFloat() / item.totalSize.toFloat() else 0f
-    
+
+    // Observe export registry for this item (HLS only)
+    val exportRegistry by HlsExportRegistry.exports.collectAsStateWithLifecycle()
+    val exportResult = if (item.isExo && item.uri != null) exportRegistry[item.uri] else null
+
     ListItem(
         headlineContent = {
             Text(
@@ -235,16 +271,48 @@ fun DownloadItemRow(
             Row {
                 if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
                     if (item.mediaType?.startsWith("video/") == true || item.isExo) {
-                        IconButton(onClick = { 
-                           item.uri?.let { uri ->
-                               onPlayOnTv(uri, item.mediaType ?: "video/*") 
-                           }
+                        // Play on TV
+                        IconButton(onClick = {
+                            item.uri?.let { uri ->
+                                onPlayOnTv(uri, item.mediaType ?: "video/*")
+                            }
                         }) {
                             Icon(Icons.Default.PlayArrow, "Play on TV", tint = MaterialTheme.colorScheme.primary)
                         }
+                        // Open in external player (system downloads with a local file)
+                        if (!item.isExo && item.localUri != null) {
+                            IconButton(onClick = {
+                                openInExternalPlayer(context, item.localUri, item.mediaType)
+                            }) {
+                                Icon(Icons.Default.OpenInNew, "Open in player", tint = MaterialTheme.colorScheme.secondary)
+                            }
+                        }
+                        // HLS export state — driven by HlsExportRegistry (auto-triggered by service)
+                        if (item.isExo) {
+                            when (exportResult?.state) {
+                                HlsExportRegistry.ExportState.DONE -> {
+                                    IconButton(onClick = {
+                                        exportResult.path?.let { openInExternalPlayer(context, it, "video/mp2t") }
+                                    }) {
+                                        Icon(Icons.Default.OpenInNew, "Open in player", tint = MaterialTheme.colorScheme.secondary)
+                                    }
+                                }
+                                HlsExportRegistry.ExportState.EXPORTING -> {
+                                    IconButton(onClick = {}, enabled = false) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(20.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    }
+                                }
+                                else -> {
+                                    // FAILED or null — show nothing, export will be retried next time
+                                }
+                            }
+                        }
                     } else {
                         IconButton(onClick = {}, enabled = false) {
-                             Icon(Icons.Default.CheckCircle, "Completed", tint = MaterialTheme.colorScheme.primary)
+                            Icon(Icons.Default.CheckCircle, "Completed", tint = MaterialTheme.colorScheme.primary)
                         }
                     }
                 } else if (item.status == DownloadManager.STATUS_FAILED) {
@@ -279,28 +347,30 @@ fun getSystemDownloads(downloadManager: DownloadManager): List<DownloadItem> {
                 val titleCol = it.getColumnIndex(DownloadManager.COLUMN_TITLE)
                 val statusCol = it.getColumnIndex(DownloadManager.COLUMN_STATUS)
                 val uriCol = it.getColumnIndex(DownloadManager.COLUMN_URI) // Remote URI
+                val localUriCol = it.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI) // Local file URI
                 val mediaTypeCol = it.getColumnIndex(DownloadManager.COLUMN_MEDIA_TYPE)
                 val totalSizeCol = it.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
                 val downloadedCol = it.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
                 val lastModCol = it.getColumnIndex(DownloadManager.COLUMN_LAST_MODIFIED_TIMESTAMP)
                 val reasonCol = it.getColumnIndex(DownloadManager.COLUMN_REASON)
-                
+
                 do {
                     val id = it.getLong(idCol)
                     val title = it.getString(titleCol) ?: "Unknown"
                     val status = it.getInt(statusCol)
                     val uri = it.getString(uriCol)
+                    val localUri = if (localUriCol >= 0) it.getString(localUriCol) else null
                     val mediaType = it.getString(mediaTypeCol)
                     val totalSize = it.getLong(totalSizeCol)
                     val bytesDownloaded = it.getLong(downloadedCol)
                     val lastModified = it.getLong(lastModCol)
-                    
+
                     val errorReason = if (status == DownloadManager.STATUS_FAILED) {
                         val reason = it.getInt(reasonCol)
                         DownloadUtils.getDownloadErrorString(reason)
                     } else null
-                    
-                    downloads.add(DownloadItem(id, title, status, uri, mediaType, totalSize, bytesDownloaded, lastModified, errorReason = errorReason))
+
+                    downloads.add(DownloadItem(id, title, status, uri, localUri, mediaType, totalSize, bytesDownloaded, lastModified, errorReason = errorReason))
                 } while (it.moveToNext())
             }
         }
@@ -331,8 +401,9 @@ fun getExoDownloads(downloadManager: androidx.media3.exoplayer.offline.DownloadM
             
             val uri = download.request.uri.toString()
             val mediaType = "application/x-mpegurl" // Assumed HLS
-            val totalSize = download.contentLength
             val bytesDownloaded = download.bytesDownloaded
+            // HLS contentLength is -1 (unknown); fall back to bytesDownloaded for display
+            val totalSize = if (download.contentLength == -1L) bytesDownloaded else download.contentLength
             val lastModified = download.updateTimeMs
             
             val errorReason = if (status == DownloadManager.STATUS_FAILED) {
@@ -349,7 +420,7 @@ fun getExoDownloads(downloadManager: androidx.media3.exoplayer.offline.DownloadM
                 status = status,
                 uri = uri,
                 mediaType = mediaType,
-                totalSize = if (totalSize == -1L) 0L else totalSize,
+                totalSize = totalSize,
                 bytesDownloaded = bytesDownloaded,
                 lastModified = lastModified,
                 isExo = true,
