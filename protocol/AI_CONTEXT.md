@@ -1,5 +1,5 @@
 # Protocol — AI Context
-_Last verified: 2026-04-03_
+_Last verified: 2026-04-05_
 
 ## Ownership
 The `protocol/` module is a lightweight, pure-Kotlin shared library containing only the data models (`Message`, `Command`) used to communicate between the Sender (Phone) and Receiver (TV). It does NOT own any networking logic, WebSockets, or UI code.

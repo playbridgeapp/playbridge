@@ -1,5 +1,5 @@
 # PlayBridge — AI Context
-_Last verified: 2026-04-03_
+_Last verified: 2026-04-05_
 
 ## Ownership
 PlayBridge is a system to cast web video from an Android phone (sender) to an Android TV (receiver). This root directory manages the mono-repo configuration and shared documentation. It does NOT own any platform-specific application logic.
