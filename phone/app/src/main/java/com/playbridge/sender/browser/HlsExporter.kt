@@ -58,8 +58,15 @@ object HlsExporter {
             .setUpstreamDataSourceFactory(DefaultHttpDataSource.Factory())
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
+        // Log a sample of what's actually stored in the cache so we can
+        // compare against the segment URLs we're trying to read.
+        val cacheKeys = cache.keys.take(5)
+        Log.d(TAG, "Cache has ${cache.keys.size} entries. Sample keys:")
+        cacheKeys.forEach { Log.d(TAG, "  cache key: $it") }
+
         fun readUri(uri: Uri): ByteArray? {
-            Log.d(TAG, "readUri: $uri")
+            val inCache = cache.isCached(uri.toString(), 0, 1)
+            Log.d(TAG, "readUri (inCache=$inCache): $uri")
             return runCatching {
                 val ds = dataSourceFactory.createDataSource()
                 val spec = DataSpec(uri)
@@ -94,15 +101,28 @@ object HlsExporter {
         val mediaPlaylistUrl: String
         val mediaPlaylistText: String
         if (manifestText.contains("#EXT-X-STREAM-INF")) {
-            Log.d(TAG, "Step 2: master playlist detected — picking first variant")
-            val variantRelative = manifestText.lines()
-                .firstOrNull { !it.startsWith("#") && it.isNotBlank() }
-            if (variantRelative == null) {
-                Log.e(TAG, "ABORT: no variant URL found in master playlist")
+            Log.d(TAG, "Step 2: master playlist detected — finding cached variant")
+
+            val allVariants = manifestText.lines()
+                .filter { !it.startsWith("#") && it.isNotBlank() }
+                .map { resolveUrl(hlsUrl, it) }
+
+            Log.d(TAG, "Found ${allVariants.size} variants, checking which is cached:")
+            allVariants.forEach { v ->
+                Log.d(TAG, "  variant cached=${cache.isCached(v, 0, 1)}: $v")
+            }
+
+            // Pick the variant whose playlist is actually in cache (= what Media3 downloaded)
+            val chosenVariant = allVariants.firstOrNull { cache.isCached(it, 0, 1) }
+                ?: allVariants.firstOrNull() // fallback to first if nothing cached
+
+            if (chosenVariant == null) {
+                Log.e(TAG, "ABORT: no variants found in master playlist")
                 return@withContext null
             }
-            mediaPlaylistUrl = resolveUrl(hlsUrl, variantRelative)
-            Log.d(TAG, "Media playlist URL: $mediaPlaylistUrl")
+
+            mediaPlaylistUrl = chosenVariant
+            Log.d(TAG, "Using media playlist: $mediaPlaylistUrl")
             val playlistBytes = readUri(Uri.parse(mediaPlaylistUrl))
             if (playlistBytes == null) {
                 Log.e(TAG, "ABORT: media playlist read returned null")
@@ -133,8 +153,12 @@ object HlsExporter {
         } else {
             title
         }
-        val safeTitle = displayTitle.replace(Regex("[^a-zA-Z0-9._\\- ]"), "_").trim().take(80)
-        val fileName = if (safeTitle.endsWith(".ts", ignoreCase = true)) safeTitle else "$safeTitle.ts"
+        // Strip any existing video/playlist extensions before adding .ts
+        val stripped = displayTitle
+            .removeSuffix(".m3u8").removeSuffix(".m3u").removeSuffix(".mp4")
+            .removeSuffix(".mkv").removeSuffix(".ts")
+        val safeTitle = stripped.replace(Regex("[^a-zA-Z0-9._\\- ]"), "_").trim().take(80)
+        val fileName = "$safeTitle.ts"
         Log.d(TAG, "Step 4: writing to Downloads as '$fileName'")
 
         val outputPair = openOutputFile(context, fileName)
@@ -148,6 +172,11 @@ object HlsExporter {
         var totalWritten = 0L
         outputStream.use { out ->
             val buf = ByteArray(64 * 1024)
+            // Log cache hit rate for first 3 segments
+            segmentUrls.take(3).forEach { seg ->
+                Log.d(TAG, "  seg inCache=${cache.isCached(seg, 0, 1)}: $seg")
+            }
+
             for ((index, segUrl) in segmentUrls.withIndex()) {
                 if (!isActive) {
                     Log.w(TAG, "Export cancelled at segment $index")
@@ -196,13 +225,23 @@ object HlsExporter {
                 MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
             ) ?: return null
             val stream = context.contentResolver.openOutputStream(uri) ?: return null
-            // Mark as complete when stream is closed — wrap so we can finalize
+            // Always clear IS_PENDING when done, even if close() throws — otherwise
+            // the file stays invisible in Downloads indefinitely.
             val wrappedStream = object : java.io.FilterOutputStream(stream) {
                 override fun close() {
-                    super.close()
-                    values.clear()
-                    values.put(MediaStore.Downloads.IS_PENDING, 0)
-                    context.contentResolver.update(uri, values, null, null)
+                    try {
+                        super.close()
+                    } finally {
+                        val pendingValues = ContentValues().apply {
+                            put(MediaStore.Downloads.IS_PENDING, 0)
+                        }
+                        runCatching {
+                            context.contentResolver.update(uri, pendingValues, null, null)
+                            Log.d(TAG, "MediaStore IS_PENDING cleared for $uri")
+                        }.onFailure { e ->
+                            Log.e(TAG, "Failed to clear IS_PENDING: ${e.message}")
+                        }
+                    }
                 }
             }
             Pair(wrappedStream, uri.toString())

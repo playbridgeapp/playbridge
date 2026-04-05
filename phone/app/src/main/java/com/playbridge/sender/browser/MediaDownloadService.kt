@@ -57,23 +57,31 @@ class MediaDownloadService : DownloadService(
             HlsExportRegistry.markExporting(url)
             Log.d(TAG, "Starting export for: $title")
 
+            // Capture context before service is destroyed
+            val appContext = applicationContext
             serviceScope.launch {
-                val cache = DownloadManagerSingleton.getDownloadCache(this@MediaDownloadService)
-                Log.d(TAG, "Cache retrieved, starting HlsExporter")
-                val path = HlsExporter.export(
-                    context = this@MediaDownloadService,
-                    hlsUrl = url,
-                    title = title,
-                    cache = cache
-                )
-                if (path != null) {
-                    Log.d(TAG, "Export SUCCESS: $path")
-                    HlsExportRegistry.markDone(url, path)
-                    showExportNotification(title, success = true)
-                } else {
-                    Log.e(TAG, "Export FAILED for: $url")
+                try {
+                    val cache = DownloadManagerSingleton.getDownloadCache(appContext)
+                    Log.d(TAG, "Cache retrieved, starting HlsExporter")
+                    val path = HlsExporter.export(
+                        context = appContext,
+                        hlsUrl = url,
+                        title = title,
+                        cache = cache
+                    )
+                    if (path != null) {
+                        Log.d(TAG, "Export SUCCESS: $path")
+                        HlsExportRegistry.markDone(url, path)
+                        showExportNotification(appContext, title, success = true)
+                    } else {
+                        Log.e(TAG, "Export FAILED (returned null) for: $url")
+                        HlsExportRegistry.markFailed(url)
+                        showExportNotification(appContext, title, success = false)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Export CRASHED for: $url — ${e.message}", e)
                     HlsExportRegistry.markFailed(url)
-                    showExportNotification(title, success = false)
+                    showExportNotification(appContext, title, success = false)
                 }
             }
         }
@@ -114,8 +122,8 @@ class MediaDownloadService : DownloadService(
             )
     }
 
-    private fun showExportNotification(title: String, success: Boolean) {
-        val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    private fun showExportNotification(context: Context, title: String, success: Boolean) {
+        val notifManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -126,7 +134,7 @@ class MediaDownloadService : DownloadService(
             notifManager.createNotificationChannel(channel)
         }
 
-        val notification = NotificationCompat.Builder(this, EXPORT_CHANNEL_ID)
+        val notification = NotificationCompat.Builder(context, EXPORT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(if (success) "Saved to Downloads" else "Export failed")
             .setContentText(title)
@@ -134,6 +142,7 @@ class MediaDownloadService : DownloadService(
             .build()
 
         notifManager.notify(title.hashCode(), notification)
+        Log.d(TAG, "Notification posted: ${if (success) "success" else "failed"} for $title")
     }
 
     companion object {
