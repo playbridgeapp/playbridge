@@ -254,7 +254,18 @@ class BrowserActivity : ComponentActivity() {
         }
 
         setContent {
-            var currentScreen by remember { mutableStateOf<Screen>(Screen.Browser) }
+            var currentScreen by remember {
+                val sp = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                mutableStateOf<Screen>(
+                    when (sp.getString("last_main_screen", "browser")) {
+                        "library" -> Screen.Library
+                        "debrid" -> Screen.DebridLibrary
+                        else -> Screen.Browser
+                    }
+                )
+            }
+            // Tracks the last "main" tab so Settings/overlays know where to return
+            var lastMainScreen by remember { mutableStateOf(currentScreen) }
             val clipboardManager = LocalClipboardManager.current
             val keyboardController = LocalSoftwareKeyboardController.current
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -380,6 +391,18 @@ class BrowserActivity : ComponentActivity() {
             
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+
+            // Persist the active main screen so it survives app restarts and Settings navigation
+            LaunchedEffect(currentScreen) {
+                if (currentScreen == Screen.Browser || currentScreen == Screen.Library || currentScreen == Screen.DebridLibrary) {
+                    lastMainScreen = currentScreen
+                    prefs.edit().putString("last_main_screen", when (currentScreen) {
+                        Screen.Library -> "library"
+                        Screen.DebridLibrary -> "debrid"
+                        else -> "browser"
+                    }).apply()
+                }
+            }
 
             val preferredAudioLang by remember { mutableStateOf(prefs.getString("preferred_audio_lang", "") ?: "") }
             val preferredSubLang by remember { mutableStateOf(prefs.getString("preferred_subtitle_lang", "") ?: "") }
@@ -1564,9 +1587,9 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Settings -> {
-                                            BackHandler { currentScreen = Screen.Browser }
+                                            BackHandler { currentScreen = lastMainScreen }
                                             SettingsScreen(
-                                                onBack = { currentScreen = Screen.Browser },
+                                                onBack = { currentScreen = lastMainScreen },
                                                 onAddonSettings = { currentScreen = Screen.AddonSettings },
                                                 tvIp = if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) tvDevice?.ip else null,
                                                 tvPort = if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) tvDevice?.port else null
