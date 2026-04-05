@@ -703,7 +703,7 @@ fun TvShowDetailScreen(
                         val trackedEp    = entity.episodeProgress ?: return@let false
                         when {
                             selectedSeason < trackedSeason -> true
-                            selectedSeason == trackedSeason -> episode.episodeNumber < trackedEp
+                            selectedSeason == trackedSeason -> episode.episodeNumber <= trackedEp
                             else -> false
                         }
                     } ?: false

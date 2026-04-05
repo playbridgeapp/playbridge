@@ -179,17 +179,39 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     return@collect
                 }
                 val ids = mutableSetOf<Int>()
-                val fourteenDaysAgo = System.currentTimeMillis() - 14L * 24 * 60 * 60 * 1000
                 tvItems.forEach { entity ->
                     try {
+                        // Only flag shows where the user has explicitly set a progress position
+                        val userSeason = entity.seasonProgress ?: return@forEach
+                        val userEp    = entity.episodeProgress ?: return@forEach
+
                         val details = tmdb.getTvDetails(entity.tmdbId) ?: return@forEach
-                        val lastAirMs = parseIsoDate(details.lastAirDate ?: return@forEach)
-                            ?: return@forEach
-                        // "New" = aired within the last 14 days AND after the user added the show
-                        val referenceMs = entity.startedAt ?: entity.addedAt
-                        if (lastAirMs > referenceMs && lastAirMs > fourteenDaysAgo) {
-                            ids.add(entity.tmdbId)
+
+                        val hasAvailable = when (val next = details.nextEpisodeToAir) {
+                            // Show is actively airing — everything before nextEpisodeToAir has aired.
+                            // Badge if the user's position is at least one episode behind that boundary.
+                            null -> {
+                                // Show is on hiatus or ended.
+                                // Approximate: flag if lastAirDate is after the user started tracking
+                                // (best we can do without fetching full season details).
+                                val lastAirMs = parseIsoDate(details.lastAirDate ?: return@forEach)
+                                    ?: return@forEach
+                                val referenceMs = entity.startedAt ?: entity.addedAt
+                                lastAirMs > referenceMs
+                            }
+                            else -> when {
+                                // User is in an earlier season than where the show currently is —
+                                // there are definitely aired episodes in later seasons ahead of them.
+                                userSeason < next.seasonNumber -> true
+                                // Same season: badge only when the next-to-air ep is at least
+                                // two ahead of the user, meaning at least one ep has aired since their progress.
+                                userSeason == next.seasonNumber -> userEp < next.episodeNumber - 1
+                                // User is somehow past the boundary (shouldn't happen) — no badge.
+                                else -> false
+                            }
                         }
+
+                        if (hasAvailable) ids.add(entity.tmdbId)
                     } catch (_: Exception) { }
                 }
                 _newEpisodeTmdbIds.value = ids
