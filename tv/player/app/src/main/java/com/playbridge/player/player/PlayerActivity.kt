@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.core.view.WindowCompat
+import com.playbridge.player.server.ServerService
 
 abstract class PlayerActivity : ComponentActivity() {
 
@@ -35,10 +36,23 @@ abstract class PlayerActivity : ComponentActivity() {
             }
         }
         current = java.lang.ref.WeakReference(this)
+        // Mark the server context as "player" so the request_pairing guard works regardless
+        // of whether this activity was launched by handleCommand() (phone cast) or directly
+        // from the TV's history/favourites screen (which bypasses handleCommand entirely).
+        ServerService.notifyContextPlayer()
     }
 
     override fun onDestroy() {
-        if (current?.get() === this) current = null
+        if (current?.get() === this) {
+            current = null
+            // Only reset activeContext when THIS is genuinely the last player being torn down —
+            // not when it's being replaced by a new PlayerActivity (which calls prev.finish()
+            // from its own onCreate, setting `current` to itself before our onDestroy runs).
+            // If we reset here while a new player is already in `current`, activeContext would
+            // become "idle" during the new session, letting request_pairing open PairingScreen
+            // on top of the new video and killing it.
+            ServerService.notifyContextIdle()
+        }
         super.onDestroy()
     }
 

@@ -56,6 +56,16 @@ class ServerService : Service() {
     private lateinit var nsdManager: android.net.nsd.NsdManager
     private var registrationListener: android.net.nsd.NsdManager.RegistrationListener? = null
     
+    // Receives ACTION_CONTEXT_IDLE from the tv/browser app (separate APK) when its
+    // BrowserActivity is destroyed, so activeContext can be reset to "idle".
+    private val contextIdleReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            if (intent.action == ACTION_CONTEXT_IDLE) {
+                setContextIdleInternal()
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         _staticInstance = this
@@ -63,6 +73,12 @@ class ServerService : Service() {
         overlayWindow = OverlayWindowHelper(applicationContext)
         nsdManager = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
         createNotificationChannel()
+        val filter = android.content.IntentFilter(ACTION_CONTEXT_IDLE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(contextIdleReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(contextIdleReceiver, filter)
+        }
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -590,6 +606,18 @@ class ServerService : Service() {
             webSocketServer?.broadcastStatus(statusJson)
         }
     }
+
+    internal fun setContextPlayerInternal() {
+        activeContext = "player"
+        broadcastContext()
+        FileLogger.d(TAG, "activeContext set to player by activity lifecycle")
+    }
+
+    internal fun setContextIdleInternal() {
+        activeContext = "idle"
+        broadcastContext()
+        FileLogger.d(TAG, "activeContext reset to idle by activity lifecycle")
+    }
     
     /**
      * Downloads subtitle URLs to the local subtitle cache directory using the provided headers.
@@ -760,6 +788,7 @@ class ServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     
     override fun onDestroy() {
+        try { unregisterReceiver(contextIdleReceiver) } catch (_: Exception) {}
         if (registrationListener != null) {
             try {
                 nsdManager.unregisterService(registrationListener)
@@ -812,6 +841,9 @@ class ServerService : Service() {
         // Sent to MainActivity (via startActivity) to navigate to the PairingScreen.
         // Fired whenever a new device starts a connection attempt while the app is backgrounded.
         const val ACTION_OPEN_PAIRING = "com.playbridge.player.ACTION_OPEN_PAIRING"
+        // Sent (as an explicit broadcast to this package) by the tv/browser app when its
+        // BrowserActivity is destroyed, so ServerService can reset activeContext to "idle".
+        const val ACTION_CONTEXT_IDLE = "com.playbridge.player.ACTION_CONTEXT_IDLE"
         const val EXTRA_QUEUE_ITEM_URL = "queue_item_url"
         const val EXTRA_QUEUE_ITEM_TITLE = "queue_item_title"
         const val EXTRA_QUEUE_ITEM_CONTENT_TYPE = "queue_item_content_type"
@@ -844,6 +876,26 @@ class ServerService : Service() {
          */
         fun broadcastPlaylistStatus(statusJson: String) {
             _staticInstance?.broadcastPlaylistStatusInternal(statusJson)
+        }
+
+        /**
+         * Mark activeContext as "player" when a PlayerActivity starts.
+         * Called from PlayerActivity.onCreate() so that videos launched directly from the TV
+         * (history/favourites screen) are treated the same as phone-cast videos — the
+         * request_pairing context guard will block the PairingScreen while they're playing.
+         */
+        fun notifyContextPlayer() {
+            _staticInstance?.setContextPlayerInternal()
+        }
+
+        /**
+         * Reset activeContext to "idle" from a player or browser activity when it finishes.
+         * Called from PlayerActivity.onDestroy() and (via broadcast) from the TV browser app.
+         * Without this, the context guard in the request_pairing handler would permanently block
+         * the PairingScreen after the first playback session ends.
+         */
+        fun notifyContextIdle() {
+            _staticInstance?.setContextIdleInternal()
         }
 
         @Volatile

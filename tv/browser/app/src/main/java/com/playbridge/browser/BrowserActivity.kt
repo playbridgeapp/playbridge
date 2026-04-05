@@ -682,6 +682,15 @@ class BrowserActivity : ComponentActivity() {
         scope.cancel()
         engine?.destroy()
         engine = null
+        // Notify the player app's ServerService that the browser session has ended so it can
+        // reset activeContext to "idle". Without this, the context guard would permanently block
+        // the PairingScreen from opening after the first browser session.
+        try {
+            val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
+                setPackage("com.playbridge.player")
+            }
+            sendBroadcast(idleIntent)
+        } catch (_: Exception) {}
         super.onDestroy()
     }
 
