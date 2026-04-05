@@ -203,6 +203,8 @@ data class TmdbTvDetails(
     @SerialName("poster_path") val posterPath: String? = null,
     @SerialName("backdrop_path") val backdropPath: String? = null,
     @SerialName("first_air_date") val firstAirDate: String = "",
+    @SerialName("last_air_date") val lastAirDate: String? = null,
+    @SerialName("next_episode_to_air") val nextEpisodeToAir: TmdbNextEpisode? = null,
     @SerialName("vote_average") val voteAverage: Double = 0.0,
     @SerialName("number_of_seasons") val numberOfSeasons: Int = 0,
     @SerialName("number_of_episodes") val numberOfEpisodes: Int = 0,
@@ -230,6 +232,13 @@ data class TmdbTvDetails(
 @Serializable
 data class TmdbExternalIds(
     @SerialName("imdb_id") val imdbId: String? = null
+)
+
+@Serializable
+data class TmdbNextEpisode(
+    @SerialName("episode_number") val episodeNumber: Int = 0,
+    @SerialName("season_number") val seasonNumber: Int = 0,
+    @SerialName("air_date") val airDate: String? = null,
 )
 
 // ==================== Season & Episode ====================

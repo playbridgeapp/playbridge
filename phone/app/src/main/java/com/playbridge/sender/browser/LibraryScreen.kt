@@ -10,8 +10,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -62,6 +64,16 @@ import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+// Lightweight holder for the item the TrackingSheet is currently open for.
+private data class TrackingTarget(
+    val tmdbId: Int,
+    val mediaType: String,
+    val title: String,
+    val posterUrl: String?,
+    val year: String,
+    val rating: String,
+)
 
 /**
  * Main Library screen — browse popular movies, TV shows, trending, and search.
@@ -183,6 +195,15 @@ private fun LibraryScreenContent(
     var showFilterSheet by remember { mutableStateOf(false) }
     val selectedTab by viewModel.selectedTab.collectAsState()
     var yearInput by remember(selectedYear) { mutableStateOf(selectedYear) }
+
+    // Tracking sheet state
+    var trackingTarget by remember { mutableStateOf<TrackingTarget?>(null) }
+
+    // Per-status lists for My List tab
+    val watchlistAll by viewModel.watchlist.collectAsState()
+
+    // New episode detection
+    val newEpisodeTmdbIds by viewModel.newEpisodeTmdbIds.collectAsState()
 
     // Type and Sort are now inline chips — badge only counts genres + year
     val activeFilterCount = listOf(
@@ -425,6 +446,20 @@ private fun LibraryScreenContent(
                                             tint = if (browseSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
+
+                                    val myListSelected = selectedTab == 2
+                                    Surface(
+                                        shape = RoundedCornerShape(24.dp),
+                                        color = if (myListSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                        modifier = Modifier.clip(RoundedCornerShape(24.dp)).clickable { viewModel.setSelectedTab(2) }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (myListSelected) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                            contentDescription = "My List",
+                                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                                            tint = if (myListSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -474,13 +509,8 @@ private fun LibraryScreenContent(
                                 }
                             }
                         }
-                        if (selectedTab == 1) {
-                            IconButton(onClick = { viewModel.setIsSearching(true) }) {
-                                Icon(Icons.Default.Search, "Search")
-                            }
-                        } else {
-                            // Spacer to balance the Search icon on the Browse tab
-                            Spacer(modifier = Modifier.width(48.dp))
+                        IconButton(onClick = { viewModel.setIsSearching(true) }) {
+                            Icon(Icons.Default.Search, "Search")
                         }
                     } // closes if
                 } // closes actions
@@ -537,6 +567,44 @@ private fun LibraryScreenContent(
         }
 
         val watchlist by viewModel.watchlist.collectAsState()
+
+        // TrackingSheet — shown when a media card is long-pressed
+        trackingTarget?.let { target ->
+            val entity = watchlist.find { it.tmdbId == target.tmdbId }
+            TrackingSheet(
+                entity = entity,
+                mediaType = target.mediaType,
+                title = target.title,
+                onAction = { action ->
+                    when (action) {
+                        is TrackingAction.Upsert -> {
+                            viewModel.upsertTracked(
+                                tmdbId = target.tmdbId,
+                                mediaType = target.mediaType,
+                                title = target.title,
+                                posterUrl = target.posterUrl,
+                                year = target.year,
+                                rating = target.rating,
+                                status = action.status,
+                            )
+                            if (action.status != WatchlistStatus.PLAN_TO_WATCH) {
+                                viewModel.setStatus(target.tmdbId, action.status)
+                            }
+                            if (action.season != null && action.episode != null) {
+                                viewModel.setEpisodeProgress(target.tmdbId, action.season, action.episode)
+                            }
+                            if (action.rating != null) {
+                                viewModel.setUserRating(target.tmdbId, action.rating)
+                            }
+                            viewModel.setNotes(target.tmdbId, action.notes)
+                        }
+                        is TrackingAction.Remove -> viewModel.removeTracked(target.tmdbId)
+                        is TrackingAction.Dismiss -> Unit
+                    }
+                    trackingTarget = null
+                }
+            )
+        }
 
         val contentBottomPadding = innerPadding.calculateBottomPadding() + 80.dp
         if (!isConfigured) {
@@ -601,7 +669,27 @@ private fun LibraryScreenContent(
             modifier = Modifier.fillMaxSize(),
             label = "TabAnimation"
         ) { tab ->
-            if (tab == 1) {
+            if (tab == 2) {
+                MyListTab(
+                    watchlist = watchlistAll,
+                    newEpisodeTmdbIds = newEpisodeTmdbIds,
+                    contentPadding = innerPadding,
+                    onItemClick = { entity ->
+                        if (entity.mediaType == "movie") onMovieClick(entity.tmdbId)
+                        else onTvShowClick(entity.tmdbId)
+                    },
+                    onLongPress = { entity ->
+                        trackingTarget = TrackingTarget(
+                            tmdbId = entity.tmdbId,
+                            mediaType = entity.mediaType,
+                            title = entity.title,
+                            posterUrl = entity.posterUrl,
+                            year = entity.year,
+                            rating = entity.rating,
+                        )
+                    },
+                )
+            } else if (tab == 1) {
                 Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
                     DiscoverGrid(
                         movies = discoveredMovies,
@@ -636,21 +724,37 @@ private fun LibraryScreenContent(
                         }
                     }
 
-                    // My Watchlist
-                    if (watchlist.isNotEmpty()) {
+                    // My List home strip — only Watching items so it acts as a "continue watching" row.
+                    val continueWatching = watchlist.filter {
+                        it.status == WatchlistStatus.WATCHING.value
+                    }
+                    if (continueWatching.isNotEmpty()) {
                         item {
                             MediaRow(
-                                title = "My Watchlist",
-                                items = watchlist,
+                                title = "Continue Watching",
+                                items = continueWatching,
                                 listState = rememberLazyListState(),
                                 onItemClick = { item ->
                                     if (item.mediaType == "movie") onMovieClick(item.tmdbId)
                                     else onTvShowClick(item.tmdbId)
                                 },
+                                onItemLongClick = { item ->
+                                    trackingTarget = TrackingTarget(
+                                        tmdbId = item.tmdbId,
+                                        mediaType = item.mediaType,
+                                        title = item.title,
+                                        posterUrl = item.posterUrl,
+                                        year = item.year,
+                                        rating = item.rating,
+                                    )
+                                },
                                 posterUrl = { it.posterUrl },
                                 displayTitle = { it.title },
                                 year = { it.year },
                                 rating = { it.rating },
+                                badgeText = { item ->
+                                    if (item.mediaType == "tv" && newEpisodeTmdbIds.contains(item.tmdbId)) "New Episode" else null
+                                },
                                 hasMore = false,
                                 isLoadingMore = false,
                                 onLoadMore = {}
@@ -911,6 +1015,7 @@ private fun <T> MediaRow(
     items: List<T>,
     listState: LazyListState = rememberLazyListState(),
     onItemClick: (T) -> Unit,
+    onItemLongClick: ((T) -> Unit)? = null,
     posterUrl: (T) -> String?,
     displayTitle: (T) -> String,
     year: (T) -> String,
@@ -956,7 +1061,8 @@ private fun <T> MediaRow(
                     year = year(item),
                     rating = rating(item),
                     label = badgeText(item),
-                    onClick = { onItemClick(item) }
+                    onClick = { onItemClick(item) },
+                    onLongClick = onItemLongClick?.let { handler -> { handler(item) } }
                 )
             }
             if (isLoadingMore && hasMore) {
@@ -975,6 +1081,7 @@ private fun <T> MediaRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PosterCard(
     posterUrl: String?,
@@ -982,7 +1089,8 @@ private fun PosterCard(
     year: String,
     rating: String,
     label: String? = null,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val showTextOverlay = LocalShowCardTextOverlay.current
 
@@ -990,7 +1098,12 @@ private fun PosterCard(
         modifier = Modifier
             .width(130.dp)
             .height(195.dp)
-            .clickable(onClick = onClick),
+            .then(
+                if (onLongClick != null)
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                else
+                    Modifier.clickable(onClick = onClick)
+            ),
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
@@ -1020,6 +1133,23 @@ private fun PosterCard(
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+
+            // Label badge (Top End) — always visible regardless of text overlay setting
+            if (!label.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(bottomStart = 10.dp),
+                    color = Color(0xFFE53935).copy(alpha = 0.92f),
+                    modifier = Modifier.align(Alignment.TopEnd),
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                     )
                 }
             }
@@ -1063,23 +1193,6 @@ private fun PosterCard(
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                         }
-                    }
-                }
-
-                // Custom Label badge (Top End)
-                if (!label.isNullOrBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.95f),
-                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
-                    ) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                        )
                     }
                 }
 

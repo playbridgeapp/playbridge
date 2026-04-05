@@ -16,14 +16,23 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.library.WatchlistEntity
+import com.playbridge.sender.data.library.WatchlistStatus
 import coil.Coil
 import coil.request.ImageRequest
 
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdb = TmdbRepository(application)
     private val watchlistDao = DatabaseProvider.getDatabase(application).watchlistDao()
+
+    /**
+     * Serialises all watchlist write operations so that rapid taps cannot
+     * observe stale StateFlow snapshots and fire duplicate inserts/deletes.
+     */
+    private val watchlistMutex = Mutex()
 
     val watchlist: StateFlow<List<WatchlistEntity>> = watchlistDao.getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -150,9 +159,47 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _isDiscoveryLoading = MutableStateFlow(false)
     val isDiscoveryLoading: StateFlow<Boolean> = _isDiscoveryLoading.asStateFlow()
 
-    init {
-        checkConfigAndLoadInitialData()
+    // ---------------------------------------------------------------------------
+    // New-episode detection
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Set of TMDB IDs (TV shows only) for which a new episode has aired since
+     * the item was added to the watchlist. Refreshed whenever the Watching list changes.
+     */
+    private val _newEpisodeTmdbIds = MutableStateFlow<Set<Int>>(emptySet())
+    val newEpisodeTmdbIds: StateFlow<Set<Int>> = _newEpisodeTmdbIds.asStateFlow()
+
+    private fun observeNewEpisodes() {
+        viewModelScope.launch {
+            watching.collect { watchingItems ->
+                val tvItems = watchingItems.filter { it.mediaType == "tv" }
+                if (tvItems.isEmpty()) {
+                    _newEpisodeTmdbIds.value = emptySet()
+                    return@collect
+                }
+                val ids = mutableSetOf<Int>()
+                val fourteenDaysAgo = System.currentTimeMillis() - 14L * 24 * 60 * 60 * 1000
+                tvItems.forEach { entity ->
+                    try {
+                        val details = tmdb.getTvDetails(entity.tmdbId) ?: return@forEach
+                        val lastAirMs = parseIsoDate(details.lastAirDate ?: return@forEach)
+                            ?: return@forEach
+                        // "New" = aired within the last 14 days AND after the user added the show
+                        val referenceMs = entity.startedAt ?: entity.addedAt
+                        if (lastAirMs > referenceMs && lastAirMs > fourteenDaysAgo) {
+                            ids.add(entity.tmdbId)
+                        }
+                    } catch (_: Exception) { }
+                }
+                _newEpisodeTmdbIds.value = ids
+            }
+        }
     }
+
+    private fun parseIsoDate(dateStr: String): Long? = try {
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse(dateStr)?.time
+    } catch (_: Exception) { null }
 
     fun checkConfigAndLoadInitialData() {
         val configured = tmdb.isConfigured()
@@ -472,9 +519,152 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun isWatchlisted(tmdbId: Int): Flow<Boolean> {
-        return watchlistDao.isWatchlisted(tmdbId)
+    // ---------------------------------------------------------------------------
+    // Tracking — per-status flows
+    // ---------------------------------------------------------------------------
+
+    val watching: StateFlow<List<WatchlistEntity>> =
+        watchlistDao.getByStatus(WatchlistStatus.WATCHING.value)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val planToWatch: StateFlow<List<WatchlistEntity>> =
+        watchlistDao.getByStatus(WatchlistStatus.PLAN_TO_WATCH.value)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val completed: StateFlow<List<WatchlistEntity>> =
+        watchlistDao.getByStatus(WatchlistStatus.COMPLETED.value)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val onHold: StateFlow<List<WatchlistEntity>> =
+        watchlistDao.getByStatus(WatchlistStatus.ON_HOLD.value)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val dropped: StateFlow<List<WatchlistEntity>> =
+        watchlistDao.getByStatus(WatchlistStatus.DROPPED.value)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        checkConfigAndLoadInitialData()
+        observeNewEpisodes()
     }
+
+    // ---------------------------------------------------------------------------
+    // Tracking — reads
+    // ---------------------------------------------------------------------------
+
+    fun isWatchlisted(tmdbId: Int): Flow<Boolean> =
+        watchlistDao.isWatchlisted(tmdbId)
+
+    fun getTracked(tmdbId: Int): Flow<WatchlistEntity?> =
+        watchlistDao.getById(tmdbId)
+
+    // ---------------------------------------------------------------------------
+    // Tracking — writes
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Adds an item to the tracked list with the given initial status, or updates
+     * the status if it is already tracked.
+     *
+     * Uses [watchlistMutex] and reads the current DB row directly so that rapid
+     * successive calls cannot race on a stale StateFlow snapshot.
+     */
+    fun upsertTracked(
+        tmdbId: Int,
+        mediaType: String,
+        title: String,
+        posterUrl: String?,
+        year: String,
+        rating: String,
+        status: WatchlistStatus = WatchlistStatus.PLAN_TO_WATCH,
+    ) {
+        viewModelScope.launch {
+            watchlistMutex.withLock {
+                val existing = watchlistDao.getByIdSync(tmdbId)
+                if (existing != null) {
+                    applyStatusTimestamps(tmdbId, status, existing)
+                } else {
+                    watchlistDao.insert(
+                        WatchlistEntity(
+                            tmdbId = tmdbId,
+                            mediaType = mediaType,
+                            title = title,
+                            posterUrl = posterUrl,
+                            year = year,
+                            rating = rating,
+                            status = status.value,
+                            startedAt = if (status == WatchlistStatus.WATCHING) System.currentTimeMillis() else null,
+                            completedAt = if (status == WatchlistStatus.COMPLETED) System.currentTimeMillis() else null,
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Changes the status of an already-tracked item and auto-stamps
+     * startedAt / completedAt on the relevant transitions.
+     */
+    fun setStatus(tmdbId: Int, status: WatchlistStatus) {
+        viewModelScope.launch {
+            watchlistMutex.withLock {
+                val existing = watchlistDao.getByIdSync(tmdbId) ?: return@withLock
+                applyStatusTimestamps(tmdbId, status, existing)
+            }
+        }
+    }
+
+    private suspend fun applyStatusTimestamps(
+        tmdbId: Int,
+        newStatus: WatchlistStatus,
+        existing: WatchlistEntity,
+    ) {
+        val now = System.currentTimeMillis()
+        val startedAt = when {
+            newStatus == WatchlistStatus.WATCHING && existing.startedAt == null -> now
+            else -> existing.startedAt
+        }
+        val completedAt = when {
+            newStatus == WatchlistStatus.COMPLETED && existing.completedAt == null -> now
+            newStatus != WatchlistStatus.COMPLETED -> null   // un-complete clears the stamp
+            else -> existing.completedAt
+        }
+        watchlistDao.updateStatus(tmdbId, newStatus.value, startedAt, completedAt)
+    }
+
+    /** Sets season + episode progress for a TV show. */
+    fun setEpisodeProgress(tmdbId: Int, season: Int, episode: Int) {
+        viewModelScope.launch {
+            watchlistDao.updateProgress(tmdbId, season, episode)
+        }
+    }
+
+    /** Sets the user's personal rating (1–10). Pass null to clear. */
+    fun setUserRating(tmdbId: Int, rating: Int?) {
+        viewModelScope.launch {
+            watchlistDao.updateRating(tmdbId, rating)
+        }
+    }
+
+    /** Updates the free-text note. Pass null to clear. */
+    fun setNotes(tmdbId: Int, notes: String?) {
+        viewModelScope.launch {
+            watchlistDao.updateNotes(tmdbId, notes)
+        }
+    }
+
+    /** Removes an item from tracking entirely. */
+    fun removeTracked(tmdbId: Int) {
+        viewModelScope.launch {
+            watchlistDao.deleteById(tmdbId)
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Toggle (used by detail screen) — serialised through watchlistMutex so rapid
+    // taps cannot observe a stale StateFlow and fire duplicate operations.
+    // ---------------------------------------------------------------------------
 
     fun toggleWatchlist(
         tmdbId: Int,
@@ -482,24 +672,26 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         title: String,
         posterUrl: String?,
         year: String,
-        rating: String
+        rating: String,
     ) {
         viewModelScope.launch {
-            val currentWatchlist = watchlist.value
-            val existing = currentWatchlist.find { it.tmdbId == tmdbId }
-            if (existing != null) {
-                watchlistDao.delete(existing)
-            } else {
-                watchlistDao.insert(
-                    WatchlistEntity(
-                        tmdbId = tmdbId,
-                        mediaType = mediaType,
-                        title = title,
-                        posterUrl = posterUrl,
-                        year = year,
-                        rating = rating
+            watchlistMutex.withLock {
+                // Read the true current DB state, not the potentially-stale StateFlow.
+                val existing = watchlistDao.getByIdSync(tmdbId)
+                if (existing != null) {
+                    watchlistDao.delete(existing)
+                } else {
+                    watchlistDao.insert(
+                        WatchlistEntity(
+                            tmdbId = tmdbId,
+                            mediaType = mediaType,
+                            title = title,
+                            posterUrl = posterUrl,
+                            year = year,
+                            rating = rating,
+                        )
                     )
-                )
+                }
             }
         }
     }

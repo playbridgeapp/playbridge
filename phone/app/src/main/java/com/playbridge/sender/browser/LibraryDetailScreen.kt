@@ -37,6 +37,8 @@ import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.CheckCircle
 
 /**
  * Detail screen for a movie — shows metadata, backdrop, and Play button
@@ -81,6 +83,7 @@ fun MovieDetailScreen(
     }
 
     val isWatchlisted by viewModel.isWatchlisted(movieId).collectAsState(initial = false)
+    val tracked by viewModel.getTracked(movieId).collectAsState(initial = null)
 
     // Stream picker sheet
     if (showStreamPicker) {
@@ -187,6 +190,7 @@ fun MovieDetailScreen(
                 item {
                     ActionButtons(
                         isWatchlisted = isWatchlisted,
+                        tracked = tracked,
                         onToggleWatchlist = {
                             details?.let { movie ->
                                 viewModel.toggleWatchlist(
@@ -334,6 +338,11 @@ fun TvShowDetailScreen(
     // Context for season queue operations (holds episode list & preferences while Ep1 stream picker is open)
     var seasonQueueContext by remember { mutableStateOf<SeasonQueueContext?>(null) }
 
+    val isWatchlisted by viewModel.isWatchlisted(tvId).collectAsState(initial = false)
+    val tracked by viewModel.getTracked(tvId).collectAsState(initial = null)
+
+    val episodeListState = rememberLazyListState()
+
     LaunchedEffect(tvId) {
         isLoading = true
         val tvDetails = tmdb.getTvDetails(tvId)
@@ -345,16 +354,18 @@ fun TvShowDetailScreen(
         isLoading = false
         trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
 
-        // Auto-load first season (skip specials if possible)
-        details?.seasons?.firstOrNull { it.seasonNumber > 0 }?.let { firstSeason ->
-            selectedSeason = firstSeason.seasonNumber
-            isSeasonLoading = true
-            seasonDetails = tmdb.getSeasonDetails(tvId, firstSeason.seasonNumber)
-            isSeasonLoading = false
-        }
+        // Prefer the tracked season (if watching), otherwise default to first season
+        val trackedSeason = tracked
+            ?.takeIf { it.status == WatchlistStatus.WATCHING.value }
+            ?.seasonProgress
+        val targetSeason = trackedSeason
+            ?: details?.seasons?.firstOrNull { it.seasonNumber > 0 }?.seasonNumber
+            ?: 1
+        selectedSeason = targetSeason
+        isSeasonLoading = true
+        seasonDetails = tmdb.getSeasonDetails(tvId, targetSeason)
+        isSeasonLoading = false
     }
-
-    val isWatchlisted by viewModel.isWatchlisted(tvId).collectAsState(initial = false)
 
     // Stream picker sheet — when seasonQueueContext is set, picking a stream for Ep1
     // triggers the throttled queue for the rest of the season
@@ -498,6 +509,7 @@ fun TvShowDetailScreen(
             val imdbId = show.imdbId
 
             LazyColumn(
+                state = episodeListState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 32.dp)
             ) {
@@ -557,6 +569,7 @@ fun TvShowDetailScreen(
                 item {
                     ActionButtons(
                         isWatchlisted = isWatchlisted,
+                        tracked = tracked,
                         onToggleWatchlist = {
                             details?.let { show ->
                                 viewModel.toggleWatchlist(
@@ -614,7 +627,7 @@ fun TvShowDetailScreen(
                                             isSeasonLoading = false
                                         }
                                     },
-                                    label = { Text("Season ${season.seasonNumber}") }
+                                    label = { Text("S${season.seasonNumber}") }
                                 )
                             }
                         }
@@ -682,11 +695,24 @@ fun TvShowDetailScreen(
                             epPlaylistIndex >= 0 &&
                             epPlaylistIndex < (playlistState?.totalCount ?: 0) &&
                             !isEpPlaying
+                    // Mark episodes as watched based on tracking progress
+                    val isEpWatched = tracked?.let { entity ->
+                        if (entity.status != WatchlistStatus.WATCHING.value &&
+                            entity.status != WatchlistStatus.COMPLETED.value) return@let false
+                        val trackedSeason = entity.seasonProgress ?: return@let false
+                        val trackedEp    = entity.episodeProgress ?: return@let false
+                        when {
+                            selectedSeason < trackedSeason -> true
+                            selectedSeason == trackedSeason -> episode.episodeNumber < trackedEp
+                            else -> false
+                        }
+                    } ?: false
                     EpisodeItem(
                         episode = episode,
                         hasAddon = imdbId != null,
                         isPlaying = isEpPlaying,
                         isInActivePlaylist = isEpQueued,
+                        isWatched = isEpWatched,
                         onPlay = {
                             if (imdbId != null) {
                                 // Jump if this episode is in the active playlist and queuing is done
@@ -954,18 +980,52 @@ private fun PlayButton(
 @Composable
 private fun ActionButtons(
     isWatchlisted: Boolean,
+    tracked: WatchlistEntity? = null,
     onToggleWatchlist: () -> Unit,
     trailerUrl: String? = null,
     onPlayTrailer: ((String) -> Unit)? = null
 ) {
     val trailerReady = trailerUrl != null && onPlayTrailer != null
-    Row(
+    val status = tracked?.let { WatchlistStatus.from(it.status) }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 16.dp, bottom = 24.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Status chip — shown when the item is tracked with a meaningful status
+        if (status != null && status != WatchlistStatus.PLAN_TO_WATCH) {
+            val statusColor = when (status) {
+                WatchlistStatus.WATCHING      -> MaterialTheme.colorScheme.primary
+                WatchlistStatus.COMPLETED     -> Color(0xFF4CAF50)
+                WatchlistStatus.ON_HOLD       -> Color(0xFFFF9800)
+                WatchlistStatus.DROPPED       -> MaterialTheme.colorScheme.error
+                else -> MaterialTheme.colorScheme.secondary
+            }
+            val progressLabel = if (status == WatchlistStatus.WATCHING &&
+                tracked.seasonProgress != null && tracked.episodeProgress != null
+            ) " · S${tracked.seasonProgress} E${tracked.episodeProgress}" else ""
+
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = statusColor.copy(alpha = 0.15f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.6f))
+            ) {
+                Text(
+                    text = status.displayName + progressLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = statusColor,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.clickable { onToggleWatchlist() }
@@ -999,7 +1059,8 @@ private fun ActionButtons(
                 color = if (trailerReady) Color.White else Color.White.copy(alpha = 0.3f)
             )
         }
-    }
+        } // close Row
+    } // close outer Column
 }
 
 @Composable
@@ -1008,6 +1069,7 @@ private fun EpisodeItem(
     hasAddon: Boolean = false,
     isPlaying: Boolean = false,
     isInActivePlaylist: Boolean = false,
+    isWatched: Boolean = false,
     onPlay: (() -> Unit)? = null
 ) {
     val containerColor = when {
@@ -1015,7 +1077,6 @@ private fun EpisodeItem(
         isInActivePlaylist -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
         else -> Color.Transparent
     }
-    
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1024,7 +1085,7 @@ private fun EpisodeItem(
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         Row(
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             // Episode Image with badge
             Box(
@@ -1052,7 +1113,7 @@ private fun EpisodeItem(
                         Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White.copy(alpha = 0.5f))
                     }
                 }
-                
+
                 // Badge overlay
                 Surface(
                     color = Color.Black.copy(alpha = 0.8f),
@@ -1069,7 +1130,7 @@ private fun EpisodeItem(
                 }
 
                 if (isPlaying) {
-                     Icon(Icons.Default.PlayArrow, contentDescription = "Playing", tint = Color.White, modifier = Modifier.align(Alignment.Center).size(32.dp))
+                    Icon(Icons.Default.PlayArrow, contentDescription = "Playing", tint = Color.White, modifier = Modifier.align(Alignment.Center).size(32.dp))
                 }
             }
 
@@ -1096,12 +1157,25 @@ private fun EpisodeItem(
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
-                if (episode.runtime != null) {
-                    Text(
-                        text = "${episode.runtime}m",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.5f)
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (episode.runtime != null) {
+                        Text(
+                            text = "${episode.runtime}m",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.5f)
+                        )
+                    }
+                    if (isWatched) {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Watched",
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
                 }
             }
         }
