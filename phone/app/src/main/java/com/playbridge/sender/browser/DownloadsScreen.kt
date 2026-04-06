@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.OpenInNew
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.core.content.FileProvider
 import com.playbridge.sender.browser.DownloadManagerSingleton
@@ -53,21 +52,24 @@ data class DownloadItem(
     val lastModified: Long,
     val isExo: Boolean = false,
     val exoState: Int = 0,
-    val errorReason: String? = null
+    val errorReason: String? = null,
+    val speedBytesPerSec: Long = 0L
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun DownloadsScreen(
-    onBack: () -> Unit,
-    onPlayOnTv: (String, String) -> Unit // url, mimeType
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val downloadManager = remember { context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager }
     val exoDownloadManager = remember { DownloadManagerSingleton.getDownloadManager(context) }
     var downloads by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
     val scope = rememberCoroutineScope()
+    // Track previous bytes and last known speed per item ID
+    val prevBytes = remember { mutableMapOf<Long, Long>() }
+    val lastKnownSpeed = remember { mutableMapOf<Long, Long>() }
 
     // Deletion state
     var itemToDelete by remember { mutableStateOf<DownloadItem?>(null) }
@@ -78,8 +80,26 @@ fun DownloadsScreen(
         while (true) {
             val systemDownloads = getSystemDownloads(downloadManager)
             val exoDownloads = getExoDownloads(exoDownloadManager)
-            downloads = (systemDownloads + exoDownloads).sortedByDescending { it.lastModified }
-            delay(1000) // Refresh every 1 second
+            val merged = (systemDownloads + exoDownloads).sortedByDescending { it.lastModified }
+            downloads = merged.map { item ->
+                val speed = if (item.status == DownloadManager.STATUS_RUNNING) {
+                    val prev = prevBytes[item.id] ?: item.bytesDownloaded
+                    val delta = (item.bytesDownloaded - prev).coerceAtLeast(0L)
+                    if (delta > 0) {
+                        lastKnownSpeed[item.id] = delta
+                        delta
+                    } else {
+                        // Underlying data hasn't updated yet — keep last reading to avoid flicker
+                        lastKnownSpeed[item.id] ?: 0L
+                    }
+                } else {
+                    lastKnownSpeed.remove(item.id)
+                    0L
+                }
+                prevBytes[item.id] = item.bytesDownloaded
+                item.copy(speedBytesPerSec = speed)
+            }
+            delay(1000)
         }
     }
 
@@ -176,8 +196,7 @@ fun DownloadsScreen(
 
                 items(downloads) { item ->
                     DownloadItemRow(
-                        item = item, 
-                        onPlayOnTv = onPlayOnTv,
+                        item = item,
                         onDelete = {
                             itemToDelete = item
                             showDeleteDialog = true
@@ -221,7 +240,6 @@ fun openInExternalPlayer(context: Context, localUri: String, mediaType: String?)
 @Composable
 fun DownloadItemRow(
     item: DownloadItem,
-    onPlayOnTv: (String, String) -> Unit,
     onDelete: () -> Unit,
     onErrorClick: () -> Unit
 ) {
@@ -249,7 +267,10 @@ fun DownloadItemRow(
                             .fillMaxWidth()
                             .padding(vertical = 4.dp),
                     )
-                    Text("${DownloadUtils.formatFileSize(item.bytesDownloaded)} / ${DownloadUtils.formatFileSize(item.totalSize)}")
+                    val speedStr = if (item.speedBytesPerSec > 0)
+                        "  ·  ${DownloadUtils.formatFileSize(item.speedBytesPerSec)}/s"
+                    else ""
+                    Text("${DownloadUtils.formatFileSize(item.bytesDownloaded)} / ${DownloadUtils.formatFileSize(item.totalSize)}$speedStr")
                 } else if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
                      Text(DownloadUtils.formatFileSize(item.totalSize))
                 } else if (item.status == DownloadManager.STATUS_FAILED) {
@@ -271,14 +292,6 @@ fun DownloadItemRow(
             Row {
                 if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
                     if (item.mediaType?.startsWith("video/") == true || item.isExo) {
-                        // Play on TV
-                        IconButton(onClick = {
-                            item.uri?.let { uri ->
-                                onPlayOnTv(uri, item.mediaType ?: "video/*")
-                            }
-                        }) {
-                            Icon(Icons.Default.PlayArrow, "Play on TV", tint = MaterialTheme.colorScheme.primary)
-                        }
                         // Open in external player (system downloads with a local file)
                         if (!item.isExo && item.localUri != null) {
                             IconButton(onClick = {

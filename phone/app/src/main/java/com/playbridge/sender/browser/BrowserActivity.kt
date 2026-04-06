@@ -1567,23 +1567,7 @@ class BrowserActivity : ComponentActivity() {
                                         Screen.Downloads -> {
                                             BackHandler { currentScreen = Screen.Browser }
                                             DownloadsScreen(
-                                                onBack = { currentScreen = Screen.Browser },
-                                                onPlayOnTv = { url, type ->
-                                                    if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
-                                                        val cmd = com.playbridge.protocol.createPlayCommandJson(
-                                                            url = url,
-                                                            title = "From Downloads",
-                                                            contentType = type,
-                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
-                                                        )
-                                                        connectionViewModel.sendCommandAndRecord(cmd, "play", url, "From Downloads")
-                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
+                                                onBack = { currentScreen = Screen.Browser }
                                             )
                                         }
                                         Screen.Settings -> {
@@ -2048,7 +2032,8 @@ class BrowserActivity : ComponentActivity() {
                                 video.contentType,
                                 video.headers?.get("User-Agent"),
                                 video.headers?.get("Cookie"),
-                                video.headers?.get("Referer") ?: video.originUrl
+                                video.headers?.get("Referer") ?: video.originUrl,
+                                pageTitle = selectedTab?.content?.title
                             )
                         },
                         browseUrl = castSheetBrowseOverride ?: currentUrl,
@@ -2142,7 +2127,8 @@ class BrowserActivity : ComponentActivity() {
                             download.contentType,
                             download.userAgent,
                             download.cookie,
-                            download.referer
+                            download.referer,
+                            pageTitle = selectedTab?.content?.title
                         )
                         Toast.makeText(this@BrowserActivity, "Download started", Toast.LENGTH_SHORT).show()
                         pendingDownload = null

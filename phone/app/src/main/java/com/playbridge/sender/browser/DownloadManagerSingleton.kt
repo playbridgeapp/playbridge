@@ -1,12 +1,14 @@
 package com.playbridge.sender.browser
 
 import android.content.Context
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.offline.DownloadManager
-import androidx.media3.common.util.UnstableApi
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -34,7 +36,21 @@ object DownloadManagerSingleton {
             )
             downloadCache = cache
 
-            val dataSourceFactory = DefaultHttpDataSource.Factory()
+            // Wrap DefaultHttpDataSource so every open() call gets cookies/headers
+            // from DownloadHeadersStore, keyed by the request host. This is necessary
+            // because DownloadRequest.Builder has no setHttpRequestHeaders() in Media3.
+            val httpFactory = DefaultHttpDataSource.Factory()
+            val dataSourceFactory = DataSource.Factory {
+                val inner = httpFactory.createDataSource()
+                object : DataSource by inner {
+                    override fun open(dataSpec: DataSpec): Long {
+                        val extra = DownloadHeadersStore.headersForUrl(dataSpec.uri.toString())
+                        if (extra.isEmpty()) return inner.open(dataSpec)
+                        val merged = HashMap(dataSpec.httpRequestHeaders).apply { putAll(extra) }
+                        return inner.open(dataSpec.buildUpon().setHttpRequestHeaders(merged).build())
+                    }
+                }
+            }
             val executor = Executors.newFixedThreadPool(6)
 
             downloadManager = DownloadManager(
