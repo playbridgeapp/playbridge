@@ -24,6 +24,7 @@ private sealed class SettingsSection {
     object Appearance : SettingsSection()
     object Library : SettingsSection()
     object Debrid : SettingsSection()
+    object Proxy : SettingsSection()
     object Playback : SettingsSection()
     object TV : SettingsSection()
     object ImportExport : SettingsSection()
@@ -49,6 +50,7 @@ fun SettingsScreen(
             onAppearance = { section = SettingsSection.Appearance },
             onLibrary = { section = SettingsSection.Library },
             onDebrid = { section = SettingsSection.Debrid },
+            onProxy = { section = SettingsSection.Proxy },
             onPlayback = { section = SettingsSection.Playback },
             onTV = { section = SettingsSection.TV },
             onImportExport = { section = SettingsSection.ImportExport },
@@ -65,6 +67,9 @@ fun SettingsScreen(
             onAddonSettings = onAddonSettings
         )
         SettingsSection.Debrid -> DebridSettingsScreen(
+            onBack = { section = SettingsSection.Hub }
+        )
+        SettingsSection.Proxy -> MediaflowSettingsScreen(
             onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.Playback -> PlaybackSettingsScreen(
@@ -88,6 +93,7 @@ private fun SettingsHubContent(
     onAppearance: () -> Unit,
     onLibrary: () -> Unit,
     onDebrid: () -> Unit,
+    onProxy: () -> Unit,
     onPlayback: () -> Unit,
     onTV: () -> Unit,
     onImportExport: () -> Unit,
@@ -132,6 +138,13 @@ private fun SettingsHubContent(
                 title = "Debrid",
                 subtitle = "Real-Debrid, All-Debrid, Premiumize",
                 onClick = onDebrid
+            )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+            SettingsNavItem(
+                icon = Icons.Default.SwapHoriz,
+                title = "Proxy",
+                subtitle = "mediaflow-proxy for stream passthrough & transcoding",
+                onClick = onProxy
             )
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
             SettingsNavItem(

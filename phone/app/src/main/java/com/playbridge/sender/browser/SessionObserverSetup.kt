@@ -1,7 +1,12 @@
 package com.playbridge.sender.browser
 
+import android.app.AlertDialog
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.text.InputType
 import android.util.Log
+import android.widget.EditText
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -205,6 +210,7 @@ fun SessionObserverSetup(
         var originalNavDelegate: GeckoSession.NavigationDelegate? = null
         var originalContentDelegate: GeckoSession.ContentDelegate? = null
         var originalPermissionDelegate: GeckoSession.PermissionDelegate? = null
+        var originalPromptDelegate: GeckoSession.PromptDelegate? = null
         var geckoSessionInstance: GeckoSession? = null
 
         if (geckoEngineSession != null) {
@@ -405,7 +411,7 @@ fun SessionObserverSetup(
                         override fun onPageStart(session: GeckoSession, url: String) {
                             isLoading.value = true
                         }
-                        
+
                         override fun onPageStop(session: GeckoSession, success: Boolean) {
                             isLoading.value = false
                         }
@@ -430,9 +436,141 @@ fun SessionObserverSetup(
 
                             Log.d(TAG, "Security changed: isSecure=${securityInfo.isSecure}, host=${securityInfo.host}, issuer=$certIssuer")
                         }
-                        
+
                         override fun onProgressChange(session: GeckoSession, progress: Int) {
                             // Optional: update progress bar precision
+                        }
+                    }
+
+                    // PromptDelegate — required for HTML <select> dropdowns, alert(), confirm(), prompt().
+                    // Without this, GeckoView silently drops all prompts and dropdowns never open.
+                    originalPromptDelegate = gs.promptDelegate
+                    gs.promptDelegate = object : GeckoSession.PromptDelegate {
+
+                        /**
+                         * Flattens a Choice array, recursing into optgroup sub-items.
+                         * Separator entries (optgroup headers) are skipped — they have no
+                         * selectable value and would produce a wrong confirm() call.
+                         */
+                        private fun flattenChoices(
+                            choices: Array<GeckoSession.PromptDelegate.ChoicePrompt.Choice>
+                        ): List<GeckoSession.PromptDelegate.ChoicePrompt.Choice> {
+                            val flat = mutableListOf<GeckoSession.PromptDelegate.ChoicePrompt.Choice>()
+                            for (c in choices) {
+                                if (!c.separator) flat.add(c)
+                                c.items?.let { flat.addAll(flattenChoices(it)) }
+                            }
+                            return flat
+                        }
+
+                        override fun onChoicePrompt(
+                            session: GeckoSession,
+                            prompt: GeckoSession.PromptDelegate.ChoicePrompt
+                        ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse>? {
+                            val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                            val flat = flattenChoices(prompt.choices)
+                            val labels = flat.map { it.label ?: "" }.toTypedArray()
+
+                            Handler(Looper.getMainLooper()).post {
+                                val builder = AlertDialog.Builder(context)
+                                    .setTitle(prompt.title?.takeIf { it.isNotBlank() })
+                                    .setOnCancelListener { result.complete(prompt.dismiss()) }
+
+                                when (prompt.type) {
+                                    GeckoSession.PromptDelegate.ChoicePrompt.Type.SINGLE,
+                                    GeckoSession.PromptDelegate.ChoicePrompt.Type.MENU -> {
+                                        val preSelected = flat.indexOfFirst { it.selected }.coerceAtLeast(0)
+                                        builder.setSingleChoiceItems(labels, preSelected) { dialog, which ->
+                                            result.complete(prompt.confirm(flat[which]))
+                                            dialog.dismiss()
+                                        }
+                                    }
+                                    GeckoSession.PromptDelegate.ChoicePrompt.Type.MULTIPLE -> {
+                                        val checked = flat.map { it.selected }.toBooleanArray()
+                                        builder.setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                                            checked[which] = isChecked
+                                        }
+                                        builder.setPositiveButton(android.R.string.ok) { _, _ ->
+                                            val selected = flat.filterIndexed { i, _ -> checked[i] }.toTypedArray()
+                                            result.complete(prompt.confirm(selected))
+                                        }
+                                        builder.setNegativeButton(android.R.string.cancel) { _, _ ->
+                                            result.complete(prompt.dismiss())
+                                        }
+                                    }
+                                    else -> {
+                                        result.complete(prompt.dismiss())
+                                        return@post
+                                    }
+                                }
+                                builder.show()
+                            }
+                            return result
+                        }
+
+                        override fun onAlertPrompt(
+                            session: GeckoSession,
+                            prompt: GeckoSession.PromptDelegate.AlertPrompt
+                        ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
+                            val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                            Handler(Looper.getMainLooper()).post {
+                                AlertDialog.Builder(context)
+                                    .setTitle(prompt.title?.takeIf { it.isNotBlank() })
+                                    .setMessage(prompt.message)
+                                    .setPositiveButton(android.R.string.ok) { _, _ -> result.complete(prompt.dismiss()) }
+                                    .setOnCancelListener { result.complete(prompt.dismiss()) }
+                                    .show()
+                            }
+                            return result
+                        }
+
+                        override fun onButtonPrompt(
+                            session: GeckoSession,
+                            prompt: GeckoSession.PromptDelegate.ButtonPrompt
+                        ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
+                            val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                            Handler(Looper.getMainLooper()).post {
+                                AlertDialog.Builder(context)
+                                    .setTitle(prompt.title?.takeIf { it.isNotBlank() })
+                                    .setMessage(prompt.message)
+                                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                                        result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.POSITIVE))
+                                    }
+                                    .setNegativeButton(android.R.string.cancel) { _, _ ->
+                                        result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE))
+                                    }
+                                    .setOnCancelListener {
+                                        result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE))
+                                    }
+                                    .show()
+                            }
+                            return result
+                        }
+
+                        override fun onTextPrompt(
+                            session: GeckoSession,
+                            prompt: GeckoSession.PromptDelegate.TextPrompt
+                        ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
+                            val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                            Handler(Looper.getMainLooper()).post {
+                                val input = EditText(context).apply {
+                                    inputType = InputType.TYPE_CLASS_TEXT
+                                    setText(prompt.defaultValue ?: "")
+                                }
+                                AlertDialog.Builder(context)
+                                    .setTitle(prompt.title?.takeIf { it.isNotBlank() })
+                                    .setMessage(prompt.message)
+                                    .setView(input)
+                                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                                        result.complete(prompt.confirm(input.text.toString()))
+                                    }
+                                    .setNegativeButton(android.R.string.cancel) { _, _ ->
+                                        result.complete(prompt.dismiss())
+                                    }
+                                    .setOnCancelListener { result.complete(prompt.dismiss()) }
+                                    .show()
+                            }
+                            return result
                         }
                     }
                 }
@@ -448,6 +586,7 @@ fun SessionObserverSetup(
                 if (originalNavDelegate != null) gs.navigationDelegate = originalNavDelegate
                 if (originalContentDelegate != null) gs.contentDelegate = originalContentDelegate
                 if (originalPermissionDelegate != null) gs.permissionDelegate = originalPermissionDelegate
+                gs.promptDelegate = originalPromptDelegate
             }
         }
     }

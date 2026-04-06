@@ -139,7 +139,10 @@ fun CastSheet(
     browseUrl: String = "",
     onBrowseClick: ((String, Boolean) -> Unit)? = null,
     onOpenNewTab: ((String) -> Unit)? = null,
-    initialMode: String = "play"
+    initialMode: String = "play",
+    mediaflowProxyUrl: String = "",
+    mediaflowProxyPassword: String = "",
+    mediaflowAutoSelect: Boolean = true,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -197,6 +200,56 @@ fun CastSheet(
 
     // Browse-mode desktop/mobile toggle
     var browseDesktopMode by remember { mutableStateOf(false) }
+
+    // Proxy mode — only relevant in play mode, only shown when proxy is configured
+    val proxyAvailable = mediaflowProxyUrl.isNotBlank()
+    var proxyMode by remember { mutableStateOf(MediaflowProxy.Mode.OFF) }
+
+    // Auto-select proxy mode whenever the selected video changes (not on proxyMode changes,
+    // which would cause a feedback loop). Only fires when auto-select is enabled AND the
+    // proxy is configured. The user can still override the chip manually afterward.
+    LaunchedEffect(selectedVideo?.url) {
+        if (proxyAvailable && mediaflowAutoSelect && selectedVideo != null) {
+            val suggested = MediaflowProxy.autoSelect(selectedVideo!!)
+            if (suggested != MediaflowProxy.Mode.OFF) {
+                proxyMode = suggested
+            }
+        }
+    }
+
+    /** Rewrite [video] URL through mediaflow-proxy if a mode is selected. */
+    fun applyProxy(video: DetectedVideo): DetectedVideo {
+        if (proxyMode == MediaflowProxy.Mode.OFF || !proxyAvailable) return video
+
+        // Use the same filtered header set that BrowserActivity would send to the TV:
+        //   - strips browser-context headers (Sec-Fetch-*, Sec-CH-UA-*, etc.) that CDNs
+        //     reject when they arrive from a different origin (the proxy server)
+        //   - ensures a sane User-Agent is always present
+        val proxyHeaders = VideoDetector.mediaHeaders(video).also { headers ->
+            // Apply the same originUrl → Referer fallback that BrowserActivity uses.
+            // Without this, CDNs that require a Referer would reject the proxy request
+            // because this fallback normally runs after applyProxy() returns.
+            if (!video.originUrl.isNullOrEmpty() &&
+                headers.keys.none { it.equals("Referer", ignoreCase = true) }
+            ) {
+                headers["Referer"] = video.originUrl
+            }
+        }
+
+        val result = MediaflowProxy.rewrite(
+            mode = proxyMode,
+            proxyBase = mediaflowProxyUrl,
+            password = mediaflowProxyPassword,
+            sourceUrl = video.url,
+            headers = proxyHeaders,
+        )
+        // Headers are encoded into the proxy URL — clear them so the TV doesn't re-send them.
+        return video.copy(
+            url = result.url,
+            contentType = result.contentType ?: video.contentType,
+            headers = if (result.url != video.url) null else video.headers,
+        )
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -293,20 +346,20 @@ fun CastSheet(
                                     val playlist = selectedVideo!!.hlsPlaylist
 
                                     if (playlist != null && selectedQuality != null) {
-                                        // Generate filtered playlist
+                                        // Generate filtered playlist (data: URI — applyProxy skips these)
                                         val filteredContent = HlsParser.generateFilteredPlaylist(playlist, selectedQuality)
                                         val base64Content = android.util.Base64.encodeToString(filteredContent.toByteArray(), android.util.Base64.NO_WRAP)
                                         val dataUri = "data:application/x-mpegurl;base64,$base64Content"
 
-                                        onVideoClick(selectedVideo!!.copy(
+                                        onVideoClick(applyProxy(selectedVideo!!.copy(
                                             url = dataUri,
                                             contentType = "application/x-mpegurl"
-                                        ), selectedSubtitles.toList())
+                                        )), selectedSubtitles.toList())
                                     } else {
-                                        onVideoClick(selectedVideo!!.copy(url = specificUrl), selectedSubtitles.toList())
+                                        onVideoClick(applyProxy(selectedVideo!!.copy(url = specificUrl)), selectedSubtitles.toList())
                                     }
                                 } else {
-                                    onVideoClick(selectedVideo!!, selectedSubtitles.toList())
+                                    onVideoClick(applyProxy(selectedVideo!!), selectedSubtitles.toList())
                                 }
                             },
                             enabled = selectedVideo != null
@@ -379,6 +432,37 @@ fun CastSheet(
                             )
                         }
                     )
+                }
+            }
+
+            // Proxy chip row — only shown in play mode when a proxy URL is configured
+            if (sheetMode == "play" && proxyAvailable) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 2.dp)
+                ) {
+                    items(MediaflowProxy.Mode.entries) { mode ->
+                        FilterChip(
+                            selected = proxyMode == mode,
+                            onClick = { proxyMode = mode },
+                            label = {
+                                Text(
+                                    text = mode.label,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            },
+                            leadingIcon = if (mode != MediaflowProxy.Mode.OFF) {
+                                {
+                                    Icon(
+                                        Icons.Default.SwapHoriz,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(FilterChipDefaults.IconSize)
+                                    )
+                                }
+                            } else null
+                        )
+                    }
                 }
             }
 
@@ -797,7 +881,7 @@ fun CastSheet(
             onDismiss = { previewVideo = null },
             onSendToTv = {
                 previewVideo = null
-                onVideoClick(pv, selectedSubtitles.toList())
+                onVideoClick(applyProxy(pv), selectedSubtitles.toList())
             }
         )
     }

@@ -38,5 +38,7 @@ data class ExportedSettings(
     val addonUrls: List<String> = emptyList(),
     val tabs: List<ExportedTab>? = null,
     val bookmarks: List<ExportedBookmark>? = null,
-    val watchlist: List<ExportedWatchlist>? = null
+    val watchlist: List<ExportedWatchlist>? = null,
+    val mediaflowProxyUrl: String? = null,
+    val mediaflowProxyPassword: String? = null,
 )

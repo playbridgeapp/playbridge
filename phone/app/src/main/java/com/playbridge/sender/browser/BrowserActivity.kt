@@ -391,6 +391,12 @@ class BrowserActivity : ComponentActivity() {
             
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+            val browserSettings = remember { getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
+
+            // Mediaflow proxy config (read once; user must reopen cast sheet to pick up changes)
+            val mediaflowProxyUrl      by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_URL, "") ?: "") }
+            val mediaflowProxyPassword by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_PASSWORD, "") ?: "") }
+            val mediaflowAutoSelect    by remember { mutableStateOf(browserSettings.getBoolean(MediaflowProxy.PREFS_KEY_AUTO_SELECT, true)) }
 
             // Persist the active main screen so it survives app restarts and Settings navigation
             LaunchedEffect(currentScreen) {
@@ -2038,6 +2044,9 @@ class BrowserActivity : ComponentActivity() {
                         },
                         browseUrl = castSheetBrowseOverride ?: currentUrl,
                         initialMode = castSheetInitialMode,
+                        mediaflowProxyUrl = mediaflowProxyUrl,
+                        mediaflowProxyPassword = mediaflowProxyPassword,
+                        mediaflowAutoSelect = mediaflowAutoSelect,
                         onBrowseClick = { selectedMode, desktopMode ->
                             val effectiveUrl = castSheetBrowseOverride ?: currentUrl
                             val cmd = com.playbridge.protocol.createBrowserCommandJson(

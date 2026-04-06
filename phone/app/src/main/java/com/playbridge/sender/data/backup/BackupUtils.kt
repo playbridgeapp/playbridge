@@ -56,7 +56,9 @@ object BackupUtils {
             addonUrls = addons.map { it.manifestUrl },
             tabs = currentTabs,
             bookmarks = currentBookmarks,
-            watchlist = currentWatchlist
+            watchlist = currentWatchlist,
+            mediaflowProxyUrl = tmdbPrefs.getString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_URL, ""),
+            mediaflowProxyPassword = tmdbPrefs.getString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_PASSWORD, ""),
         )
 
         Json { prettyPrint = true; encodeDefaults = false }.encodeToString(exported)
@@ -82,6 +84,8 @@ object BackupUtils {
                 if (imported.omdbApiKey != null) putString("omdb_api_key", imported.omdbApiKey)
                 if (imported.debridProvider != null) putString(DebridRepository.KEY_DEBRID_PROVIDER, imported.debridProvider)
                 if (imported.debridApiKey != null) putString(DebridRepository.KEY_DEBRID_API_KEY, imported.debridApiKey)
+                if (imported.mediaflowProxyUrl != null) putString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_URL, imported.mediaflowProxyUrl)
+                if (imported.mediaflowProxyPassword != null) putString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_PASSWORD, imported.mediaflowProxyPassword)
                 apply()
             }
 
