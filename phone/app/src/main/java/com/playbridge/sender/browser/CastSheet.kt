@@ -405,6 +405,14 @@ fun CastSheet(
                     selectedValue = playerMode,
                     onSelect = onPlayerModeChange
                 )
+                if (sheetMode == "play" && proxyAvailable) {
+                    ChipDropdown(
+                        selectedLabel = proxyMode.label,
+                        options = MediaflowProxy.Mode.entries.map { it.name to it.label },
+                        selectedValue = proxyMode.name,
+                        onSelect = { value -> proxyMode = MediaflowProxy.Mode.valueOf(value) }
+                    )
+                }
                 if (sheetMode == "browse") {
                     FilterChip(
                         selected = browseDesktopMode,
@@ -432,37 +440,6 @@ fun CastSheet(
                             )
                         }
                     )
-                }
-            }
-
-            // Proxy chip row — only shown in play mode when a proxy URL is configured
-            if (sheetMode == "play" && proxyAvailable) {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 2.dp)
-                ) {
-                    items(MediaflowProxy.Mode.entries) { mode ->
-                        FilterChip(
-                            selected = proxyMode == mode,
-                            onClick = { proxyMode = mode },
-                            label = {
-                                Text(
-                                    text = mode.label,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            },
-                            leadingIcon = if (mode != MediaflowProxy.Mode.OFF) {
-                                {
-                                    Icon(
-                                        Icons.Default.SwapHoriz,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(FilterChipDefaults.IconSize)
-                                    )
-                                }
-                            } else null
-                        )
-                    }
                 }
             }
 
