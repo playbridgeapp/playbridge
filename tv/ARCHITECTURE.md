@@ -5,29 +5,32 @@
 ### Browser App
 ```
 com.playbridge.browser/
-├── logging/
-│   └── FileLogger.kt
 ├── AdBlocker.kt
 ├── BrowserActivity.kt
 ├── BrowserEngine.kt
 ├── GeckoViewEngine.kt
 ├── PlayBridgeBrowserApplication.kt
-└── SystemWebViewEngine.kt
+├── SystemWebViewEngine.kt
+└── logging
+    └── FileLogger.kt
 ```
 
 ### Player App
 ```
 com.playbridge.player/
-├── data/
+├── BootReceiver.kt
+├── MainActivity.kt
+├── PlayBridgeApplication.kt
+├── data
 │   └── HistoryStore.kt
-├── logging/
+├── logging
 │   └── FileLogger.kt
-├── model/
+├── model
 │   └── PairedDevice.kt
-├── pairing/
+├── pairing
 │   ├── PairingStore.kt
 │   └── QRGenerator.kt
-├── player/
+├── player
 │   ├── BufferSeekBar.kt
 │   ├── ColorMatrixEffect.kt
 │   ├── ContentSniffer.kt
@@ -50,23 +53,20 @@ com.playbridge.player/
 │   ├── VlcControlsManager.kt
 │   ├── VlcPlayerActivity.kt
 │   └── VlcTrackSelectionDialog.kt
-├── server/
+├── server
 │   ├── BluetoothServer.kt
 │   ├── OverlayWindowHelper.kt
 │   ├── ServerService.kt
 │   └── WebSocketServer.kt
-├── ui/
-│   ├── theme/
-│   │   ├── Color.kt
-│   │   ├── Theme.kt
-│   │   └── Type.kt
-│   ├── HomeScreen.kt
-│   ├── LibraryScreen.kt
-│   ├── PairingScreen.kt
-│   └── SettingsScreen.kt
-├── BootReceiver.kt
-├── MainActivity.kt
-└── PlayBridgeApplication.kt
+└── ui
+    ├── HomeScreen.kt
+    ├── LibraryScreen.kt
+    ├── PairingScreen.kt
+    ├── SettingsScreen.kt
+    └── theme
+        ├── Color.kt
+        ├── Theme.kt
+        └── Type.kt
 ```
 
 ## Key Components
