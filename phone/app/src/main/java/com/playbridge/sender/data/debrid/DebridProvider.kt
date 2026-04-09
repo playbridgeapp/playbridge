@@ -27,9 +27,11 @@ interface DebridProvider {
     suspend fun getTorrentInfo(id: String): DebridTorrentInfo
     
     /**
-     * Get a list of the user's recent torrents.
+     * Get a paginated list of the user's recent torrents.
+     * @param page 1-based page number. Providers that don't support pagination should return
+     *             their full list on page 1 and an empty list for any subsequent page.
      */
-    suspend fun getTorrents(): List<DebridTorrentInfo>
+    suspend fun getTorrents(page: Int = 1): List<DebridTorrentInfo>
 
     /**
      * Instruct the Debrid provider which files within the torrent to download/prepare.

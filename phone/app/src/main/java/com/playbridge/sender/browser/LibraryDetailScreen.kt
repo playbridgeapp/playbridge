@@ -342,6 +342,7 @@ fun TvShowDetailScreen(
     val tracked by viewModel.getTracked(tvId).collectAsState(initial = null)
 
     val episodeListState = rememberLazyListState()
+    var episodesAscending by remember { mutableStateOf(true) }
 
     LaunchedEffect(tvId) {
         isLoading = true
@@ -606,20 +607,51 @@ fun TvShowDetailScreen(
                     }
                 }
 
-                // Season Chips
+                // Season chips — left button scrolls the row (hidden when chips fit on screen),
+                // right button toggles episode sort order.
                 item {
                     val seasons = show.seasons.filter { it.seasonNumber > 0 }
-                    if (seasons.isNotEmpty()) {
+                    val chipScrollState = rememberScrollState()
+                    // True once layout has run and chips overflow the available width
+                    val isScrollable = chipScrollState.maxValue > 0
+                    // Flip when the row has been scrolled all the way to the end
+                    val isAtEnd = isScrollable && chipScrollState.value >= chipScrollState.maxValue
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Scroll helper — only visible when chips overflow; icon flips based on position
+                        if (isScrollable) {
+                            IconButton(onClick = {
+                                scope.launch {
+                                    if (isAtEnd) chipScrollState.animateScrollTo(0)
+                                    else chipScrollState.animateScrollTo(chipScrollState.maxValue)
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = if (isAtEnd) Icons.Default.ChevronLeft else Icons.Default.ChevronRight,
+                                    contentDescription = if (isAtEnd) "Scroll to start" else "Scroll to end"
+                                )
+                            }
+                        }
+
+                        // Scrollable season chips
                         Row(
                             modifier = Modifier
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 24.dp, vertical = 16.dp),
+                                .weight(1f)
+                                .horizontalScroll(chipScrollState)
+                                .padding(vertical = 8.dp)
+                                .padding(start = if (isScrollable) 0.dp else 24.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             seasons.forEach { season ->
+                                val isSelected = selectedSeason == season.seasonNumber
                                 ElevatedFilterChip(
-                                    selected = selectedSeason == season.seasonNumber,
+                                    selected = isSelected,
                                     onClick = {
+                                        if (isSelected) return@ElevatedFilterChip
                                         selectedSeason = season.seasonNumber
                                         scope.launch {
                                             isSeasonLoading = true
@@ -630,6 +662,18 @@ fun TvShowDetailScreen(
                                     label = { Text("S${season.seasonNumber}") }
                                 )
                             }
+                        }
+
+                        // Sort toggle — ascending / descending episode order
+                        IconButton(
+                            onClick = { episodesAscending = !episodesAscending },
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (episodesAscending) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                                contentDescription = if (episodesAscending) "Sort descending" else "Sort ascending",
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
                         }
                     }
                 }
@@ -676,7 +720,8 @@ fun TvShowDetailScreen(
                 }
 
                 // Episodes list
-                val episodes = seasonDetails?.episodes ?: emptyList()
+                val episodes = (seasonDetails?.episodes ?: emptyList())
+                    .let { if (episodesAscending) it else it.reversed() }
                 val isActivePlaylistSeason = highlightSeason != null &&
                         selectedSeason == highlightSeason &&
                         playlistState != null

@@ -138,8 +138,8 @@ class RealDebridClient(
         )
     }
 
-    override suspend fun getTorrents(): List<DebridTorrentInfo> = withContext(Dispatchers.IO) {
-        val request = requestBuilder("$baseUrl/torrents").get().build()
+    override suspend fun getTorrents(page: Int): List<DebridTorrentInfo> = withContext(Dispatchers.IO) {
+        val request = requestBuilder("$baseUrl/torrents?page=$page&limit=50").get().build()
         val response = client.newCall(request).execute()
         val body = response.body?.string() ?: throw DebridException("Empty response")
         

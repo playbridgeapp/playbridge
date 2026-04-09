@@ -142,7 +142,9 @@ class AllDebridClient(
         )
     }
 
-    override suspend fun getTorrents(): List<DebridTorrentInfo> = withContext(Dispatchers.IO) {
+    override suspend fun getTorrents(page: Int): List<DebridTorrentInfo> = withContext(Dispatchers.IO) {
+        // AllDebrid returns all magnets in a single call — no server-side pagination.
+        if (page > 1) return@withContext emptyList()
         val request = Request.Builder()
             .url(buildUrl("/magnet/status"))
             .get()

@@ -127,7 +127,9 @@ class PremiumizeClient(
         )
     }
 
-    override suspend fun getTorrents(): List<DebridTorrentInfo> = withContext(Dispatchers.IO) {
+    override suspend fun getTorrents(page: Int): List<DebridTorrentInfo> = withContext(Dispatchers.IO) {
+        // Premiumize returns all transfers in a single call — no server-side pagination.
+        if (page > 1) return@withContext emptyList()
         val request = requestBuilder("$baseUrl/transfer/list").get().build()
         val response = client.newCall(request).execute()
         val body = response.body?.string() ?: throw DebridException("Empty response")
