@@ -1,5 +1,5 @@
 # PlayBridge — AI Context
-_Last verified: 2026-04-05_
+_Last verified: 2026-04-11_
 
 ## Ownership
 PlayBridge is a system to cast web video from an Android phone (sender) to an Android TV (receiver). This root directory manages the mono-repo configuration and shared documentation. It does NOT own any platform-specific application logic.
@@ -12,22 +12,22 @@ PlayBridge is a system to cast web video from an Android phone (sender) to an An
 | Module | Path | Role |
 |---|---|---|
 | Phone | `phone/` | Android sender app with GeckoView browser |
-| TV | `tv/` | Android TV receiver app with MPV player |
+| TV | `tv/` | Android TV receiver app with ExoPlayer/MPV player and browser |
 | Protocol | `protocol/` | Shared data classes for WebSocket messages |
 | Extension | `extension/` | Desktop web extension (Firefox) |
 
 ## Build Commands
-- `./gradlew app:assembleDebug` (run in `phone/` or `tv/`)
-- `./gradlew app:assembleRelease` (run in `phone/` or `tv/`)
-- `./gradlew build` (run in `protocol/`)
+- `cd phone && ./gradlew app:assembleDebug`
+- `cd tv/player && ./gradlew app:assembleDebug`
+- `cd protocol && ./gradlew build`
 
 ## Cross-cutting Gotchas
-WARNING: **Protocol ripple:** Any change to `protocol/src/main/java/com/playbridge/protocol/Message.kt` must be reflected in BOTH `tv/app/src/main/java/com/playbridge/receiver/server/ServerService.kt` AND `phone/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`, and potentially `extension/src/background.js`.
+WARNING: **Protocol ripple:** Any change to `protocol/src/main/java/com/playbridge/protocol/Message.kt` must be reflected in BOTH `tv/player/app/src/main/java/com/playbridge/player/server/ServerService.kt` AND `phone/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`, and potentially `extension/src/background.js`.
 WARNING: **GeckoView version must stay in sync:** Phone and TV both depend on GeckoView. If the version is bumped in one module's `gradle/libs.versions.toml`, it must be bumped in the other or runtime behavior diverges.
 
 ## Current State
-_As of 2026-04-03:_
+_As of 2026-04-11:_
 - Working: Multi-module Gradle build, protocol sharing, phone/tv apps compiling
 - Broken/degraded: nothing critical
-- In progress: Web extension integration
-- Blockers: TV App Play Store compliance issues (cleartext traffic config, missing Privacy Policy, Data Safety)
+- In progress: Standalone Desktop Web Extension integration, `pending_patches/add_subtitle_support.patch` integration
+- Blockers: TV App Play Store compliance issues (cleartext traffic config globally enabled, missing Privacy Policy, Data Safety)
