@@ -118,6 +118,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 ## Open-Source Preparation Checklist
 
 ### ✅ Already Good
+- [x] Fix SSL bypass for Play Store (scope to private IPs)
 - **Unsafe SSL in ContentSniffer (TV App)**
 - **Dangerous Permissions**: `CAMERA` and `RECORD_AUDIO` were successfully removed from TV manifest.
 - **Hardcoded Values**
@@ -366,7 +367,6 @@ PlayBridge/
 
 | Priority | Task | Effort |
 |----------|------|--------|
-| 🔴 High | Fix SSL bypass for Play Store (scope to private IPs) | 1-2 hours |
 | 🔴 High | Fix network_security_config.xml (remove global cleartext) | 30 min |
 | 🟡 Medium | Create & host Privacy Policy | 2-4 hours |
 | 🟡 Medium | Fill out Play Console (data safety, content rating, listing) | 2-3 hours |
