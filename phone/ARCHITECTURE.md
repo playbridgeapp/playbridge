@@ -3,7 +3,8 @@
 ## Package Structure
 ```
 com.playbridge.sender/
-├── browser/
+├── PlayBridgeApplication.kt
+├── browser
 │   ├── AddonInstallDialog.kt
 │   ├── AddonSettingsScreen.kt
 │   ├── AppearanceSettingsScreen.kt
@@ -17,6 +18,7 @@ com.playbridge.sender/
 │   ├── DebridLibraryScreen.kt
 │   ├── DebridSettingsScreen.kt
 │   ├── DownloadConfirmDialog.kt
+│   ├── DownloadHeadersStore.kt
 │   ├── DownloadManagerSingleton.kt
 │   ├── DownloadUtils.kt
 │   ├── DownloadsScreen.kt
@@ -25,6 +27,9 @@ com.playbridge.sender/
 │   ├── ExtensionsScreen.kt
 │   ├── FindOnPageBar.kt
 │   ├── HistoryScreen.kt
+│   ├── HlsExportRegistry.kt
+│   ├── HlsExportService.kt
+│   ├── HlsExporter.kt
 │   ├── HlsParser.kt
 │   ├── HomeScreen.kt
 │   ├── ImportExportSettingsScreen.kt
@@ -36,6 +41,9 @@ com.playbridge.sender/
 │   ├── LinkContextMenu.kt
 │   ├── MagnetParsingSheet.kt
 │   ├── MediaDownloadService.kt
+│   ├── MediaflowProxy.kt
+│   ├── MediaflowSettingsScreen.kt
+│   ├── MyListTab.kt
 │   ├── PlaybackSettingsScreen.kt
 │   ├── PopupBlockerSettingsScreen.kt
 │   ├── RemoteControlScreen.kt
@@ -47,27 +55,28 @@ com.playbridge.sender/
 │   ├── TVSettingsScreen.kt
 │   ├── TabManager.kt
 │   ├── TabsScreen.kt
+│   ├── TrackingSheet.kt
 │   ├── VideoDetector.kt
 │   └── VideoPreviewSheet.kt
-├── connection/
+├── connection
 │   ├── BluetoothClient.kt
 │   ├── ConnectionStore.kt
 │   ├── ConnectionViewModel.kt
 │   ├── NsdHelper.kt
 │   └── WebSocketClient.kt
-├── data/
-│   ├── backup/
+├── data
+│   ├── backup
 │   │   ├── BackupManager.kt
 │   │   ├── BackupTrigger.kt
 │   │   └── BackupUtils.kt
-│   ├── debrid/
+│   ├── debrid
 │   │   ├── AllDebridClient.kt
 │   │   ├── DebridModels.kt
 │   │   ├── DebridProvider.kt
 │   │   ├── DebridRepository.kt
 │   │   ├── PremiumizeClient.kt
 │   │   └── RealDebridClient.kt
-│   ├── history/
+│   ├── history
 │   │   ├── BookmarkDao.kt
 │   │   ├── BookmarkEntity.kt
 │   │   ├── CommandHistoryDao.kt
@@ -78,7 +87,7 @@ com.playbridge.sender/
 │   │   ├── HistoryEntity.kt
 │   │   ├── TabDao.kt
 │   │   └── TabEntity.kt
-│   └── library/
+│   └── library
 │       ├── AddonDao.kt
 │       ├── AddonModels.kt
 │       ├── AddonRepository.kt
@@ -88,17 +97,18 @@ com.playbridge.sender/
 │       ├── TmdbModels.kt
 │       ├── TmdbRepository.kt
 │       ├── WatchlistDao.kt
-│       └── WatchlistEntity.kt
-├── model/
+│       ├── WatchlistEntity.kt
+│       └── WatchlistStatus.kt
+├── model
 │   ├── Message.kt
 │   └── TvDevice.kt
-└── ui/
-    ├── theme/
-    │   ├── Color.kt
-    │   ├── Theme.kt
-    │   └── Type.kt
+└── ui
     ├── ConnectionScreen.kt
-    └── HomeScreen.kt
+    ├── HomeScreen.kt
+    └── theme
+        ├── Color.kt
+        ├── Theme.kt
+        └── Type.kt
 ```
 
 ## Key Components
