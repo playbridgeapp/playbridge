@@ -23,10 +23,65 @@ data class InstalledAddonEntity(
     val baseUrl: String,       // e.g. https://torrentio.strem.fun/providers=yts|sort=qualitysize|debridoptions=nodownloadlinks|realdebrid=XXXX
     val version: String = "",
     val types: String = "",    // Comma-separated: "movie,series"
+    val resources: String = "",      // JSON array of resource names, e.g. ["stream","catalog","meta","subtitles"]
+    val catalogsJson: String = "",    // JSON array of StremioResource objects from manifest.catalogs
     val installedAt: Long = System.currentTimeMillis()
 )
 
+fun InstalledAddonEntity.supportsResource(name: String): Boolean {
+    return try {
+        val resourcesList = kotlinx.serialization.json.Json.decodeFromString<List<String>>(resources)
+        resourcesList.contains(name)
+    } catch (e: Exception) {
+        false
+    }
+}
+
+/**
+ * Parse the catalog entries stored in [catalogsJson].
+ * Each entry carries a URL path [id] (e.g. "top"), a single content [type]
+ * (e.g. "movie"), and a human-readable [name].
+ */
+fun InstalledAddonEntity.parsedCatalogEntries(): List<StremioCatalogEntry> {
+    return try {
+        kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+        }.decodeFromString<List<StremioCatalogEntry>>(catalogsJson)
+    } catch (e: Exception) {
+        emptyList()
+    }
+}
+
 // ==================== Stremio Addon Manifest ====================
+
+/**
+ * One extra parameter declared by an addon catalog (e.g. "search", "skip", "genre").
+ * [isRequired] = true means the catalog only returns results when this extra is provided.
+ */
+@Serializable
+data class StremioExtra(
+    val name: String = "",
+    val isRequired: Boolean = false,
+    val options: List<String> = emptyList()
+)
+
+/**
+ * A single catalog entry from an addon manifest.
+ * Uses Stremio's actual field names: [id] is the URL path segment (e.g. "top"),
+ * [type] is the content type (e.g. "movie"), and [name] is the human-readable label.
+ * [extra] declares optional/required parameters like "search" and "skip".
+ * Note: distinct from [StremioResource] which models the "resources" array (can be string or object).
+ */
+@Serializable
+data class StremioCatalogEntry(
+    val id: String = "",
+    val type: String = "",
+    val name: String = "",
+    val extra: List<StremioExtra> = emptyList()
+) {
+    /** True if this catalog accepts a search query via the Stremio extra protocol. */
+    val supportsSearch: Boolean get() = extra.any { it.name == "search" }
+}
 
 @Serializable
 data class StremioManifest(
@@ -36,7 +91,7 @@ data class StremioManifest(
     val version: String = "",
     val resources: List<StremioResource> = emptyList(),
     val types: List<String> = emptyList(),
-    val catalogs: List<StremioResource> = emptyList()
+    val catalogs: List<StremioCatalogEntry> = emptyList()
 )
 
 @Serializable(with = StremioResourceSerializer::class)
@@ -185,3 +240,63 @@ data class StemioBehaviorHints(
         return size * 8.0 / (runtime * 60 * 1_000_000.0)
     }
 }
+
+// ==================== Stremio Catalog & Meta DTOs ====================
+
+@Serializable
+data class StremioMetaPreview(
+    val id: String = "",
+    val type: String = "",
+    val name: String = "",
+    val poster: String? = null,
+    val description: String? = null,
+    val year: String? = null,
+    val imdbRating: String? = null,
+    val genres: List<String> = emptyList()
+)
+
+@Serializable
+data class StremioMetaDetail(
+    val id: String = "",
+    val type: String = "",
+    val name: String = "",
+    val poster: String? = null,
+    val background: String? = null,
+    val description: String? = null,
+    val runtime: String? = null,
+    val year: String? = null,
+    val imdbRating: String? = null,
+    val cast: List<String> = emptyList(),
+    val genres: List<String> = emptyList(),
+    val videos: List<StremioVideo> = emptyList()
+)
+
+@Serializable
+data class StremioVideo(
+    val id: String = "",       // e.g. "tt1234567:1:3"
+    val title: String = "",
+    val season: Int? = null,
+    val episode: Int? = null,
+    val released: String? = null,
+    val thumbnail: String? = null,
+    val overview: String? = null
+)
+
+@Serializable data class StremioMetaResponse(val meta: StremioMetaDetail? = null)
+@Serializable data class StremioMetasResponse(val metas: List<StremioMetaPreview>? = null)
+
+// ==================== Home Tab Catalog Row ====================
+
+/**
+ * One horizontal row in the Home tab, representing a single addon catalog page.
+ * [addonName] drives the source chip rendered beside the row title.
+ */
+data class AddonCatalogRow(
+    val catalogName: String,     // entry.name — human-readable, e.g. "Cinemeta - Top movies"
+    val addonName: String,       // addon.name — shown as the source chip, e.g. "Cinemeta"
+    val type: String,            // "movie" / "series" etc.
+    val catalogId: String,       // URL path segment, e.g. "top"
+    val addonBaseUrl: String,    // for eviction / identification
+    val items: List<StremioMetaPreview> = emptyList(),
+    val isLoading: Boolean = true
+)

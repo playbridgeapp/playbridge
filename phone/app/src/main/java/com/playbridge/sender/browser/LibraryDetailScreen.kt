@@ -63,7 +63,7 @@ fun MovieDetailScreen(
     val context = LocalContext.current
     val tmdb = remember { TmdbRepository(context) }
     val omdb = remember { OmdbRepository(context) }
-    val subtitleService = remember { StremioSubtitleService() }
+    val subtitleService = remember { StremioSubtitleService(addonRepository) }
     val scope = rememberCoroutineScope()
 
     var details by remember { mutableStateOf<TmdbMovieDetails?>(null) }
@@ -359,7 +359,7 @@ fun TvShowDetailScreen(
     val context = LocalContext.current
     val tmdb = remember { TmdbRepository(context) }
     val omdb = remember { OmdbRepository(context) }
-    val subtitleService = remember { StremioSubtitleService() }
+    val subtitleService = remember { StremioSubtitleService(addonRepository) }
     val scope = rememberCoroutineScope()
     
     var details by remember { mutableStateOf<TmdbTvDetails?>(null) }

@@ -3,6 +3,11 @@ package com.playbridge.sender.browser
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.playbridge.sender.data.library.AddonCatalogRow
+import com.playbridge.sender.data.library.AddonRepository
+import com.playbridge.sender.data.library.InstalledAddonEntity
+import com.playbridge.sender.data.library.StremioMetaPreview
+import com.playbridge.sender.data.library.parsedCatalogEntries
 import com.playbridge.sender.data.library.TmdbMovie
 import com.playbridge.sender.data.library.TmdbMultiSearchResult
 import com.playbridge.sender.data.library.TmdbRepository
@@ -15,18 +20,20 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.library.WatchlistEntity
 import com.playbridge.sender.data.library.WatchlistStatus
-import coil.Coil
-import coil.request.ImageRequest
-
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdb = TmdbRepository(application)
     private val watchlistDao = DatabaseProvider.getDatabase(application).watchlistDao()
+    private val addonRepository = AddonRepository(
+        addonDao = DatabaseProvider.getDatabase(application).addonDao(),
+        cacheDir = application.cacheDir
+    )
 
     /**
      * Serialises all watchlist write operations so that rapid taps cannot
@@ -39,10 +46,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     // UI Scroll States
     val mainListState = LazyListState()
-    val trendingDayListState = LazyListState()
-    val popularMoviesListState = LazyListState()
-    val popularTvShowsListState = LazyListState()
-    val newReleasesListState = LazyListState()
     val discoveredMoviesListState = LazyListState()
     val discoveredTvShowsListState = LazyListState()
     val discoverGridState = LazyGridState()
@@ -50,58 +53,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _isConfigured = MutableStateFlow(tmdb.isConfigured())
     val isConfigured: StateFlow<Boolean> = _isConfigured.asStateFlow()
-
-    private val _isLoading = MutableStateFlow(true)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    // Popular Movies
-    private val _popularMovies = MutableStateFlow<List<TmdbMovie>>(emptyList())
-    val popularMovies: StateFlow<List<TmdbMovie>> = _popularMovies.asStateFlow()
-    private var popularMoviesPage = 1
-    private val _isLoadingMorePopularMovies = MutableStateFlow(false)
-    val isLoadingMorePopularMovies: StateFlow<Boolean> = _isLoadingMorePopularMovies.asStateFlow()
-    private val _hasMorePopularMovies = MutableStateFlow(true)
-    val hasMorePopularMovies: StateFlow<Boolean> = _hasMorePopularMovies.asStateFlow()
-
-    // Popular TV Shows
-    private val _popularTvShows = MutableStateFlow<List<TmdbTvShow>>(emptyList())
-    val popularTvShows: StateFlow<List<TmdbTvShow>> = _popularTvShows.asStateFlow()
-    private var popularTvShowsPage = 1
-    private val _isLoadingMorePopularTvShows = MutableStateFlow(false)
-    val isLoadingMorePopularTvShows: StateFlow<Boolean> = _isLoadingMorePopularTvShows.asStateFlow()
-    private val _hasMorePopularTvShows = MutableStateFlow(true)
-    val hasMorePopularTvShows: StateFlow<Boolean> = _hasMorePopularTvShows.asStateFlow()
-
-    // Trending Week (Carousel)
-    private val _trendingWeek = MutableStateFlow<List<TmdbMultiSearchResult>>(emptyList())
-    val trendingWeek: StateFlow<List<TmdbMultiSearchResult>> = _trendingWeek.asStateFlow()
-    private var trendingWeekPage = 1
-
-    // Trending Day
-    private val _trendingDay = MutableStateFlow<List<TmdbMultiSearchResult>>(emptyList())
-    val trendingDay: StateFlow<List<TmdbMultiSearchResult>> = _trendingDay.asStateFlow()
-    private var trendingDayPage = 1
-    private val _isLoadingMoreTrendingDay = MutableStateFlow(false)
-    val isLoadingMoreTrendingDay: StateFlow<Boolean> = _isLoadingMoreTrendingDay.asStateFlow()
-    private val _hasMoreTrendingDay = MutableStateFlow(true)
-    val hasMoreTrendingDay: StateFlow<Boolean> = _hasMoreTrendingDay.asStateFlow()
-
-    // New & Upcoming (Merged)
-    private val _newReleases = MutableStateFlow<List<TmdbMovie>>(emptyList())
-    val newReleases: StateFlow<List<TmdbMovie>> = _newReleases.asStateFlow()
-    private val _nowPlayingMovieIds = MutableStateFlow<Set<Int>>(emptySet())
-    val nowPlayingMovieIds: StateFlow<Set<Int>> = _nowPlayingMovieIds.asStateFlow()
-
-    private var nowPlayingMoviesPage = 1
-    private var upcomingMoviesPage = 1
-    private val _isLoadingMoreNewReleases = MutableStateFlow(false)
-    val isLoadingMoreNewReleases: StateFlow<Boolean> = _isLoadingMoreNewReleases.asStateFlow()
-    private val _hasMoreNewReleases = MutableStateFlow(true)
-    val hasMoreNewReleases: StateFlow<Boolean> = _hasMoreNewReleases.asStateFlow()
-
-    // Internal raw lists used for the merge
-    private val _nowPlayingRaw = MutableStateFlow<List<TmdbMovie>>(emptyList())
-    private val _upcomingRaw = MutableStateFlow<List<TmdbMovie>>(emptyList())
 
     // Search state
     private val _searchQuery = MutableStateFlow("")
@@ -115,6 +66,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _isSearchLoading = MutableStateFlow(false)
     val isSearchLoading: StateFlow<Boolean> = _isSearchLoading.asStateFlow()
+
+    // Addon search results (parallel to TMDB search)
+    private val _addonSearchResults = MutableStateFlow<List<StremioMetaPreview>>(emptyList())
+    val addonSearchResults: StateFlow<List<StremioMetaPreview>> = _addonSearchResults.asStateFlow()
 
     // Navigation state
     private val _selectedTab = MutableStateFlow(0)
@@ -158,6 +113,62 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _isDiscoveryLoading = MutableStateFlow(false)
     val isDiscoveryLoading: StateFlow<Boolean> = _isDiscoveryLoading.asStateFlow()
+
+    // ---------------------------------------------------------------------------
+    // Addon Catalog rows (Home tab — one horizontal row per catalog, loaded in parallel)
+    // ---------------------------------------------------------------------------
+
+    private val _catalogRows = MutableStateFlow<List<AddonCatalogRow>>(emptyList())
+    val catalogRows: StateFlow<List<AddonCatalogRow>> = _catalogRows.asStateFlow()
+
+    fun loadCatalogRows() {
+        viewModelScope.launch {
+            val addons = addonRepository.getInstalledAddons()
+            if (addons.isEmpty()) return@launch
+
+            // Build skeleton rows so the UI shows shimmer/loading state immediately
+            val skeletons = addons.flatMap { addon ->
+                addon.parsedCatalogEntries()
+                    .filter { it.type.isNotBlank() && it.id.isNotBlank() }
+                    .map { entry ->
+                        AddonCatalogRow(
+                            catalogName = entry.name.ifBlank { entry.id },
+                            addonName = addon.name,
+                            type = entry.type,
+                            catalogId = entry.id,
+                            addonBaseUrl = addon.baseUrl,
+                            isLoading = true
+                        )
+                    }
+            }
+            _catalogRows.value = skeletons
+
+            // Fetch first page of each catalog in parallel, emit each result as it lands
+            val deferreds = addons.flatMap { addon ->
+                addon.parsedCatalogEntries()
+                    .filter { it.type.isNotBlank() && it.id.isNotBlank() }
+                    .map { entry ->
+                        async {
+                            val items = runCatching {
+                                addonRepository.fetchCatalog(addon, entry.type, entry.id, skip = 0)
+                            }.getOrDefault(emptyList())
+                            AddonCatalogRow(
+                                catalogName = entry.name.ifBlank { entry.id },
+                                addonName = addon.name,
+                                type = entry.type,
+                                catalogId = entry.id,
+                                addonBaseUrl = addon.baseUrl,
+                                items = items,
+                                isLoading = false
+                            )
+                        }
+                    }
+            }
+            // Replace skeleton rows with filled rows as each deferred completes
+            val filled = deferreds.map { it.await() }
+            _catalogRows.value = filled.filter { it.items.isNotEmpty() }
+        }
+    }
 
     // ---------------------------------------------------------------------------
     // New-episode detection
@@ -223,159 +234,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse(dateStr)?.time
     } catch (_: Exception) { null }
 
+    /**
+     * Re-checks whether a TMDB API key is configured and fires the initial
+     * Discovery query (Browse tab). The Home tab is addon-driven and loads
+     * independently via [loadCatalogRows].
+     */
     fun checkConfigAndLoadInitialData() {
-        val configured = tmdb.isConfigured()
-        _isConfigured.value = configured
-
-        if (configured && _popularMovies.value.isEmpty() && _trendingDay.value.isEmpty()) {
-            loadInitialData()
-        } else if (!configured) {
-            _isLoading.value = false
-        }
-    }
-
-    private fun loadInitialData() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            try {
-                val movies = tmdb.getPopularMovies(page = 1)
-                val tvShows = tmdb.getPopularTvShows(page = 1)
-                val trendDay = tmdb.getTrending(page = 1, timeWindow = "day")
-                val trendWeek = tmdb.getTrending(page = 1, timeWindow = "week")
-                val upcoming = tmdb.getUpcomingMovies(page = 1)
-                val nowPlaying = tmdb.getNowPlayingMovies(page = 1)
-
-                _popularMovies.value = movies.results
-                popularMoviesPage = 1
-
-                _popularTvShows.value = tvShows.results
-                popularTvShowsPage = 1
-
-                _trendingDay.value = trendDay.results.filter { it.isMovie || it.isTvShow }
-                trendingDayPage = 1
-
-                _trendingWeek.value = trendWeek.results.filter { it.isMovie || it.isTvShow }
-                trendingWeekPage = 1
-
-                _nowPlayingRaw.value = nowPlaying.results
-                _upcomingRaw.value = upcoming.results
-                _nowPlayingMovieIds.value = nowPlaying.results.map { it.id }.toSet()
-                _newReleases.value = (nowPlaying.results + upcoming.results).distinctBy { it.id }
-
-                nowPlayingMoviesPage = 1
-                upcomingMoviesPage = 1
-                _hasMoreNewReleases.value = nowPlaying.results.isNotEmpty() || upcoming.results.isNotEmpty()
-
-                // Prefetch the first page of poster images so they're in cache before
-                // the user scrolls — trending week first (carousel), then popular.
-                val posterUrls = buildList {
-                    addAll(trendWeek.results.mapNotNull { it.posterUrl })
-                    addAll(movies.results.mapNotNull { it.posterUrl })
-                    addAll(tvShows.results.mapNotNull { it.posterUrl })
-                    addAll(trendDay.results.mapNotNull { it.posterUrl })
-                }.distinct()
-                prefetchPosters(posterUrls)
-            } catch (e: Exception) {
-                // Handle error if needed
-            } finally {
-                _isLoading.value = false
-                triggerDiscovery()
-            }
-        }
-    }
-
-    fun loadMorePopularMovies() {
-        if (_isLoadingMorePopularMovies.value || !_hasMorePopularMovies.value) return
-
-        viewModelScope.launch {
-            _isLoadingMorePopularMovies.value = true
-            try {
-                val nextPage = popularMoviesPage + 1
-                val newMovies = tmdb.getPopularMovies(page = nextPage)
-                if (newMovies.results.isNotEmpty()) {
-                    _popularMovies.value = _popularMovies.value + newMovies.results
-                    popularMoviesPage = nextPage
-                } else {
-                    _hasMorePopularMovies.value = false
-                }
-            } finally {
-                _isLoadingMorePopularMovies.value = false
-            }
-        }
-    }
-
-    fun loadMorePopularTvShows() {
-        if (_isLoadingMorePopularTvShows.value || !_hasMorePopularTvShows.value) return
-
-        viewModelScope.launch {
-            _isLoadingMorePopularTvShows.value = true
-            try {
-                val nextPage = popularTvShowsPage + 1
-                val newTvShows = tmdb.getPopularTvShows(page = nextPage)
-                if (newTvShows.results.isNotEmpty()) {
-                    _popularTvShows.value = _popularTvShows.value + newTvShows.results
-                    popularTvShowsPage = nextPage
-                } else {
-                    _hasMorePopularTvShows.value = false
-                }
-            } finally {
-                _isLoadingMorePopularTvShows.value = false
-            }
-        }
-    }
-
-    fun loadMoreTrendingDay() {
-        if (_isLoadingMoreTrendingDay.value || !_hasMoreTrendingDay.value) return
-
-        viewModelScope.launch {
-            _isLoadingMoreTrendingDay.value = true
-            try {
-                val nextPage = trendingDayPage + 1
-                val newTrending = tmdb.getTrending(page = nextPage, timeWindow = "day")
-                if (newTrending.results.isNotEmpty()) {
-                    _trendingDay.value = _trendingDay.value + newTrending.results.filter { it.isMovie || it.isTvShow }
-                    trendingDayPage = nextPage
-                } else {
-                    _hasMoreTrendingDay.value = false
-                }
-            } finally {
-                _isLoadingMoreTrendingDay.value = false
-            }
-        }
-    }
-
-    fun loadMoreNewReleases() {
-        if (_isLoadingMoreNewReleases.value || !_hasMoreNewReleases.value) return
-
-        viewModelScope.launch {
-            _isLoadingMoreNewReleases.value = true
-            try {
-                // To keep it simple, we fetch both next pages and re-merge
-                val nextNowPlayingPage = nowPlayingMoviesPage + 1
-                val nextUpcomingPage = upcomingMoviesPage + 1
-                
-                val newNowPlaying = tmdb.getNowPlayingMovies(page = nextNowPlayingPage)
-                val newUpcoming = tmdb.getUpcomingMovies(page = nextUpcomingPage)
-                
-                if (newNowPlaying.results.isNotEmpty() || newUpcoming.results.isNotEmpty()) {
-                    _nowPlayingRaw.value = _nowPlayingRaw.value + newNowPlaying.results
-                    _upcomingRaw.value = _upcomingRaw.value + newUpcoming.results
-                    
-                    // Update the label set
-                    _nowPlayingMovieIds.value = _nowPlayingMovieIds.value + newNowPlaying.results.map { it.id }
-                    
-                    // Re-merge
-                    _newReleases.value = (_nowPlayingRaw.value + _upcomingRaw.value).distinctBy { it.id }
-                    
-                    nowPlayingMoviesPage = nextNowPlayingPage
-                    upcomingMoviesPage = nextUpcomingPage
-                } else {
-                    _hasMoreNewReleases.value = false
-                }
-            } finally {
-                _isLoadingMoreNewReleases.value = false
-            }
-        }
+        _isConfigured.value = tmdb.isConfigured()
+        if (_isConfigured.value) triggerDiscovery()
     }
 
     // Search
@@ -388,6 +254,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         if (!searching) {
             _searchQuery.value = ""
             _searchResults.value = emptyList()
+            _addonSearchResults.value = emptyList()
         }
     }
 
@@ -397,9 +264,19 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             _isSearchLoading.value = true
+            _addonSearchResults.value = emptyList()
             try {
-                val results = tmdb.searchMulti(query)
-                _searchResults.value = results.results.filter { it.isMovie || it.isTvShow }
+                // Fire TMDB and addon catalog searches concurrently
+                val tmdbDeferred = async {
+                    runCatching { tmdb.searchMulti(query) }.getOrNull()
+                }
+                val addonDeferred = async {
+                    runCatching { addonRepository.searchAllCatalogs(query) }.getOrNull()
+                }
+                _searchResults.value = tmdbDeferred.await()?.results
+                    ?.filter { it.isMovie || it.isTvShow }
+                    ?: emptyList()
+                _addonSearchResults.value = addonDeferred.await() ?: emptyList()
             } finally {
                 _isSearchLoading.value = false
             }
@@ -526,21 +403,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /**
-     * Fires-and-forgets Coil enqueue requests for a list of poster URLs so they land
-     * in the disk/memory cache before the user scrolls to them.
-     * Takes the first 60 distinct URLs to avoid hammering the network.
-     */
-    private fun prefetchPosters(urls: List<String>) {
-        val context = getApplication<android.app.Application>()
-        val imageLoader = Coil.imageLoader(context)
-        urls.take(60).forEach { url ->
-            imageLoader.enqueue(
-                ImageRequest.Builder(context).data(url).build()
-            )
-        }
-    }
-
     // ---------------------------------------------------------------------------
     // Tracking — per-status flows
     // ---------------------------------------------------------------------------
@@ -568,6 +430,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     init {
         checkConfigAndLoadInitialData()
         observeNewEpisodes()
+        loadCatalogRows()
     }
 
     // ---------------------------------------------------------------------------

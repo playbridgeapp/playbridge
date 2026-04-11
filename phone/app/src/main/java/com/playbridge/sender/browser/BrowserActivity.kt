@@ -280,6 +280,7 @@ class BrowserActivity : ComponentActivity() {
             val bookmarkDao = remember { database.bookmarkDao() }
             val addonDao = remember { database.addonDao() }
             val addonRepository = remember { com.playbridge.sender.data.library.AddonRepository(addonDao, cacheDir) }
+            val subtitleService = remember { com.playbridge.sender.data.library.StremioSubtitleService(addonRepository) }
             val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
             
             // Suggestions State
@@ -1173,6 +1174,9 @@ class BrowserActivity : ComponentActivity() {
                             is Screen.TvShowDetail -> {
                                 // No TopAppBar here as TvShowDetailScreen has its own
                             }
+                            is Screen.AddonDetail -> {
+                                // No TopAppBar here as AddonDetailScreen has its own
+                            }
                             Screen.AddonSettings -> {
                                 // No TopAppBar here as AddonSettingsScreen has its own
                             }
@@ -1775,7 +1779,49 @@ class BrowserActivity : ComponentActivity() {
                                                 },
                                                 onTvShowClick = { tvId ->
                                                     currentScreen = Screen.TvShowDetail(tvId)
+                                                },
+                                                onAddonItemClick = { id, type ->
+                                                    currentScreen = Screen.AddonDetail(id, type)
                                                 }
+                                            )
+                                        }
+                                        is Screen.AddonDetail -> {
+                                            val screen = targetScreen as Screen.AddonDetail
+                                            BackHandler { currentScreen = Screen.Library }
+                                            AddonDetailScreen(
+                                                id = screen.id,
+                                                type = screen.type,
+                                                addonRepository = addonRepository,
+                                                onMovieResolved = { tmdbId ->
+                                                    currentScreen = Screen.MovieDetail(tmdbId)
+                                                },
+                                                onTvShowResolved = { tmdbId ->
+                                                    currentScreen = Screen.TvShowDetail(tmdbId)
+                                                },
+                                                onPlayStream = { url, title, subtitles ->
+                                                    val mainVideo = DetectedVideo(
+                                                        url = url,
+                                                        title = title,
+                                                        tabId = -1,
+                                                        timestamp = System.currentTimeMillis(),
+                                                        isPlayable = true,
+                                                        detectedBy = "library"
+                                                    )
+                                                    val subVideos = subtitles?.map { subUrl ->
+                                                        DetectedVideo(
+                                                            url = subUrl,
+                                                            tabId = -1,
+                                                            timestamp = System.currentTimeMillis(),
+                                                            contentType = "text/vtt",
+                                                            detectedBy = "library_subtitle"
+                                                        )
+                                                    } ?: emptyList()
+                                                    scope.launch {
+                                                        forcedVideos = listOf(mainVideo) + subVideos
+                                                        showVideoSheet = true
+                                                    }
+                                                },
+                                                onBack = { currentScreen = Screen.Library }
                                             )
                                         }
                                         is Screen.MovieDetail -> {
@@ -2069,7 +2115,8 @@ class BrowserActivity : ComponentActivity() {
                             castSheetInitialMode = "play"
                             castSheetBrowseOverride = null
                             currentScreen = Screen.Browser
-                        }
+                        },
+                        subtitleService = subtitleService,
                     )
                 }
 
@@ -2300,4 +2347,5 @@ sealed class Screen {
     object AddonSettings : Screen()
     data class MovieDetail(val movieId: Int) : Screen()
     data class TvShowDetail(val tvId: Int) : Screen()
+    data class AddonDetail(val id: String, val type: String) : Screen()
 }

@@ -143,6 +143,7 @@ fun CastSheet(
     mediaflowProxyUrl: String = "",
     mediaflowProxyPassword: String = "",
     mediaflowAutoSelect: Boolean = true,
+    subtitleService: StremioSubtitleService = StremioSubtitleService(),
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -187,7 +188,6 @@ fun CastSheet(
     var showSubtitleResults by remember { mutableStateOf(false) }
 
     val tmdbRepository = remember { TmdbRepository(context) }
-    val subtitleService = remember { StremioSubtitleService() }
     val scope = rememberCoroutineScope()
 
     // Global selection state

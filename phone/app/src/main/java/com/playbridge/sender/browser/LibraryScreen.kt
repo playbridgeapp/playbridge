@@ -91,7 +91,8 @@ fun LibraryScreen(
     nowPlayingSeason: Int? = null,
     nowPlayingEpisode: Int? = null,
     onNowPlayingClick: () -> Unit = {},
-    onRemoteClick: (() -> Unit)? = null
+    onRemoteClick: (() -> Unit)? = null,
+    onAddonItemClick: (id: String, type: String) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val browserPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
@@ -117,7 +118,8 @@ fun LibraryScreen(
             nowPlayingSeason = nowPlayingSeason,
             nowPlayingEpisode = nowPlayingEpisode,
             onNowPlayingClick = onNowPlayingClick,
-            onRemoteClick = onRemoteClick
+            onRemoteClick = onRemoteClick,
+            onAddonItemClick = onAddonItemClick,
         )
     }
 }
@@ -133,42 +135,27 @@ private fun LibraryScreenContent(
     nowPlayingSeason: Int? = null,
     nowPlayingEpisode: Int? = null,
     onNowPlayingClick: () -> Unit = {},
-    onRemoteClick: (() -> Unit)? = null
+    onRemoteClick: (() -> Unit)? = null,
+    onAddonItemClick: (id: String, type: String) -> Unit = { _, _ -> },
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    var activeHeroBackdropUrl by remember { mutableStateOf<String?>(null) }
-
-    // Check if API key is configured
+    // Check if API key is configured (only needed for Browse/search)
     val isConfigured by viewModel.isConfigured.collectAsState()
 
-    // Data state
-    val popularMovies by viewModel.popularMovies.collectAsState()
-    val isLoadingMorePopularMovies by viewModel.isLoadingMorePopularMovies.collectAsState()
-    val hasMorePopularMovies by viewModel.hasMorePopularMovies.collectAsState()
+    // Addon catalog rows — collected early so the ambient backdrop can derive from them
+    val catalogRows by viewModel.catalogRows.collectAsState()
 
-    val popularTvShows by viewModel.popularTvShows.collectAsState()
-    val isLoadingMorePopularTvShows by viewModel.isLoadingMorePopularTvShows.collectAsState()
-    val hasMorePopularTvShows by viewModel.hasMorePopularTvShows.collectAsState()
-
-    val trendingDay by viewModel.trendingDay.collectAsState()
-    val trendingWeek by viewModel.trendingWeek.collectAsState()
-    val newReleases by viewModel.newReleases.collectAsState()
-    val nowPlayingMovieIds by viewModel.nowPlayingMovieIds.collectAsState()
-
-    val isLoadingMoreTrendingDay by viewModel.isLoadingMoreTrendingDay.collectAsState()
-    val hasMoreTrendingDay by viewModel.hasMoreTrendingDay.collectAsState()
-
-    val isLoadingMoreNewReleases by viewModel.isLoadingMoreNewReleases.collectAsState()
-    val hasMoreNewReleases by viewModel.hasMoreNewReleases.collectAsState()
-
-    val isLoading by viewModel.isLoading.collectAsState()
+    // Ambient backdrop derived from addon catalog rows (helper is non-composable
+    // so Modifier.background() cannot shadow the StremioMetaPreview.background property).
+    val activeHeroBackdropUrl = remember(catalogRows) { firstAddonBackdropUrl(catalogRows) }
 
     // Search state
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
     val isSearchLoading by viewModel.isSearchLoading.collectAsState()
+    val addonSearchResults by viewModel.addonSearchResults.collectAsState()
 
     // Discovery state
     val selectedGenres by viewModel.selectedGenres.collectAsState()
@@ -187,7 +174,7 @@ private fun LibraryScreenContent(
     val selectedYear by viewModel.selectedYear.collectAsState()
 
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
-    
+
     BackHandler(enabled = isSearching) {
         viewModel.setIsSearching(false)
     }
@@ -461,6 +448,7 @@ private fun LibraryScreenContent(
                                             tint = if (myListSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
+
                                 }
                             }
                         }
@@ -609,17 +597,7 @@ private fun LibraryScreenContent(
 
         val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         val contentBottomPadding = innerPadding.calculateBottomPadding() + navBarPadding + 80.dp
-        if (!isConfigured) {
-        // No API key — show setup prompt
-        ApiKeyPrompt()
-    } else if (isLoading) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            CircularProgressIndicator()
-        }
-    } else if (isSearching) {
+        if (isSearching) {
         // Search results
         if (isSearchLoading) {
             Box(
@@ -628,7 +606,7 @@ private fun LibraryScreenContent(
             ) {
                 CircularProgressIndicator()
             }
-        } else if (searchResults.isEmpty() && searchQuery.isNotBlank()) {
+        } else if (searchResults.isEmpty() && addonSearchResults.isEmpty() && searchQuery.isNotBlank()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -640,9 +618,10 @@ private fun LibraryScreenContent(
                 )
             }
         } else {
-            SearchResultsList(
+            CombinedSearchResults(
                 listState = viewModel.searchResultsListState,
-                results = searchResults,
+                tmdbResults = searchResults,
+                addonResults = addonSearchResults,
                 contentPadding = PaddingValues(
                     top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
                     bottom = contentBottomPadding + 8.dp,
@@ -650,7 +629,8 @@ private fun LibraryScreenContent(
                     end = 8.dp
                 ),
                 onMovieClick = onMovieClick,
-                onTvShowClick = onTvShowClick
+                onTvShowClick = onTvShowClick,
+                onAddonItemClick = onAddonItemClick
             )
         }
     } else {
@@ -692,41 +672,36 @@ private fun LibraryScreenContent(
                     },
                 )
             } else if (tab == 1) {
-                Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding())) {
-                    DiscoverGrid(
-                        movies = discoveredMovies,
-                        tvShows = discoveredTvShows,
-                        gridState = viewModel.discoverGridState,
-                        selectedMediaType = selectedMediaType,
-                        isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
-                        hasMoreMovies = hasMoreDiscoveredMovies,
-                        isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
-                        hasMoreTvShows = hasMoreDiscoveredTvShows,
-                        isDiscoveryLoading = isDiscoveryLoading,
-                        onMovieClick = onMovieClick,
-                        onTvShowClick = onTvShowClick,
-                        onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
-                        onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() }
-                    )
+                // Browse / Discover tab — requires TMDB API key
+                if (!isConfigured) {
+                    ApiKeyPrompt()
+                } else {
+                    Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding())) {
+                        DiscoverGrid(
+                            movies = discoveredMovies,
+                            tvShows = discoveredTvShows,
+                            gridState = viewModel.discoverGridState,
+                            selectedMediaType = selectedMediaType,
+                            isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
+                            hasMoreMovies = hasMoreDiscoveredMovies,
+                            isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
+                            hasMoreTvShows = hasMoreDiscoveredTvShows,
+                            isDiscoveryLoading = isDiscoveryLoading,
+                            onMovieClick = onMovieClick,
+                            onTvShowClick = onTvShowClick,
+                            onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
+                            onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() }
+                        )
+                    }
                 }
             } else {
+                // Home tab — entirely addon-driven, no TMDB required
                 LazyColumn(
                     state = viewModel.mainListState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(top = innerPadding.calculateTopPadding(), bottom = contentBottomPadding)
                 ) {
-                    if (trendingWeek.isNotEmpty()) {
-                        item {
-                            HeroBannerCarousel(
-                                items = trendingWeek,
-                                onMovieClick = onMovieClick,
-                                onTvShowClick = onTvShowClick,
-                                onHeroItemChanged = { activeHeroBackdropUrl = it }
-                            )
-                        }
-                    }
-
-                    // My List home strip — only Watching items so it acts as a "continue watching" row.
+                    // Continue Watching — local watchlist, always available
                     val continueWatching = watchlist.filter {
                         it.status == WatchlistStatus.WATCHING.value
                     }
@@ -764,85 +739,47 @@ private fun LibraryScreenContent(
                         }
                     }
 
-                    // Trending Today
-                    if (trendingDay.isNotEmpty()) {
-                        item {
-                            MediaRow(
-                                title = "Trending Today",
-                                items = trendingDay,
-                                listState = viewModel.trendingDayListState,
-                                onItemClick = { item ->
-                                    if (item.isMovie) onMovieClick(item.id)
-                                    else onTvShowClick(item.id)
-                                },
-                                posterUrl = { it.posterUrl },
-                                displayTitle = { it.displayTitle },
-                                year = { it.year },
-                                rating = { String.format("%.1f", it.voteAverage) },
-                                onLoadMore = { viewModel.loadMoreTrendingDay() },
-                                isLoadingMore = isLoadingMoreTrendingDay,
-                                hasMore = hasMoreTrendingDay
-                            )
+                    // Addon catalog rows — one horizontal row per installed catalog
+                    if (catalogRows.isNotEmpty()) {
+                        catalogRows.forEach { row ->
+                            item(key = "${row.addonBaseUrl}:${row.type}:${row.catalogId}") {
+                                AddonMediaRow(
+                                    row = row,
+                                    onItemClick = { item -> onAddonItemClick(item.id, item.type) }
+                                )
+                            }
                         }
-                    }
-
-                    // Popular Movies
-                    if (popularMovies.isNotEmpty()) {
+                    } else if (continueWatching.isEmpty()) {
+                        // Nothing to show — prompt user to install an addon
                         item {
-                            MediaRow(
-                                title = "Popular Movies",
-                                items = popularMovies,
-                                listState = viewModel.popularMoviesListState,
-                                onItemClick = { onMovieClick(it.id) },
-                                posterUrl = { it.posterUrl },
-                                displayTitle = { it.title },
-                                year = { it.year },
-                                rating = { it.rating },
-                                onLoadMore = { viewModel.loadMorePopularMovies() },
-                                isLoadingMore = isLoadingMorePopularMovies,
-                                hasMore = hasMorePopularMovies
-                            )
-                        }
-                    }
-
-                    // Popular TV Shows
-                    if (popularTvShows.isNotEmpty()) {
-                        item {
-                            MediaRow(
-                                title = "Popular TV Shows",
-                                items = popularTvShows,
-                                listState = viewModel.popularTvShowsListState,
-                                onItemClick = { onTvShowClick(it.id) },
-                                posterUrl = { it.posterUrl },
-                                displayTitle = { it.name },
-                                year = { it.year },
-                                rating = { it.rating },
-                                onLoadMore = { viewModel.loadMorePopularTvShows() },
-                                isLoadingMore = isLoadingMorePopularTvShows,
-                                hasMore = hasMorePopularTvShows
-                            )
-                        }
-                    }
-
-                    // New & Upcoming (Merged)
-                    if (newReleases.isNotEmpty()) {
-                        item {
-                            MediaRow(
-                                title = "New & Upcoming",
-                                items = newReleases,
-                                listState = viewModel.newReleasesListState,
-                                onItemClick = { onMovieClick(it.id) },
-                                posterUrl = { it.posterUrl },
-                                displayTitle = { it.title },
-                                year = { it.year },
-                                rating = { it.rating },
-                                badgeText = { item ->
-                                    if (nowPlayingMovieIds.contains(item.id)) "In Theaters" else null
-                                },
-                                onLoadMore = { viewModel.loadMoreNewReleases() },
-                                isLoadingMore = isLoadingMoreNewReleases,
-                                hasMore = hasMoreNewReleases
-                            )
+                            Box(
+                                modifier = Modifier.fillParentMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                    modifier = Modifier.padding(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Extension,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "No addons installed",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "Install a Stremio addon from Settings to see content here.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1349,6 +1286,172 @@ private fun SearchResultItem(
     }
 }
 
+/**
+ * Unified search results list showing TMDB results followed by addon catalog results.
+ * Addon results appear under a labelled divider so the user can distinguish the sources.
+ */
+@Composable
+private fun CombinedSearchResults(
+    listState: LazyListState,
+    tmdbResults: List<TmdbMultiSearchResult>,
+    addonResults: List<StremioMetaPreview>,
+    contentPadding: PaddingValues,
+    onMovieClick: (Int) -> Unit,
+    onTvShowClick: (Int) -> Unit,
+    onAddonItemClick: (id: String, type: String) -> Unit = { _, _ -> }
+) {
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = contentPadding,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // TMDB results
+        items(tmdbResults) { result ->
+            SearchResultItem(
+                result = result,
+                onClick = {
+                    if (result.isMovie) onMovieClick(result.id)
+                    else onTvShowClick(result.id)
+                }
+            )
+        }
+
+        // Addon results section
+        if (addonResults.isNotEmpty()) {
+            item {
+                val topPad = if (tmdbResults.isNotEmpty()) 4.dp else 0.dp
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = topPad, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    HorizontalDivider(modifier = Modifier.weight(1f))
+                    Text(
+                        text = "From Addons",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    HorizontalDivider(modifier = Modifier.weight(1f))
+                }
+            }
+            items(addonResults) { item ->
+                AddonSearchResultItem(
+                    item = item,
+                    onClick = { onAddonItemClick(item.id, item.type) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddonSearchResultItem(
+    item: StremioMetaPreview,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp)
+        ) {
+            // Poster
+            Box(
+                modifier = Modifier
+                    .width(70.dp)
+                    .height(105.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            ) {
+                if (item.poster != null) {
+                    AsyncImage(
+                        model = item.poster,
+                        contentDescription = item.name,
+                        contentScale = ContentScale.Crop,
+                        placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                        error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Movie, null, modifier = Modifier.size(24.dp))
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // Info
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(105.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        text = item.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        item.year?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        item.imdbRating?.let {
+                            Text(
+                                text = "★ $it",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.tertiaryContainer
+                        ) {
+                            Text(
+                                text = item.type.replaceFirstChar { it.uppercase() },
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                if (!item.description.isNullOrBlank()) {
+                    Text(
+                        text = item.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ApiKeyPrompt() {
     Box(
@@ -1392,170 +1495,71 @@ private fun ApiKeyPrompt() {
     }
 }
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+// ==================== Addon Media Row (Home tab) ====================
+
+/**
+ * A horizontal scrolling row for a single addon catalog, styled to match the
+ * TMDB [MediaRow]s above it. The row title is the catalog name; an addon source
+ * chip sits beside it so users know where the content comes from.
+ */
 @Composable
-private fun HeroBannerCarousel(
-    items: List<TmdbMultiSearchResult>,
-    onMovieClick: (Int) -> Unit,
-    onTvShowClick: (Int) -> Unit,
-    onHeroItemChanged: (String?) -> Unit
+private fun AddonMediaRow(
+    row: AddonCatalogRow,
+    onItemClick: (StremioMetaPreview) -> Unit
 ) {
-    if (items.isEmpty()) {
-        LaunchedEffect(Unit) { onHeroItemChanged(null) }
-        return
-    }
+    if (row.isLoading && row.items.isEmpty()) return // hide until first page arrives
 
-    val heroItems = items.take(5)
-    val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { heroItems.size })
-
-    // Auto-cycle
-
-    LaunchedEffect(pagerState.settledPage) {
-        if (heroItems.size > 1) {
-            delay(5000)
-            val nextPage = (pagerState.currentPage + 1) % heroItems.size
-            pagerState.animateScrollToPage(nextPage)
-        }
-    }
-
-    LaunchedEffect(pagerState.currentPage) {
-        onHeroItemChanged(heroItems.getOrNull(pagerState.currentPage)?.backdropUrl)
-    }
-
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val heroHeight = (configuration.screenHeightDp * 0.45).dp
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(heroHeight)
-            .padding(vertical = 8.dp)
-    ) {
-        androidx.compose.foundation.pager.HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 24.dp),
-            pageSpacing = 12.dp
-        ) { page ->
-            val item = heroItems[page]
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable {
-                        if (item.isMovie) onMovieClick(item.id) else onTvShowClick(item.id)
-                    }
+    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+        // Title + source chip
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = row.catalogName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f, fill = false),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            // Addon source chip
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                contentColor = MaterialTheme.colorScheme.onTertiaryContainer
             ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                if (item.backdropUrl != null) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(item.backdropUrl)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = item.displayTitle,
-                        contentScale = ContentScale.Crop,
-                        placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
-                        error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant))
-                }
-
-                // Gradient overlay
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f)),
-                                startY = 100f
-                            )
-                        )
-                )
-
-                // Info content
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(16.dp)
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(
-                        text = item.displayTitle,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    Icon(
+                        imageVector = Icons.Default.Extension,
+                        contentDescription = null,
+                        modifier = Modifier.size(11.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary)
-                                Text(
-                                    text = String.format("%.1f", item.voteAverage),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                        if (item.year.isNotBlank()) {
-                            Text(
-                                text = item.year,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Color.LightGray
-                            )
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = Color.White.copy(alpha = 0.2f)
-                        ) {
-                            Text(
-                                text = if (item.isMovie) "MOVIE" else "TV",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        text = row.addonName,
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 }
             }
         }
-    }
-        
-    // Pager indicators
-        if (heroItems.size > 1) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                repeat(heroItems.size) { iteration ->
-                    val isSelected = pagerState.currentPage == iteration
-                    val color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.4f)
-                    val width = if (isSelected) 16.dp else 6.dp
-                    Box(
-                        modifier = Modifier
-                            .size(height = 6.dp, width = width)
-                            .clip(CircleShape)
-                            .background(color)
-                    )
-                }
+
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(row.items) { item ->
+                PosterCard(
+                    posterUrl = item.poster,
+                    title = item.name,
+                    year = item.year ?: "",
+                    rating = item.imdbRating ?: "",
+                    onClick = { onItemClick(item) }
+                )
             }
         }
     }

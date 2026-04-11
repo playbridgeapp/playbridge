@@ -188,6 +188,15 @@ class TmdbRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Look up a movie or TV show by its IMDb ID (e.g. "tt1234567").
+     * Used to route addon catalog items (which carry IMDb IDs) to existing TMDB detail screens.
+     * Returns null if the API key is not configured or the request fails.
+     */
+    suspend fun findByImdbId(imdbId: String): TmdbFindResponse? {
+        return fetch("$BASE_URL/find/$imdbId?external_source=imdb_id&language=en-US")
+    }
+
     private fun appendApiKey(url: String, apiKey: String): String {
         val separator = if ("?" in url) "&" else "?"
         return "${url}${separator}api_key=$apiKey"

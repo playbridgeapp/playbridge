@@ -32,6 +32,7 @@ class AddonRepository(
     companion object {
         private const val TAG = "AddonRepository"
         private const val CACHE_TTL_MS = 60 * 60 * 1000L // 60 minutes
+        private const val CATALOG_CACHE_TTL_MS = 15 * 60 * 1000L // 15 minutes — catalogs change more often
         private const val CACHE_FILE_NAME = "stream_cache.json"
     }
 
@@ -45,6 +46,9 @@ class AddonRepository(
     private data class PersistedCache(val entries: Map<String, CacheEntry>)
 
     private val streamCache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
+    private val subtitleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<StremioStream>>>()
+    private val catalogCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<StremioMetaPreview>>>()
+    private val metaCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StremioMetaDetail>>()
     private val ioScope = CoroutineScope(Dispatchers.IO)
     private val diskJson = Json { ignoreUnknownKeys = true }
 
@@ -118,13 +122,19 @@ class AddonRepository(
                 val body = response.body?.string() ?: return@withContext null
                 val manifest = json.decodeFromString<StremioManifest>(body)
 
+                val resourceNames = manifest.resources.map { it.name }.distinct()
+                val resourcesJson = json.encodeToString(resourceNames)
+                val catalogsJson = json.encodeToString(manifest.catalogs)
+
                 val entity = InstalledAddonEntity(
                     manifestUrl = manifestUrl,
                     name = manifest.name.ifBlank { "Unknown Addon" },
                     description = manifest.description,
                     baseUrl = baseUrl,
                     version = manifest.version,
-                    types = manifest.types.joinToString(",")
+                    types = manifest.types.joinToString(","),
+                    resources = resourcesJson,
+                    catalogsJson = catalogsJson
                 )
 
                 addonDao.insert(entity)
@@ -155,6 +165,267 @@ class AddonRepository(
      * Used by the UI to decide between stream-picker mode vs. provider-info-only mode.
      */
     suspend fun hasAnyAddons(): Boolean = addonDao.count() > 0
+
+    /** Returns all installed addons. */
+    suspend fun getInstalledAddons(): List<InstalledAddonEntity> = withContext(Dispatchers.IO) {
+        addonDao.getAllSync()
+    }
+
+    /**
+     * Enumerate all catalogs available across all installed addons.
+     * Returns a list of (addon, contentType, catalogId).
+     */
+    /**
+     * Enumerate all catalogs available across all installed addons.
+     * Returns a list of (addon, contentType, catalogId) where catalogId is the
+     * URL path segment used in /catalog/{type}/{catalogId}.json requests.
+     */
+    suspend fun getAvailableCatalogs(): List<Triple<InstalledAddonEntity, String, String>> {
+        return withContext(Dispatchers.IO) {
+            val addons = addonDao.getAllSync()
+            addons.flatMap { addon ->
+                addon.parsedCatalogEntries()
+                    .filter { it.type.isNotBlank() && it.id.isNotBlank() }
+                    .map { entry -> Triple(addon, entry.type, entry.id) }
+            }
+        }
+    }
+
+    // ==================== Catalog Resolution ====================
+
+    /**
+     * Fetch one page of items from a specific addon catalog.
+     * Uses a 15-minute cache keyed by (baseUrl, type, catalogId, skip).
+     *
+     * @param addon   The installed addon to query
+     * @param type    Content type: "movie", "series", "channel", etc.
+     * @param catalogId  The catalog ID from the addon manifest
+     * @param skip    Offset for pagination (Stremio standard: increment by 100)
+     */
+    suspend fun fetchCatalog(
+        addon: InstalledAddonEntity,
+        type: String,
+        catalogId: String,
+        skip: Int = 0
+    ): List<StremioMetaPreview> {
+        val cacheKey = "${addon.baseUrl}:$type:$catalogId:$skip"
+        val cached = catalogCache[cacheKey]
+        if (cached != null && System.currentTimeMillis() - cached.first < CATALOG_CACHE_TTL_MS) {
+            Log.d(TAG, "Using cached catalog for $cacheKey")
+            return cached.second
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = if (skip > 0)
+                    "${addon.baseUrl}/catalog/$type/$catalogId/skip=$skip.json"
+                else
+                    "${addon.baseUrl}/catalog/$type/$catalogId.json"
+                Log.d(TAG, "Fetching catalog: $url")
+                val request = Request.Builder().url(url).get().build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Catalog fetch failed from ${addon.name}: ${response.code}")
+                    return@withContext emptyList()
+                }
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val parsed = json.decodeFromString<StremioMetasResponse>(body)
+                val items = parsed.metas ?: emptyList()
+                catalogCache[cacheKey] = Pair(System.currentTimeMillis(), items)
+                items
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching catalog from ${addon.name}", e)
+                emptyList()
+            }
+        }
+    }
+
+    // ==================== Catalog Search ====================
+
+    /**
+     * Search a specific addon catalog using the Stremio extra protocol.
+     * URL pattern: `{baseUrl}/catalog/{type}/{catalogId}/search={query}.json`
+     *
+     * Results are intentionally NOT cached — search queries vary freely and
+     * caching them would waste memory without meaningful hit rates.
+     *
+     * @param addon     The installed addon to query
+     * @param type      Content type: "movie", "series", etc.
+     * @param catalogId The catalog ID from the addon manifest
+     * @param query     The user's search string; will be URL-encoded
+     */
+    suspend fun searchCatalog(
+        addon: InstalledAddonEntity,
+        type: String,
+        catalogId: String,
+        query: String
+    ): List<StremioMetaPreview> {
+        if (query.isBlank()) return emptyList()
+        return withContext(Dispatchers.IO) {
+            try {
+                val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20")
+                val url = "${addon.baseUrl}/catalog/$type/$catalogId/search=$encoded.json"
+                Log.d(TAG, "Searching catalog: $url")
+                val request = Request.Builder().url(url).get().build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Catalog search failed from ${addon.name}: ${response.code}")
+                    return@withContext emptyList()
+                }
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val parsed = json.decodeFromString<StremioMetasResponse>(body)
+                parsed.metas ?: emptyList()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error searching catalog from ${addon.name}", e)
+                emptyList()
+            }
+        }
+    }
+
+    /**
+     * Search across all installed addon catalogs that declare search support.
+     * Fires all matching catalogs in parallel and merges results.
+     * Deduplicates by item ID.
+     *
+     * @param query The user's search string
+     */
+    suspend fun searchAllCatalogs(query: String): List<StremioMetaPreview> {
+        if (query.isBlank()) return emptyList()
+        val addons = addonDao.getAllSync()
+        return coroutineScope {
+            val deferreds = addons.flatMap { addon ->
+                addon.parsedCatalogEntries()
+                    .filter { it.supportsSearch && it.type.isNotBlank() && it.id.isNotBlank() }
+                    .map { entry ->
+                        async(Dispatchers.IO) {
+                            searchCatalog(addon, entry.type, entry.id, query)
+                        }
+                    }
+            }
+            val seen = mutableSetOf<String>()
+            deferreds.awaitAll()
+                .flatten()
+                .filter { item -> item.id.isNotBlank() && seen.add(item.id) }
+        }
+    }
+
+    // ==================== Meta Resolution ====================
+
+    /**
+     * Fetch full metadata for a content item from installed addons that declare meta support.
+     * Tries each qualifying addon in order and returns the first successful result.
+     * Results are cached for [CACHE_TTL_MS] (60 minutes).
+     *
+     * @param type  Content type: "movie", "series", etc.
+     * @param id    The addon-specific content ID (may be IMDb "tt..." or a custom addon ID)
+     */
+    suspend fun fetchMeta(type: String, id: String): StremioMetaDetail? {
+        val cacheKey = "meta:$type:$id"
+        val cached = metaCache[cacheKey]
+        if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
+            Log.d(TAG, "Using cached meta for $cacheKey")
+            return cached.second
+        }
+
+        val addons = addonDao.getAllSync().filter { addon ->
+            addon.supportsResource("meta") &&
+                addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) }
+        }
+
+        if (addons.isEmpty()) {
+            Log.d(TAG, "No meta-capable addons for type=$type")
+            return null
+        }
+
+        return withContext(Dispatchers.IO) {
+            for (addon in addons) {
+                try {
+                    val url = "${addon.baseUrl}/meta/$type/$id.json"
+                    Log.d(TAG, "Fetching meta from ${addon.name}: $url")
+                    val request = Request.Builder().url(url).get().build()
+                    val response = client.newCall(request).execute()
+                    if (response.isSuccessful) {
+                        val body = response.body?.string() ?: continue
+                        val parsed = json.decodeFromString<StremioMetaResponse>(body)
+                        val meta = parsed.meta
+                        if (meta != null) {
+                            metaCache[cacheKey] = Pair(System.currentTimeMillis(), meta)
+                            return@withContext meta
+                        }
+                    } else {
+                        Log.e(TAG, "Meta fetch failed from ${addon.name}: ${response.code}")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error fetching meta from ${addon.name}", e)
+                }
+            }
+            null
+        }
+    }
+
+    // ==================== Subtitle Resolution ====================
+
+    /**
+     * Resolve subtitles for a movie or episode from all installed addons that declare
+     * subtitle support for the requested content type.
+     *
+     * @param type "movie" or "series"
+     * @param id IMDb ID for movies (e.g. "tt1234567") or "tt1234567:season:episode" for series
+     */
+    suspend fun resolveSubtitles(type: String, id: String): List<StremioStream> {
+        val cacheKey = "$type:$id"
+        val cached = subtitleCache[cacheKey]
+        if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
+            Log.d(TAG, "Using cached subtitles for $cacheKey")
+            return cached.second
+        }
+
+        val addons = addonDao.getAllSync().filter { addon ->
+            addon.supportsResource("subtitles") &&
+                addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) }
+        }
+
+        if (addons.isEmpty()) {
+            Log.d(TAG, "No subtitle-capable addons for type=$type")
+            return emptyList()
+        }
+
+        return coroutineScope {
+            val results = addons.map { addon ->
+                async(Dispatchers.IO) {
+                    fetchSubtitlesFromAddon(addon, type, id)
+                }
+            }.awaitAll()
+
+            val merged = results.flatten()
+            subtitleCache[cacheKey] = Pair(System.currentTimeMillis(), merged)
+            merged
+        }
+    }
+
+    private suspend fun fetchSubtitlesFromAddon(
+        addon: InstalledAddonEntity,
+        type: String,
+        id: String
+    ): List<StremioStream> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = "${addon.baseUrl}/subtitles/$type/$id.json"
+                Log.d(TAG, "Fetching subtitles from ${addon.name}: $url")
+                val request = Request.Builder().url(url).get().build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Subtitle fetch failed from ${addon.name}: ${response.code}")
+                    return@withContext emptyList()
+                }
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val parsed = json.decodeFromString<StremioStreamResponse>(body)
+                parsed.subtitles ?: parsed.streams ?: emptyList()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching subtitles from ${addon.name}", e)
+                emptyList()
+            }
+        }
+    }
 
     // ==================== Stream Resolution ====================
 
@@ -372,9 +643,11 @@ class AddonRepository(
             }
         }
 
-        val addons = addonDao.getAllSync()
+        // Include addons that explicitly support "stream" OR have no resource data
+        // (pre-Phase 1 installs have resources = "" and must not be silently excluded).
+        val addons = addonDao.getAllSync().filter { it.resources.isBlank() || it.supportsResource("stream") }
         if (addons.isEmpty()) {
-            Log.d(TAG, "No addons installed")
+            Log.d(TAG, "No stream-capable addons installed")
             return emptyList()
         }
 
@@ -412,9 +685,11 @@ class AddonRepository(
                 }
             }
 
-            val addons = addonDao.getAllSync()
+            // Include addons that explicitly support "stream" OR have no resource data
+            // (pre-Phase 1 installs have resources = "" and must not be silently excluded).
+            val addons = addonDao.getAllSync().filter { it.resources.isBlank() || it.supportsResource("stream") }
             if (addons.isEmpty()) {
-                Log.d(TAG, "No addons installed")
+                Log.d(TAG, "No stream-capable addons installed")
                 emit(emptyList())
                 return@flow
             }

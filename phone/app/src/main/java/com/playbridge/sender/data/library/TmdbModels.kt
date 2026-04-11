@@ -367,3 +367,11 @@ object TmdbCommonGenres {
         TmdbGenre(37, "Western")
     )
 }
+
+// ==================== Find by external ID (IMDb) ====================
+
+@Serializable
+data class TmdbFindResponse(
+    @SerialName("movie_results") val movieResults: List<TmdbMovie> = emptyList(),
+    @SerialName("tv_results") val tvResults: List<TmdbTvShow> = emptyList()
+)

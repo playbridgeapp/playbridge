@@ -34,6 +34,13 @@ object DatabaseProvider {
         }
     }
 
+    private val MIGRATION_7_8 = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE installed_addons ADD COLUMN resources TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE installed_addons ADD COLUMN catalogsJson TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
     @Volatile
     private var INSTANCE: HistoryDatabase? = null
 
@@ -44,7 +51,7 @@ object DatabaseProvider {
                 HistoryDatabase::class.java,
                 "history_database"
             )
-            .addMigrations(MIGRATION_4_5, MIGRATION_6_7)
+            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8)
             .fallbackToDestructiveMigration()
             .build()
             INSTANCE = instance

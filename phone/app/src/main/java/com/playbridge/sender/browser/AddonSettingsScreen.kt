@@ -20,8 +20,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import com.playbridge.sender.data.library.AddonRepository
 import com.playbridge.sender.data.library.InstalledAddonEntity
+import com.playbridge.sender.data.library.parsedCatalogEntries
+import com.playbridge.sender.data.library.supportsResource
 import kotlinx.coroutines.launch
 
 /**
@@ -171,9 +174,8 @@ fun AddonSettingsScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
+                            // Version + content types
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (addon.version.isNotBlank()) {
                                     Text(
                                         text = "v${addon.version}",
@@ -189,6 +191,8 @@ fun AddonSettingsScreen(
                                     )
                                 }
                             }
+                            // Capability badges
+                            AddonCapabilityBadges(addon = addon)
                         }
 
                         IconButton(
@@ -211,6 +215,7 @@ fun AddonSettingsScreen(
 
             // Empty state
             if (installedAddons.isEmpty()) {
+
                 item {
                     Box(
                         modifier = Modifier
@@ -241,5 +246,66 @@ fun AddonSettingsScreen(
                 }
             }
         }
+    }
+}
+
+// ==================== Capability Badge Composables ====================
+
+/**
+ * Renders a compact row of capability badges for an installed addon.
+ * Shows which Stremio resources the addon supports (Streams, Catalog, Meta, Subtitles)
+ * and the number of catalogs it exposes.
+ */
+@Composable
+private fun AddonCapabilityBadges(addon: InstalledAddonEntity) {
+    val resources = listOf("stream", "catalog", "meta", "subtitles")
+    val supported = resources.filter { addon.supportsResource(it) }
+    if (supported.isEmpty()) return
+
+    val catalogCount = remember(addon.catalogsJson) {
+        addon.parsedCatalogEntries().size
+    }
+
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        supported.forEach { cap ->
+            val label = when (cap) {
+                "stream" -> "Streams"
+                "catalog" -> if (catalogCount > 0) "$catalogCount Catalogs" else "Catalogs"
+                "meta" -> "Meta"
+                "subtitles" -> "Subtitles"
+                else -> cap.replaceFirstChar { it.uppercaseChar() }
+            }
+            CapabilityBadge(label = label, cap = cap)
+        }
+    }
+}
+
+@Composable
+private fun CapabilityBadge(label: String, cap: String) {
+    val containerColor = when (cap) {
+        "stream" -> MaterialTheme.colorScheme.primaryContainer
+        "catalog" -> MaterialTheme.colorScheme.tertiaryContainer
+        "meta" -> MaterialTheme.colorScheme.secondaryContainer
+        "subtitles" -> Color(0xFFFFE0B2) // amber-100
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val contentColor = when (cap) {
+        "stream" -> MaterialTheme.colorScheme.onPrimaryContainer
+        "catalog" -> MaterialTheme.colorScheme.onTertiaryContainer
+        "meta" -> MaterialTheme.colorScheme.onSecondaryContainer
+        "subtitles" -> Color(0xFFE65100) // deep-orange
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(
+        shape = MaterialTheme.shapes.extraSmall,
+        color = containerColor,
+        contentColor = contentColor
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
     }
 }
