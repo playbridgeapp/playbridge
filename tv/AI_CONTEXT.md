@@ -1,5 +1,5 @@
 # TV App — AI Context
-_Last verified: 2026-04-05_
+_Last verified: 2026-04-11_
 
 ## Ownership
 The `tv/` module provides a Leanback UI for the Android TV application, acting as the receiver. It runs a Ktor WebSocket server to listen for commands and handles video playback via MPV, VLC, or ExoPlayer. It also provides a fallback web browser (SystemWebView or GeckoView). It does NOT own protocol data structures.
@@ -16,12 +16,13 @@ The `tv/` module provides a Leanback UI for the Android TV application, acting a
 - Communication mechanism: Hosts a Ktor WebSocket server to receive JSON commands from Phone app.
 
 ## Gotchas
-WARNING: `network_security_config.xml` has a global `<base-config cleartextTrafficPermitted="true">` which must be removed for production.
+WARNING: `network_security_config.xml` has a global `<base-config cleartextTrafficPermitted="true">` which must be removed for production. CIDR notation is invalid in `<domain>` tags.
 WARNING: Uses `SYSTEM_ALERT_WINDOW` as a workaround for Android 14+ background activity limits.
+GOTCHA: `ContentSniffer.kt` deliberately bypasses SSL certificate validation, but ONLY for local network URLs (like `192.168.x.x` or `.local`).
 
 ## Current State
-_As of 2026-04-05:_
-- Working: Core Infrastructure, WebSocket Server, Pairing System (Phase 1 complete)
+_As of 2026-04-11:_
+- Working: Core Infrastructure, WebSocket Server, Pairing System (Phase 1 complete), Dual-engine browser setup
 - Broken/degraded: nothing critical
 - In progress: `add_subtitle_support.patch` in `pending_patches/`, Phase 2 & 3 tasks (Player UI, Leanback integration, Settings)
-- Blockers: Play Store blockers (cleartext traffic config, missing Privacy Policy URL, Data Safety section unfilled)
+- Blockers: Play Store blockers (cleartext traffic config globally enabled, missing Privacy Policy URL, Data Safety section unfilled)
