@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.playbridge.sender.data.library.AddonCatalogRow
 import com.playbridge.sender.data.library.AddonRepository
+import com.playbridge.sender.data.library.AddonSearchResultGroup
 import com.playbridge.sender.data.library.InstalledAddonEntity
 import com.playbridge.sender.data.library.StremioMetaPreview
 import com.playbridge.sender.data.library.parsedCatalogEntries
@@ -51,6 +52,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val discoverGridState = LazyGridState()
     val searchResultsListState = LazyListState()
 
+    /**
+     * Per-row horizontal scroll states for addon catalog rows, keyed by
+     * "${addonBaseUrl}:${type}:${catalogId}".
+     * Stored in the ViewModel so position is preserved across recompositions
+     * and tab switches.
+     */
+    private val _catalogRowScrollStates = java.util.concurrent.ConcurrentHashMap<String, LazyListState>()
+
+    fun catalogRowScrollState(key: String): LazyListState =
+        _catalogRowScrollStates.getOrPut(key) { LazyListState() }
+
     private val _isConfigured = MutableStateFlow(tmdb.isConfigured())
     val isConfigured: StateFlow<Boolean> = _isConfigured.asStateFlow()
 
@@ -67,9 +79,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _isSearchLoading = MutableStateFlow(false)
     val isSearchLoading: StateFlow<Boolean> = _isSearchLoading.asStateFlow()
 
-    // Addon search results (parallel to TMDB search)
-    private val _addonSearchResults = MutableStateFlow<List<StremioMetaPreview>>(emptyList())
-    val addonSearchResults: StateFlow<List<StremioMetaPreview>> = _addonSearchResults.asStateFlow()
+    // Addon search results — grouped by addon so the UI can show per-source filter chips.
+    // Use .flatMap { it.items } to get the flat list if needed.
+    private val _addonSearchGroups = MutableStateFlow<List<AddonSearchResultGroup>>(emptyList())
+    val addonSearchGroups: StateFlow<List<AddonSearchResultGroup>> = _addonSearchGroups.asStateFlow()
 
     // Navigation state
     private val _selectedTab = MutableStateFlow(0)
@@ -121,12 +134,24 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _catalogRows = MutableStateFlow<List<AddonCatalogRow>>(emptyList())
     val catalogRows: StateFlow<List<AddonCatalogRow>> = _catalogRows.asStateFlow()
 
-    fun loadCatalogRows() {
+    fun loadCatalogRows(forceRefresh: Boolean = false) {
         viewModelScope.launch {
             val addons = addonRepository.getInstalledAddons()
-            if (addons.isEmpty()) return@launch
+            if (addons.isEmpty()) {
+                _catalogRows.value = emptyList()
+                return@launch
+            }
 
-            // Build skeleton rows so the UI shows shimmer/loading state immediately
+            val now = System.currentTimeMillis()
+
+            // Serve cache immediately if fresh enough (< 5 min) and not forced
+            val cached = catalogCache
+            if (!forceRefresh && cached != null && (now - catalogCacheTime) < CATALOG_CACHE_TTL_MS) {
+                _catalogRows.value = cached
+                return@launch
+            }
+
+            // Build skeleton rows so the UI shows shimmer/loading state right away
             val skeletons = addons.flatMap { addon ->
                 addon.parsedCatalogEntries()
                     .filter { it.type.isNotBlank() && it.id.isNotBlank() }
@@ -143,7 +168,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             }
             _catalogRows.value = skeletons
 
-            // Fetch first page of each catalog in parallel, emit each result as it lands
+            // Fetch catalogs in parallel; update the list as each one lands (no need to wait for all)
+            val filled = mutableListOf<AddonCatalogRow>()
+            val mutex = kotlinx.coroutines.sync.Mutex()
+
             val deferreds = addons.flatMap { addon ->
                 addon.parsedCatalogEntries()
                     .filter { it.type.isNotBlank() && it.id.isNotBlank() }
@@ -152,21 +180,41 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                             val items = runCatching {
                                 addonRepository.fetchCatalog(addon, entry.type, entry.id, skip = 0)
                             }.getOrDefault(emptyList())
-                            AddonCatalogRow(
-                                catalogName = entry.name.ifBlank { entry.id },
-                                addonName = addon.name,
-                                type = entry.type,
-                                catalogId = entry.id,
-                                addonBaseUrl = addon.baseUrl,
-                                items = items,
-                                isLoading = false
-                            )
+                            if (items.isNotEmpty()) {
+                                val row = AddonCatalogRow(
+                                    catalogName = entry.name.ifBlank { entry.id },
+                                    addonName = addon.name,
+                                    type = entry.type,
+                                    catalogId = entry.id,
+                                    addonBaseUrl = addon.baseUrl,
+                                    items = items,
+                                    isLoading = false
+                                )
+                                mutex.withLock {
+                                    filled.add(row)
+                                    _catalogRows.value = filled.toList()
+                                }
+                            }
                         }
                     }
             }
-            // Replace skeleton rows with filled rows as each deferred completes
-            val filled = deferreds.map { it.await() }
-            _catalogRows.value = filled.filter { it.items.isNotEmpty() }
+            deferreds.forEach { it.await() }
+            // Store completed result in cache
+            catalogCache = _catalogRows.value
+            catalogCacheTime = System.currentTimeMillis()
+        }
+    }
+
+    companion object {
+        private const val CATALOG_CACHE_TTL_MS = 5 * 60 * 1000L // 5 minutes
+        // Shared across ViewModel instances within the same process lifetime
+        @Volatile private var catalogCache: List<AddonCatalogRow>? = null
+        @Volatile private var catalogCacheTime: Long = 0L
+
+        /** Call when addons are installed/removed to force a fresh fetch on next load. */
+        fun invalidateCatalogCache() {
+            catalogCache = null
+            catalogCacheTime = 0L
         }
     }
 
@@ -254,7 +302,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         if (!searching) {
             _searchQuery.value = ""
             _searchResults.value = emptyList()
-            _addonSearchResults.value = emptyList()
+            _addonSearchGroups.value = emptyList()
         }
     }
 
@@ -264,19 +312,19 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             _isSearchLoading.value = true
-            _addonSearchResults.value = emptyList()
+            _addonSearchGroups.value = emptyList()
             try {
                 // Fire TMDB and addon catalog searches concurrently
                 val tmdbDeferred = async {
                     runCatching { tmdb.searchMulti(query) }.getOrNull()
                 }
                 val addonDeferred = async {
-                    runCatching { addonRepository.searchAllCatalogs(query) }.getOrNull()
+                    runCatching { addonRepository.searchAllCatalogsGrouped(query) }.getOrNull()
                 }
                 _searchResults.value = tmdbDeferred.await()?.results
                     ?.filter { it.isMovie || it.isTvShow }
                     ?: emptyList()
-                _addonSearchResults.value = addonDeferred.await() ?: emptyList()
+                _addonSearchGroups.value = addonDeferred.await() ?: emptyList()
             } finally {
                 _isSearchLoading.value = false
             }

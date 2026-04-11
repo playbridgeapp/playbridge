@@ -31,6 +31,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -67,6 +68,7 @@ fun MovieDetailScreen(
     val scope = rememberCoroutineScope()
 
     var details by remember { mutableStateOf<TmdbMovieDetails?>(null) }
+    var addonMeta by remember { mutableStateOf<StremioMetaDetail?>(null) }
     var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var trailerUrl by remember { mutableStateOf<String?>(null) }
@@ -84,8 +86,10 @@ fun MovieDetailScreen(
         val movieDetails = tmdb.getMovieDetails(movieId)
         details = movieDetails
         val imdbId = movieDetails?.imdbId
-        if (imdbId != null && omdb.isConfigured()) {
-            omdbDetails = omdb.getDetailsByImdbId(imdbId)
+        if (imdbId != null) {
+            if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
+            // Addon metadata is the primary display source
+            addonMeta = runCatching { addonRepository.fetchMeta("movie", imdbId) }.getOrNull()
         }
         isLoading = false
         trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
@@ -164,14 +168,14 @@ fun MovieDetailScreen(
                 // Backdrop
                 item {
                     BackdropSection(
-                        backdropUrl = movie.backdropUrl,
+                        backdropUrl = addonMeta?.background ?: movie.backdropUrl,
                         logoUrl = movie.logoUrl,
-                        title = movie.title,
-                        year = movie.year,
+                        title = addonMeta?.name ?: movie.title,
+                        year = addonMeta?.year ?: movie.year,
                         certification = movie.certification,
-                        rating = movie.rating,
-                        runtime = movie.runtimeFormatted,
-                        genres = movie.genres.map { it.name },
+                        rating = addonMeta?.imdbRating ?: movie.rating,
+                        runtime = addonMeta?.runtime ?: movie.runtimeFormatted,
+                        genres = addonMeta?.genres?.takeIf { it.isNotEmpty() } ?: movie.genres.map { it.name },
                         omdbDetails = omdbDetails
                     )
                 }
@@ -263,15 +267,16 @@ fun MovieDetailScreen(
                 // Overview
                 item {
                     Text(
-                        text = movie.overview,
+                        text = addonMeta?.description ?: movie.overview,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                         color = Color.White
                     )
-                    
-                    if (movie.cast.isNotEmpty()) {
+
+                    val displayCast = addonMeta?.cast?.takeIf { it.isNotEmpty() } ?: movie.cast
+                    if (displayCast.isNotEmpty()) {
                         Text(
-                            text = "Starring: ${movie.cast.joinToString(", ")}",
+                            text = "Starring: ${displayCast.joinToString(", ")}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White.copy(alpha = 0.7f),
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
@@ -363,14 +368,13 @@ fun TvShowDetailScreen(
     val scope = rememberCoroutineScope()
     
     var details by remember { mutableStateOf<TmdbTvDetails?>(null) }
+    var addonMeta by remember { mutableStateOf<StremioMetaDetail?>(null) }
     var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var trailerUrl by remember { mutableStateOf<String?>(null) }
     var watchProviders by remember { mutableStateOf<List<TmdbWatchProvider>>(emptyList()) }
     var hasAddons by remember { mutableStateOf(false) }
     var selectedSeason by remember { mutableIntStateOf(highlightSeason ?: 1) }
-    var seasonDetails by remember { mutableStateOf<TmdbSeason?>(null) }
-    var isSeasonLoading by remember { mutableStateOf(false) }
 
     // Stream resolution state
     var resolvedStreams by remember { mutableStateOf<List<ResolvedStream>>(emptyList()) }
@@ -388,7 +392,7 @@ fun TvShowDetailScreen(
     var isQueueing by remember { mutableStateOf(false) }
 
     // Episode selection for stream picker
-    var currentEpisodeSelection by remember { mutableStateOf<TmdbEpisode?>(null) }
+    var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
     // Context for season queue operations (holds episode list & preferences while Ep1 stream picker is open)
     var seasonQueueContext by remember { mutableStateOf<SeasonQueueContext?>(null) }
 
@@ -403,32 +407,32 @@ fun TvShowDetailScreen(
         val tvDetails = tmdb.getTvDetails(tvId)
         details = tvDetails
         val imdbId = tvDetails?.imdbId
-        if (imdbId != null && omdb.isConfigured()) {
-            omdbDetails = omdb.getDetailsByImdbId(imdbId)
+        if (imdbId != null) {
+            if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
+            addonMeta = runCatching { addonRepository.fetchMeta("series", imdbId) }.getOrNull()
         }
         isLoading = false
         trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
         watchProviders = tmdb.getTvWatchProviders(tvId)
         hasAddons = addonRepository.hasAnyAddons()
 
-        // Prefer the tracked season (if watching), otherwise default to first season
+        // Prefer the tracked season, otherwise first season from addon videos
         val trackedSeason = tracked
             ?.takeIf { it.status == WatchlistStatus.WATCHING.value }
             ?.seasonProgress
-        val targetSeason = trackedSeason
-            ?: details?.seasons?.firstOrNull { it.seasonNumber > 0 }?.seasonNumber
-            ?: 1
+        val firstAddonSeason = addonMeta?.videos
+            ?.mapNotNull { it.season }
+            ?.filter { it > 0 }
+            ?.minOrNull()
+        val targetSeason = trackedSeason ?: highlightSeason ?: firstAddonSeason ?: 1
         selectedSeason = targetSeason
-        isSeasonLoading = true
-        seasonDetails = tmdb.getSeasonDetails(tvId, targetSeason)
-        isSeasonLoading = false
     }
 
     // Stream picker sheet — when seasonQueueContext is set, picking a stream for Ep1
     // triggers the throttled queue for the rest of the season
 
     if (showStreamPicker) {
-        val episodeRuntime = currentEpisodeSelection?.runtime
+        val episodeRuntime: Int? = null // StremioVideo has no runtime
         StreamPickerSheet(
             streams = resolvedStreams,
             isLoading = resolutionState.isResolving,
@@ -455,7 +459,7 @@ fun TvShowDetailScreen(
 
                             if (prefLang.isNotEmpty()) {
                                 try {
-                                    val allSubs = subtitleService.getSubtitlesForEpisode(imdbId, episode.seasonNumber, episode.episodeNumber)
+                                    val allSubs = subtitleService.getSubtitlesForEpisode(imdbId, selectedSeason, episode.episode ?: 0)
                                     allSubs.mapNotNull { it.url }
                                 } catch (e: Exception) {
                                     emptyList()
@@ -479,12 +483,12 @@ fun TvShowDetailScreen(
                             resolutionState = ResolutionState() // Clear Ep1 resolution state
                             onPlayPlaylist(listOf(ep1Payload))
                             // Notify BrowserActivity of which show/season is now playing
-                            val startEp = sqCtx.episodes.firstOrNull()?.episodeNumber ?: 1
+                            val startEp = sqCtx.episodes.firstOrNull()?.episode ?: 1
                             onNowPlayingStarted(tvId, sqCtx.season, startEp)
                             Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
 
                             // Derive target bitrate + bingeGroup from selected Ep1 stream
-                            val ep1Runtime = currentEpisodeSelection?.runtime
+                            val ep1Runtime: Int? = null // StremioVideo has no runtime
                             val targetMbps = resolved.stream.behaviorHints?.calculateMbps(ep1Runtime)
                             val preferredBingeGroup = resolved.stream.behaviorHints?.bingeGroup
 
@@ -582,18 +586,18 @@ fun TvShowDetailScreen(
 
             val autoQualityKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_quality", "") ?: "" }
             val autoMaxMbps = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_max_mbps", "")?.toDoubleOrNull() }
-            val episodesInSeason = seasonDetails?.episodes ?: emptyList()
+            val episodesInSeason = addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList()
 
-            val startResolution: (TmdbEpisode, Boolean, Boolean) -> Unit = start@{ episode, forPhone, forcePicker ->
+            val startResolution: (StremioVideo, Boolean, Boolean) -> Unit = start@{ episode, forPhone, forcePicker ->
                 if (imdbId != null && hasAddons) {
                     resolutionState = ResolutionState(
                         isResolving = true,
                         target = if (forPhone) ResolutionTarget.PHONE else ResolutionTarget.TV,
-                        episodeId = episode.id
+                        episodeId = episode.episode ?: 0
                     )
                     forceManualInPicker = forcePicker
                     currentEpisodeSelection = episode
-                    streamPickerTitle = "${show.name} S${selectedSeason}E${episode.episodeNumber}"
+                    streamPickerTitle = "${show.name} S${selectedSeason}E${episode.episode ?: 0}"
                     resolvedStreams = emptyList()
 
                     if (forcePicker || autoQualityKey.isEmpty()) {
@@ -602,7 +606,7 @@ fun TvShowDetailScreen(
 
                     scope.launch {
                         addonRepository.resolveEpisodeStreamsFlow(
-                            imdbId, selectedSeason, episode.episodeNumber
+                            imdbId, selectedSeason, episode.episode ?: 0
                         ).collect { latest ->
                             resolvedStreams = latest
                         }
@@ -614,7 +618,7 @@ fun TvShowDetailScreen(
                                 streams = resolvedStreams,
                                 preferredQuality = QualityFilter.fromKey(autoQualityKey),
                                 maxMbps = autoMaxMbps,
-                                runtimeMinutes = episode.runtime
+                                runtimeMinutes = null
                             )
                             val finalSelection = best ?: resolvedStreams.firstOrNull()
                             if (finalSelection != null) {
@@ -635,16 +639,13 @@ fun TvShowDetailScreen(
                     }
 
                     if (!forPhone && episode == episodesInSeason.firstOrNull()) {
-                        val runtimeMap = episodesInSeason.associate { ep ->
-                            ep.episodeNumber to (ep.runtime ?: 45)
-                        }
                         seasonQueueContext = SeasonQueueContext(
                             imdbId = imdbId,
                             season = selectedSeason,
                             episodes = episodesInSeason,
                             showName = show.name,
                             qualityFilter = emptyList(),
-                            runtimeMap = runtimeMap
+                            runtimeMap = emptyMap()
                         )
                     }
                 }
@@ -659,14 +660,14 @@ fun TvShowDetailScreen(
                 // Backdrop
                 item {
                     BackdropSection(
-                        backdropUrl = show.backdropUrl,
+                        backdropUrl = addonMeta?.background ?: show.backdropUrl,
                         logoUrl = show.logoUrl,
-                        title = show.name,
-                        year = show.year,
+                        title = addonMeta?.name ?: show.name,
+                        year = addonMeta?.year ?: show.year,
                         certification = show.certification,
-                        rating = show.rating,
-                        runtime = "${show.numberOfSeasons} Season${if (show.numberOfSeasons != 1) "s" else ""}",
-                        genres = show.genres.map { it.name },
+                        rating = addonMeta?.imdbRating ?: show.rating,
+                        runtime = addonMeta?.runtime ?: "${show.numberOfSeasons} Season${if (show.numberOfSeasons != 1) "s" else ""}",
+                        genres = addonMeta?.genres?.takeIf { it.isNotEmpty() } ?: show.genres.map { it.name },
                         omdbDetails = omdbDetails
                     )
                 }
@@ -710,15 +711,16 @@ fun TvShowDetailScreen(
                 // Overview
                 item {
                     Text(
-                        text = show.overview,
+                        text = addonMeta?.description ?: show.overview,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                         color = Color.White
                     )
-                    
-                    if (show.cast.isNotEmpty()) {
+
+                    val displayCast = addonMeta?.cast?.takeIf { it.isNotEmpty() } ?: show.cast
+                    if (displayCast.isNotEmpty()) {
                         Text(
-                            text = "Starring: ${show.cast.joinToString(", ")}",
+                            text = "Starring: ${displayCast.joinToString(", ")}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White.copy(alpha = 0.7f),
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
@@ -729,7 +731,12 @@ fun TvShowDetailScreen(
                 // Season chips — left button scrolls the row (hidden when chips fit on screen),
                 // right button toggles episode sort order.
                 item {
-                    val seasons = show.seasons.filter { it.seasonNumber > 0 }
+                    val seasons = addonMeta?.videos
+                        ?.mapNotNull { it.season }
+                        ?.filter { it > 0 }
+                        ?.distinct()
+                        ?.sorted()
+                        ?: emptyList()
                     val chipScrollState = rememberScrollState()
                     // True once layout has run and chips overflow the available width
                     val isScrollable = chipScrollState.maxValue > 0
@@ -765,20 +772,15 @@ fun TvShowDetailScreen(
                                 .padding(start = if (isScrollable) 0.dp else 24.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            seasons.forEach { season ->
-                                val isSelected = selectedSeason == season.seasonNumber
+                            seasons.forEach { seasonNumber ->
+                                val isSelected = selectedSeason == seasonNumber
                                 ElevatedFilterChip(
                                     selected = isSelected,
                                     onClick = {
                                         if (isSelected) return@ElevatedFilterChip
-                                        selectedSeason = season.seasonNumber
-                                        scope.launch {
-                                            isSeasonLoading = true
-                                            seasonDetails = tmdb.getSeasonDetails(tvId, season.seasonNumber)
-                                            isSeasonLoading = false
-                                        }
+                                        selectedSeason = seasonNumber
                                     },
-                                    label = { Text("S${season.seasonNumber}") }
+                                    label = { Text("S$seasonNumber") }
                                 )
                             }
                         }
@@ -824,22 +826,8 @@ fun TvShowDetailScreen(
                     }
                 }
 
-                // Episodes loading
-                item {
-                    if (isSeasonLoading) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        }
-                    }
-                }
-
                 // Episodes list
-                val episodes = (seasonDetails?.episodes ?: emptyList())
+                val episodes = (addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList())
                     .let { if (episodesAscending) it else it.reversed() }
                 val isActivePlaylistSeason = highlightSeason != null &&
                         selectedSeason == highlightSeason &&
@@ -850,8 +838,9 @@ fun TvShowDetailScreen(
                 } else null
                 items(episodes.size) { index ->
                     val episode = episodes[index]
+                    val epNum = episode.episode ?: 0
                     val epPlaylistIndex = if (startEpisodeNumber != null) {
-                        episode.episodeNumber - startEpisodeNumber
+                        epNum - startEpisodeNumber
                     } else -1
                     val isEpPlaying = isActivePlaylistSeason &&
                             epPlaylistIndex == playlistState?.currentIndex
@@ -867,7 +856,7 @@ fun TvShowDetailScreen(
                         val trackedEp    = entity.episodeProgress ?: return@let false
                         when {
                             selectedSeason < trackedSeason -> true
-                            selectedSeason == trackedSeason -> episode.episodeNumber <= trackedEp
+                            selectedSeason == trackedSeason -> epNum <= trackedEp
                             else -> false
                         }
                     } ?: false
@@ -875,7 +864,7 @@ fun TvShowDetailScreen(
                         episode = episode,
                         hasAddon = imdbId != null,
                         isPlaying = isEpPlaying,
-                        isResolving = resolutionState.isResolving && resolutionState.episodeId == episode.id,
+                        isResolving = resolutionState.isResolving && resolutionState.episodeId == epNum,
                         isInActivePlaylist = isEpQueued,
                         isWatched = isEpWatched,
                         onClick = {
@@ -1457,7 +1446,7 @@ private fun ActionButtons(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EpisodeItem(
-    episode: TmdbEpisode,
+    episode: StremioVideo,
     hasAddon: Boolean = false,
     isPlaying: Boolean = false,
     isResolving: Boolean = false,
@@ -1496,10 +1485,10 @@ private fun EpisodeItem(
                     .height(80.dp)
                     .clip(RoundedCornerShape(8.dp))
             ) {
-                if (episode.stillUrl != null) {
+                if (episode.thumbnail != null) {
                     AsyncImage(
-                        model = episode.stillUrl,
-                        contentDescription = episode.name,
+                        model = episode.thumbnail,
+                        contentDescription = episode.title,
                         contentScale = ContentScale.Crop,
                         placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
                         error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
@@ -1523,7 +1512,7 @@ private fun EpisodeItem(
                     modifier = Modifier.align(Alignment.TopStart)
                 ) {
                     Text(
-                        text = episode.episodeNumber.toString(),
+                        text = (episode.episode ?: 0).toString(),
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
@@ -1553,12 +1542,12 @@ private fun EpisodeItem(
 
             Spacer(modifier = Modifier.width(16.dp))
 
-            // Title, Date, Runtime
+            // Title, Date
             Column(
                 modifier = Modifier.weight(1f)
             ) {
                 Text(
-                    text = episode.name,
+                    text = episode.title,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
@@ -1566,33 +1555,21 @@ private fun EpisodeItem(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                if (!episode.airDate.isNullOrBlank()) {
+                if (!episode.released.isNullOrBlank()) {
                     Text(
-                        text = episode.airDate,
+                        text = episode.released,
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White.copy(alpha = 0.7f)
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (episode.runtime != null) {
-                        Text(
-                            text = "${episode.runtime}m",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.5f)
-                        )
-                    }
-                    if (isWatched) {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = "Watched",
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
+                if (isWatched) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = "Watched",
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                        modifier = Modifier.size(14.dp)
+                    )
                 }
             }
         }
@@ -1601,7 +1578,7 @@ private fun EpisodeItem(
 
          // Description
         Text(
-            text = episode.overview,
+            text = episode.overview ?: "",
             style = MaterialTheme.typography.bodyMedium,
             color = Color.White.copy(alpha = 0.7f),
             maxLines = 4,
@@ -1633,7 +1610,7 @@ data class SeasonResolutionState(
 data class SeasonQueueContext(
     val imdbId: String,
     val season: Int,
-    val episodes: List<TmdbEpisode>,
+    val episodes: List<StremioVideo>,
     val showName: String,
     val qualityFilter: List<String>,
     val runtimeMap: Map<Int, Int>
@@ -1676,5 +1653,403 @@ fun TranslucentBackground(backdropUrl: String?) {
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
         )
+    }
+}
+
+/**
+ * Routing + detail screen for items tapped in an addon catalog.
+ *
+ * - Standard IMDb IDs ("tt..."): performs a TMDB /find lookup and redirects
+ *   to the existing [MovieDetailScreen] or [TvShowDetailScreen].
+ * - Non-standard IDs: fetches full metadata via [AddonRepository.fetchMeta] and
+ *   displays a native detail view with stream resolution (Phase 4).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LibraryDetailScreen(
+    id: String,
+    type: String,
+    addonRepository: AddonRepository,
+    onMovieResolved: (tmdbId: Int) -> Unit,
+    onTvShowResolved: (tmdbId: Int) -> Unit,
+    onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit = { _, _, _ -> },
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    val tmdb = remember { TmdbRepository(context) }
+    val scope = rememberCoroutineScope()
+
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var metaDetail by remember { mutableStateOf<StremioMetaDetail?>(null) }
+
+    // Stream resolution state
+    var resolvedStreams by remember { mutableStateOf<List<ResolvedStream>>(emptyList()) }
+    var resolutionState by remember { mutableStateOf(ResolutionState()) }
+    var showStreamPicker by remember { mutableStateOf(false) }
+    var resolvingEpisodeId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(id, type) {
+        isLoading = true
+        errorMessage = null
+
+        when {
+            id.startsWith("tt") -> {
+                // Standard IMDb ID — look up TMDB ID via /find
+                val result = tmdb.findByImdbId(id)
+                when {
+                    result == null -> {
+                        errorMessage = "Could not reach TMDB. Check your API key and connection."
+                    }
+                    type == "movie" && result.movieResults.isNotEmpty() -> {
+                        onMovieResolved(result.movieResults.first().id)
+                        return@LaunchedEffect
+                    }
+                    type == "series" && result.tvResults.isNotEmpty() -> {
+                        onTvShowResolved(result.tvResults.first().id)
+                        return@LaunchedEffect
+                    }
+                    result.movieResults.isNotEmpty() -> {
+                        // type mismatch — trust the data over the declared type
+                        onMovieResolved(result.movieResults.first().id)
+                        return@LaunchedEffect
+                    }
+                    result.tvResults.isNotEmpty() -> {
+                        onTvShowResolved(result.tvResults.first().id)
+                        return@LaunchedEffect
+                    }
+                    else -> {
+                        errorMessage = "\"$id\" was not found on TMDB."
+                    }
+                }
+            }
+            else -> {
+                // Non-IMDb ID — fetch meta from addon
+                val meta = addonRepository.fetchMeta(type, id)
+                if (meta != null) {
+                    metaDetail = meta
+                } else {
+                    errorMessage = "Metadata for \"$id\" is not available from any installed addon."
+                }
+            }
+        }
+        isLoading = false
+    }
+
+    // Helper: start stream resolution for a given stream ID
+    val startResolution = { streamId: String, forPhone: Boolean ->
+        resolvingEpisodeId = streamId
+        resolutionState = ResolutionState(
+            isResolving = true,
+            target = if (forPhone) ResolutionTarget.PHONE else ResolutionTarget.TV
+        )
+        resolvedStreams = emptyList()
+        showStreamPicker = true
+        scope.launch {
+            addonRepository.resolveStreamsFlow(type, streamId).collect { latest ->
+                resolvedStreams = latest
+            }
+            resolutionState = resolutionState.copy(isResolving = false)
+            resolvingEpisodeId = null
+        }
+        Unit
+    }
+
+    // Stream picker sheet
+    if (showStreamPicker) {
+        val title = metaDetail?.name ?: id
+        StreamPickerSheet(
+            streams = resolvedStreams,
+            isLoading = resolutionState.isResolving,
+            title = title,
+            forceManual = false,
+            onStreamSelected = { resolved ->
+                val forPhone = resolutionState.target == ResolutionTarget.PHONE
+                showStreamPicker = false
+                resolutionState = ResolutionState()
+                val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
+                if (forPhone) {
+                    openInExternalPlayer(context, streamUrl, null, null)
+                } else {
+                    onPlayStream(streamUrl, title, null)
+                    Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = {
+                showStreamPicker = false
+                resolutionState = ResolutionState()
+                resolvingEpisodeId = null
+            }
+        )
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        when {
+            isLoading -> CircularProgressIndicator()
+
+            errorMessage != null -> Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Extension,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                )
+                Text(
+                    text = errorMessage!!,
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(onClick = onBack) { Text("Go back") }
+            }
+
+            metaDetail != null -> AddonMetaDetailContent(
+                meta = metaDetail!!,
+                type = type,
+                resolutionState = resolutionState,
+                resolvingEpisodeId = resolvingEpisodeId,
+                onWatchOnTv = { streamId -> startResolution(streamId, false) },
+                onWatchOnPhone = { streamId -> startResolution(streamId, true) }
+            )
+        }
+
+        TopAppBar(
+            title = { },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = Color.Transparent,
+                scrolledContainerColor = Color.Transparent
+            ),
+            modifier = Modifier.align(Alignment.TopStart)
+        )
+    }
+}
+
+// ==================== Meta Detail UI ====================
+
+@Composable
+private fun AddonMetaDetailContent(
+    meta: StremioMetaDetail,
+    type: String,
+    resolutionState: ResolutionState,
+    resolvingEpisodeId: String?,
+    onWatchOnTv: (streamId: String) -> Unit,
+    onWatchOnPhone: (streamId: String) -> Unit
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        TranslucentBackground(backdropUrl = meta.background ?: meta.poster)
+        
+        val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 32.dp + navBarPadding)
+        ) {
+            // Backdrop / poster header
+            item {
+                BackdropSection(
+                    backdropUrl = meta.background ?: meta.poster,
+                    logoUrl = null,
+                    title = meta.name,
+                    year = meta.year ?: "",
+                    certification = "",
+                    rating = meta.imdbRating ?: "",
+                    runtime = meta.runtime ?: "",
+                    genres = meta.genres,
+                    omdbDetails = null
+                )
+            }
+
+            // Description
+            if (!meta.description.isNullOrBlank()) {
+                item {
+                    Text(
+                        text = meta.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            // Cast
+            if (meta.cast.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Starring: ${meta.cast.take(5).joinToString(", ")}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            // Play buttons — shown for movies, or for series that have no episode list
+            if (type == "movie" || meta.videos.isEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    SplitPlayButton(
+                        isTvResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV,
+                        isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
+                        hasAddons = true,
+                        hasImdbId = true,
+                        watchProviders = emptyList(),
+                        onWatchOnTv = { onWatchOnTv(meta.id) },
+                        onWatchOnTvLongClick = { onWatchOnTv(meta.id) }, // no picker forcing here yet
+                        onWatchOnPhone = { onWatchOnPhone(meta.id) },
+                        onWatchOnPhoneLongClick = { onWatchOnPhone(meta.id) }
+                    )
+                }
+            }
+
+            // Episodes list
+            if (meta.videos.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = "Episodes",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    )
+                }
+                
+                // Group by season if available, otherwise just list them
+                val groupedEpisodes = meta.videos.groupBy { it.season ?: 1 }
+                val sortedSeasons = groupedEpisodes.keys.sorted()
+                
+                sortedSeasons.forEach { seasonNum ->
+                    if (sortedSeasons.size > 1) {
+                        item {
+                            Text(
+                                text = "Season $seasonNum",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+                    val episodes = groupedEpisodes[seasonNum] ?: emptyList()
+                    items(episodes) { video ->
+                        ElegantEpisodeItemRow(
+                            video = video,
+                            isResolving = resolvingEpisodeId == video.id && resolutionState.isResolving,
+                            resolvingTarget = resolutionState.target,
+                            onWatchOnTv = { onWatchOnTv(video.id) },
+                            onWatchOnPhone = { onWatchOnPhone(video.id) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ElegantEpisodeItemRow(
+    video: StremioVideo,
+    isResolving: Boolean,
+    resolvingTarget: ResolutionTarget,
+    onWatchOnTv: () -> Unit,
+    onWatchOnPhone: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Thumbnail Box
+        Box(
+            modifier = Modifier
+                .width(140.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha=0.6f))
+        ) {
+            if (video.thumbnail != null) {
+                AsyncImage(
+                    model = video.thumbnail,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.5f),
+                    modifier = Modifier.align(Alignment.Center).size(32.dp)
+                )
+            }
+            
+            // Resolving Overlay
+            if (isResolving) {
+                Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.5f)), contentAlignment=Alignment.Center) {
+                    CircularProgressIndicator(modifier=Modifier.size(24.dp), color=Color.White, strokeWidth=2.dp)
+                }
+            }
+        }
+        
+        Column(modifier = Modifier.weight(1f)) {
+            val label = when {
+                video.season != null && video.episode != null ->
+                    "S${video.season}E${video.episode}" + if (video.title.isNotBlank()) " · ${video.title}" else ""
+                video.title.isNotBlank() -> video.title
+                else -> video.id
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            video.released?.take(10)?.let { date ->
+                Spacer(modifier=Modifier.height(2.dp))
+                Text(
+                    text = date,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.6f)
+                )
+            }
+            Spacer(modifier=Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onWatchOnTv,
+                    enabled = !isResolving,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical=4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Icon(Icons.Default.Tv, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("TV", style=MaterialTheme.typography.labelSmall)
+                }
+                OutlinedButton(
+                    onClick = onWatchOnPhone,
+                    enabled = !isResolving,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical=4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Phone", style=MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
     }
 }

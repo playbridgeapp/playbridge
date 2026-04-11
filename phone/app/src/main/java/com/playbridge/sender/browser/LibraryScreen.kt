@@ -155,7 +155,8 @@ private fun LibraryScreenContent(
     val isSearching by viewModel.isSearching.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
     val isSearchLoading by viewModel.isSearchLoading.collectAsState()
-    val addonSearchResults by viewModel.addonSearchResults.collectAsState()
+    val addonSearchGroups by viewModel.addonSearchGroups.collectAsState()
+    val addonSearchResults = remember(addonSearchGroups) { addonSearchGroups.flatMap { it.items } }
 
     // Discovery state
     val selectedGenres by viewModel.selectedGenres.collectAsState()
@@ -175,8 +176,25 @@ private fun LibraryScreenContent(
 
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
 
+    // Home tab: which addon is selected in the filter chip row (null = All)
+    var selectedAddonFilter by remember { mutableStateOf<String?>(null) }
+
+    // Search: which source chip is selected ("" = All, "tmdb" = TMDB only, addonName = that addon)
+    var selectedSearchSource by remember { mutableStateOf("") }
+
     BackHandler(enabled = isSearching) {
         viewModel.setIsSearching(false)
+        selectedSearchSource = ""
+    }
+
+    // Reset search source chip when search session ends
+    LaunchedEffect(isSearching) { if (!isSearching) selectedSearchSource = "" }
+    // Reset addon filter if the installed addons change (new addon installed, etc.)
+    LaunchedEffect(catalogRows) {
+        if (selectedAddonFilter != null &&
+            catalogRows.none { it.addonName == selectedAddonFilter }) {
+            selectedAddonFilter = null
+        }
     }
 
     var showFilterSheet by remember { mutableStateOf(false) }
@@ -618,20 +636,71 @@ private fun LibraryScreenContent(
                 )
             }
         } else {
-            CombinedSearchResults(
-                listState = viewModel.searchResultsListState,
-                tmdbResults = searchResults,
-                addonResults = addonSearchResults,
-                contentPadding = PaddingValues(
-                    top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
-                    bottom = contentBottomPadding + 8.dp,
-                    start = 8.dp,
-                    end = 8.dp
-                ),
-                onMovieClick = onMovieClick,
-                onTvShowClick = onTvShowClick,
-                onAddonItemClick = onAddonItemClick
-            )
+            // Derive which results to show based on selected source chip
+            val filteredTmdb = if (selectedSearchSource.isEmpty() || selectedSearchSource == "tmdb")
+                searchResults else emptyList()
+            val filteredAddon = when {
+                selectedSearchSource.isEmpty() -> addonSearchResults
+                selectedSearchSource == "tmdb" -> emptyList()
+                else -> addonSearchGroups.find { it.addonName == selectedSearchSource }?.items ?: emptyList()
+            }
+
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Source filter chips
+                val addonSources = addonSearchGroups.map { it.addonName }
+                if (searchResults.isNotEmpty() || addonSearchResults.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 4.dp,
+                                bottom = 4.dp
+                            ),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedSearchSource.isEmpty(),
+                                onClick = { selectedSearchSource = "" },
+                                label = { Text("All") }
+                            )
+                        }
+                        if (searchResults.isNotEmpty()) {
+                            item {
+                                FilterChip(
+                                    selected = selectedSearchSource == "tmdb",
+                                    onClick = { selectedSearchSource = "tmdb" },
+                                    label = { Text("TMDB") }
+                                )
+                            }
+                        }
+                        items(addonSources) { addonName ->
+                            FilterChip(
+                                selected = selectedSearchSource == addonName,
+                                onClick = { selectedSearchSource = addonName },
+                                label = { Text(addonName) }
+                            )
+                        }
+                    }
+                }
+
+                CombinedSearchResults(
+                    listState = viewModel.searchResultsListState,
+                    tmdbResults = filteredTmdb,
+                    addonResults = filteredAddon,
+                    contentPadding = PaddingValues(
+                        top = if (addonSources.isNotEmpty() || searchResults.isNotEmpty()) 4.dp
+                              else innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
+                        bottom = contentBottomPadding + 8.dp,
+                        start = 8.dp,
+                        end = 8.dp
+                    ),
+                    onMovieClick = onMovieClick,
+                    onTvShowClick = onTvShowClick,
+                    onAddonItemClick = onAddonItemClick
+                )
+            }
         }
     } else {
         // Main catalog
@@ -696,11 +765,48 @@ private fun LibraryScreenContent(
                 }
             } else {
                 // Home tab — entirely addon-driven, no TMDB required
+                // Derive the distinct addon names for the filter chips
+                val addonNames = remember(catalogRows) {
+                    catalogRows.map { it.addonName }.distinct()
+                }
+                val filteredCatalogRows = remember(catalogRows, selectedAddonFilter) {
+                    if (selectedAddonFilter == null) catalogRows
+                    else catalogRows.filter { it.addonName == selectedAddonFilter }
+                }
+
                 LazyColumn(
                     state = viewModel.mainListState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(top = innerPadding.calculateTopPadding(), bottom = contentBottomPadding)
                 ) {
+                    // Addon filter chips — shown when more than one addon is installed
+                    if (addonNames.size > 1) {
+                        item(key = "addon_filter_chips") {
+                            LazyRow(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                item {
+                                    FilterChip(
+                                        selected = selectedAddonFilter == null,
+                                        onClick = { selectedAddonFilter = null },
+                                        label = { Text("All") }
+                                    )
+                                }
+                                items(addonNames) { name ->
+                                    FilterChip(
+                                        selected = selectedAddonFilter == name,
+                                        onClick = { selectedAddonFilter = name },
+                                        label = { Text(name) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     // Continue Watching — local watchlist, always available
                     val continueWatching = watchlist.filter {
                         it.status == WatchlistStatus.WATCHING.value
@@ -740,16 +846,18 @@ private fun LibraryScreenContent(
                     }
 
                     // Addon catalog rows — one horizontal row per installed catalog
-                    if (catalogRows.isNotEmpty()) {
-                        catalogRows.forEach { row ->
-                            item(key = "${row.addonBaseUrl}:${row.type}:${row.catalogId}") {
+                    if (filteredCatalogRows.isNotEmpty()) {
+                        filteredCatalogRows.forEach { row ->
+                            val rowKey = "${row.addonBaseUrl}:${row.type}:${row.catalogId}"
+                            item(key = rowKey) {
                                 AddonMediaRow(
                                     row = row,
+                                    listState = viewModel.catalogRowScrollState(rowKey),
                                     onItemClick = { item -> onAddonItemClick(item.id, item.type) }
                                 )
                             }
                         }
-                    } else if (continueWatching.isEmpty()) {
+                    } else if (catalogRows.isEmpty() && continueWatching.isEmpty()) {
                         // Nothing to show — prompt user to install an addon
                         item {
                             Box(
@@ -1505,6 +1613,7 @@ private fun ApiKeyPrompt() {
 @Composable
 private fun AddonMediaRow(
     row: AddonCatalogRow,
+    listState: LazyListState,
     onItemClick: (StremioMetaPreview) -> Unit
 ) {
     if (row.isLoading && row.items.isEmpty()) return // hide until first page arrives
@@ -1549,6 +1658,7 @@ private fun AddonMediaRow(
         }
 
         LazyRow(
+            state = listState,
             contentPadding = PaddingValues(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {

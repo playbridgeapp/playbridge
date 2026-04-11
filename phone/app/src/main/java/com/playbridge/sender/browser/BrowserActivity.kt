@@ -1174,8 +1174,8 @@ class BrowserActivity : ComponentActivity() {
                             is Screen.TvShowDetail -> {
                                 // No TopAppBar here as TvShowDetailScreen has its own
                             }
-                            is Screen.AddonDetail -> {
-                                // No TopAppBar here as AddonDetailScreen has its own
+                            is Screen.LibraryDetail -> {
+                                // No TopAppBar here as LibraryDetailScreen has its own
                             }
                             Screen.AddonSettings -> {
                                 // No TopAppBar here as AddonSettingsScreen has its own
@@ -1781,14 +1781,14 @@ class BrowserActivity : ComponentActivity() {
                                                     currentScreen = Screen.TvShowDetail(tvId)
                                                 },
                                                 onAddonItemClick = { id, type ->
-                                                    currentScreen = Screen.AddonDetail(id, type)
+                                                    currentScreen = Screen.LibraryDetail(id, type)
                                                 }
                                             )
                                         }
-                                        is Screen.AddonDetail -> {
-                                            val screen = targetScreen as Screen.AddonDetail
+                                        is Screen.LibraryDetail -> {
+                                            val screen = targetScreen as Screen.LibraryDetail
                                             BackHandler { currentScreen = Screen.Library }
-                                            AddonDetailScreen(
+                                            LibraryDetailScreen(
                                                 id = screen.id,
                                                 type = screen.type,
                                                 addonRepository = addonRepository,
@@ -2347,5 +2347,5 @@ sealed class Screen {
     object AddonSettings : Screen()
     data class MovieDetail(val movieId: Int) : Screen()
     data class TvShowDetail(val tvId: Int) : Screen()
-    data class AddonDetail(val id: String, val type: String) : Screen()
+    data class LibraryDetail(val id: String, val type: String) : Screen()
 }

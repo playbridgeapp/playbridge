@@ -308,6 +308,38 @@ class AddonRepository(
         }
     }
 
+    /**
+     * Like [searchAllCatalogs] but returns results grouped by addon name so the UI
+     * can render per-source filter chips. Deduplication is applied within each group.
+     */
+    suspend fun searchAllCatalogsGrouped(query: String): List<AddonSearchResultGroup> {
+        if (query.isBlank()) return emptyList()
+        val addons = addonDao.getAllSync()
+        return coroutineScope {
+            // One deferred per (addon, catalogEntry) pair, tagged with the addon name
+            val tagged = addons.flatMap { addon ->
+                addon.parsedCatalogEntries()
+                    .filter { it.supportsSearch && it.type.isNotBlank() && it.id.isNotBlank() }
+                    .map { entry ->
+                        async(Dispatchers.IO) {
+                            val items = searchCatalog(addon, entry.type, entry.id, query)
+                            addon.name to items
+                        }
+                    }
+            }
+            // Merge by addon name, dedup within each group
+            val byAddon = mutableMapOf<String, MutableList<StremioMetaPreview>>()
+            tagged.awaitAll().forEach { (addonName, items) ->
+                val bucket = byAddon.getOrPut(addonName) { mutableListOf() }
+                val seen = bucket.map { it.id }.toMutableSet()
+                items.forEach { item -> if (item.id.isNotBlank() && seen.add(item.id)) bucket += item }
+            }
+            byAddon.entries
+                .filter { it.value.isNotEmpty() }
+                .map { AddonSearchResultGroup(addonName = it.key, items = it.value) }
+        }
+    }
+
     // ==================== Meta Resolution ====================
 
     /**

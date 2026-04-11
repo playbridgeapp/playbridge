@@ -300,3 +300,13 @@ data class AddonCatalogRow(
     val items: List<StremioMetaPreview> = emptyList(),
     val isLoading: Boolean = true
 )
+
+// ==================== Search Result Groups ====================
+
+/**
+ * Search results from a single addon, used to power per-source filter chips in Search.
+ */
+data class AddonSearchResultGroup(
+    val addonName: String,
+    val items: List<StremioMetaPreview>
+)
