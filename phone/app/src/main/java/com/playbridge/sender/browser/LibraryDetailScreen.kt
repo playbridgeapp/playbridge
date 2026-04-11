@@ -59,6 +59,7 @@ fun MovieDetailScreen(
     onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
     onPlayTrailer: ((String) -> Unit)? = null,
     viewModel: LibraryViewModel,
+    tvName: String? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -236,6 +237,7 @@ fun MovieDetailScreen(
                         hasAddons = hasAddons,
                         hasImdbId = imdbId != null,
                         watchProviders = watchProviders,
+                        tvName = tvName,
                         onWatchOnTv = { startResolution(false, false) },
                         onWatchOnTvLongClick = { startResolution(false, true) },
                         onWatchOnPhone = { startResolution(true, false) },
@@ -359,6 +361,7 @@ fun TvShowDetailScreen(
     highlightSeason: Int? = null,
     highlightEpisode: Int? = null,
     viewModel: LibraryViewModel,
+    tvName: String? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -680,6 +683,7 @@ fun TvShowDetailScreen(
                         hasAddons = hasAddons,
                         hasImdbId = imdbId != null,
                         watchProviders = watchProviders,
+                        tvName = tvName,
                         onWatchOnTv = { episodesInSeason.firstOrNull()?.let { startResolution(it, false, false) } },
                         onWatchOnTvLongClick = { episodesInSeason.firstOrNull()?.let { startResolution(it, false, true) } },
                         onWatchOnPhone = { episodesInSeason.firstOrNull()?.let { startResolution(it, true, false) } },
@@ -1101,16 +1105,19 @@ private fun SplitPlayButton(
     hasAddons: Boolean,
     hasImdbId: Boolean,
     watchProviders: List<TmdbWatchProvider>,
+    tvName: String? = null,
     onWatchOnTv: () -> Unit,
     onWatchOnTvLongClick: (() -> Unit)? = null,
     onWatchOnPhone: () -> Unit = {},
     onWatchOnPhoneLongClick: (() -> Unit)? = null
 ) {
     var showProvidersSheet by remember { mutableStateOf(false) }
+    var watchOnTv by remember { mutableStateOf(tvName != null) }
 
     val topProvider = watchProviders.firstOrNull()
     val isBusy = isTvResolving || isPhoneResolving
-    val canPlayOnTv = hasAddons && hasImdbId && !isBusy
+    val isResolving = if (watchOnTv) isTvResolving else isPhoneResolving
+    val canPlay = hasAddons && hasImdbId || watchProviders.isNotEmpty()
     val haptic = LocalHapticFeedback.current
 
     Column(
@@ -1119,26 +1126,77 @@ private fun SplitPlayButton(
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // ── Primary: Watch on TV ──────────────────────────────────────────────
+        // ── Mode toggle chip ──────────────────────────────────────────────────
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Watching on",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.4f),
+                modifier = Modifier.padding(end = 8.dp)
+            )
+            Surface(
+                modifier = Modifier.clickable { watchOnTv = !watchOnTv },
+                shape = RoundedCornerShape(50),
+                color = Color.White.copy(alpha = 0.08f),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, Color.White.copy(alpha = 0.2f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (watchOnTv) Icons.Default.Tv else Icons.Default.PhoneAndroid,
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                        tint = Color.White.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = if (watchOnTv) {
+                            if (!tvName.isNullOrBlank()) "TV ($tvName)" else "TV"
+                        } else "Phone",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White.copy(alpha = 0.75f)
+                    )
+                    Icon(
+                        imageVector = Icons.Default.SwapHoriz,
+                        contentDescription = "Switch destination",
+                        modifier = Modifier.size(13.dp),
+                        tint = Color.White.copy(alpha = 0.45f)
+                    )
+                }
+            }
+        }
+
+        // ── Single Watch button ───────────────────────────────────────────────
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(60.dp)
                 .combinedClickable(
-                    enabled = !isBusy && (canPlayOnTv || watchProviders.isNotEmpty()),
+                    enabled = !isBusy && canPlay,
                     onClick = {
-                        if (hasAddons && hasImdbId) onWatchOnTv()
-                        else if (watchProviders.isNotEmpty()) showProvidersSheet = true
+                        if (hasAddons && hasImdbId) {
+                            if (watchOnTv) onWatchOnTv() else onWatchOnPhone()
+                        } else if (watchProviders.isNotEmpty()) showProvidersSheet = true
                     },
-                    onLongClick = if (onWatchOnTvLongClick != null && !isBusy) {
-                        { 
+                    onLongClick = if (!isBusy) {
+                        {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onWatchOnTvLongClick() 
+                            if (watchOnTv) onWatchOnTvLongClick?.invoke()
+                            else onWatchOnPhoneLongClick?.invoke()
                         }
                     } else null
                 ),
             shape = RoundedCornerShape(16.dp),
-            color = if (!isBusy && (canPlayOnTv || watchProviders.isNotEmpty()))
+            color = if (!isBusy && canPlay)
                 MaterialTheme.colorScheme.primary
             else
                 MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
@@ -1149,19 +1207,19 @@ private fun SplitPlayButton(
             ) {
                 // Icon anchored to the left
                 Icon(
-                    Icons.Default.Tv,
+                    imageVector = if (watchOnTv) Icons.Default.Tv else Icons.Default.PhoneAndroid,
                     contentDescription = null,
                     modifier = Modifier
                         .align(Alignment.CenterStart)
                         .size(24.dp),
-                    tint = if (!isBusy && (canPlayOnTv || watchProviders.isNotEmpty()))
+                    tint = if (!isBusy && canPlay)
                         MaterialTheme.colorScheme.onPrimary
                     else
                         MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.4f)
                 )
                 // Text centered in the button
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (isTvResolving) {
+                    if (isResolving) {
                         Text(
                             text = resolvingLabel.ifBlank { "Resolving…" },
                             fontWeight = FontWeight.Bold,
@@ -1170,87 +1228,19 @@ private fun SplitPlayButton(
                         )
                     } else {
                         Text(
-                            text = "Watch on TV",
+                            text = "Watch",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onPrimary
+                            color = if (!isBusy && canPlay)
+                                MaterialTheme.colorScheme.onPrimary
+                            else
+                                MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.4f)
                         )
                         if (topProvider != null) {
                             Text(
                                 text = topProvider.providerName,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Secondary: Watch on phone ─────────────────────────────────────────
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(60.dp)
-                .combinedClickable(
-                    enabled = !isBusy && (hasAddons && hasImdbId || watchProviders.isNotEmpty()),
-                    onClick = {
-                        if (hasAddons && hasImdbId) onWatchOnPhone()
-                        else if (watchProviders.isNotEmpty()) showProvidersSheet = true
-                    },
-                    onLongClick = if (onWatchOnPhoneLongClick != null && !isBusy) {
-                        {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onWatchOnPhoneLongClick()
-                        }
-                    } else null
-                ),
-            shape = RoundedCornerShape(16.dp),
-            color = Color.Transparent,
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                if (!isBusy) {
-                    if (watchProviders.isNotEmpty()) Color.White.copy(alpha = 0.4f)
-                    else Color.White.copy(alpha = 0.15f)
-                } else {
-                    Color.White.copy(alpha = 0.05f)
-                }
-            )
-        ) {
-            Box(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                // Icon anchored to the left
-                Icon(
-                    Icons.Default.PhoneAndroid,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .size(24.dp),
-                    tint = if (!isBusy) Color.White else Color.White.copy(alpha = 0.3f)
-                )
-                // Text centered in the button
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (isPhoneResolving) {
-                        Text(
-                            text = resolvingLabel.ifBlank { "Resolving…" },
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = Color.White.copy(alpha = 0.3f)
-                        )
-                    } else {
-                        Text(
-                            text = "Watch on phone",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = if (!isBusy) Color.White else Color.White.copy(alpha = 0.3f)
-                        )
-                        if (topProvider != null) {
-                            Text(
-                                text = topProvider.providerName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = if (!isBusy) 0.55f else 0.2f)
                             )
                         }
                     }
@@ -1673,6 +1663,7 @@ fun LibraryDetailScreen(
     onMovieResolved: (tmdbId: Int) -> Unit,
     onTvShowResolved: (tmdbId: Int) -> Unit,
     onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit = { _, _, _ -> },
+    tvName: String? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1815,6 +1806,7 @@ fun LibraryDetailScreen(
                 type = type,
                 resolutionState = resolutionState,
                 resolvingEpisodeId = resolvingEpisodeId,
+                tvName = tvName,
                 onWatchOnTv = { streamId -> startResolution(streamId, false) },
                 onWatchOnPhone = { streamId -> startResolution(streamId, true) }
             )
@@ -1844,6 +1836,7 @@ private fun AddonMetaDetailContent(
     type: String,
     resolutionState: ResolutionState,
     resolvingEpisodeId: String?,
+    tvName: String? = null,
     onWatchOnTv: (streamId: String) -> Unit,
     onWatchOnPhone: (streamId: String) -> Unit
 ) {
@@ -1904,6 +1897,7 @@ private fun AddonMetaDetailContent(
                         hasAddons = true,
                         hasImdbId = true,
                         watchProviders = emptyList(),
+                        tvName = tvName,
                         onWatchOnTv = { onWatchOnTv(meta.id) },
                         onWatchOnTvLongClick = { onWatchOnTv(meta.id) }, // no picker forcing here yet
                         onWatchOnPhone = { onWatchOnPhone(meta.id) },

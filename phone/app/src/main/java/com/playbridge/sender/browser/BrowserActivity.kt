@@ -1262,7 +1262,12 @@ class BrowserActivity : ComponentActivity() {
                                             }
 
                                             // BrowserView call site
-                                            Box(modifier = Modifier.fillMaxSize()) {
+                                            // Apply top padding so GeckoView starts below the toolbar,
+                                            // not behind it (required after enableEdgeToEdge()).
+                                            Box(modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(top = innerPadding.calculateTopPadding())
+                                            ) {
                                                 BrowserView(
                                                     session = session,
                                                     onLongPressLink = { url: String -> contextMenuUrl = url }
@@ -1792,6 +1797,7 @@ class BrowserActivity : ComponentActivity() {
                                                 id = screen.id,
                                                 type = screen.type,
                                                 addonRepository = addonRepository,
+                                                tvName = tvDevice?.name,
                                                 onMovieResolved = { tmdbId ->
                                                     currentScreen = Screen.MovieDetail(tmdbId)
                                                 },
@@ -1831,6 +1837,7 @@ class BrowserActivity : ComponentActivity() {
                                                 movieId = movieId,
                                                 addonRepository = addonRepository,
                                                 viewModel = libraryViewModel,
+                                                tvName = tvDevice?.name,
                                                 onPlayTrailer = { trailerUrl ->
                                                     castSheetInitialMode = "browse"
                                                     castSheetBrowseOverride = trailerUrl
@@ -1870,6 +1877,7 @@ class BrowserActivity : ComponentActivity() {
                                             TvShowDetailScreen(
                                                 tvId = tvId,
                                                 addonRepository = addonRepository,
+                                                tvName = tvDevice?.name,
                                                 onPlayTrailer = { trailerUrl ->
                                                     castSheetInitialMode = "browse"
                                                     castSheetBrowseOverride = trailerUrl
