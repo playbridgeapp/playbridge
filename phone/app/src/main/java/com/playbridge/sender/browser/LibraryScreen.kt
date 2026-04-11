@@ -363,6 +363,7 @@ private fun LibraryScreenContent(
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         floatingActionButtonPosition = androidx.compose.material3.FabPosition.End,
         floatingActionButton = {
@@ -606,7 +607,8 @@ private fun LibraryScreenContent(
             )
         }
 
-        val contentBottomPadding = innerPadding.calculateBottomPadding() + 80.dp
+        val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val contentBottomPadding = innerPadding.calculateBottomPadding() + navBarPadding + 80.dp
         if (!isConfigured) {
         // No API key — show setup prompt
         ApiKeyPrompt()
@@ -642,7 +644,7 @@ private fun LibraryScreenContent(
                 listState = viewModel.searchResultsListState,
                 results = searchResults,
                 contentPadding = PaddingValues(
-                    top = innerPadding.calculateTopPadding() + 8.dp,
+                    top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
                     bottom = contentBottomPadding + 8.dp,
                     start = 8.dp,
                     end = 8.dp
@@ -690,7 +692,7 @@ private fun LibraryScreenContent(
                     },
                 )
             } else if (tab == 1) {
-                Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
+                Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding())) {
                     DiscoverGrid(
                         movies = discoveredMovies,
                         tvShows = discoveredTvShows,

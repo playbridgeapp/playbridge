@@ -6,6 +6,7 @@ import android.view.View
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
@@ -194,8 +195,8 @@ class BrowserActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
 
 
         
@@ -846,7 +847,8 @@ class BrowserActivity : ComponentActivity() {
                     }
                 ) {
                     Scaffold(
-                    topBar = {
+                        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                        topBar = {
                         if (isFullscreen) {
                             // Hide toolbar in fullscreen
                         } else when (currentScreen) {
@@ -1217,7 +1219,7 @@ class BrowserActivity : ComponentActivity() {
                         } else {
                             innerPadding
                         }
-                        Box(modifier = Modifier.padding(resolvedPadding).fillMaxSize()) {
+                        Box(modifier = Modifier.fillMaxSize()) {
                                     when (targetScreen) {
                                         Screen.Browser -> {
                                             // Fullscreen back handler — takes priority

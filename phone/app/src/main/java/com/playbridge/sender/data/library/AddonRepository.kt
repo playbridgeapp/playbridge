@@ -150,6 +150,12 @@ class AddonRepository(
         }
     }
 
+    /**
+     * Returns true if at least one addon is installed.
+     * Used by the UI to decide between stream-picker mode vs. provider-info-only mode.
+     */
+    suspend fun hasAnyAddons(): Boolean = addonDao.count() > 0
+
     // ==================== Stream Resolution ====================
 
     /**

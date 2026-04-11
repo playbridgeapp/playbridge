@@ -1,5 +1,6 @@
 package com.playbridge.sender.browser
 
+import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,33 +13,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.data.library.ResolvedStream
 
 /**
- * Quality filter options for streams.
- */
-private enum class QualityFilter(val label: String, val patterns: List<String>) {
-    ALL("All", emptyList()),
-    UHD("4K", listOf("2160p", "4k", "uhd", "4K")),
-    FHD("1080p", listOf("1080p", "1080")),
-    HD("720p", listOf("720p", "720")),
-}
-
-/**
- * Check if a stream matches a quality filter by scanning name + title.
- */
-private fun ResolvedStream.matchesFilter(filter: QualityFilter): Boolean {
-    if (filter == QualityFilter.ALL) return true
-    val text = "${stream.name.orEmpty()} ${stream.title.orEmpty()}".lowercase()
-    return filter.patterns.any { text.contains(it.lowercase()) }
-}
-
-/**
  * Bottom sheet displaying resolved streams from Stremio addons.
  * Supports quality filter chips and incremental display (streams appear as they resolve).
+ *
+ * When "auto_stream_quality" pref is set (2160p / 1080p / 720p), the sheet auto-picks the
+ * best matching stream as soon as all addons have responded and calls [onStreamSelected]
+ * without requiring the user to tap. If "auto_stream_max_mbps" is set, only streams at or
+ * below that bitrate are considered; no match = falls back to the first stream in ANY quality.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,9 +35,47 @@ fun StreamPickerSheet(
     isLoading: Boolean,
     title: String,
     episodeRuntimeMinutes: Int? = null,
+    forceManual: Boolean = false,
     onStreamSelected: (ResolvedStream) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
+
+    // Auto-select preferences
+    val autoQualityKey = remember { prefs.getString("auto_stream_quality", "") ?: "" }
+    val autoMaxMbps = remember {
+        val raw = prefs.getString("auto_stream_max_mbps", "") ?: ""
+        raw.toDoubleOrNull()
+    }
+    // Resolve the QualityFilter enum matching the pref key (e.g. "2160p" → UHD)
+    val autoFilter = remember(autoQualityKey) { QualityFilter.fromKey(autoQualityKey) }
+
+    // Track whether we already fired the auto-pick to avoid re-triggering
+    var autoPickFired by remember { mutableStateOf(false) }
+    // Show a brief "Auto-picking…" message while we're about to dismiss
+    var autoPickTriggered by remember { mutableStateOf(false) }
+
+    // Auto-select: fires once when streams are fully loaded
+    LaunchedEffect(isLoading, streams.size) {
+        if (!forceManual && autoFilter != null && !isLoading && streams.isNotEmpty() && !autoPickFired) {
+            autoPickFired = true
+            autoPickTriggered = true
+
+            // 1. Filter to the desired quality tier + apply max-bitrate cap
+            val best = StreamSelector.selectBest(
+                streams = streams,
+                preferredQuality = autoFilter,
+                maxMbps = autoMaxMbps,
+                runtimeMinutes = episodeRuntimeMinutes
+            )
+
+            // 2. Fallback: if no candidates in the tier, use the first stream
+            val result = best ?: streams.firstOrNull()
+            result?.let { onStreamSelected(it) }
+        }
+    }
+
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedFilter by remember { mutableStateOf(QualityFilter.ALL) }
     var selectedProvider by remember { mutableStateOf<String?>(null) }
@@ -60,7 +86,7 @@ fun StreamPickerSheet(
 
     val filteredStreams = remember(streams, selectedFilter, selectedProvider) {
         streams.filter { stream ->
-            stream.matchesFilter(selectedFilter) &&
+            StreamSelector.matchesFilter(stream, selectedFilter) &&
             (selectedProvider == null || stream.addonName == selectedProvider)
         }
     }
@@ -68,7 +94,7 @@ fun StreamPickerSheet(
     val filterCounts = remember(streams) {
         QualityFilter.entries.associateWith { filter ->
             if (filter == QualityFilter.ALL) streams.size
-            else streams.count { it.matchesFilter(filter) }
+            else streams.count { StreamSelector.matchesFilter(it, filter) }
         }
     }
 
@@ -136,20 +162,30 @@ fun StreamPickerSheet(
                 }
             }
 
-            // Stream count + loading indicator
+            // Stream count + loading / auto-pick indicator
             Row(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (streams.isNotEmpty()) {
+                if (streams.isNotEmpty() && !autoPickTriggered) {
                     Text(
                         text = "${filteredStreams.size} stream${if (filteredStreams.size != 1) "s" else ""}",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
-                if (isLoading) {
+                if (autoPickTriggered) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = "Auto-picking…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else if (isLoading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(14.dp),
                         strokeWidth = 2.dp

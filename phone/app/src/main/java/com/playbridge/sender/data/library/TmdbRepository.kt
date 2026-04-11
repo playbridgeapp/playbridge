@@ -73,7 +73,16 @@ class TmdbRepository(private val context: Context) {
         return fetch("$BASE_URL/movie/$movieId/videos?language=en-US")
     }
 
-    // ==================== TV Shows ====================
+    suspend fun getMovieWatchProviders(movieId: Int, region: String = "US"): List<TmdbWatchProvider> {
+        val response: TmdbWatchProvidersResponse = fetch("$BASE_URL/movie/$movieId/watch/providers")
+            ?: return emptyList()
+        val regionData = response.results[region] ?: return emptyList()
+        return (regionData.flatrate + regionData.rent + regionData.buy)
+            .distinctBy { it.providerId }
+            .sortedBy { it.displayPriority }
+    }
+
+
 
     suspend fun discoverTvShows(page: Int = 1, withGenres: String? = null, sortBy: String = "popularity.desc", year: String? = null): TmdbPagedResponse<TmdbTvShow> {
         val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
@@ -107,6 +116,15 @@ class TmdbRepository(private val context: Context) {
 
     suspend fun getTvVideos(tvId: Int): TmdbVideoResult? {
         return fetch("$BASE_URL/tv/$tvId/videos?language=en-US")
+    }
+
+    suspend fun getTvWatchProviders(tvId: Int, region: String = "US"): List<TmdbWatchProvider> {
+        val response: TmdbWatchProvidersResponse = fetch("$BASE_URL/tv/$tvId/watch/providers")
+            ?: return emptyList()
+        val regionData = response.results[region] ?: return emptyList()
+        return (regionData.flatrate + regionData.rent + regionData.buy)
+            .distinctBy { it.providerId }
+            .sortedBy { it.displayPriority }
     }
 
     suspend fun getSeasonDetails(tvId: Int, seasonNumber: Int): TmdbSeason? {

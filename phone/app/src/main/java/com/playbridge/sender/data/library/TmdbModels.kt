@@ -312,6 +312,31 @@ data class TmdbMultiSearchResult(
 }
 
 
+// ==================== Watch Providers ====================
+
+@Serializable
+data class TmdbWatchProvider(
+    @SerialName("provider_id") val providerId: Int,
+    @SerialName("provider_name") val providerName: String,
+    @SerialName("logo_path") val logoPath: String? = null,
+    @SerialName("display_priority") val displayPriority: Int = 0
+) {
+    val logoUrl: String? get() = logoPath?.let { "https://image.tmdb.org/t/p/w45$it" }
+}
+
+@Serializable
+data class TmdbWatchProvidersRegion(
+    val link: String = "",
+    val flatrate: List<TmdbWatchProvider> = emptyList(),
+    val rent: List<TmdbWatchProvider> = emptyList(),
+    val buy: List<TmdbWatchProvider> = emptyList()
+)
+
+@Serializable
+data class TmdbWatchProvidersResponse(
+    val results: Map<String, TmdbWatchProvidersRegion> = emptyMap()
+)
+
 // ==================== Common Genres ====================
 
 /**

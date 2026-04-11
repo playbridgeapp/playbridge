@@ -7,6 +7,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -14,9 +16,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -26,6 +30,7 @@ fun LibrarySettingsScreen(
 ) {
     val context = LocalContext.current
     val tmdbPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
+    val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
 
     var tmdbApiKey by remember { mutableStateOf(tmdbPrefs.getString("tmdb_api_key", "") ?: "") }
     var showTmdbKey by remember { mutableStateOf(false) }
@@ -34,6 +39,22 @@ fun LibrarySettingsScreen(
     var showOmdbKey by remember { mutableStateOf(false) }
 
     var showCardTextOverlay by remember { mutableStateOf(tmdbPrefs.getBoolean("show_card_text_overlay", false)) }
+
+    // Stream picker auto-select prefs
+    val qualityOptions = listOf(
+        "" to "Off (always show picker)",
+        "2160p" to "4K (2160p)",
+        "1080p" to "1080p",
+        "720p" to "720p"
+    )
+    var autoQuality by remember {
+        mutableStateOf(browserPrefs.getString("auto_stream_quality", "") ?: "")
+    }
+    var qualityExpanded by remember { mutableStateOf(false) }
+
+    var autoMaxMbpsText by remember {
+        mutableStateOf(browserPrefs.getString("auto_stream_max_mbps", "") ?: "")
+    }
 
     Scaffold(
         topBar = {
@@ -106,7 +127,7 @@ fun LibrarySettingsScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { 
+                    .clickable {
                         showCardTextOverlay = !showCardTextOverlay
                         tmdbPrefs.edit().putBoolean("show_card_text_overlay", showCardTextOverlay).apply()
                     }
@@ -128,6 +149,76 @@ fun LibrarySettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
+            Text("Stream Picker", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+
+            Text(
+                "Automatically pick a stream without showing the picker. Streams are matched by quality tag in their name.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Auto-select quality dropdown
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    readOnly = true,
+                    value = qualityOptions.find { it.first == autoQuality }?.second ?: "Off (always show picker)",
+                    onValueChange = {},
+                    label = { Text("Auto-select Quality") },
+                    trailingIcon = {
+                        IconButton(onClick = { qualityExpanded = !qualityExpanded }) {
+                            Icon(
+                                if (qualityExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                                contentDescription = if (qualityExpanded) "Collapse" else "Expand"
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { qualityExpanded = !qualityExpanded }
+                )
+                DropdownMenu(
+                    expanded = qualityExpanded,
+                    onDismissRequest = { qualityExpanded = false },
+                    modifier = Modifier.fillMaxWidth(0.9f)
+                ) {
+                    qualityOptions.forEach { (code, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                autoQuality = code
+                                qualityExpanded = false
+                                browserPrefs.edit().putString("auto_stream_quality", code).apply()
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Max bitrate field — only relevant when auto-select is enabled
+            if (autoQuality.isNotEmpty()) {
+                OutlinedTextField(
+                    value = autoMaxMbpsText,
+                    onValueChange = { raw ->
+                        // Allow only digits and a single decimal point
+                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
+                            autoMaxMbpsText = raw
+                            browserPrefs.edit().putString("auto_stream_max_mbps", raw.trim()).apply()
+                        }
+                    },
+                    label = { Text("Max Bitrate (Mbps, optional)") },
+                    placeholder = { Text("e.g. 20 — leave blank to pick first match") },
+                    supportingText = { Text("Only streams at or below this bitrate will be auto-selected. Requires file size metadata from the addon.") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
             OutlinedButton(
                 onClick = onAddonSettings,
                 modifier = Modifier.fillMaxWidth()
@@ -137,3 +228,4 @@ fun LibrarySettingsScreen(
         }
     }
 }
+
