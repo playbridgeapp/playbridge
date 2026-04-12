@@ -37,6 +37,7 @@ com.playbridge.sender/
 │   ├── LibraryEnums.kt
 │   ├── LibraryScreen.kt
 │   ├── LibrarySettingsScreen.kt
+│   ├── LibraryUtils.kt
 │   ├── LibraryViewModel.kt
 │   ├── LinkContextMenu.kt
 │   ├── MagnetParsingSheet.kt
@@ -51,6 +52,7 @@ com.playbridge.sender/
 │   ├── SettingsScreen.kt
 │   ├── SiteInfoSheet.kt
 │   ├── StreamPickerSheet.kt
+│   ├── StreamSelector.kt
 │   ├── SubtitlePreferences.kt
 │   ├── TVSettingsScreen.kt
 │   ├── TabManager.kt

@@ -217,49 +217,61 @@ PlayBridge/
 │   │   └── src/main/
 │   │       ├── java/com/playbridge/sender/
 │   │       │   ├── browser/
+│   │       │   │   ├── AddonInstallDialog.kt
+│   │       │   │   ├── AddonSettingsScreen.kt
+│   │       │   │   ├── AppearanceSettingsScreen.kt
 │   │       │   │   ├── BookmarksScreen.kt
 │   │       │   │   ├── BrowserActivity.kt    (~1721 lines, slimmed down)
 │   │       │   │   ├── BrowserToolbar.kt
-│   │       │   │   ├── TabManager.kt           (tab/session lifecycle)
-│   │       │   │   ├── SessionObserverSetup.kt (observer + delegates)
 │   │       │   │   ├── CastSheet.kt
 │   │       │   │   ├── CommandHistoryScreen.kt
 │   │       │   │   ├── Components.kt
 │   │       │   │   ├── DashParser.kt
+│   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
 │   │       │   │   ├── DebridSettingsScreen.kt
 │   │       │   │   ├── DownloadConfirmDialog.kt
+│   │       │   │   ├── DownloadHeadersStore.kt
 │   │       │   │   ├── DownloadManagerSingleton.kt
 │   │       │   │   ├── DownloadUtils.kt
-│   │       │   │   ├── MediaDownloadService.kt
-│   │       │   │   ├── LinkContextMenu.kt
-│   │       │   │   ├── TabsScreen.kt
+│   │       │   │   ├── DownloadsScreen.kt
+│   │       │   │   ├── ErrorPageUtils.kt
+│   │       │   │   ├── ExportedSettings.kt     (serializable data models for settings import/export)
 │   │       │   │   ├── ExtensionsScreen.kt
+│   │       │   │   ├── FindOnPageBar.kt
+│   │       │   │   ├── HistoryScreen.kt
+│   │       │   │   ├── HlsExportRegistry.kt
+│   │       │   │   ├── HlsExportService.kt
+│   │       │   │   ├── HlsExporter.kt
+│   │       │   │   ├── HlsParser.kt
+│   │       │   │   ├── HomeScreen.kt
 │   │       │   │   ├── ImportExportSettingsScreen.kt
+│   │       │   │   ├── LibraryDetailScreen.kt
+│   │       │   │   ├── LibraryEnums.kt
+│   │       │   │   ├── LibraryScreen.kt
 │   │       │   │   ├── LibrarySettingsScreen.kt
+│   │       │   │   ├── LibraryUtils.kt
+│   │       │   │   ├── LibraryViewModel.kt
+│   │       │   │   ├── LinkContextMenu.kt
+│   │       │   │   ├── MagnetParsingSheet.kt   (Debrid integration)
+│   │       │   │   ├── MediaDownloadService.kt
+│   │       │   │   ├── MediaflowProxy.kt
+│   │       │   │   ├── MediaflowSettingsScreen.kt
+│   │       │   │   ├── MyListTab.kt
 │   │       │   │   ├── PlaybackSettingsScreen.kt
 │   │       │   │   ├── PopupBlockerSettingsScreen.kt
 │   │       │   │   ├── RemoteControlScreen.kt
-│   │       │   │   ├── DownloadsScreen.kt
-│   │       │   │   ├── HistoryScreen.kt
+│   │       │   │   ├── SessionObserverSetup.kt (observer + delegates)
 │   │       │   │   ├── SettingsScreen.kt
+│   │       │   │   ├── SiteInfoSheet.kt
 │   │       │   │   ├── StreamPickerSheet.kt    (bottom sheet for resolved Stremio streams)
+│   │       │   │   ├── StreamSelector.kt
 │   │       │   │   ├── SubtitlePreferences.kt  (Subtitle preferences UI/logic)
 │   │       │   │   ├── TVSettingsScreen.kt
-│   │       │   │   ├── ExportedSettings.kt     (serializable data models for settings import/export)
-│   │       │   │   ├── HlsParser.kt
-│   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
-│   │       │   │   ├── MagnetParsingSheet.kt   (Debrid integration)
-│   │       │   │   ├── LibraryViewModel.kt
-│   │       │   │   ├── CommandHistoryScreen.kt
-│   │       │   │   ├── HomeScreen.kt
-│   │       │   │   ├── ErrorPageUtils.kt
-│   │       │   │   ├── FindOnPageBar.kt
-│   │       │   │   ├── LibraryDetailScreen.kt
-│   │       │   │   ├── LibraryEnums.kt
-│   │       │   │   ├── SiteInfoSheet.kt
+│   │       │   │   ├── TabManager.kt           (tab/session lifecycle)
+│   │       │   │   ├── TabsScreen.kt
+│   │       │   │   ├── TrackingSheet.kt
 │   │       │   │   ├── VideoDetector.kt
 │   │       │   │   └── VideoPreviewSheet.kt
-│   │       │   │   └── ...
 │   │       │   ├── connection/
 │   │       │   │   ├── BluetoothClient.kt
 │   │       │   │   ├── ConnectionStore.kt
