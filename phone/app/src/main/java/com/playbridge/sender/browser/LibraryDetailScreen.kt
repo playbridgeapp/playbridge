@@ -76,6 +76,7 @@ fun LibraryDetailScreen(
     highlightEpisode: Int? = null,
     viewModel: LibraryViewModel,
     tvName: String? = null,
+    onTvConnectionClick: (() -> Unit)? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -109,15 +110,10 @@ fun LibraryDetailScreen(
     var streamPickerTitle by remember { mutableStateOf("Select Stream") }
     var forceManualInPicker by remember { mutableStateOf(false) }
 
-    // Season play state
-    var seasonResolutionState by remember { mutableStateOf(SeasonResolutionState()) }
-    var queuedCount by remember { mutableIntStateOf(0) }
-    var queueTotalCount by remember { mutableIntStateOf(0) }
-    var isQueueing by remember { mutableStateOf(false) }
-
     // Episode selection for stream picker
     var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
-    var seasonQueueContext by remember { mutableStateOf<SeasonQueueContext?>(null) }
+    // Triple: (episode, season number, isWatched at time of long-press)
+    var episodeSheetTarget by remember { mutableStateOf<Triple<StremioVideo, Int, Boolean>?>(null) }
 
     val episodeListState = rememberLazyListState()
     var episodesAscending by remember { mutableStateOf(true) }
@@ -273,7 +269,7 @@ fun LibraryDetailScreen(
     val episodesInSeason = addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList()
 
     // Unified stream resolution function
-    val startResolution: (String, String, String, Boolean, Boolean, StremioVideo?, Boolean) -> Unit = start@{ streamId, streamType, resTitle, forPhone, forcePicker, episode, isFirstEpOfSeason ->
+    val startResolution: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = start@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
         if (!canResolveStreams) return@start
 
         resolutionState = ResolutionState(
@@ -320,18 +316,6 @@ fun LibraryDetailScreen(
                 }
             }
         }
-
-        // Season queue context only for TMDB series, first episode, and TV target
-        if (!forPhone && isFirstEpOfSeason && resolvedImdbId != null && isSeries && episode == episodesInSeason.firstOrNull()) {
-            seasonQueueContext = SeasonQueueContext(
-                imdbId = resolvedImdbId!!,
-                season = selectedSeason,
-                episodes = episodesInSeason,
-                showName = displayTitle,
-                qualityFilter = emptyList(),
-                runtimeMap = emptyMap()
-            )
-        }
     }
 
     // Stream picker sheet
@@ -349,7 +333,6 @@ fun LibraryDetailScreen(
                 val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
 
                 if (forPhone) {
-                    seasonQueueContext = null
                     openInExternalPlayer(context, streamUrl, null, null)
                 } else {
                     scope.launch {
@@ -385,94 +368,18 @@ fun LibraryDetailScreen(
                             emptyList()
                         }
 
-                        val ep1Payload = com.playbridge.protocol.PlayPayload(
-                            url = streamUrl,
-                            title = streamPickerTitle,
-                            subtitles = subtitles.ifEmpty { null }
-                        )
-
-                        val sqCtx = seasonQueueContext
-                        if (sqCtx != null && isSeries) {
-                            // Season play: send Ep1 as a 1-item playlist
-                            seasonQueueContext = null
-                            resolutionState = ResolutionState()
-                            onPlayPlaylist(listOf(ep1Payload))
-                            val startEp = sqCtx.episodes.firstOrNull()?.episode ?: 1
-                            onNowPlayingStarted(resolvedTmdbId ?: 0, sqCtx.season, startEp)
-                            Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
-
-                            // Derive target bitrate
-                            val ep1Runtime: Int? = null
-                            val targetMbps = resolved.stream.behaviorHints?.calculateMbps(ep1Runtime)
-                            val preferredBingeGroup = resolved.stream.behaviorHints?.bingeGroup
-
-                            // Start background queue for Eps 2+
-                            val totalEpisodes = sqCtx.episodes.size
-                            queueTotalCount = totalEpisodes
-                            queuedCount = 1
-                            isQueueing = true
-                            seasonResolutionState = SeasonResolutionState(
-                                isResolving = true,
-                                progressLabel = "Queuing: 1/$totalEpisodes"
-                            )
-
-                            val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-                            val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
-
-                            addonRepository.resolveSeasonStreamsFlow(
-                                imdbId = sqCtx.imdbId,
-                                season = sqCtx.season,
-                                episodeCount = totalEpisodes,
-                                showName = sqCtx.showName,
-                                qualityFilter = sqCtx.qualityFilter,
-                                targetBitrateMbps = targetMbps,
-                                preferredBingeGroup = preferredBingeGroup,
-                                episodeRuntimeMinutes = sqCtx.runtimeMap,
-                                delayBetweenMs = 2000
-                            ).collect { episodeStream ->
-                                if (episodeStream != null && episodeStream.episode > 1) {
-                                    val epUrl = episodeStream.stream.stream.url
-                                    if (!epUrl.isNullOrBlank()) {
-                                        val epSubs = if (prefLang.isNotEmpty()) {
-                                            try {
-                                                val allSubs = subtitleService.getSubtitlesForEpisode(
-                                                    sqCtx.imdbId, sqCtx.season, episodeStream.episode
-                                                )
-                                                allSubs.mapNotNull { it.url }
-                                            } catch (_: Exception) { emptyList() }
-                                        } else emptyList()
-
-                                        onQueueAdd(
-                                            com.playbridge.protocol.PlayPayload(
-                                                url = epUrl,
-                                                title = episodeStream.title,
-                                                subtitles = epSubs.ifEmpty { null }
-                                            )
-                                        )
-                                        queuedCount++
-                                        seasonResolutionState = seasonResolutionState.copy(
-                                            progressLabel = "Queuing: $queuedCount/$totalEpisodes"
-                                        )
-                                    }
-                                }
-                            }
-
-                            seasonResolutionState = SeasonResolutionState()
-                            isQueueing = false
-                            Toast.makeText(context, "All $queuedCount episodes queued", Toast.LENGTH_SHORT).show()
-                        } else {
-                            // Single episode or movie play
-                            onPlayStream(streamUrl, streamPickerTitle, subtitles.ifEmpty { null })
-                            resolutionState = ResolutionState()
-                            Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+                        onPlayStream(streamUrl, streamPickerTitle, subtitles.ifEmpty { null })
+                        resolutionState = ResolutionState()
+                        if (isSeries && currentEpisodeSelection != null) {
+                            onNowPlayingStarted(resolvedTmdbId ?: 0, selectedSeason, currentEpisodeSelection!!.episode ?: 1)
                         }
+                        Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
                     }
                 }
             },
             onDismiss = {
                 showStreamPicker = false
                 resolutionState = ResolutionState()
-                seasonQueueContext = null
             }
         )
     }
@@ -520,22 +427,23 @@ fun LibraryDetailScreen(
                             // Movie or series with no episodes
                             val firstEpisodeForTv = episodesInSeason.firstOrNull()
                             SplitPlayButton(
-                                isTvResolving = seasonResolutionState.isResolving || (resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV),
+                                isTvResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV,
                                 isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
-                                resolvingLabel = if (seasonResolutionState.isResolving) seasonResolutionState.progressLabel else "Finding streams…",
+                                resolvingLabel = "Finding streams…",
                                 hasAddons = hasAddons,
                                 hasImdbId = resolvedImdbId != null || resolvedTmdbId != null,
                                 watchProviders = watchProviders,
                                 tvName = tvName,
+                                onTvChipLongPress = onTvConnectionClick,
                                 onWatchOnTv = {
                                     if (isSeries && firstEpisodeForTv != null) {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, false, firstEpisodeForTv, true)
+                                        startResolution(streamId, streamType, title, false, false, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, false, false, null, false)
+                                        startResolution(streamId, addonType, displayTitle, false, false, null)
                                     }
                                 },
                                 onWatchOnTvLongClick = {
@@ -543,10 +451,10 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, true, firstEpisodeForTv, true)
+                                        startResolution(streamId, streamType, title, false, true, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, false, true, null, false)
+                                        startResolution(streamId, addonType, displayTitle, false, true, null)
                                     }
                                 },
                                 onWatchOnPhone = {
@@ -554,10 +462,10 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, true, false, firstEpisodeForTv, false)
+                                        startResolution(streamId, streamType, title, true, false, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, true, false, null, false)
+                                        startResolution(streamId, addonType, displayTitle, true, false, null)
                                     }
                                 },
                                 onWatchOnPhoneLongClick = {
@@ -565,48 +473,65 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, true, true, firstEpisodeForTv, false)
+                                        startResolution(streamId, streamType, title, true, true, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, true, true, null, false)
+                                        startResolution(streamId, addonType, displayTitle, true, true, null)
                                     }
                                 }
                             )
                         } else {
-                            // Series with episodes — show season chip and episode list
-                            val firstEpisode = episodesInSeason.firstOrNull()
-                            if (firstEpisode != null) {
+                            // Series with episodes — play the next unwatched episode
+                            val nextUnwatchedEpisode = episodesInSeason.firstOrNull { ep ->
+                                val epNum = ep.episode ?: 0
+                                val epWatched = tracked?.let { entity ->
+                                    if (entity.status != WatchlistStatus.WATCHING.value &&
+                                        entity.status != WatchlistStatus.COMPLETED.value) return@let false
+                                    val trackedSeason = entity.seasonProgress ?: return@let false
+                                    val trackedEp    = entity.episodeProgress ?: return@let false
+                                    when {
+                                        selectedSeason < trackedSeason -> true
+                                        selectedSeason == trackedSeason -> epNum <= trackedEp
+                                        else -> false
+                                    }
+                                } ?: false
+                                !epWatched
+                            } ?: episodesInSeason.firstOrNull()
+                            if (nextUnwatchedEpisode != null) {
+                                val epLabel = "S${selectedSeason.toString().padStart(2, '0')}E${(nextUnwatchedEpisode.episode ?: 1).toString().padStart(2, '0')}"
                                 SplitPlayButton(
-                                    isTvResolving = seasonResolutionState.isResolving || (resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV),
+                                    isTvResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV,
                                     isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
-                                    resolvingLabel = if (seasonResolutionState.isResolving) seasonResolutionState.progressLabel else "Finding streams…",
+                                    resolvingLabel = "Finding streams…",
                                     hasAddons = hasAddons,
                                     hasImdbId = resolvedImdbId != null || resolvedTmdbId != null,
                                     watchProviders = watchProviders,
                                     tvName = tvName,
+                                    watchLabel = "Watch $epLabel",
+                                    onTvChipLongPress = onTvConnectionClick,
                                     onWatchOnTv = {
-                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisode.episode ?: 1}" else firstEpisode.id
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
-                                        val title = "$displayTitle S${selectedSeason}E${firstEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, false, firstEpisode, true)
+                                        val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, false, false, nextUnwatchedEpisode)
                                     },
                                     onWatchOnTvLongClick = {
-                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisode.episode ?: 1}" else firstEpisode.id
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
-                                        val title = "$displayTitle S${selectedSeason}E${firstEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, true, firstEpisode, true)
+                                        val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, false, true, nextUnwatchedEpisode)
                                     },
                                     onWatchOnPhone = {
-                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisode.episode ?: 1}" else firstEpisode.id
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
-                                        val title = "$displayTitle S${selectedSeason}E${firstEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, true, false, firstEpisode, false)
+                                        val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, true, false, nextUnwatchedEpisode)
                                     },
                                     onWatchOnPhoneLongClick = {
-                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisode.episode ?: 1}" else firstEpisode.id
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
-                                        val title = "$displayTitle S${selectedSeason}E${firstEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, true, true, firstEpisode, false)
+                                        val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, true, true, nextUnwatchedEpisode)
                                     }
                                 )
                             }
@@ -741,33 +666,6 @@ fun LibraryDetailScreen(
                         }
                     }
 
-                    // Queuing progress
-                    if (isQueueing && queueTotalCount > 0) {
-                        item {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 24.dp)
-                                    .padding(bottom = 8.dp)
-                            ) {
-                                LinearProgressIndicator(
-                                    progress = { queuedCount.toFloat() / queueTotalCount },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(2.dp)
-                                        .clip(RoundedCornerShape(1.dp)),
-                                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                                )
-                                Text(
-                                    text = "Queuing $queuedCount / $queueTotalCount episodes…",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White.copy(alpha=0.7f),
-                                    modifier = Modifier.padding(top = 4.dp)
-                                )
-                            }
-                        }
-                    }
-
                     // Episodes list
                     if (isSeries && hasEpisodes) {
                         val episodes = (addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList())
@@ -810,23 +708,18 @@ fun LibraryDetailScreen(
                                 isWatched = isEpWatched,
                                 onClick = {
                                     if (canResolveStreams) {
-                                        if (!isQueueing && (isEpPlaying || isEpQueued)) {
+                                        if (isEpPlaying || isEpQueued) {
                                             onPlaylistJump(epPlaylistIndex)
                                         } else {
                                             val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
                                             val streamType = if (resolvedImdbId != null) "series" else addonType
                                             val title = "$displayTitle S${selectedSeason}E${epNum}"
-                                            startResolution(streamId, streamType, title, false, false, episode, episode == episodesInSeason.firstOrNull())
+                                            startResolution(streamId, streamType, title, false, false, episode)
                                         }
                                     }
                                 },
                                 onLongClick = {
-                                    if (canResolveStreams) {
-                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
-                                        val streamType = if (resolvedImdbId != null) "series" else addonType
-                                        val title = "$displayTitle S${selectedSeason}E${epNum}"
-                                        startResolution(streamId, streamType, title, false, true, episode, episode == episodesInSeason.firstOrNull())
-                                    }
+                                    episodeSheetTarget = Triple(episode, selectedSeason, isEpWatched)
                                 }
                             )
                         }
@@ -864,6 +757,46 @@ fun LibraryDetailScreen(
                     item { Spacer(modifier = Modifier.height(32.dp)) }
                 }
             }
+        }
+
+        // Episode options sheet
+        episodeSheetTarget?.let { (ep, epSeason, epIsWatched) ->
+            EpisodeOptionsSheet(
+                episode = ep,
+                season = epSeason,
+                isWatched = epIsWatched,
+                canResolve = canResolveStreams,
+                onPickStream = {
+                    episodeSheetTarget = null
+                    val epNum = ep.episode ?: 0
+                    val streamId = if (resolvedImdbId != null) "$resolvedImdbId:$epSeason:$epNum" else ep.id
+                    val streamType = if (resolvedImdbId != null) "series" else addonType
+                    val title = "$displayTitle S${epSeason}E$epNum"
+                    startResolution(streamId, streamType, title, false, true, ep)
+                },
+                onMarkWatched = {
+                    episodeSheetTarget = null
+                    resolvedTmdbId?.let { tmdbId ->
+                        viewModel.upsertTracked(
+                            tmdbId = tmdbId,
+                            mediaType = "tv",
+                            title = displayTitle,
+                            posterUrl = tvDetails?.posterUrl ?: addonMeta?.poster,
+                            year = displayYear,
+                            rating = displayRating,
+                            status = WatchlistStatus.WATCHING,
+                        )
+                        viewModel.setEpisodeProgress(tmdbId, epSeason, ep.episode ?: 0)
+                    }
+                },
+                onUnmarkWatched = {
+                    episodeSheetTarget = null
+                    resolvedTmdbId?.let { tmdbId ->
+                        viewModel.setEpisodeProgress(tmdbId, epSeason, ((ep.episode ?: 1) - 1).coerceAtLeast(0))
+                    }
+                },
+                onDismiss = { episodeSheetTarget = null }
+            )
         }
 
         TopAppBar(
@@ -1078,6 +1011,8 @@ private fun SplitPlayButton(
     hasImdbId: Boolean,
     watchProviders: List<TmdbWatchProvider>,
     tvName: String? = null,
+    watchLabel: String = "Watch",
+    onTvChipLongPress: (() -> Unit)? = null,
     onWatchOnTv: () -> Unit,
     onWatchOnTvLongClick: (() -> Unit)? = null,
     onWatchOnPhone: () -> Unit = {},
@@ -1110,8 +1045,18 @@ private fun SplitPlayButton(
                 color = Color.White.copy(alpha = 0.4f),
                 modifier = Modifier.padding(end = 8.dp)
             )
+            Box(
+                modifier = Modifier.combinedClickable(
+                    onClick = { watchOnTv = !watchOnTv },
+                    onLongClick = if (watchOnTv && onTvChipLongPress != null) {
+                        {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onTvChipLongPress()
+                        }
+                    } else null
+                )
+            ) {
             Surface(
-                modifier = Modifier.clickable { watchOnTv = !watchOnTv },
                 shape = RoundedCornerShape(50),
                 color = Color.White.copy(alpha = 0.08f),
                 border = androidx.compose.foundation.BorderStroke(
@@ -1145,6 +1090,7 @@ private fun SplitPlayButton(
                     )
                 }
             }
+            } // close Box
         }
 
         // ── Single Watch button ───────────────────────────────────────────────
@@ -1200,7 +1146,7 @@ private fun SplitPlayButton(
                         )
                     } else {
                         Text(
-                            text = "Watch",
+                            text = watchLabel,
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleSmall,
                             color = if (!isBusy && canPlay)
@@ -1415,7 +1361,7 @@ private fun EpisodeItem(
     isInActivePlaylist: Boolean = false,
     isWatched: Boolean = false,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     val containerColor = when {
@@ -1517,28 +1463,35 @@ private fun EpisodeItem(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                if (!episode.released.isNullOrBlank()) {
+                val formattedDate = remember(episode.released) { formatEpisodeDate(episode.released) }
+                if (formattedDate != null) {
+                    val isFuture = episode.released?.let { isEpisodeFuture(it) } == true
                     Text(
-                        text = episode.released,
+                        text = formattedDate,
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.7f)
+                        color = if (isFuture)
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                        else
+                            Color.White.copy(alpha = 0.7f)
                     )
                 }
-                if (isWatched) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = "Watched",
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
+            }
+
+            // Watched indicator — only shown when episode is watched
+            if (isWatched) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = "Watched",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
 
-         // Description
+        // Description
         Text(
             text = episode.overview ?: "",
             style = MaterialTheme.typography.bodyMedium,
@@ -1546,6 +1499,158 @@ private fun EpisodeItem(
             maxLines = 4,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+// ==================== Episode Date Helpers ====================
+
+private fun formatEpisodeDate(released: String?): String? {
+    if (released.isNullOrBlank()) return null
+    return try {
+        val formats = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            "yyyy-MM-dd"
+        )
+        var date: java.util.Date? = null
+        for (fmt in formats) {
+            date = runCatching {
+                java.text.SimpleDateFormat(fmt, java.util.Locale.US).also {
+                    it.isLenient = false
+                }.parse(released)
+            }.getOrNull()
+            if (date != null) break
+        }
+        if (date == null) return null
+
+        val now = java.util.Date()
+        val diffMs = date.time - now.time
+        val diffDays = (diffMs / (1000L * 60 * 60 * 24)).toInt()
+
+        when {
+            diffDays > 1  -> "in $diffDays days"
+            diffDays == 1 -> "tomorrow"
+            diffDays == 0 -> "today"
+            else -> java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).format(date)
+        }
+    } catch (_: Exception) { null }
+}
+
+private fun isEpisodeFuture(released: String): Boolean {
+    if (released.isBlank()) return false
+    return try {
+        val formats = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            "yyyy-MM-dd"
+        )
+        for (fmt in formats) {
+            val d = runCatching {
+                java.text.SimpleDateFormat(fmt, java.util.Locale.US).also {
+                    it.isLenient = false
+                }.parse(released)
+            }.getOrNull()
+            if (d != null) return d.after(java.util.Date())
+        }
+        false
+    } catch (_: Exception) { false }
+}
+
+// ==================== Episode Options Sheet ====================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EpisodeOptionsSheet(
+    episode: StremioVideo,
+    season: Int,
+    isWatched: Boolean,
+    canResolve: Boolean,
+    onPickStream: () -> Unit,
+    onMarkWatched: () -> Unit,
+    onUnmarkWatched: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 32.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (episode.thumbnail != null) {
+                    AsyncImage(
+                        model = episode.thumbnail,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .width(72.dp)
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "S${season.toString().padStart(2,'0')}E${(episode.episode ?: 0).toString().padStart(2,'0')}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = episode.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            // Pick stream
+            if (canResolve) {
+                ListItem(
+                    headlineContent = { Text("Pick stream") },
+                    leadingContent = {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface)
+                    },
+                    modifier = Modifier.clickable { onPickStream() }
+                )
+            }
+
+            // Mark / Unmark watched
+            if (isWatched) {
+                ListItem(
+                    headlineContent = { Text("Unmark as watched") },
+                    leadingContent = {
+                        Icon(Icons.Default.Close, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface)
+                    },
+                    modifier = Modifier.clickable { onUnmarkWatched() }
+                )
+            } else {
+                ListItem(
+                    headlineContent = { Text("Mark as watched") },
+                    leadingContent = {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface)
+                    },
+                    modifier = Modifier.clickable { onMarkWatched() }
+                )
+            }
+        }
     }
 }
 
@@ -1559,24 +1664,7 @@ data class ResolutionState(
     val episodeId: Int? = null
 )
 
-data class SeasonResolutionState(
-    val isResolving: Boolean = false,
-    val progressLabel: String = ""
-)
-
-// ==================== Queue / Playlist Data Classes ====================
-
-/**
- * Context for a season queue operation (stored while the stream picker is open for Ep1)
- */
-data class SeasonQueueContext(
-    val imdbId: String,
-    val season: Int,
-    val episodes: List<StremioVideo>,
-    val showName: String,
-    val qualityFilter: List<String>,
-    val runtimeMap: Map<Int, Int>
-)
+// ==================== Playlist Data Classes ====================
 
 /**
  * UI state for the playlist synced from the TV
