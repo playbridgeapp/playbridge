@@ -1223,7 +1223,13 @@ class BrowserActivity : ComponentActivity() {
                         } else {
                             innerPadding
                         }
-                        Box(modifier = Modifier.fillMaxSize()) {
+                        // Apply resolvedPadding here so every screen is offset below its
+                        // topBar (Browser/Tabs/Extensions use the shared Scaffold topBar;
+                        // screens with their own topBar have resolvedPadding.top = 0).
+                        Box(modifier = Modifier
+                            .fillMaxSize()
+                            .padding(resolvedPadding)
+                        ) {
                                     when (targetScreen) {
                                         Screen.Browser -> {
                                             // Fullscreen back handler — takes priority
@@ -1262,12 +1268,7 @@ class BrowserActivity : ComponentActivity() {
                                             }
 
                                             // BrowserView call site
-                                            // Apply top padding so GeckoView starts below the toolbar,
-                                            // not behind it (required after enableEdgeToEdge()).
-                                            Box(modifier = Modifier
-                                                .fillMaxSize()
-                                                .padding(top = innerPadding.calculateTopPadding())
-                                            ) {
+                                            Box(modifier = Modifier.fillMaxSize()) {
                                                 BrowserView(
                                                     session = session,
                                                     onLongPressLink = { url: String -> contextMenuUrl = url }
