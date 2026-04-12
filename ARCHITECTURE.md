@@ -25,7 +25,7 @@ graph TB
         Browser[GeckoView Browser]
         Extension[Video Detector Extension]
         WSClient[WebSocket Client]
-        Connection[Connection Screen<br/>NSD Discovery + QR + PIN]
+        Connection[Connection Screen<br/>NSD Discovery + PIN]
         RemoteControl[Remote Control UI]
         HLS[HLS Parser]
         Addons[Stremio Addons Protocol<br/>Stream/Catalog/Meta/Subs]
@@ -132,7 +132,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] Sealed class pattern for type-safe command handling (shared protocol module)
 - [x] Unified protocol module — single source of truth for message classes
 - [x] Context-aware remote control (phone queries TV for active screen)
-- [x] Authentication implemented (Token/PIN validation via QR code pairing)
+- [x] Authentication implemented (Token/PIN validation via mDNS/NSD pairing)
 - [x] README.md created
 - [x] LICENSE file added
 - [x] Room database for browsing history, bookmarks, and tab persistence (phone)
@@ -327,8 +327,7 @@ PlayBridge/
         │           ├── model/
         │           │   └── PairedDevice.kt
         │           ├── pairing/
-        │           │   ├── PairingStore.kt
-        │           │   └── QRGenerator.kt
+        │           │   └── PairingStore.kt
         │           ├── player/
         │           │   ├── BufferSeekBar.kt
         │           │   ├── ColorMatrixEffect.kt
@@ -395,7 +394,7 @@ PlayBridge/
 - Feature-rich phone app with remote control, touchpad, HLS quality parsing, extension management, tab management, download support (standard + HLS), browsing history (Room DB), bookmarks, tab persistence, desktop mode, SSL lock indicator, and native Debrid integration
 - TV app has dual-engine browser (SystemWebView/GeckoView) with runtime switching, comprehensive ad blocking (EasyList + cosmetic filtering + popup blocking), video maximize/restore via JS injection, subtitle support (SRT/VTT), track selection dialog, context broadcasting, settings, and foreground service architecture
 - AdBlocker is a singleton preloaded at app startup for instant protection when browser opens
-- Authentication fully implemented with PIN + token flow via QR code pairing
+- Authentication fully implemented with PIN + token flow via mDNS/NSD pairing
 - NSD auto-discovery for seamless phone-to-TV connection
 
 **Key Actions Before Open-Sourcing:**

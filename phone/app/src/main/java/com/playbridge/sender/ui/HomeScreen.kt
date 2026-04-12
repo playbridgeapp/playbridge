@@ -173,7 +173,7 @@ fun HomeScreen(
                         onClick = onDisconnect,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Clear & Scan New QR")
+                        Text("Clear & Find New TV")
                     }
                 }
                 is WebSocketClient.ConnectionState.AuthFailed -> {
@@ -182,7 +182,7 @@ fun HomeScreen(
                         onClick = onRescan,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Scan QR to Re-pair")
+                        Text("Connect to TV")
                     }
                     TextButton(
                         onClick = onDisconnect,
@@ -205,7 +205,7 @@ fun HomeScreen(
                         onClick = onRescan,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Scan QR Code")
+                        Text("Connect to TV")
                     }
 
                     // For testing browser even when disconnected
@@ -250,7 +250,7 @@ fun HomeScreen(
                     is WebSocketClient.ConnectionState.Error ->
                         "Check that:\n• TV app is running\n• Both devices are on same network\n• IP address is correct"
                     is WebSocketClient.ConnectionState.AuthFailed ->
-                        "The PIN was incorrect or the TV app was reinstalled.\nScan the QR code on your TV to re-pair."
+                        "The PIN was incorrect or the TV app was reinstalled.\nEnter the PIN shown on your TV to re-pair."
                     is WebSocketClient.ConnectionState.Disconnected ->
                         "Connect to your TV to start casting videos."
                 },

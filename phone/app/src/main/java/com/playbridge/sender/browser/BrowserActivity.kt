@@ -70,7 +70,6 @@ import mozilla.components.lib.state.Store
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.connection.NsdHelper
-import com.playbridge.sender.model.QRCodeData
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
@@ -444,8 +443,8 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             
-            // View state - browser or scanner
-            var showScanner by remember { mutableStateOf(false) }
+            // View state - browser
+            // var showScanner by remember { mutableStateOf(false) } (deleted)
             
             // FAB Drag state
             var fabOffsetX by remember { mutableFloatStateOf(0f) }

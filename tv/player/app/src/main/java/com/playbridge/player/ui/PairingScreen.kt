@@ -22,7 +22,6 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import com.playbridge.player.pairing.QRGenerator
 import com.playbridge.player.server.WebSocketServer
 
 

@@ -28,8 +28,7 @@ com.playbridge.player/
 ├── model
 │   └── PairedDevice.kt
 ├── pairing
-│   ├── PairingStore.kt
-│   └── QRGenerator.kt
+│   └── PairingStore.kt
 ├── player
 │   ├── BufferSeekBar.kt
 │   ├── ColorMatrixEffect.kt
@@ -104,7 +103,6 @@ com.playbridge.player/
 | GeckoView Engine | GeckoViewEngine.kt | GeckoView engine with bundled uBlock Origin for advanced ad blocking |
 | Ad Blocker | AdBlocker.kt (~662 lines) | Singleton ad blocker preloaded at app startup; EasyList + EasyPrivacy + Adblock Warning Removal List, cosmetic filtering, popup/document blocking |
 | TV Browser | BrowserActivity.kt (~728 lines) | TV browser with dual-engine switching, remote input, fullscreen handling, JS-based video maximize/restore, cursor control |
-| QR Generator | QRGenerator.kt | ZXing-based QR code generation for pairing (includes IP, port, token, name) |
 | Settings | SettingsScreen.kt | TV app settings UI (including external player selection and dynamically reading packageManager info for version) |
 | File Logger | FileLogger.kt | Mirrored Android Log that persists entries to a rolling file in internal storage |
 | Color Matrix | ColorMatrixEffect.kt | Media3 GlEffect applying custom ColorMatrix for filters via GLSL |
@@ -114,7 +112,6 @@ com.playbridge.player/
 - **Media3 ExoPlayer** v1.9.2 — Full streaming suite (HLS, DASH, RTSP, Smooth Streaming)
 - **Media3 Session** — Media session support
 - **Media3 DataSource OkHttp** — HTTP performance with OkHttp backend
-- **ZXing** v3.5.2 — QR code generation
 - **Jetpack Compose TV** — TV-optimized UI (tv-foundation, tv-material)
 - **Coil** v3.3.0 — Image loading (with OkHttp network backend)
 - **OkHttp** v4.12.0 — HTTP client for ExoPlayer data source + URL connections

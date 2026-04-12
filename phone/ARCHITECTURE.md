@@ -103,7 +103,6 @@ com.playbridge.sender/
 │       ├── WatchlistStatus.kt
 │       └── WatchlistStatusConverter.kt
 ├── model
-│   ├── Message.kt
 │   └── TvDevice.kt
 └── ui
     ├── ConnectionScreen.kt
@@ -161,7 +160,7 @@ com.playbridge.sender/
 | Connection VM | ConnectionViewModel.kt | Centralized logic for WebSocket + NSD discovery, TV commands, state |
 | WebSocket | WebSocketClient.kt | OkHttp-based client with auto-retry (60 attempts, 5s intervals) |
 | Bluetooth Client | BluetoothClient.kt | Bluetooth RFCOMM socket client fallback for TV connections |
-| Connection | ConnectionScreen.kt | NSD auto-discovery, QR scanning, manual IP entry, PIN authentication |
+| Connection | ConnectionScreen.kt | NSD auto-discovery, manual IP entry, and PIN authentication |
 | Service Discovery | NsdHelper.kt | Network Service Discovery to find TV services on local network |
 | Embedded Extension | `assets/extensions/video_detector` | Legacy internal extension bundled with the phone app for video detection in GeckoView |
 
@@ -169,7 +168,6 @@ com.playbridge.sender/
 - **GeckoView** (Mozilla) v147.0.20260105210555 — Full Firefox engine
 - **Mozilla Android Components** v147.0 — Tabs, toolbar, extensions, sessions, prompts support
 - **OkHttp** v4.12.0 — WebSocket client
-- **CameraX** v1.4.1 + **ML Kit Barcode** v17.3.0 — QR code scanning
 - **Jetpack Compose BOM** v2024.09.00 — UI (Material3)
 - **Kotlin Serialization** v1.7.3 — JSON protocol
 - **DataStore** v1.1.1 — Preferences persistence
