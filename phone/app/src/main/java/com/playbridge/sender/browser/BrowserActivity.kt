@@ -1794,6 +1794,12 @@ class BrowserActivity : ComponentActivity() {
                                                 addonRepository = addonRepository,
                                                 viewModel = libraryViewModel,
                                                 tvName = tvDevice?.name,
+                                                isTvConnected = connectionState is WebSocketClient.ConnectionState.Connected,
+                                                availableTvDevices = remember(discoveredDevices, history) {
+                                                    (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
+                                                },
+                                                selectedTvDevice = tvDevice,
+                                                onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
                                                 onPlayTrailer = { trailerUrl ->
                                                     castSheetInitialMode = "browse"
                                                     castSheetBrowseOverride = trailerUrl

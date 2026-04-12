@@ -30,9 +30,11 @@ import com.playbridge.sender.data.library.WatchlistEntity
 import com.playbridge.sender.data.library.WatchlistStatus
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val tmdb = TmdbRepository(application)
-    private val watchlistDao = DatabaseProvider.getDatabase(application).watchlistDao()
+    private val database = DatabaseProvider.getDatabase(application)
+    private val watchlistDao = database.watchlistDao()
+    private val searchHistoryDao = database.searchHistoryDao()
     private val addonRepository = AddonRepository(
-        addonDao = DatabaseProvider.getDatabase(application).addonDao(),
+        addonDao = database.addonDao(),
         cacheDir = application.cacheDir
     )
 
@@ -83,6 +85,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     // Use .flatMap { it.items } to get the flat list if needed.
     private val _addonSearchGroups = MutableStateFlow<List<AddonSearchResultGroup>>(emptyList())
     val addonSearchGroups: StateFlow<List<AddonSearchResultGroup>> = _addonSearchGroups.asStateFlow()
+
+    // Search history
+    val searchHistory: StateFlow<List<com.playbridge.sender.data.history.SearchHistoryEntity>> = searchHistoryDao.getAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Navigation state
     private val _selectedTab = MutableStateFlow(0)
@@ -314,6 +320,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             _isSearchLoading.value = true
             _addonSearchGroups.value = emptyList()
             try {
+                // Save to history
+                searchHistoryDao.insert(com.playbridge.sender.data.history.SearchHistoryEntity(query, System.currentTimeMillis()))
+
                 // Fire TMDB and addon catalog searches concurrently
                 val tmdbDeferred = async {
                     runCatching { tmdb.searchMulti(query) }.getOrNull()
@@ -328,6 +337,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             } finally {
                 _isSearchLoading.value = false
             }
+        }
+    }
+
+    fun removeSearchHistory(query: String) {
+        viewModelScope.launch {
+            searchHistoryDao.deleteByQuery(query)
+        }
+    }
+
+    fun clearSearchHistory() {
+        viewModelScope.launch {
+            searchHistoryDao.deleteAll()
         }
     }
 

@@ -48,7 +48,8 @@ class AddonRepository(
     private val streamCache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
     private val subtitleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<StremioStream>>>()
     private val catalogCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<StremioMetaPreview>>>()
-    private val metaCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StremioMetaDetail>>()
+    // Triple: (timestampMs, meta, addonName)
+    private val metaCache = java.util.concurrent.ConcurrentHashMap<String, Triple<Long, StremioMetaDetail, String>>()
     private val ioScope = CoroutineScope(Dispatchers.IO)
     private val diskJson = Json { ignoreUnknownKeys = true }
 
@@ -414,12 +415,19 @@ class AddonRepository(
      * @param type  Content type: "movie", "series", etc.
      * @param id    The addon-specific content ID (may be IMDb "tt..." or a custom addon ID)
      */
-    suspend fun fetchMeta(type: String, id: String): StremioMetaDetail? {
+    suspend fun fetchMeta(type: String, id: String): StremioMetaDetail? =
+        fetchMetaWithSource(type, id)?.first
+
+    /**
+     * Like [fetchMeta] but also returns the name of the addon that supplied the metadata.
+     * Returns null when no addon could provide metadata for the given type + id.
+     */
+    suspend fun fetchMetaWithSource(type: String, id: String): Pair<StremioMetaDetail, String>? {
         val cacheKey = "meta:$type:$id"
         val cached = metaCache[cacheKey]
         if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
             Log.d(TAG, "Using cached meta for $cacheKey")
-            return cached.second
+            return Pair(cached.second, cached.third)
         }
 
         val addons = addonDao.getAllSync().filter { addon ->
@@ -445,8 +453,8 @@ class AddonRepository(
                         val parsed = json.decodeFromString<StremioMetaResponse>(body)
                         val meta = parsed.meta
                         if (meta != null) {
-                            metaCache[cacheKey] = Pair(System.currentTimeMillis(), meta)
-                            return@withContext meta
+                            metaCache[cacheKey] = Triple(System.currentTimeMillis(), meta, addon.name)
+                            return@withContext Pair(meta, addon.name)
                         }
                     } else {
                         Log.e(TAG, "Meta fetch failed from ${addon.name}: ${response.code}")

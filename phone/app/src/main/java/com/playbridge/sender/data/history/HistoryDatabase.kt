@@ -8,8 +8,8 @@ import com.playbridge.sender.data.library.WatchlistDao
 import com.playbridge.sender.data.library.WatchlistEntity
 
 @Database(
-    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class],
-    version = 10
+    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class, SearchHistoryEntity::class],
+    version = 11
 )
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
@@ -18,4 +18,5 @@ abstract class HistoryDatabase : RoomDatabase() {
     abstract fun addonDao(): AddonDao
     abstract fun commandHistoryDao(): CommandHistoryDao
     abstract fun watchlistDao(): WatchlistDao
+    abstract fun searchHistoryDao(): SearchHistoryDao
 }

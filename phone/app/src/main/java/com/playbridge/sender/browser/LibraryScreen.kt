@@ -157,6 +157,7 @@ private fun LibraryScreenContent(
     val isSearchLoading by viewModel.isSearchLoading.collectAsState()
     val addonSearchGroups by viewModel.addonSearchGroups.collectAsState()
     val addonSearchResults = remember(addonSearchGroups) { addonSearchGroups.flatMap { it.items } }
+    val searchHistory by viewModel.searchHistory.collectAsState()
 
     // Discovery state
     val selectedGenres by viewModel.selectedGenres.collectAsState()
@@ -624,7 +625,24 @@ private fun LibraryScreenContent(
             ) {
                 CircularProgressIndicator()
             }
-        } else if (searchResults.isEmpty() && addonSearchResults.isEmpty() && searchQuery.isNotBlank()) {
+        } else if (searchQuery.isBlank()) {
+            // Show search history
+            SearchHistoryList(
+                history = searchHistory,
+                contentPadding = PaddingValues(
+                    top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
+                    bottom = contentBottomPadding + 8.dp,
+                    start = 16.dp,
+                    end = 16.dp
+                ),
+                onQueryClick = { query ->
+                    viewModel.setSearchQuery(query)
+                    viewModel.performSearch()
+                },
+                onRemoveClick = { viewModel.removeSearchHistory(it) },
+                onClearAll = { viewModel.clearSearchHistory() }
+            )
+        } else if (searchResults.isEmpty() && addonSearchResults.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -691,7 +709,7 @@ private fun LibraryScreenContent(
                     addonResults = filteredAddon,
                     contentPadding = PaddingValues(
                         top = if (addonSources.isNotEmpty() || searchResults.isNotEmpty()) 4.dp
-                              else innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
+                               else innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
                         bottom = contentBottomPadding + 8.dp,
                         start = 8.dp,
                         end = 8.dp
@@ -1671,6 +1689,105 @@ private fun AddonMediaRow(
                     onClick = { onItemClick(item) }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SearchHistoryList(
+    history: List<com.playbridge.sender.data.history.SearchHistoryEntity>,
+    contentPadding: PaddingValues,
+    onQueryClick: (String) -> Unit,
+    onRemoveClick: (String) -> Unit,
+    onClearAll: () -> Unit
+) {
+    if (history.isEmpty()) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.History,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "No search history",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+            }
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = contentPadding
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Recent Searches",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                TextButton(onClick = onClearAll) {
+                    Text("Clear All")
+                }
+            }
+        }
+        items(history) { item ->
+            SearchHistoryItem(
+                query = item.query,
+                onClick = { onQueryClick(item.query) },
+                onRemoveClick = { onRemoveClick(item.query) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchHistoryItem(
+    query: String,
+    onClick: () -> Unit,
+    onRemoveClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.History,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Text(
+            text = query,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        IconButton(onClick = onRemoveClick) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Remove",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

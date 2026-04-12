@@ -56,6 +56,12 @@ object DatabaseProvider {
         }
     }
 
+    private val MIGRATION_10_11 = object : Migration(10, 11) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS `search_history` (`query` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`query`))")
+        }
+    }
+
     @Volatile
     private var INSTANCE: HistoryDatabase? = null
 
@@ -66,7 +72,7 @@ object DatabaseProvider {
                 HistoryDatabase::class.java,
                 "history_database"
             )
-            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
             .fallbackToDestructiveMigration()
             .build()
             INSTANCE = instance

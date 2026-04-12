@@ -46,6 +46,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material.ripple.rememberRipple
+import com.playbridge.sender.model.TvDevice
 
 /**
  * Unified detail screen for movies, TV shows, and addon-native content.
@@ -76,7 +77,10 @@ fun LibraryDetailScreen(
     highlightEpisode: Int? = null,
     viewModel: LibraryViewModel,
     tvName: String? = null,
-    onTvConnectionClick: (() -> Unit)? = null,
+    isTvConnected: Boolean = false,
+    availableTvDevices: List<TvDevice> = emptyList(),
+    selectedTvDevice: TvDevice? = null,
+    onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -102,6 +106,8 @@ fun LibraryDetailScreen(
     var selectedSeason by remember { mutableIntStateOf(highlightSeason ?: 1) }
     var resolvedTmdbId by remember { mutableStateOf<Int?>(null) }
     var resolvedImdbId by remember { mutableStateOf<String?>(null) }
+    /** Name of the addon that supplied [addonMeta], e.g. "Cinemeta" or "Kitsu". Null until loaded. */
+    var addonMetaSource by remember { mutableStateOf<String?>(null) }
 
     // Stream resolution state
     var resolvedStreams by remember { mutableStateOf<List<ResolvedStream>>(emptyList()) }
@@ -135,7 +141,9 @@ fun LibraryDetailScreen(
                     if (imdbId != null) {
                         resolvedImdbId = imdbId
                         if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
-                        addonMeta = runCatching { addonRepository.fetchMeta(addonType, imdbId) }.getOrNull()
+                        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, imdbId) }.getOrNull()
+                        addonMeta = metaResult?.first
+                        addonMetaSource = metaResult?.second
                     }
                     trailerUrl = tmdb.getTvVideos(numericId)?.bestTrailerUrl
                     watchProviders = tmdb.getTvWatchProviders(numericId)
@@ -146,7 +154,9 @@ fun LibraryDetailScreen(
                     if (imdbId != null) {
                         resolvedImdbId = imdbId
                         if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
-                        addonMeta = runCatching { addonRepository.fetchMeta(addonType, imdbId) }.getOrNull()
+                        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, imdbId) }.getOrNull()
+                        addonMeta = metaResult?.first
+                        addonMetaSource = metaResult?.second
                     }
                     trailerUrl = tmdb.getMovieVideos(numericId)?.bestTrailerUrl
                     watchProviders = tmdb.getMovieWatchProviders(numericId)
@@ -166,7 +176,9 @@ fun LibraryDetailScreen(
                         val tv = tmdb.getTvDetails(tvId)
                         tvDetails = tv
                         if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
-                        addonMeta = runCatching { addonRepository.fetchMeta(addonType, id) }.getOrNull()
+                        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, id) }.getOrNull()
+                        addonMeta = metaResult?.first
+                        addonMetaSource = metaResult?.second
                         trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
                         watchProviders = tmdb.getTvWatchProviders(tvId)
                     }
@@ -177,7 +189,9 @@ fun LibraryDetailScreen(
                         val movie = tmdb.getMovieDetails(movieId)
                         movieDetails = movie
                         if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
-                        addonMeta = runCatching { addonRepository.fetchMeta(addonType, id) }.getOrNull()
+                        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, id) }.getOrNull()
+                        addonMeta = metaResult?.first
+                        addonMetaSource = metaResult?.second
                         trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
                         watchProviders = tmdb.getMovieWatchProviders(movieId)
                     }
@@ -188,7 +202,9 @@ fun LibraryDetailScreen(
                         val movie = tmdb.getMovieDetails(movieId)
                         movieDetails = movie
                         if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
-                        addonMeta = runCatching { addonRepository.fetchMeta("movie", id) }.getOrNull()
+                        val metaResult = runCatching { addonRepository.fetchMetaWithSource("movie", id) }.getOrNull()
+                        addonMeta = metaResult?.first
+                        addonMetaSource = metaResult?.second
                         trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
                         watchProviders = tmdb.getMovieWatchProviders(movieId)
                     }
@@ -199,7 +215,9 @@ fun LibraryDetailScreen(
                         val tv = tmdb.getTvDetails(tvId)
                         tvDetails = tv
                         if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
-                        addonMeta = runCatching { addonRepository.fetchMeta("series", id) }.getOrNull()
+                        val metaResult = runCatching { addonRepository.fetchMetaWithSource("series", id) }.getOrNull()
+                        addonMeta = metaResult?.first
+                        addonMetaSource = metaResult?.second
                         trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
                         watchProviders = tmdb.getTvWatchProviders(tvId)
                     }
@@ -209,8 +227,10 @@ fun LibraryDetailScreen(
                 }
             }
             else -> {
-                // Addon-native ID — no TMDB lookup
-                addonMeta = runCatching { addonRepository.fetchMeta(addonType, id) }.getOrNull()
+                // Addon-native ID (e.g. "kitsu:12345") — no TMDB lookup
+                val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, id) }.getOrNull()
+                addonMeta = metaResult?.first
+                addonMetaSource = metaResult?.second
             }
         }
 
@@ -434,7 +454,10 @@ fun LibraryDetailScreen(
                                 hasImdbId = resolvedImdbId != null || resolvedTmdbId != null,
                                 watchProviders = watchProviders,
                                 tvName = tvName,
-                                onTvChipLongPress = onTvConnectionClick,
+                                isTvConnected = isTvConnected,
+                                availableTvDevices = availableTvDevices,
+                                selectedTvDevice = selectedTvDevice,
+                                onTvDeviceSelect = onTvDeviceSelect,
                                 onWatchOnTv = {
                                     if (isSeries && firstEpisodeForTv != null) {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
@@ -507,8 +530,11 @@ fun LibraryDetailScreen(
                                     hasImdbId = resolvedImdbId != null || resolvedTmdbId != null,
                                     watchProviders = watchProviders,
                                     tvName = tvName,
+                                    isTvConnected = isTvConnected,
                                     watchLabel = "Watch $epLabel",
-                                    onTvChipLongPress = onTvConnectionClick,
+                                    availableTvDevices = availableTvDevices,
+                                    selectedTvDevice = selectedTvDevice,
+                                    onTvDeviceSelect = onTvDeviceSelect,
                                     onWatchOnTv = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
@@ -725,31 +751,46 @@ fun LibraryDetailScreen(
                         }
                     }
 
-                    // IMDb info chip
-                    if (resolvedImdbId != null) {
+                    // ID + metadata-source info chips
+                    // addonNativeId: a non-numeric, non-IMDB id such as "kitsu:12345"
+                    val addonNativeId = id.takeIf { id.toIntOrNull() == null && !id.startsWith("tt") }
+                    val hasTmdbData = movieDetails != null || tvDetails != null
+                    val hasAddonMeta = addonMeta != null
+                    val showAnyChip = resolvedImdbId != null || addonNativeId != null || hasTmdbData || hasAddonMeta
+                    if (showAnyChip) {
                         item {
-                            Surface(
-                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
-                                shape = RoundedCornerShape(20.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+                            Row(
+                                modifier = Modifier
+                                    .padding(horizontal = 24.dp, vertical = 16.dp)
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Info,
-                                        contentDescription = null,
-                                        tint = Color.White.copy(alpha = 0.7f),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = "IMDB: $resolvedImdbId",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Color.White.copy(alpha = 0.7f)
-                                    )
+                                // IMDb ID chip (movies + shows resolved via IMDB/TMDB)
+                                resolvedImdbId?.let { imdbId ->
+                                    DetailInfoChip(label = "IMDb", value = imdbId)
                                 }
+
+                                // Addon-native ID chip (e.g. kitsu:12345, mal:678)
+                                if (resolvedImdbId == null && addonNativeId != null) {
+                                    val prefix = if (addonNativeId.contains(":"))
+                                        addonNativeId.substringBefore(":").replaceFirstChar { it.uppercase() }
+                                    else "ID"
+                                    val value = if (addonNativeId.contains(":"))
+                                        addonNativeId.substringAfter(":")
+                                    else addonNativeId
+                                    DetailInfoChip(label = prefix, value = value)
+                                }
+
+                                // Metadata source chip
+                                val sourceLabel = when {
+                                    hasTmdbData && hasAddonMeta ->
+                                        "TMDB + ${addonMetaSource ?: "Addon"}"
+                                    hasTmdbData -> "via TMDB"
+                                    hasAddonMeta -> "via ${addonMetaSource ?: "Addon"}"
+                                    else -> null
+                                }
+                                sourceLabel?.let { DetailInfoChip(label = "Source", value = it) }
                             }
                         }
                     }
@@ -1001,6 +1042,42 @@ private fun RatingBadge(provider: String, value: String, color: Color) {
     }
 }
 
+/**
+ * A small pill chip showing a [label] (dimmed) followed by a [value] (brighter).
+ * Used at the bottom of detail screens to show IDs and metadata sources.
+ */
+@Composable
+private fun DetailInfoChip(label: String, value: String) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                Icons.Default.Info,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.5f),
+                modifier = Modifier.size(12.dp)
+            )
+            Text(
+                text = "$label:",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.5f)
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White.copy(alpha = 0.8f)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun SplitPlayButton(
@@ -1011,14 +1088,18 @@ private fun SplitPlayButton(
     hasImdbId: Boolean,
     watchProviders: List<TmdbWatchProvider>,
     tvName: String? = null,
+    isTvConnected: Boolean = false,
     watchLabel: String = "Watch",
-    onTvChipLongPress: (() -> Unit)? = null,
+    availableTvDevices: List<TvDevice> = emptyList(),
+    selectedTvDevice: TvDevice? = null,
+    onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
     onWatchOnTv: () -> Unit,
     onWatchOnTvLongClick: (() -> Unit)? = null,
     onWatchOnPhone: () -> Unit = {},
     onWatchOnPhoneLongClick: (() -> Unit)? = null
 ) {
     var showProvidersSheet by remember { mutableStateOf(false) }
+    var showDeviceMenu by remember { mutableStateOf(false) }
     var watchOnTv by remember { mutableStateOf(tvName != null) }
 
     val topProvider = watchProviders.firstOrNull()
@@ -1045,22 +1126,37 @@ private fun SplitPlayButton(
                 color = Color.White.copy(alpha = 0.4f),
                 modifier = Modifier.padding(end = 8.dp)
             )
+            val connectedGreen = Color(0xFF4CAF50)
             Box(
                 modifier = Modifier.combinedClickable(
-                    onClick = { watchOnTv = !watchOnTv },
-                    onLongClick = if (watchOnTv && onTvChipLongPress != null) {
+                    onClick = {
+                        val togglingToTv = !watchOnTv
+                        watchOnTv = togglingToTv
+                        // If switching to TV and not connected, try to connect to the selected device
+                        if (togglingToTv && !isTvConnected && selectedTvDevice != null) {
+                            onTvDeviceSelect?.invoke(selectedTvDevice)
+                        }
+                    },
+                    onLongClick = if (watchOnTv && availableTvDevices.isNotEmpty()) {
                         {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onTvChipLongPress()
+                            showDeviceMenu = true
                         }
                     } else null
                 )
             ) {
             Surface(
                 shape = RoundedCornerShape(50),
-                color = Color.White.copy(alpha = 0.08f),
+                color = if (watchOnTv && isTvConnected)
+                    connectedGreen.copy(alpha = 0.15f)
+                else
+                    Color.White.copy(alpha = 0.08f),
                 border = androidx.compose.foundation.BorderStroke(
-                    1.dp, Color.White.copy(alpha = 0.2f)
+                    1.dp,
+                    if (watchOnTv && isTvConnected)
+                        connectedGreen.copy(alpha = 0.5f)
+                    else
+                        Color.White.copy(alpha = 0.2f)
                 )
             ) {
                 Row(
@@ -1072,7 +1168,10 @@ private fun SplitPlayButton(
                         imageVector = if (watchOnTv) Icons.Default.Tv else Icons.Default.PhoneAndroid,
                         contentDescription = null,
                         modifier = Modifier.size(13.dp),
-                        tint = Color.White.copy(alpha = 0.7f)
+                        tint = if (watchOnTv && isTvConnected)
+                            connectedGreen
+                        else
+                            Color.White.copy(alpha = 0.7f)
                     )
                     Text(
                         text = if (watchOnTv) {
@@ -1080,7 +1179,10 @@ private fun SplitPlayButton(
                         } else "Phone",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Medium,
-                        color = Color.White.copy(alpha = 0.75f)
+                        color = if (watchOnTv && isTvConnected)
+                            connectedGreen
+                        else
+                            Color.White.copy(alpha = 0.75f)
                     )
                     Icon(
                         imageVector = Icons.Default.SwapHoriz,
@@ -1090,6 +1192,44 @@ private fun SplitPlayButton(
                     )
                 }
             }
+                DropdownMenu(
+                    expanded = showDeviceMenu,
+                    onDismissRequest = { showDeviceMenu = false }
+                ) {
+                    Text(
+                        text = "Choose device",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                    )
+                    availableTvDevices.forEach { device ->
+                        val isSelected = device.uuid.isNotEmpty() && device.uuid == selectedTvDevice?.uuid
+                            || device.uuid.isEmpty() && device.ip == selectedTvDevice?.ip
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = device.name.ifBlank { device.ip },
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Tv,
+                                    contentDescription = null,
+                                    tint = if (isSelected) MaterialTheme.colorScheme.primary
+                                           else LocalContentColor.current.copy(alpha = 0.7f)
+                                )
+                            },
+                            trailingIcon = if (isSelected) {
+                                { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                            } else null,
+                            onClick = {
+                                showDeviceMenu = false
+                                onTvDeviceSelect?.invoke(device)
+                            }
+                        )
+                    }
+                }
             } // close Box
         }
 
