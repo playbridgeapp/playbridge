@@ -47,10 +47,19 @@ sequenceDiagram
 
 ```json
 // Play video (with optional headers, content type, and external subtitles)
-{"type": "command", "action": "play", "payload": {"url": "...", "title": "...", "headers": {...}, "contentType": "...", "subtitles": ["url1.srt", "url2.vtt"]}}
+{"type": "command", "action": "play", "payload": {"url": "...", "title": "...", "headers": {...}, "contentType": "...", "subtitles": ["..."], "playerMode": "vlc", "preferredAudioLanguage": "en"}}
+
+// Send a multi-item playlist (e.g., entire TV season)
+{"type": "command", "action": "playlist", "payload": {"items": [{"url": "...", "title": "E01"}, {"url": "...", "title": "E02"}], "startIndex": 0}}
+
+// Queue a single item to the current TV playlist
+{"type": "command", "action": "queue_add", "payload": {"item": {"url": "...", "title": "Next Ep"}}}
+
+// Jump to a specific index in the TV's active playlist
+{"type": "command", "action": "playlist_jump", "payload": {"index": 5}}
 
 // Open browser on TV
-{"type": "command", "action": "browser", "payload": {"url": "..."}}
+{"type": "command", "action": "browser", "payload": {"url": "...", "desktopMode": true}}
 
 // Player control
 {"type": "command", "action": "control", "payload": {"command": "pause"}}
@@ -63,12 +72,12 @@ sequenceDiagram
 
 // Browser control (refresh, switch engine, maximize/restore video)
 {"type": "command", "action": "browser_control", "payload": {"action": "refresh"}}
-{"type": "command", "action": "browser_control", "payload": {"action": "maximize_video"}}
-{"type": "command", "action": "browser_control", "payload": {"action": "restore_video"}}
-{"type": "command", "action": "browser_control", "payload": {"action": "switch_engine"}}
 
 // Context query (ask TV what screen it's on)
 {"type": "command", "action": "context_query"}
+
+// Request pairing (triggers TV to show PIN)
+{"type": "request_pairing"}
 
 // Heartbeat
 {"type": "ping"}
@@ -85,6 +94,9 @@ sequenceDiagram
 
 // Context response
 {"type": "context", "active": "player"}  // "player", "browser", or "idle"
+
+// Playlist status update (broadcasts full queue state to phone)
+{"type": "playlist_status", "items": [{"index": 0, "title": "E01"}], "currentIndex": 0, "totalCount": 1}
 
 // Heartbeat
 {"type": "pong"}

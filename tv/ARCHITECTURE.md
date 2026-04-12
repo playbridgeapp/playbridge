@@ -78,7 +78,7 @@ com.playbridge.player/
 | Server Service | ServerService.kt | Foreground service managing server lifecycle, command routing, external player intents, NSD registration, context broadcasting |
 | Video Player Base | PlayerActivity.kt | Abstract base class for players, playlist queue, auto-advance |
 | ExoPlayer | ExoPlayerActivity.kt | ExoPlayer implementation with HLS/DASH/RTSP support |
-| LibVLC Player | VlcPlayerActivity.kt | LibVLC implementation for unsupported ExoPlayer formats |
+| LibVLC Player | VlcPlayerActivity.kt | LibVLC implementation for unsupported ExoPlayer formats (AVI, SWF, etc.) |
 | Player Controls | PlayerControlsManager.kt | Custom controls overlay, seekbar, play/pause, prev/next episode buttons, filter button, dynamic scrubbing intervals |
 | VLC Controls | VlcControlsManager.kt | Custom controls overlay specific to VLC player |
 | Input Handler | InputHandler.kt | D-pad, phone remote, control commands |
@@ -94,6 +94,10 @@ com.playbridge.player/
 | Video Filter Manager | VideoFilterManager.kt | Applies ColorMatrix filters to PlayerView hardware layer (GPU-accelerated, zero decode overhead) |
 | Video Filter Dialog | VideoFilterDialog.kt | Compact bottom-panel filter picker with live preview on focus, D-pad custom sliders |
 | Overlay Window | OverlayWindowHelper.kt | Helper for drawing invisible overlay to keep WebView active in background |
+| AdBlocker | AdBlocker.kt | Singleton ad blocker preloaded at app startup; EasyList + EasyPrivacy, cosmetic filtering, popup/redirect blocking |
+| GPU Video Filters | VideoFilterManager.kt | Applies live ColorMatrix filters (HDR, Vivid, Action, etc.) directly to the SurfaceView/TextureView without CPU penalties |
+| Playlist Picker | PlaylistPickerDialog.kt | Side-wall UI for navigating series episodes and jumping within a live queue |
+| M3U Parser | M3uParser.kt | Custom parser for IPTV M3U playlists, bypassing ExoPlayer restrictions |
 | Protocol & Commands | Message.kt | Shared protocol: sealed `Command` class, message parsing, JSON helpers (in `protocol` module) |
 | Browser Engine Interface | BrowserEngine.kt | Abstraction for swappable browser engines (loadUrl, reload, evaluateJavascript, etc.) |
 | SystemWebView Engine | SystemWebViewEngine.kt | Android WebView engine with JS-based popup/redirect blocking, cosmetic CSS injection, ad request interception |

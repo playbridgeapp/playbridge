@@ -10,10 +10,10 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 | Module | Package | Purpose |
 |--------|---------|---------|
-| **Phone (Sender)** | `com.playbridge.sender` | GeckoView-based browser with video detection, downloads, bookmarks, remote control, sends commands to TV |
-| **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + ExoPlayer + dual-engine browser (SystemWebView/GeckoView) with ad blocking, receives and plays video streams |
-| **Protocol** | `com.playbridge.protocol` | Shared protocol: NSD constants, message classes, command parser, and helper functions |
-| **Extension** | `extension/src/` | Standalone browser extension for Firefox (V2). Direct WebSocket connection to TV for desktop. Sends videos and URLs to TV |
+| **Phone (Sender)** | `com.playbridge.sender` | GeckoView browser with video detection, full Stremio addon protocol (Stream/Catalog/Meta/Subtitles), persistent watchlist/tracking, and S3 cloud backup |
+| **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + Dual-engine browser + Dual-player (ExoPlayer/VLC) with GPU video filters and M3U playlist support |
+| **Protocol** | `com.playbridge.protocol` | Shared protocol: NSD constants, JSON message classes (including multi-item playlists), and command parser |
+| **Extension** | `extension/src/` | Standalone browser extension for Firefox (V2). Direct WebSocket connection to TV for desktop casting |
 
 ---
 
@@ -25,37 +25,37 @@ graph TB
         Browser[GeckoView Browser]
         Extension[Video Detector Extension]
         WSClient[WebSocket Client]
-        Connection[Connection Screen<br/>NSD Discovery + QR + Manual]
+        Connection[Connection Screen<br/>NSD Discovery + QR + PIN]
         RemoteControl[Remote Control UI]
         HLS[HLS Parser]
-        Downloads[Download Manager]
-        HistoryDB[Room DB<br/>History + Bookmarks + Tabs]
+        Addons[Stremio Addons Protocol<br/>Stream/Catalog/Meta/Subs]
+        Tracking[Watchlist & Tracking<br/>Room DB]
+        Backup[Cloud Backup<br/>S3 Compatible]
     end
     
     subgraph TV App
         WSServer[WebSocket Server]
-        Player[ExoPlayer + Subtitles]
+        Player[ExoPlayer / LibVLC]
         TVBrowser[Dual-Engine Browser<br/>SystemWebView / GeckoView]
         AdBlock[Singleton AdBlocker<br/>EasyList + Cosmetic Filtering]
-        TrackSel[Track Selection Dialog]
-        History[History Store]
+        Filters[GPU Video Filters<br/>ColorMatrix Presets]
+        PlaylistStore[Playlist Store<br/>Episodes / Queue]
         ServerSvc[Server Foreground Service]
     end
     
     Extension --> Browser
     Browser --> WSClient
-    Browser --> Downloads
-    Browser --> HistoryDB
-    HLS --> Browser
+    Browser --> Addons
+    Addons --> Tracking
+    Tracking --> Browser
     Connection --> WSClient
     RemoteControl --> WSClient
-    WSClient <-->|Play/Control/Remote/Mouse/Browser Commands| WSServer
+    WSClient <-->|Play/Playlist/Remote/Mouse/Control| WSServer
     ServerSvc --> WSServer
     WSServer --> Player
     WSServer --> TVBrowser
-    WSServer --> History
-    TVBrowser --> AdBlock
-    Player --> TrackSel
+    WSServer --> PlaylistStore
+    Player --> Filters
 ```
 
 ---
@@ -136,16 +136,15 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] README.md created
 - [x] LICENSE file added
 - [x] Room database for browsing history, bookmarks, and tab persistence (phone)
-- [x] Subtitle support (SRT/VTT) with external URLs
+- [x] Subtitle support (SRT/VTT) with external URLs and addon routing
 - [x] Dual-engine TV browser (SystemWebView + GeckoView) with runtime switching
 - [x] Ad blocking with EasyList, EasyPrivacy, cosmetic filtering, and popup blocking
-- [x] Bookmarks support (phone)
-- [x] Tab persistence across app restarts (phone)
-- [x] Desktop mode toggle (phone)
-- [x] SSL lock indicator (phone)
-- [x] Video maximize/restore via JS injection (TV browser)
-- [x] `SECURITY.md` finalized with security considerations (SSL bypass, local network)
-- [x] Resolved SettingsScreen.kt version mismatch by dynamically reading `packageManager` info (TV app)
+- [x] Persistent Watchlist & Media Tracking (phone Room DB)
+- [x] Cloud Backup system (S3 compatible) with settings export/import
+- [x] Full Stremio Addon Expansion (Catalogs, Meta, Subtitles)
+- [x] Edge-to-edge UI support with manual WindowInsets handling
+- [x] Multi-item Playlists & Queue support (Phone -> TV)
+- [x] GPU-accelerated Video Filters on TV (gpu-zero overhead)
 - [x] Custom M3U parser for IPTV playlists bypassing default HLS parser (TV app)
 - [x] Extracted PlayerActivity logic into abstract base class with ExoPlayerActivity and VlcPlayerActivity implementations (TV app)
 

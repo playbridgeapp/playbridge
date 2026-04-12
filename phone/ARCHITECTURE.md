@@ -100,7 +100,8 @@ com.playbridge.sender/
 │       ├── TmdbRepository.kt
 │       ├── WatchlistDao.kt
 │       ├── WatchlistEntity.kt
-│       └── WatchlistStatus.kt
+│       ├── WatchlistStatus.kt
+│       └── WatchlistStatusConverter.kt
 ├── model
 │   ├── Message.kt
 │   └── TvDevice.kt
@@ -140,6 +141,9 @@ com.playbridge.sender/
 | Remote Control | RemoteControlScreen.kt | Context-aware D-pad, touchpad, and player controls for TV |
 | HLS Parser | HlsParser.kt | Parses HLS manifests for quality selection with audio track support |
 | Video Detection | VideoDetector.kt | Video content type detection via request interception |
+| Watchlist System | WatchlistDao.kt | Room-based persistence for 'My List', tracking progress, and episode-level 'watched' states |
+| Cloud Backup | BackupManager.kt | S3-compatible cloud backup/restore for all app settings and databases |
+| Ambient UI | LibraryScreen.kt | Dynamic 'Hero' backdrops that adapt to currently highlighted media |
 | Downloads | DownloadsScreen.kt | Download list UI (system + HLS/ExoPlayer downloads) |
 | Download Utils | DownloadUtils.kt | Download helper: standard files via DownloadManager, HLS via ExoPlayer DownloadService |
 | HLS Download Manager | DownloadManagerSingleton.kt | Media3 ExoPlayer download manager singleton for HLS offline downloads |
