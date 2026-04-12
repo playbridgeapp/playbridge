@@ -48,336 +48,59 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material.ripple.rememberRipple
 
 /**
- * Detail screen for a movie — shows metadata, backdrop, and Play button
- * that resolves streams from installed addons and shows a picker.
+ * Unified detail screen for movies, TV shows, and addon-native content.
+ *
+ * ID resolution:
+ * - Numeric ID (toIntOrNull != null)   → TMDB lookup (movie/tv based on type)
+ * - ID starts with "tt"                → TMDB /find by IMDb ID, then addon meta
+ * - Anything else                      → addon-native ID, no TMDB lookup
+ *
+ * After TMDB resolution, always attempts addon meta fetch where:
+ * - addonType = if (type == "tv") "series" else type
+ * - metaId = resolvedImdbId ?: id
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MovieDetailScreen(
-    movieId: Int,
+fun LibraryDetailScreen(
+    id: String,
+    type: String,
     addonRepository: AddonRepository,
-    onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
+    onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit = { _, _, _ -> },
     onPlayTrailer: ((String) -> Unit)? = null,
-    viewModel: LibraryViewModel,
-    tvName: String? = null,
-    onBack: () -> Unit
-) {
-    val context = LocalContext.current
-    val tmdb = remember { TmdbRepository(context) }
-    val omdb = remember { OmdbRepository(context) }
-    val subtitleService = remember { StremioSubtitleService(addonRepository) }
-    val scope = rememberCoroutineScope()
-
-    var details by remember { mutableStateOf<TmdbMovieDetails?>(null) }
-    var addonMeta by remember { mutableStateOf<StremioMetaDetail?>(null) }
-    var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var trailerUrl by remember { mutableStateOf<String?>(null) }
-    var watchProviders by remember { mutableStateOf<List<TmdbWatchProvider>>(emptyList()) }
-    var hasAddons by remember { mutableStateOf(false) }
-
-    // Stream resolution state
-    var resolvedStreams by remember { mutableStateOf<List<ResolvedStream>>(emptyList()) }
-    var resolutionState by remember { mutableStateOf(ResolutionState()) }
-    var showStreamPicker by remember { mutableStateOf(false) }
-    var forceManualInPicker by remember { mutableStateOf(false) }
-
-    LaunchedEffect(movieId) {
-        isLoading = true
-        val movieDetails = tmdb.getMovieDetails(movieId)
-        details = movieDetails
-        val imdbId = movieDetails?.imdbId
-        if (imdbId != null) {
-            if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
-            // Addon metadata is the primary display source
-            addonMeta = runCatching { addonRepository.fetchMeta("movie", imdbId) }.getOrNull()
-        }
-        isLoading = false
-        trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
-        watchProviders = tmdb.getMovieWatchProviders(movieId)
-        hasAddons = addonRepository.hasAnyAddons()
-    }
-
-    val isWatchlisted by viewModel.isWatchlisted(movieId).collectAsState(initial = false)
-    val tracked by viewModel.getTracked(movieId).collectAsState(initial = null)
-
-    // Stream picker sheet
-    if (showStreamPicker) {
-        StreamPickerSheet(
-            streams = resolvedStreams,
-            isLoading = resolutionState.isResolving,
-            title = details?.title ?: "Select Stream",
-            episodeRuntimeMinutes = details?.runtime,
-            forceManual = forceManualInPicker,
-            onStreamSelected = { resolved ->
-                val forPhone = resolutionState.target == ResolutionTarget.PHONE
-                showStreamPicker = false
-                resolutionState = resolutionState.copy(isResolving = false)
-                val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
-
-                if (forPhone) {
-                    openInExternalPlayer(context, streamUrl, null, null)
-                } else {
-                    scope.launch {
-                        val subtitles = details?.imdbId?.let { imdbId ->
-                            val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-                            val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
-                            if (prefLang.isNotEmpty()) {
-                                try {
-                                    val allSubs = subtitleService.getSubtitlesForMovie(imdbId)
-                                    allSubs.mapNotNull { it.url }
-                                } catch (e: Exception) {
-                                    emptyList()
-                                }
-                            } else {
-                                emptyList()
-                            }
-                        } ?: emptyList()
-
-                        onPlayStream(streamUrl, details?.title ?: "Movie", subtitles.ifEmpty { null })
-                        Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            },
-            onDismiss = { showStreamPicker = false; resolutionState = ResolutionState() }
-        )
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        TranslucentBackground(backdropUrl = details?.backdropUrl)
-        if (isLoading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
-            }
-        } else if (details == null) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Failed to load movie details", color = Color.White)
-            }
-        } else {
-            val movie = details!!
-            val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 32.dp + navBarPadding)
-            ) {
-                // Backdrop
-                item {
-                    BackdropSection(
-                        backdropUrl = addonMeta?.background ?: movie.backdropUrl,
-                        logoUrl = movie.logoUrl,
-                        title = addonMeta?.name ?: movie.title,
-                        year = addonMeta?.year ?: movie.year,
-                        certification = movie.certification,
-                        rating = addonMeta?.imdbRating ?: movie.rating,
-                        runtime = addonMeta?.runtime ?: movie.runtimeFormatted,
-                        genres = addonMeta?.genres?.takeIf { it.isNotEmpty() } ?: movie.genres.map { it.name },
-                        omdbDetails = omdbDetails
-                    )
-                }
-
-                // Play / Watch buttons
-                item {
-                    val imdbId = movie.imdbId
-                    val autoQualityKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_quality", "") ?: "" }
-                    val autoMaxMbps = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_max_mbps", "")?.toDoubleOrNull() }
-
-                    val startResolution: (Boolean, Boolean) -> Unit = start@{ forPhone, forcePicker ->
-                        if (imdbId != null && hasAddons) {
-                            resolutionState = ResolutionState(
-                                isResolving = true,
-                                target = if (forPhone) ResolutionTarget.PHONE else ResolutionTarget.TV
-                            )
-                            forceManualInPicker = forcePicker
-                            resolvedStreams = emptyList()
-                            if (forcePicker || autoQualityKey.isEmpty()) {
-                                showStreamPicker = true
-                            }
-                            scope.launch {
-                                addonRepository.resolveMovieStreamsFlow(imdbId).collect { latest ->
-                                    resolvedStreams = latest
-                                }
-                                resolutionState = resolutionState.copy(isResolving = false)
-
-                                // Auto-pick logic if not showing picker
-                                if (!showStreamPicker && !forcePicker && autoQualityKey.isNotEmpty()) {
-                                    val best = StreamSelector.selectBest(
-                                        streams = resolvedStreams,
-                                        preferredQuality = QualityFilter.fromKey(autoQualityKey),
-                                        maxMbps = autoMaxMbps,
-                                        runtimeMinutes = movie.runtime
-                                    )
-                                    val finalSelection = best ?: resolvedStreams.firstOrNull()
-                                    if (finalSelection != null) {
-                                        val streamUrl = finalSelection.stream.url
-                                        if (streamUrl != null) {
-                                            if (forPhone) {
-                                                openInExternalPlayer(context, streamUrl, null, null)
-                                            } else {
-                                                onPlayStream(streamUrl, movie.title, null)
-                                                Toast.makeText(context, "Auto-selected: ${finalSelection.stream.name}", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    } else {
-                                        showStreamPicker = true
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    SplitPlayButton(
-                        isTvResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV,
-                        isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
-                        hasAddons = hasAddons,
-                        hasImdbId = imdbId != null,
-                        watchProviders = watchProviders,
-                        tvName = tvName,
-                        onWatchOnTv = { startResolution(false, false) },
-                        onWatchOnTvLongClick = { startResolution(false, true) },
-                        onWatchOnPhone = { startResolution(true, false) },
-                        onWatchOnPhoneLongClick = { startResolution(true, true) }
-                    )
-                }
-
-                item {
-                    ActionButtons(
-                        isWatchlisted = isWatchlisted,
-                        tracked = tracked,
-                        onToggleWatchlist = {
-                            details?.let { movie ->
-                                viewModel.toggleWatchlist(
-                                    tmdbId = movie.id,
-                                    mediaType = "movie",
-                                    title = movie.title,
-                                    posterUrl = movie.posterUrl,
-                                    year = movie.year,
-                                    rating = movie.rating
-                                )
-                            }
-                        },
-                        trailerUrl = trailerUrl,
-                        onPlayTrailer = onPlayTrailer
-                    )
-                }
-
-                // Overview
-                item {
-                    Text(
-                        text = addonMeta?.description ?: movie.overview,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                        color = Color.White
-                    )
-
-                    val displayCast = addonMeta?.cast?.takeIf { it.isNotEmpty() } ?: movie.cast
-                    if (displayCast.isNotEmpty()) {
-                        Text(
-                            text = "Starring: ${displayCast.joinToString(", ")}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                        )
-                    }
-                    if (movie.director.isNotBlank()) {
-                        Text(
-                            text = "Director: ${movie.director}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-
-                // IMDb ID info
-                item {
-                    if (movie.imdbId != null) {
-                        Surface(
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
-                            shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Info,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.7f),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "IMDB: ${movie.imdbId}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White.copy(alpha = 0.7f)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                item { Spacer(modifier = Modifier.height(32.dp)) }
-            }
-        }
-        
-        TopAppBar(
-            title = { },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = Color.Transparent,
-                scrolledContainerColor = Color.Transparent
-            )
-        )
-    }
-}
-
-/**
- * Detail screen for a TV show — shows metadata, seasons, episodes,
- * and Play button that resolves streams and shows a picker.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TvShowDetailScreen(
-    tvId: Int,
-    addonRepository: AddonRepository,
-    onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit,
-    onPlayTrailer: ((String) -> Unit)? = null,
-    onPlayPlaylist: (items: List<com.playbridge.protocol.PlayPayload>) -> Unit,
+    onPlayPlaylist: (items: List<com.playbridge.protocol.PlayPayload>) -> Unit = {},
     onQueueAdd: (com.playbridge.protocol.PlayPayload) -> Unit = {},
     onPlaylistJump: (Int) -> Unit = {},
     playlistState: PlaylistUiState? = null,
-    onNowPlayingStarted: (tvId: Int, season: Int, startEpisode: Int) -> Unit = { _, _, _ -> },
+    onNowPlayingStarted: (tmdbId: Int, season: Int, startEpisode: Int) -> Unit = { _, _, _ -> },
     highlightSeason: Int? = null,
     highlightEpisode: Int? = null,
     viewModel: LibraryViewModel,
     tvName: String? = null,
-    onBack: () -> Unit
+    onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     val tmdb = remember { TmdbRepository(context) }
     val omdb = remember { OmdbRepository(context) }
     val subtitleService = remember { StremioSubtitleService(addonRepository) }
     val scope = rememberCoroutineScope()
-    
-    var details by remember { mutableStateOf<TmdbTvDetails?>(null) }
+
+    // Determine if this is a series or movie
+    val addonType = if (type == "tv") "series" else type
+    val isSeries = type == "tv" || type == "series"
+
+    // Primary state for TMDB content
+    var movieDetails by remember { mutableStateOf<TmdbMovieDetails?>(null) }
+    var tvDetails by remember { mutableStateOf<TmdbTvDetails?>(null) }
     var addonMeta by remember { mutableStateOf<StremioMetaDetail?>(null) }
     var omdbDetails by remember { mutableStateOf<OmdbResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     var trailerUrl by remember { mutableStateOf<String?>(null) }
     var watchProviders by remember { mutableStateOf<List<TmdbWatchProvider>>(emptyList()) }
     var hasAddons by remember { mutableStateOf(false) }
     var selectedSeason by remember { mutableIntStateOf(highlightSeason ?: 1) }
+    var resolvedTmdbId by remember { mutableStateOf<Int?>(null) }
+    var resolvedImdbId by remember { mutableStateOf<String?>(null) }
 
     // Stream resolution state
     var resolvedStreams by remember { mutableStateOf<List<ResolvedStream>>(emptyList()) }
@@ -388,81 +111,256 @@ fun TvShowDetailScreen(
 
     // Season play state
     var seasonResolutionState by remember { mutableStateOf(SeasonResolutionState()) }
-
-    // Throttled queue state
     var queuedCount by remember { mutableIntStateOf(0) }
     var queueTotalCount by remember { mutableIntStateOf(0) }
     var isQueueing by remember { mutableStateOf(false) }
 
     // Episode selection for stream picker
     var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
-    // Context for season queue operations (holds episode list & preferences while Ep1 stream picker is open)
     var seasonQueueContext by remember { mutableStateOf<SeasonQueueContext?>(null) }
-
-    val isWatchlisted by viewModel.isWatchlisted(tvId).collectAsState(initial = false)
-    val tracked by viewModel.getTracked(tvId).collectAsState(initial = null)
 
     val episodeListState = rememberLazyListState()
     var episodesAscending by remember { mutableStateOf(true) }
 
-    LaunchedEffect(tvId) {
+    // Load TMDB content based on ID type
+    LaunchedEffect(id, type) {
         isLoading = true
-        val tvDetails = tmdb.getTvDetails(tvId)
-        details = tvDetails
-        val imdbId = tvDetails?.imdbId
-        if (imdbId != null) {
-            if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
-            addonMeta = runCatching { addonRepository.fetchMeta("series", imdbId) }.getOrNull()
-        }
-        isLoading = false
-        trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
-        watchProviders = tmdb.getTvWatchProviders(tvId)
-        hasAddons = addonRepository.hasAnyAddons()
+        errorMessage = null
 
-        // Prefer the tracked season, otherwise first season from addon videos
-        val trackedSeason = tracked
-            ?.takeIf { it.status == WatchlistStatus.WATCHING.value }
-            ?.seasonProgress
-        val firstAddonSeason = addonMeta?.videos
-            ?.mapNotNull { it.season }
-            ?.filter { it > 0 }
-            ?.minOrNull()
-        val targetSeason = trackedSeason ?: highlightSeason ?: firstAddonSeason ?: 1
-        selectedSeason = targetSeason
+        when {
+            id.toIntOrNull() != null -> {
+                // Numeric TMDB ID — direct lookup
+                val numericId = id.toInt()
+                resolvedTmdbId = numericId
+                if (isSeries) {
+                    val tv = tmdb.getTvDetails(numericId)
+                    tvDetails = tv
+                    val imdbId = tv?.imdbId
+                    if (imdbId != null) {
+                        resolvedImdbId = imdbId
+                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
+                        addonMeta = runCatching { addonRepository.fetchMeta(addonType, imdbId) }.getOrNull()
+                    }
+                    trailerUrl = tmdb.getTvVideos(numericId)?.bestTrailerUrl
+                    watchProviders = tmdb.getTvWatchProviders(numericId)
+                } else {
+                    val movie = tmdb.getMovieDetails(numericId)
+                    movieDetails = movie
+                    val imdbId = movie?.imdbId
+                    if (imdbId != null) {
+                        resolvedImdbId = imdbId
+                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
+                        addonMeta = runCatching { addonRepository.fetchMeta(addonType, imdbId) }.getOrNull()
+                    }
+                    trailerUrl = tmdb.getMovieVideos(numericId)?.bestTrailerUrl
+                    watchProviders = tmdb.getMovieWatchProviders(numericId)
+                }
+            }
+            id.startsWith("tt") -> {
+                // IMDb ID — resolve via TMDB /find
+                val result = tmdb.findByImdbId(id)
+                when {
+                    result == null -> {
+                        errorMessage = "Could not reach TMDB. Check your API key and connection."
+                    }
+                    isSeries && result.tvResults.isNotEmpty() -> {
+                        val tvId = result.tvResults.first().id
+                        resolvedTmdbId = tvId
+                        resolvedImdbId = id
+                        val tv = tmdb.getTvDetails(tvId)
+                        tvDetails = tv
+                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
+                        addonMeta = runCatching { addonRepository.fetchMeta(addonType, id) }.getOrNull()
+                        trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
+                        watchProviders = tmdb.getTvWatchProviders(tvId)
+                    }
+                    !isSeries && result.movieResults.isNotEmpty() -> {
+                        val movieId = result.movieResults.first().id
+                        resolvedTmdbId = movieId
+                        resolvedImdbId = id
+                        val movie = tmdb.getMovieDetails(movieId)
+                        movieDetails = movie
+                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
+                        addonMeta = runCatching { addonRepository.fetchMeta(addonType, id) }.getOrNull()
+                        trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
+                        watchProviders = tmdb.getMovieWatchProviders(movieId)
+                    }
+                    result.movieResults.isNotEmpty() -> {
+                        val movieId = result.movieResults.first().id
+                        resolvedTmdbId = movieId
+                        resolvedImdbId = id
+                        val movie = tmdb.getMovieDetails(movieId)
+                        movieDetails = movie
+                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
+                        addonMeta = runCatching { addonRepository.fetchMeta("movie", id) }.getOrNull()
+                        trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
+                        watchProviders = tmdb.getMovieWatchProviders(movieId)
+                    }
+                    result.tvResults.isNotEmpty() -> {
+                        val tvId = result.tvResults.first().id
+                        resolvedTmdbId = tvId
+                        resolvedImdbId = id
+                        val tv = tmdb.getTvDetails(tvId)
+                        tvDetails = tv
+                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
+                        addonMeta = runCatching { addonRepository.fetchMeta("series", id) }.getOrNull()
+                        trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
+                        watchProviders = tmdb.getTvWatchProviders(tvId)
+                    }
+                    else -> {
+                        errorMessage = "\"$id\" was not found on TMDB."
+                    }
+                }
+            }
+            else -> {
+                // Addon-native ID — no TMDB lookup
+                addonMeta = runCatching { addonRepository.fetchMeta(addonType, id) }.getOrNull()
+            }
+        }
+
+        // Error if nothing loaded
+        if (movieDetails == null && tvDetails == null && addonMeta == null && errorMessage == null) {
+            errorMessage = "Could not load details for \"$id\"."
+        }
+
+        isLoading = false
+        hasAddons = addonRepository.hasAnyAddons()
     }
 
-    // Stream picker sheet — when seasonQueueContext is set, picking a stream for Ep1
-    // triggers the throttled queue for the rest of the season
+    // Watchlist state (gated on resolvedTmdbId)
+    val isWatchlisted by remember(resolvedTmdbId) {
+        resolvedTmdbId?.let { viewModel.isWatchlisted(it) }
+            ?: kotlinx.coroutines.flow.flowOf(false)
+    }.collectAsState(initial = false)
 
+    val tracked by remember(resolvedTmdbId) {
+        resolvedTmdbId?.let { viewModel.getTracked(it) }
+            ?: kotlinx.coroutines.flow.flowOf(null)
+    }.collectAsState(initial = null)
+
+    // Season initialization (after tracked is set)
+    LaunchedEffect(addonMeta, tracked) {
+        if (addonMeta == null && tvDetails == null) return@LaunchedEffect
+        val trackedSeason = tracked?.takeIf { it.status == WatchlistStatus.WATCHING.value }?.seasonProgress
+        val firstAddonSeason = addonMeta?.videos?.mapNotNull { it.season }?.filter { it > 0 }?.minOrNull()
+        selectedSeason = trackedSeason ?: highlightSeason ?: firstAddonSeason ?: 1
+    }
+
+    // Derived display values (prefer addon meta, fallback to TMDB)
+    val displayTitle = addonMeta?.name ?: tvDetails?.name ?: movieDetails?.title ?: id
+    val displayBackdrop = addonMeta?.background ?: tvDetails?.backdropUrl ?: movieDetails?.backdropUrl ?: addonMeta?.poster
+    val displayLogo = tvDetails?.logoUrl ?: movieDetails?.logoUrl
+    val displayYear = addonMeta?.year ?: tvDetails?.year ?: movieDetails?.year ?: ""
+    val displayCert = tvDetails?.certification ?: movieDetails?.certification ?: ""
+    val displayRating = addonMeta?.imdbRating ?: tvDetails?.rating ?: movieDetails?.rating ?: ""
+    val displayRuntime = addonMeta?.runtime ?: run {
+        if (isSeries) tvDetails?.let { "${it.numberOfSeasons} Season${if (it.numberOfSeasons != 1) "s" else ""}" } ?: ""
+        else movieDetails?.runtimeFormatted ?: ""
+    }
+    val displayGenres = addonMeta?.genres?.takeIf { it.isNotEmpty() }
+        ?: tvDetails?.genres?.map { it.name } ?: movieDetails?.genres?.map { it.name } ?: emptyList()
+    val displayOverview = addonMeta?.description ?: tvDetails?.overview ?: movieDetails?.overview ?: ""
+    val displayCast = addonMeta?.cast?.takeIf { it.isNotEmpty() } ?: tvDetails?.cast ?: movieDetails?.cast ?: emptyList()
+    val displayDirector = if (!isSeries) movieDetails?.director ?: "" else ""
+
+    // Check if we have episodes
+    val hasEpisodes = addonMeta?.videos?.isNotEmpty() == true
+    val canResolveStreams = hasAddons && (resolvedImdbId != null || !id.startsWith("tt"))
+
+    // Stream resolution helper
+    val autoQualityKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_quality", "") ?: "" }
+    val autoMaxMbps = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_max_mbps", "")?.toDoubleOrNull() }
+    val episodesInSeason = addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList()
+
+    // Unified stream resolution function
+    val startResolution: (String, String, String, Boolean, Boolean, StremioVideo?, Boolean) -> Unit = start@{ streamId, streamType, resTitle, forPhone, forcePicker, episode, isFirstEpOfSeason ->
+        if (!canResolveStreams) return@start
+
+        resolutionState = ResolutionState(
+            isResolving = true,
+            target = if (forPhone) ResolutionTarget.PHONE else ResolutionTarget.TV,
+            episodeId = episode?.episode
+        )
+        forceManualInPicker = forcePicker
+        currentEpisodeSelection = episode
+        streamPickerTitle = resTitle
+        resolvedStreams = emptyList()
+
+        if (forcePicker || autoQualityKey.isEmpty()) {
+            showStreamPicker = true
+        }
+
+        scope.launch {
+            addonRepository.resolveStreamsFlow(streamType, streamId).collect { latest ->
+                resolvedStreams = latest
+            }
+            resolutionState = resolutionState.copy(isResolving = false)
+
+            // Auto-pick logic
+            if (!showStreamPicker && !forcePicker && autoQualityKey.isNotEmpty()) {
+                val best = StreamSelector.selectBest(
+                    streams = resolvedStreams,
+                    preferredQuality = QualityFilter.fromKey(autoQualityKey),
+                    maxMbps = autoMaxMbps,
+                    runtimeMinutes = if (!isSeries) movieDetails?.runtime else null
+                )
+                val finalSelection = best ?: resolvedStreams.firstOrNull()
+                if (finalSelection != null) {
+                    val streamUrl = finalSelection.stream.url
+                    if (streamUrl != null) {
+                        if (forPhone) {
+                            openInExternalPlayer(context, streamUrl, null, null)
+                        } else {
+                            onPlayStream(streamUrl, resTitle, null)
+                            Toast.makeText(context, "Auto-selected: ${finalSelection.stream.name}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    showStreamPicker = true
+                }
+            }
+        }
+
+        // Season queue context only for TMDB series, first episode, and TV target
+        if (!forPhone && isFirstEpOfSeason && resolvedImdbId != null && isSeries && episode == episodesInSeason.firstOrNull()) {
+            seasonQueueContext = SeasonQueueContext(
+                imdbId = resolvedImdbId!!,
+                season = selectedSeason,
+                episodes = episodesInSeason,
+                showName = displayTitle,
+                qualityFilter = emptyList(),
+                runtimeMap = emptyMap()
+            )
+        }
+    }
+
+    // Stream picker sheet
     if (showStreamPicker) {
-        val episodeRuntime: Int? = null // StremioVideo has no runtime
         StreamPickerSheet(
             streams = resolvedStreams,
             isLoading = resolutionState.isResolving,
             title = streamPickerTitle,
-            episodeRuntimeMinutes = episodeRuntime,
+            episodeRuntimeMinutes = null,
             forceManual = forceManualInPicker,
             onStreamSelected = { resolved ->
                 val forPhone = resolutionState.target == ResolutionTarget.PHONE
                 showStreamPicker = false
-                resolutionState = resolutionState.copy(isResolving = false) // Target stays same during EP1 pick
+                resolutionState = resolutionState.copy(isResolving = false)
                 val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
 
                 if (forPhone) {
-                    // Play locally on phone — open system video player chooser
                     seasonQueueContext = null
                     openInExternalPlayer(context, streamUrl, null, null)
                 } else {
                     scope.launch {
-                        val subtitles = if (details?.imdbId != null && currentEpisodeSelection != null) {
-                            val imdbId = details!!.imdbId!!
+                        val subtitles = if (resolvedImdbId != null && currentEpisodeSelection != null && isSeries) {
                             val episode = currentEpisodeSelection!!
                             val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
                             val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
 
                             if (prefLang.isNotEmpty()) {
                                 try {
-                                    val allSubs = subtitleService.getSubtitlesForEpisode(imdbId, selectedSeason, episode.episode ?: 0)
+                                    val allSubs = subtitleService.getSubtitlesForEpisode(resolvedImdbId!!, selectedSeason, episode.episode ?: 0)
                                     allSubs.mapNotNull { it.url }
                                 } catch (e: Exception) {
                                     emptyList()
@@ -470,7 +368,22 @@ fun TvShowDetailScreen(
                             } else {
                                 emptyList()
                             }
-                        } else emptyList()
+                        } else if (resolvedImdbId != null && !isSeries) {
+                            val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                            val prefLang = prefs.getString("preferred_subtitle_lang", "") ?: ""
+                            if (prefLang.isNotEmpty()) {
+                                try {
+                                    val allSubs = subtitleService.getSubtitlesForMovie(resolvedImdbId!!)
+                                    allSubs.mapNotNull { it.url }
+                                } catch (e: Exception) {
+                                    emptyList()
+                                }
+                            } else {
+                                emptyList()
+                            }
+                        } else {
+                            emptyList()
+                        }
 
                         val ep1Payload = com.playbridge.protocol.PlayPayload(
                             url = streamUrl,
@@ -479,26 +392,24 @@ fun TvShowDetailScreen(
                         )
 
                         val sqCtx = seasonQueueContext
-                        if (sqCtx != null) {
-                            // Season play: send Ep1 as a 1-item playlist so the TV enters
-                            // playlist mode immediately (ExoPlayer playlist button shows)
+                        if (sqCtx != null && isSeries) {
+                            // Season play: send Ep1 as a 1-item playlist
                             seasonQueueContext = null
-                            resolutionState = ResolutionState() // Clear Ep1 resolution state
+                            resolutionState = ResolutionState()
                             onPlayPlaylist(listOf(ep1Payload))
-                            // Notify BrowserActivity of which show/season is now playing
                             val startEp = sqCtx.episodes.firstOrNull()?.episode ?: 1
-                            onNowPlayingStarted(tvId, sqCtx.season, startEp)
+                            onNowPlayingStarted(resolvedTmdbId ?: 0, sqCtx.season, startEp)
                             Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
 
-                            // Derive target bitrate + bingeGroup from selected Ep1 stream
-                            val ep1Runtime: Int? = null // StremioVideo has no runtime
+                            // Derive target bitrate
+                            val ep1Runtime: Int? = null
                             val targetMbps = resolved.stream.behaviorHints?.calculateMbps(ep1Runtime)
                             val preferredBingeGroup = resolved.stream.behaviorHints?.bingeGroup
 
                             // Start background queue for Eps 2+
                             val totalEpisodes = sqCtx.episodes.size
                             queueTotalCount = totalEpisodes
-                            queuedCount = 1 // Ep1 is already playing
+                            queuedCount = 1
                             isQueueing = true
                             seasonResolutionState = SeasonResolutionState(
                                 isResolving = true,
@@ -519,7 +430,6 @@ fun TvShowDetailScreen(
                                 episodeRuntimeMinutes = sqCtx.runtimeMap,
                                 delayBetweenMs = 2000
                             ).collect { episodeStream ->
-                                // Skip Ep1 — already playing
                                 if (episodeStream != null && episodeStream.episode > 1) {
                                     val epUrl = episodeStream.stream.stream.url
                                     if (!epUrl.isNullOrBlank()) {
@@ -551,9 +461,9 @@ fun TvShowDetailScreen(
                             isQueueing = false
                             Toast.makeText(context, "All $queuedCount episodes queued", Toast.LENGTH_SHORT).show()
                         } else {
-                            // Single episode play (not season queue)
+                            // Single episode or movie play
                             onPlayStream(streamUrl, streamPickerTitle, subtitles.ifEmpty { null })
-                            resolutionState = ResolutionState() // Clear
+                            resolutionState = ResolutionState()
                             Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -568,331 +478,394 @@ fun TvShowDetailScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        TranslucentBackground(backdropUrl = details?.backdropUrl)
-        if (isLoading) {
-            Box(
+        TranslucentBackground(backdropUrl = displayBackdrop)
+        when {
+            isLoading -> Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator()
             }
-        } else if (details == null) {
-            Box(
+            errorMessage != null -> Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Failed to load TV show details", color = Color.White)
+                Text(errorMessage!!, color = Color.White)
             }
-        } else {
-            val show = details!!
-            val imdbId = show.imdbId
-
-            val autoQualityKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_quality", "") ?: "" }
-            val autoMaxMbps = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_max_mbps", "")?.toDoubleOrNull() }
-            val episodesInSeason = addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList()
-
-            val startResolution: (StremioVideo, Boolean, Boolean) -> Unit = start@{ episode, forPhone, forcePicker ->
-                if (imdbId != null && hasAddons) {
-                    resolutionState = ResolutionState(
-                        isResolving = true,
-                        target = if (forPhone) ResolutionTarget.PHONE else ResolutionTarget.TV,
-                        episodeId = episode.episode ?: 0
-                    )
-                    forceManualInPicker = forcePicker
-                    currentEpisodeSelection = episode
-                    streamPickerTitle = "${show.name} S${selectedSeason}E${episode.episode ?: 0}"
-                    resolvedStreams = emptyList()
-
-                    if (forcePicker || autoQualityKey.isEmpty()) {
-                        showStreamPicker = true
+            else -> {
+                val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                LazyColumn(
+                    state = episodeListState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 32.dp + navBarPadding)
+                ) {
+                    // Backdrop
+                    item {
+                        BackdropSection(
+                            backdropUrl = displayBackdrop,
+                            logoUrl = displayLogo,
+                            title = displayTitle,
+                            year = displayYear,
+                            certification = displayCert,
+                            rating = displayRating,
+                            runtime = displayRuntime,
+                            genres = displayGenres,
+                            omdbDetails = omdbDetails
+                        )
                     }
 
-                    scope.launch {
-                        addonRepository.resolveEpisodeStreamsFlow(
-                            imdbId, selectedSeason, episode.episode ?: 0
-                        ).collect { latest ->
-                            resolvedStreams = latest
-                        }
-                        resolutionState = resolutionState.copy(isResolving = false)
-
-                        // Auto-pick logic
-                        if (!showStreamPicker && !forcePicker && autoQualityKey.isNotEmpty()) {
-                            val best = StreamSelector.selectBest(
-                                streams = resolvedStreams,
-                                preferredQuality = QualityFilter.fromKey(autoQualityKey),
-                                maxMbps = autoMaxMbps,
-                                runtimeMinutes = null
-                            )
-                            val finalSelection = best ?: resolvedStreams.firstOrNull()
-                            if (finalSelection != null) {
-                                val streamUrl = finalSelection.stream.url
-                                if (streamUrl != null) {
-                                    if (forPhone) {
-                                        openInExternalPlayer(context, streamUrl, null, null)
+                    // Play button
+                    item {
+                        if (!isSeries || !hasEpisodes) {
+                            // Movie or series with no episodes
+                            val firstEpisodeForTv = episodesInSeason.firstOrNull()
+                            SplitPlayButton(
+                                isTvResolving = seasonResolutionState.isResolving || (resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV),
+                                isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
+                                resolvingLabel = if (seasonResolutionState.isResolving) seasonResolutionState.progressLabel else "Finding streams…",
+                                hasAddons = hasAddons,
+                                hasImdbId = resolvedImdbId != null || resolvedTmdbId != null,
+                                watchProviders = watchProviders,
+                                tvName = tvName,
+                                onWatchOnTv = {
+                                    if (isSeries && firstEpisodeForTv != null) {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, false, false, firstEpisodeForTv, true)
                                     } else {
-                                        // Simplified payload for auto-pick TV
-                                        onPlayStream(streamUrl, streamPickerTitle, null)
-                                        Toast.makeText(context, "Auto-selected: ${finalSelection.stream.name}", Toast.LENGTH_SHORT).show()
+                                        val streamId = resolvedImdbId ?: id
+                                        startResolution(streamId, addonType, displayTitle, false, false, null, false)
+                                    }
+                                },
+                                onWatchOnTvLongClick = {
+                                    if (isSeries && firstEpisodeForTv != null) {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, false, true, firstEpisodeForTv, true)
+                                    } else {
+                                        val streamId = resolvedImdbId ?: id
+                                        startResolution(streamId, addonType, displayTitle, false, true, null, false)
+                                    }
+                                },
+                                onWatchOnPhone = {
+                                    if (isSeries && firstEpisodeForTv != null) {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, true, false, firstEpisodeForTv, false)
+                                    } else {
+                                        val streamId = resolvedImdbId ?: id
+                                        startResolution(streamId, addonType, displayTitle, true, false, null, false)
+                                    }
+                                },
+                                onWatchOnPhoneLongClick = {
+                                    if (isSeries && firstEpisodeForTv != null) {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, true, true, firstEpisodeForTv, false)
+                                    } else {
+                                        val streamId = resolvedImdbId ?: id
+                                        startResolution(streamId, addonType, displayTitle, true, true, null, false)
                                     }
                                 }
-                            } else {
-                                showStreamPicker = true
-                            }
-                        }
-                    }
-
-                    if (!forPhone && episode == episodesInSeason.firstOrNull()) {
-                        seasonQueueContext = SeasonQueueContext(
-                            imdbId = imdbId,
-                            season = selectedSeason,
-                            episodes = episodesInSeason,
-                            showName = show.name,
-                            qualityFilter = emptyList(),
-                            runtimeMap = emptyMap()
-                        )
-                    }
-                }
-            }
-
-            val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-            LazyColumn(
-                state = episodeListState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 32.dp + navBarPadding)
-            ) {
-                // Backdrop
-                item {
-                    BackdropSection(
-                        backdropUrl = addonMeta?.background ?: show.backdropUrl,
-                        logoUrl = show.logoUrl,
-                        title = addonMeta?.name ?: show.name,
-                        year = addonMeta?.year ?: show.year,
-                        certification = show.certification,
-                        rating = addonMeta?.imdbRating ?: show.rating,
-                        runtime = addonMeta?.runtime ?: "${show.numberOfSeasons} Season${if (show.numberOfSeasons != 1) "s" else ""}",
-                        genres = addonMeta?.genres?.takeIf { it.isNotEmpty() } ?: show.genres.map { it.name },
-                        omdbDetails = omdbDetails
-                    )
-                }
-
-                item {
-                    SplitPlayButton(
-                        isTvResolving = seasonResolutionState.isResolving || (resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV),
-                        isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
-                        resolvingLabel = if (seasonResolutionState.isResolving) seasonResolutionState.progressLabel else "Finding streams…",
-                        hasAddons = hasAddons,
-                        hasImdbId = imdbId != null,
-                        watchProviders = watchProviders,
-                        tvName = tvName,
-                        onWatchOnTv = { episodesInSeason.firstOrNull()?.let { startResolution(it, false, false) } },
-                        onWatchOnTvLongClick = { episodesInSeason.firstOrNull()?.let { startResolution(it, false, true) } },
-                        onWatchOnPhone = { episodesInSeason.firstOrNull()?.let { startResolution(it, true, false) } },
-                        onWatchOnPhoneLongClick = { episodesInSeason.firstOrNull()?.let { startResolution(it, true, true) } }
-                    )
-                }
-                
-                item {
-                    ActionButtons(
-                        isWatchlisted = isWatchlisted,
-                        tracked = tracked,
-                        onToggleWatchlist = {
-                            details?.let { show ->
-                                viewModel.toggleWatchlist(
-                                    tmdbId = show.id,
-                                    mediaType = "tv",
-                                    title = show.name,
-                                    posterUrl = show.posterUrl,
-                                    year = show.year,
-                                    rating = show.rating
-                                )
-                            }
-                        },
-                        trailerUrl = trailerUrl,
-                        onPlayTrailer = onPlayTrailer
-                    )
-                }
-
-                // Overview
-                item {
-                    Text(
-                        text = addonMeta?.description ?: show.overview,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                        color = Color.White
-                    )
-
-                    val displayCast = addonMeta?.cast?.takeIf { it.isNotEmpty() } ?: show.cast
-                    if (displayCast.isNotEmpty()) {
-                        Text(
-                            text = "Starring: ${displayCast.joinToString(", ")}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                        )
-                    }
-                }
-
-                // Season chips — left button scrolls the row (hidden when chips fit on screen),
-                // right button toggles episode sort order.
-                item {
-                    val seasons = addonMeta?.videos
-                        ?.mapNotNull { it.season }
-                        ?.filter { it > 0 }
-                        ?.distinct()
-                        ?.sorted()
-                        ?: emptyList()
-                    val chipScrollState = rememberScrollState()
-                    // True once layout has run and chips overflow the available width
-                    val isScrollable = chipScrollState.maxValue > 0
-                    // Flip when the row has been scrolled all the way to the end
-                    val isAtEnd = isScrollable && chipScrollState.value >= chipScrollState.maxValue
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Scroll helper — only visible when chips overflow; icon flips based on position
-                        if (isScrollable) {
-                            IconButton(onClick = {
-                                scope.launch {
-                                    if (isAtEnd) chipScrollState.animateScrollTo(0)
-                                    else chipScrollState.animateScrollTo(chipScrollState.maxValue)
-                                }
-                            }) {
-                                Icon(
-                                    imageVector = if (isAtEnd) Icons.Default.ChevronLeft else Icons.Default.ChevronRight,
-                                    contentDescription = if (isAtEnd) "Scroll to start" else "Scroll to end"
-                                )
-                            }
-                        }
-
-                        // Scrollable season chips
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .horizontalScroll(chipScrollState)
-                                .padding(vertical = 8.dp)
-                                .padding(start = if (isScrollable) 0.dp else 24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            seasons.forEach { seasonNumber ->
-                                val isSelected = selectedSeason == seasonNumber
-                                ElevatedFilterChip(
-                                    selected = isSelected,
-                                    onClick = {
-                                        if (isSelected) return@ElevatedFilterChip
-                                        selectedSeason = seasonNumber
+                            )
+                        } else {
+                            // Series with episodes — show season chip and episode list
+                            val firstEpisode = episodesInSeason.firstOrNull()
+                            if (firstEpisode != null) {
+                                SplitPlayButton(
+                                    isTvResolving = seasonResolutionState.isResolving || (resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV),
+                                    isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
+                                    resolvingLabel = if (seasonResolutionState.isResolving) seasonResolutionState.progressLabel else "Finding streams…",
+                                    hasAddons = hasAddons,
+                                    hasImdbId = resolvedImdbId != null || resolvedTmdbId != null,
+                                    watchProviders = watchProviders,
+                                    tvName = tvName,
+                                    onWatchOnTv = {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisode.episode ?: 1}" else firstEpisode.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${firstEpisode.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, false, false, firstEpisode, true)
                                     },
-                                    label = { Text("S$seasonNumber") }
+                                    onWatchOnTvLongClick = {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisode.episode ?: 1}" else firstEpisode.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${firstEpisode.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, false, true, firstEpisode, true)
+                                    },
+                                    onWatchOnPhone = {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisode.episode ?: 1}" else firstEpisode.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${firstEpisode.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, true, false, firstEpisode, false)
+                                    },
+                                    onWatchOnPhoneLongClick = {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisode.episode ?: 1}" else firstEpisode.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${firstEpisode.episode ?: 1}"
+                                        startResolution(streamId, streamType, title, true, true, firstEpisode, false)
+                                    }
                                 )
                             }
                         }
+                    }
 
-                        // Sort toggle — ascending / descending episode order
-                        IconButton(
-                            onClick = { episodesAscending = !episodesAscending },
-                            modifier = Modifier.padding(end = 8.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (episodesAscending) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
-                                contentDescription = if (episodesAscending) "Sort descending" else "Sort ascending",
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    // Action buttons (watchlist, trailer) — only if TMDB resolved
+                    if (resolvedTmdbId != null) {
+                        item {
+                            ActionButtons(
+                                isWatchlisted = isWatchlisted,
+                                tracked = tracked,
+                                onToggleWatchlist = {
+                                    if (isSeries && tvDetails != null) {
+                                        viewModel.toggleWatchlist(
+                                            tmdbId = tvDetails!!.id,
+                                            mediaType = "tv",
+                                            title = tvDetails!!.name,
+                                            posterUrl = tvDetails!!.posterUrl,
+                                            year = tvDetails!!.year,
+                                            rating = tvDetails!!.rating
+                                        )
+                                    } else if (movieDetails != null) {
+                                        viewModel.toggleWatchlist(
+                                            tmdbId = movieDetails!!.id,
+                                            mediaType = "movie",
+                                            title = movieDetails!!.title,
+                                            posterUrl = movieDetails!!.posterUrl,
+                                            year = movieDetails!!.year,
+                                            rating = movieDetails!!.rating
+                                        )
+                                    }
+                                },
+                                trailerUrl = trailerUrl,
+                                onPlayTrailer = onPlayTrailer
                             )
                         }
                     }
-                }
 
-                // Queuing progress — slim bar
-                if (isQueueing && queueTotalCount > 0) {
+                    // Overview, cast, director
                     item {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 24.dp)
-                                .padding(bottom = 8.dp)
-                        ) {
-                            LinearProgressIndicator(
-                                progress = { queuedCount.toFloat() / queueTotalCount },
+                        Text(
+                            text = displayOverview,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                            color = Color.White
+                        )
+
+                        if (displayCast.isNotEmpty()) {
+                            Text(
+                                text = "Starring: ${displayCast.take(5).joinToString(", ")}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                            )
+                        }
+
+                        if (displayDirector.isNotBlank()) {
+                            Text(
+                                text = "Director: $displayDirector",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    // Season chips — only for series with episodes
+                    if (isSeries && hasEpisodes) {
+                        item {
+                            val seasons = addonMeta?.videos
+                                ?.mapNotNull { it.season }
+                                ?.filter { it > 0 }
+                                ?.distinct()
+                                ?.sorted()
+                                ?: emptyList()
+                            val chipScrollState = rememberScrollState()
+                            val isScrollable = chipScrollState.maxValue > 0
+                            val isAtEnd = isScrollable && chipScrollState.value >= chipScrollState.maxValue
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(2.dp)
-                                    .clip(RoundedCornerShape(1.dp)),
-                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                            )
-                            Text(
-                                text = "Queuing $queuedCount / $queueTotalCount episodes…",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha=0.7f),
-                                modifier = Modifier.padding(top = 4.dp)
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (isScrollable) {
+                                    IconButton(onClick = {
+                                        scope.launch {
+                                            if (isAtEnd) chipScrollState.animateScrollTo(0)
+                                            else chipScrollState.animateScrollTo(chipScrollState.maxValue)
+                                        }
+                                    }) {
+                                        Icon(
+                                            imageVector = if (isAtEnd) Icons.Default.ChevronLeft else Icons.Default.ChevronRight,
+                                            contentDescription = if (isAtEnd) "Scroll to start" else "Scroll to end"
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .horizontalScroll(chipScrollState)
+                                        .padding(vertical = 8.dp)
+                                        .padding(start = if (isScrollable) 0.dp else 24.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    seasons.forEach { seasonNumber ->
+                                        val isSelected = selectedSeason == seasonNumber
+                                        ElevatedFilterChip(
+                                            selected = isSelected,
+                                            onClick = {
+                                                if (isSelected) return@ElevatedFilterChip
+                                                selectedSeason = seasonNumber
+                                            },
+                                            label = { Text("S$seasonNumber") }
+                                        )
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { episodesAscending = !episodesAscending },
+                                    modifier = Modifier.padding(end = 8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (episodesAscending) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                                        contentDescription = if (episodesAscending) "Sort descending" else "Sort ascending",
+                                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Queuing progress
+                    if (isQueueing && queueTotalCount > 0) {
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp)
+                                    .padding(bottom = 8.dp)
+                            ) {
+                                LinearProgressIndicator(
+                                    progress = { queuedCount.toFloat() / queueTotalCount },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(2.dp)
+                                        .clip(RoundedCornerShape(1.dp)),
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                )
+                                Text(
+                                    text = "Queuing $queuedCount / $queueTotalCount episodes…",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White.copy(alpha=0.7f),
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Episodes list
+                    if (isSeries && hasEpisodes) {
+                        val episodes = (addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList())
+                            .let { if (episodesAscending) it else it.reversed() }
+                        val isActivePlaylistSeason = highlightSeason != null &&
+                                selectedSeason == highlightSeason &&
+                                playlistState != null
+                        val startEpisodeNumber = if (highlightEpisode != null && playlistState != null) {
+                            highlightEpisode - playlistState.currentIndex
+                        } else null
+                        items(episodes.size) { index ->
+                            val episode = episodes[index]
+                            val epNum = episode.episode ?: 0
+                            val epPlaylistIndex = if (startEpisodeNumber != null) {
+                                epNum - startEpisodeNumber
+                            } else -1
+                            val isEpPlaying = isActivePlaylistSeason &&
+                                    epPlaylistIndex == playlistState?.currentIndex
+                            val isEpQueued = isActivePlaylistSeason &&
+                                    epPlaylistIndex >= 0 &&
+                                    epPlaylistIndex < (playlistState?.totalCount ?: 0) &&
+                                    !isEpPlaying
+                            val isEpWatched = tracked?.let { entity ->
+                                if (entity.status != WatchlistStatus.WATCHING.value &&
+                                    entity.status != WatchlistStatus.COMPLETED.value) return@let false
+                                val trackedSeason = entity.seasonProgress ?: return@let false
+                                val trackedEp    = entity.episodeProgress ?: return@let false
+                                when {
+                                    selectedSeason < trackedSeason -> true
+                                    selectedSeason == trackedSeason -> epNum <= trackedEp
+                                    else -> false
+                                }
+                            } ?: false
+                            EpisodeItem(
+                                episode = episode,
+                                hasAddon = canResolveStreams,
+                                isPlaying = isEpPlaying,
+                                isResolving = resolutionState.isResolving && resolutionState.episodeId == epNum,
+                                isInActivePlaylist = isEpQueued,
+                                isWatched = isEpWatched,
+                                onClick = {
+                                    if (canResolveStreams) {
+                                        if (!isQueueing && (isEpPlaying || isEpQueued)) {
+                                            onPlaylistJump(epPlaylistIndex)
+                                        } else {
+                                            val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
+                                            val streamType = if (resolvedImdbId != null) "series" else addonType
+                                            val title = "$displayTitle S${selectedSeason}E${epNum}"
+                                            startResolution(streamId, streamType, title, false, false, episode, episode == episodesInSeason.firstOrNull())
+                                        }
+                                    }
+                                },
+                                onLongClick = {
+                                    if (canResolveStreams) {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${epNum}"
+                                        startResolution(streamId, streamType, title, false, true, episode, episode == episodesInSeason.firstOrNull())
+                                    }
+                                }
                             )
                         }
                     }
-                }
 
-                // Episodes list
-                val episodes = (addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList())
-                    .let { if (episodesAscending) it else it.reversed() }
-                val isActivePlaylistSeason = highlightSeason != null &&
-                        selectedSeason == highlightSeason &&
-                        playlistState != null
-                // Episode number of playlist index 0, derived from current playing ep and current index
-                val startEpisodeNumber = if (highlightEpisode != null && playlistState != null) {
-                    highlightEpisode - playlistState.currentIndex
-                } else null
-                items(episodes.size) { index ->
-                    val episode = episodes[index]
-                    val epNum = episode.episode ?: 0
-                    val epPlaylistIndex = if (startEpisodeNumber != null) {
-                        epNum - startEpisodeNumber
-                    } else -1
-                    val isEpPlaying = isActivePlaylistSeason &&
-                            epPlaylistIndex == playlistState?.currentIndex
-                    val isEpQueued = isActivePlaylistSeason &&
-                            epPlaylistIndex >= 0 &&
-                            epPlaylistIndex < (playlistState?.totalCount ?: 0) &&
-                            !isEpPlaying
-                    // Mark episodes as watched based on tracking progress
-                    val isEpWatched = tracked?.let { entity ->
-                        if (entity.status != WatchlistStatus.WATCHING.value &&
-                            entity.status != WatchlistStatus.COMPLETED.value) return@let false
-                        val trackedSeason = entity.seasonProgress ?: return@let false
-                        val trackedEp    = entity.episodeProgress ?: return@let false
-                        when {
-                            selectedSeason < trackedSeason -> true
-                            selectedSeason == trackedSeason -> epNum <= trackedEp
-                            else -> false
-                        }
-                    } ?: false
-                    EpisodeItem(
-                        episode = episode,
-                        hasAddon = imdbId != null,
-                        isPlaying = isEpPlaying,
-                        isResolving = resolutionState.isResolving && resolutionState.episodeId == epNum,
-                        isInActivePlaylist = isEpQueued,
-                        isWatched = isEpWatched,
-                        onClick = {
-                            if (imdbId != null) {
-                                // Jump if this episode is in the active playlist and queuing is done
-                                if (!isQueueing && (isEpPlaying || isEpQueued)) {
-                                    onPlaylistJump(epPlaylistIndex)
-                                } else {
-                                    startResolution(episode, false, false)
+                    // IMDb info chip
+                    if (resolvedImdbId != null) {
+                        item {
+                            Surface(
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                                shape = RoundedCornerShape(20.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = Color.White.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "IMDB: $resolvedImdbId",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color.White.copy(alpha = 0.7f)
+                                    )
                                 }
                             }
-                        },
-                        onLongClick = {
-                            if (imdbId != null) {
-                                startResolution(episode, false, true)
-                            }
                         }
-                    )
-                }
+                    }
 
-                item { Spacer(modifier = Modifier.height(32.dp)) }
+                    item { Spacer(modifier = Modifier.height(32.dp)) }
+                }
             }
         }
-        
+
         TopAppBar(
             title = { },
             navigationIcon = {
@@ -907,7 +880,6 @@ fun TvShowDetailScreen(
         )
     }
 }
-
 // ==================== Shared Components ====================
 
 @Composable
@@ -1643,407 +1615,5 @@ fun TranslucentBackground(backdropUrl: String?) {
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
         )
-    }
-}
-
-/**
- * Routing + detail screen for items tapped in an addon catalog.
- *
- * - Standard IMDb IDs ("tt..."): performs a TMDB /find lookup and redirects
- *   to the existing [MovieDetailScreen] or [TvShowDetailScreen].
- * - Non-standard IDs: fetches full metadata via [AddonRepository.fetchMeta] and
- *   displays a native detail view with stream resolution (Phase 4).
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LibraryDetailScreen(
-    id: String,
-    type: String,
-    addonRepository: AddonRepository,
-    onMovieResolved: (tmdbId: Int) -> Unit,
-    onTvShowResolved: (tmdbId: Int) -> Unit,
-    onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit = { _, _, _ -> },
-    tvName: String? = null,
-    onBack: () -> Unit,
-) {
-    val context = LocalContext.current
-    val tmdb = remember { TmdbRepository(context) }
-    val scope = rememberCoroutineScope()
-
-    var isLoading by remember { mutableStateOf(true) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var metaDetail by remember { mutableStateOf<StremioMetaDetail?>(null) }
-
-    // Stream resolution state
-    var resolvedStreams by remember { mutableStateOf<List<ResolvedStream>>(emptyList()) }
-    var resolutionState by remember { mutableStateOf(ResolutionState()) }
-    var showStreamPicker by remember { mutableStateOf(false) }
-    var resolvingEpisodeId by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(id, type) {
-        isLoading = true
-        errorMessage = null
-
-        when {
-            id.startsWith("tt") -> {
-                // Standard IMDb ID — look up TMDB ID via /find
-                val result = tmdb.findByImdbId(id)
-                when {
-                    result == null -> {
-                        errorMessage = "Could not reach TMDB. Check your API key and connection."
-                    }
-                    type == "movie" && result.movieResults.isNotEmpty() -> {
-                        onMovieResolved(result.movieResults.first().id)
-                        return@LaunchedEffect
-                    }
-                    type == "series" && result.tvResults.isNotEmpty() -> {
-                        onTvShowResolved(result.tvResults.first().id)
-                        return@LaunchedEffect
-                    }
-                    result.movieResults.isNotEmpty() -> {
-                        // type mismatch — trust the data over the declared type
-                        onMovieResolved(result.movieResults.first().id)
-                        return@LaunchedEffect
-                    }
-                    result.tvResults.isNotEmpty() -> {
-                        onTvShowResolved(result.tvResults.first().id)
-                        return@LaunchedEffect
-                    }
-                    else -> {
-                        errorMessage = "\"$id\" was not found on TMDB."
-                    }
-                }
-            }
-            else -> {
-                // Non-IMDb ID — fetch meta from addon
-                val meta = addonRepository.fetchMeta(type, id)
-                if (meta != null) {
-                    metaDetail = meta
-                } else {
-                    errorMessage = "Metadata for \"$id\" is not available from any installed addon."
-                }
-            }
-        }
-        isLoading = false
-    }
-
-    // Helper: start stream resolution for a given stream ID
-    val startResolution = { streamId: String, forPhone: Boolean ->
-        resolvingEpisodeId = streamId
-        resolutionState = ResolutionState(
-            isResolving = true,
-            target = if (forPhone) ResolutionTarget.PHONE else ResolutionTarget.TV
-        )
-        resolvedStreams = emptyList()
-        showStreamPicker = true
-        scope.launch {
-            addonRepository.resolveStreamsFlow(type, streamId).collect { latest ->
-                resolvedStreams = latest
-            }
-            resolutionState = resolutionState.copy(isResolving = false)
-            resolvingEpisodeId = null
-        }
-        Unit
-    }
-
-    // Stream picker sheet
-    if (showStreamPicker) {
-        val title = metaDetail?.name ?: id
-        StreamPickerSheet(
-            streams = resolvedStreams,
-            isLoading = resolutionState.isResolving,
-            title = title,
-            forceManual = false,
-            onStreamSelected = { resolved ->
-                val forPhone = resolutionState.target == ResolutionTarget.PHONE
-                showStreamPicker = false
-                resolutionState = ResolutionState()
-                val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
-                if (forPhone) {
-                    openInExternalPlayer(context, streamUrl, null, null)
-                } else {
-                    onPlayStream(streamUrl, title, null)
-                    Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
-                }
-            },
-            onDismiss = {
-                showStreamPicker = false
-                resolutionState = ResolutionState()
-                resolvingEpisodeId = null
-            }
-        )
-    }
-
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        when {
-            isLoading -> CircularProgressIndicator()
-
-            errorMessage != null -> Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(32.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Extension,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                )
-                Text(
-                    text = errorMessage!!,
-                    style = MaterialTheme.typography.bodyLarge,
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedButton(onClick = onBack) { Text("Go back") }
-            }
-
-            metaDetail != null -> AddonMetaDetailContent(
-                meta = metaDetail!!,
-                type = type,
-                resolutionState = resolutionState,
-                resolvingEpisodeId = resolvingEpisodeId,
-                tvName = tvName,
-                onWatchOnTv = { streamId -> startResolution(streamId, false) },
-                onWatchOnPhone = { streamId -> startResolution(streamId, true) }
-            )
-        }
-
-        TopAppBar(
-            title = { },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = Color.Transparent,
-                scrolledContainerColor = Color.Transparent
-            ),
-            modifier = Modifier.align(Alignment.TopStart)
-        )
-    }
-}
-
-// ==================== Meta Detail UI ====================
-
-@Composable
-private fun AddonMetaDetailContent(
-    meta: StremioMetaDetail,
-    type: String,
-    resolutionState: ResolutionState,
-    resolvingEpisodeId: String?,
-    tvName: String? = null,
-    onWatchOnTv: (streamId: String) -> Unit,
-    onWatchOnPhone: (streamId: String) -> Unit
-) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        TranslucentBackground(backdropUrl = meta.background ?: meta.poster)
-        
-        val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 32.dp + navBarPadding)
-        ) {
-            // Backdrop / poster header
-            item {
-                BackdropSection(
-                    backdropUrl = meta.background ?: meta.poster,
-                    logoUrl = null,
-                    title = meta.name,
-                    year = meta.year ?: "",
-                    certification = "",
-                    rating = meta.imdbRating ?: "",
-                    runtime = meta.runtime ?: "",
-                    genres = meta.genres,
-                    omdbDetails = null
-                )
-            }
-
-            // Description
-            if (!meta.description.isNullOrBlank()) {
-                item {
-                    Text(
-                        text = meta.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                    )
-                }
-            }
-
-            // Cast
-            if (meta.cast.isNotEmpty()) {
-                item {
-                    Text(
-                        text = "Starring: ${meta.cast.take(5).joinToString(", ")}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                    )
-                }
-            }
-
-            // Play buttons — shown for movies, or for series that have no episode list
-            if (type == "movie" || meta.videos.isEmpty()) {
-                item {
-                    Spacer(Modifier.height(8.dp))
-                    SplitPlayButton(
-                        isTvResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV,
-                        isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
-                        hasAddons = true,
-                        hasImdbId = true,
-                        watchProviders = emptyList(),
-                        tvName = tvName,
-                        onWatchOnTv = { onWatchOnTv(meta.id) },
-                        onWatchOnTvLongClick = { onWatchOnTv(meta.id) }, // no picker forcing here yet
-                        onWatchOnPhone = { onWatchOnPhone(meta.id) },
-                        onWatchOnPhoneLongClick = { onWatchOnPhone(meta.id) }
-                    )
-                }
-            }
-
-            // Episodes list
-            if (meta.videos.isNotEmpty()) {
-                item {
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = "Episodes",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                    )
-                }
-                
-                // Group by season if available, otherwise just list them
-                val groupedEpisodes = meta.videos.groupBy { it.season ?: 1 }
-                val sortedSeasons = groupedEpisodes.keys.sorted()
-                
-                sortedSeasons.forEach { seasonNum ->
-                    if (sortedSeasons.size > 1) {
-                        item {
-                            Text(
-                                text = "Season $seasonNum",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                            )
-                        }
-                    }
-                    val episodes = groupedEpisodes[seasonNum] ?: emptyList()
-                    items(episodes) { video ->
-                        ElegantEpisodeItemRow(
-                            video = video,
-                            isResolving = resolvingEpisodeId == video.id && resolutionState.isResolving,
-                            resolvingTarget = resolutionState.target,
-                            onWatchOnTv = { onWatchOnTv(video.id) },
-                            onWatchOnPhone = { onWatchOnPhone(video.id) }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ElegantEpisodeItemRow(
-    video: StremioVideo,
-    isResolving: Boolean,
-    resolvingTarget: ResolutionTarget,
-    onWatchOnTv: () -> Unit,
-    onWatchOnPhone: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Thumbnail Box
-        Box(
-            modifier = Modifier
-                .width(140.dp)
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha=0.6f))
-        ) {
-            if (video.thumbnail != null) {
-                AsyncImage(
-                    model = video.thumbnail,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.5f),
-                    modifier = Modifier.align(Alignment.Center).size(32.dp)
-                )
-            }
-            
-            // Resolving Overlay
-            if (isResolving) {
-                Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.5f)), contentAlignment=Alignment.Center) {
-                    CircularProgressIndicator(modifier=Modifier.size(24.dp), color=Color.White, strokeWidth=2.dp)
-                }
-            }
-        }
-        
-        Column(modifier = Modifier.weight(1f)) {
-            val label = when {
-                video.season != null && video.episode != null ->
-                    "S${video.season}E${video.episode}" + if (video.title.isNotBlank()) " · ${video.title}" else ""
-                video.title.isNotBlank() -> video.title
-                else -> video.id
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            video.released?.take(10)?.let { date ->
-                Spacer(modifier=Modifier.height(2.dp))
-                Text(
-                    text = date,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.6f)
-                )
-            }
-            Spacer(modifier=Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = onWatchOnTv,
-                    enabled = !isResolving,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical=4.dp),
-                    modifier = Modifier.height(32.dp)
-                ) {
-                    Icon(Icons.Default.Tv, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("TV", style=MaterialTheme.typography.labelSmall)
-                }
-                OutlinedButton(
-                    onClick = onWatchOnPhone,
-                    enabled = !isResolving,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical=4.dp),
-                    modifier = Modifier.height(32.dp)
-                ) {
-                    Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Phone", style=MaterialTheme.typography.labelSmall)
-                }
-            }
-        }
     }
 }

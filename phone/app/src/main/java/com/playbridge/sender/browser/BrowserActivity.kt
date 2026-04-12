@@ -1168,12 +1168,6 @@ class BrowserActivity : ComponentActivity() {
                             Screen.Library -> {
                                 // No TopAppBar here as LibraryScreen has its own
                             }
-                            is Screen.MovieDetail -> {
-                                // No TopAppBar here as MovieDetailScreen has its own
-                            }
-                            is Screen.TvShowDetail -> {
-                                // No TopAppBar here as TvShowDetailScreen has its own
-                            }
                             is Screen.LibraryDetail -> {
                                 // No TopAppBar here as LibraryDetailScreen has its own
                             }
@@ -1196,10 +1190,10 @@ class BrowserActivity : ComponentActivity() {
                             } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
                                 slideInVertically { height -> -height } + fadeIn() togetherWith
                                         slideOutVertically { height -> height } + fadeOut()
-                            } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.MovieDetail || targetState is Screen.TvShowDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary || initialState == Screen.Connection)) {
+                            } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.LibraryDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary || initialState == Screen.Connection)) {
                                  androidx.compose.animation.slideInHorizontally { width -> width } + fadeIn() togetherWith
                                         androidx.compose.animation.slideOutHorizontally { width -> -width } + fadeOut()
-                            } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary || targetState == Screen.Connection) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.MovieDetail || initialState is Screen.TvShowDetail)) {
+                            } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary || targetState == Screen.Connection) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.LibraryDetail)) {
                                  androidx.compose.animation.slideInHorizontally { width -> -width } + fadeIn() togetherWith
                                         androidx.compose.animation.slideOutHorizontally { width -> width } + fadeOut()
                             } else {
@@ -1777,14 +1771,14 @@ class BrowserActivity : ComponentActivity() {
                                                 nowPlayingEpisode = nowPlayingEp,
                                                 onNowPlayingClick = {
                                                     nowPlayingTvId?.let { id ->
-                                                        currentScreen = Screen.TvShowDetail(id)
+                                                        currentScreen = Screen.LibraryDetail(id.toString(), "tv")
                                                     }
                                                 },
                                                 onMovieClick = { movieId ->
-                                                    currentScreen = Screen.MovieDetail(movieId)
+                                                    currentScreen = Screen.LibraryDetail(movieId.toString(), "movie")
                                                 },
                                                 onTvShowClick = { tvId ->
-                                                    currentScreen = Screen.TvShowDetail(tvId)
+                                                    currentScreen = Screen.LibraryDetail(tvId.toString(), "tv")
                                                 },
                                                 onAddonItemClick = { id, type ->
                                                     currentScreen = Screen.LibraryDetail(id, type)
@@ -1794,48 +1788,10 @@ class BrowserActivity : ComponentActivity() {
                                         is Screen.LibraryDetail -> {
                                             val screen = targetScreen as Screen.LibraryDetail
                                             BackHandler { currentScreen = Screen.Library }
+                                            val screenNumericId = screen.id.toIntOrNull()
                                             LibraryDetailScreen(
                                                 id = screen.id,
                                                 type = screen.type,
-                                                addonRepository = addonRepository,
-                                                tvName = tvDevice?.name,
-                                                onMovieResolved = { tmdbId ->
-                                                    currentScreen = Screen.MovieDetail(tmdbId)
-                                                },
-                                                onTvShowResolved = { tmdbId ->
-                                                    currentScreen = Screen.TvShowDetail(tmdbId)
-                                                },
-                                                onPlayStream = { url, title, subtitles ->
-                                                    val mainVideo = DetectedVideo(
-                                                        url = url,
-                                                        title = title,
-                                                        tabId = -1,
-                                                        timestamp = System.currentTimeMillis(),
-                                                        isPlayable = true,
-                                                        detectedBy = "library"
-                                                    )
-                                                    val subVideos = subtitles?.map { subUrl ->
-                                                        DetectedVideo(
-                                                            url = subUrl,
-                                                            tabId = -1,
-                                                            timestamp = System.currentTimeMillis(),
-                                                            contentType = "text/vtt",
-                                                            detectedBy = "library_subtitle"
-                                                        )
-                                                    } ?: emptyList()
-                                                    scope.launch {
-                                                        forcedVideos = listOf(mainVideo) + subVideos
-                                                        showVideoSheet = true
-                                                    }
-                                                },
-                                                onBack = { currentScreen = Screen.Library }
-                                            )
-                                        }
-                                        is Screen.MovieDetail -> {
-                                            val movieId = (targetScreen as Screen.MovieDetail).movieId
-                                            BackHandler { currentScreen = Screen.Library }
-                                            MovieDetailScreen(
-                                                movieId = movieId,
                                                 addonRepository = addonRepository,
                                                 viewModel = libraryViewModel,
                                                 tvName = tvDevice?.name,
@@ -1853,7 +1809,6 @@ class BrowserActivity : ComponentActivity() {
                                                         isPlayable = true,
                                                         detectedBy = "library"
                                                     )
-
                                                     val subVideos = subtitles?.map { subUrl ->
                                                         DetectedVideo(
                                                             url = subUrl,
@@ -1863,47 +1818,6 @@ class BrowserActivity : ComponentActivity() {
                                                             detectedBy = "library_subtitle"
                                                         )
                                                     } ?: emptyList()
-
-                                                    scope.launch {
-                                                        forcedVideos = listOf(mainVideo) + subVideos
-                                                        showVideoSheet = true
-                                                    }
-                                                },
-                                                onBack = { currentScreen = Screen.Library }
-                                            )
-                                        }
-                                        is Screen.TvShowDetail -> {
-                                            val tvId = (targetScreen as Screen.TvShowDetail).tvId
-                                            BackHandler { currentScreen = Screen.Library }
-                                            TvShowDetailScreen(
-                                                tvId = tvId,
-                                                addonRepository = addonRepository,
-                                                tvName = tvDevice?.name,
-                                                onPlayTrailer = { trailerUrl ->
-                                                    castSheetInitialMode = "browse"
-                                                    castSheetBrowseOverride = trailerUrl
-                                                    showVideoSheet = true
-                                                },
-                                                onPlayStream = { url, title, subtitles ->
-                                                    val mainVideo = DetectedVideo(
-                                                        url = url,
-                                                        title = title,
-                                                        tabId = -1,
-                                                        timestamp = System.currentTimeMillis(),
-                                                        isPlayable = true,
-                                                        detectedBy = "library"
-                                                    )
-
-                                                    val subVideos = subtitles?.map { subUrl ->
-                                                        DetectedVideo(
-                                                            url = subUrl,
-                                                            tabId = -1,
-                                                            timestamp = System.currentTimeMillis(),
-                                                            contentType = "text/vtt",
-                                                            detectedBy = "library_subtitle"
-                                                        )
-                                                    } ?: emptyList()
-
                                                     scope.launch {
                                                         forcedVideos = listOf(mainVideo) + subVideos
                                                         showVideoSheet = true
@@ -1939,18 +1853,16 @@ class BrowserActivity : ComponentActivity() {
                                                         com.playbridge.protocol.createPlaylistJumpCommandJson(index)
                                                     )
                                                 },
-                                                onNowPlayingStarted = { id, season, startEp ->
-                                                    nowPlayingTvId = id
+                                                onNowPlayingStarted = { tmdbId, season, startEp ->
+                                                    nowPlayingTvId = tmdbId
                                                     nowPlayingSeason = season
                                                     nowPlayingEpisodeStart = startEp
                                                 },
-                                                // Highlight the playing season and episode when navigated via play icon
-                                                highlightSeason = if (tvId == nowPlayingTvId) nowPlayingSeason else null,
-                                                highlightEpisode = if (tvId == nowPlayingTvId) {
+                                                highlightSeason = if (screenNumericId == nowPlayingTvId) nowPlayingSeason else null,
+                                                highlightEpisode = if (screenNumericId == nowPlayingTvId) {
                                                     tvPlaylistState?.let { nowPlayingEpisodeStart + it.currentIndex }
                                                 } else null,
                                                 playlistState = tvPlaylistState,
-                                                viewModel = libraryViewModel,
                                                 onBack = { currentScreen = Screen.Library }
                                             )
                                         }
@@ -2358,7 +2270,5 @@ sealed class Screen {
     object Library : Screen()
     object DebridLibrary : Screen()
     object AddonSettings : Screen()
-    data class MovieDetail(val movieId: Int) : Screen()
-    data class TvShowDetail(val tvId: Int) : Screen()
     data class LibraryDetail(val id: String, val type: String) : Screen()
 }
