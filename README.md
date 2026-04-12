@@ -14,6 +14,18 @@ PlayBridge is an open-source Android application suite that bridges the gap betw
 The project consists of two applications:
 1.  **Phone App (`phone`)**: The sender application. Browses web, detects videos, and controls the TV.
 2.  **TV App (`tv`)**: The receiver application. Runs on Android TV, plays content, and displays a web browser.
+3.  **Protocol (`protocol`)**: Shared WebSocket protocol and message definitions.
+
+## Documentation
+
+Comprehensive project documentation is available:
+- **[Architecture](ARCHITECTURE.md)**: Project-wide architectural decisions, module roles, and technology stack.
+- **[Design System](DESIGN.md)**: Visual language, color tokens, typography, and component specifications.
+- **[AI Context](AI_CONTEXT.md)**: Guidelines and cross-module gotchas for AI-assisted development.
+- **[Contributing](CONTRIBUTING.md)**: Setup instructions and contribution guidelines.
+- **[Security Policy](SECURITY.md)**: Security considerations and vulnerability reporting.
+
+Additional feature plans and historical documentation can be found in the [docs/](docs/) directory.
 
 ## Build Instructions
 
