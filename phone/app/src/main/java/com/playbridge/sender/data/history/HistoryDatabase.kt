@@ -9,7 +9,7 @@ import com.playbridge.sender.data.library.WatchlistEntity
 
 @Database(
     entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class],
-    version = 8
+    version = 10
 )
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao

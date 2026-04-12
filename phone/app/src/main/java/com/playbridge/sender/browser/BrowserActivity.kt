@@ -1959,7 +1959,11 @@ class BrowserActivity : ComponentActivity() {
                                             AddonSettingsScreen(
                                                 addonRepository = addonRepository,
                                                 installedAddons = installedAddons,
-                                                onBack = { currentScreen = Screen.Settings }
+                                                onBack = { currentScreen = Screen.Settings },
+                                                onOpenUrl = { url ->
+                                                    tabManager.createTab(url, store)
+                                                    currentScreen = Screen.Browser
+                                                }
                                             )
                                         }
                                         Screen.DebridLibrary -> {

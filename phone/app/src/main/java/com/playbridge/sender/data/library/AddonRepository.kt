@@ -161,6 +161,70 @@ class AddonRepository(
     }
 
     /**
+     * Persist the user's feature configuration for an addon.
+     *
+     * @param isEnabled       Master on/off switch (false = skip addon entirely).
+     * @param disabledFeatures Set of resource names the user has turned off,
+     *                         e.g. setOf("catalog", "meta").  Empty = all features active.
+     */
+    suspend fun configureAddon(
+        addon: InstalledAddonEntity,
+        isEnabled: Boolean,
+        disabledFeatures: Set<String>
+    ) {
+        addonDao.update(
+            addon.copy(
+                isEnabled = isEnabled,
+                disabledFeatures = disabledFeatures.joinToString(",")
+            )
+        )
+    }
+
+    /**
+     * Persist a new display/resolution order for all addons.
+     * Call this after the user finishes a drag-to-reorder gesture.
+     * @param addons Addons in the desired new order (index 0 = highest priority).
+     */
+    suspend fun reorderAddons(addons: List<InstalledAddonEntity>) {
+        addons.forEachIndexed { index, addon ->
+            addonDao.update(addon.copy(sortOrder = index))
+        }
+    }
+
+    /**
+     * Re-fetch an addon's manifest from its URL and update the stored metadata
+     * (name, description, version, resources, catalogs). The manifestUrl itself
+     * and user settings (isEnabled, sortOrder) are preserved.
+     * Returns the updated entity, or null if the fetch/parse fails.
+     */
+    suspend fun refreshAddon(addon: InstalledAddonEntity): InstalledAddonEntity? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder().url(addon.manifestUrl).get().build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) return@withContext null
+                val body = response.body?.string() ?: return@withContext null
+                val manifest = json.decodeFromString<StremioManifest>(body)
+                val resourceNames = manifest.resources.map { it.name }.distinct()
+                val updated = addon.copy(
+                    name = manifest.name.ifBlank { addon.name },
+                    description = manifest.description,
+                    version = manifest.version,
+                    types = manifest.types.joinToString(","),
+                    resources = json.encodeToString(resourceNames),
+                    catalogsJson = json.encodeToString(manifest.catalogs)
+                )
+                addonDao.update(updated)
+                Log.d(TAG, "Refreshed addon: ${updated.name}")
+                updated
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to refresh addon: ${addon.name}", e)
+                null
+            }
+        }
+    }
+
+    /**
      * Returns true if at least one addon is installed.
      * Used by the UI to decide between stream-picker mode vs. provider-info-only mode.
      */
@@ -182,7 +246,7 @@ class AddonRepository(
      */
     suspend fun getAvailableCatalogs(): List<Triple<InstalledAddonEntity, String, String>> {
         return withContext(Dispatchers.IO) {
-            val addons = addonDao.getAllSync()
+            val addons = addonDao.getAllSync().filter { it.isFeatureEnabled("catalog") }
             addons.flatMap { addon ->
                 addon.parsedCatalogEntries()
                     .filter { it.type.isNotBlank() && it.id.isNotBlank() }
@@ -359,7 +423,8 @@ class AddonRepository(
         }
 
         val addons = addonDao.getAllSync().filter { addon ->
-            addon.supportsResource("meta") &&
+            addon.isFeatureEnabled("meta") &&
+                addon.supportsResource("meta") &&
                 addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) }
         }
 
@@ -412,7 +477,8 @@ class AddonRepository(
         }
 
         val addons = addonDao.getAllSync().filter { addon ->
-            addon.supportsResource("subtitles") &&
+            addon.isFeatureEnabled("subtitles") &&
+                addon.supportsResource("subtitles") &&
                 addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) }
         }
 
@@ -677,7 +743,10 @@ class AddonRepository(
 
         // Include addons that explicitly support "stream" OR have no resource data
         // (pre-Phase 1 installs have resources = "" and must not be silently excluded).
-        val addons = addonDao.getAllSync().filter { it.resources.isBlank() || it.supportsResource("stream") }
+        // Respects both the master isEnabled switch and the per-feature disabledFeatures list.
+        val addons = addonDao.getAllSync().filter {
+            it.isFeatureEnabled("stream") && (it.resources.isBlank() || it.supportsResource("stream"))
+        }
         if (addons.isEmpty()) {
             Log.d(TAG, "No stream-capable addons installed")
             return emptyList()
@@ -719,7 +788,10 @@ class AddonRepository(
 
             // Include addons that explicitly support "stream" OR have no resource data
             // (pre-Phase 1 installs have resources = "" and must not be silently excluded).
-            val addons = addonDao.getAllSync().filter { it.resources.isBlank() || it.supportsResource("stream") }
+            // Respects both the master isEnabled switch and the per-feature disabledFeatures list.
+            val addons = addonDao.getAllSync().filter {
+                it.isFeatureEnabled("stream") && (it.resources.isBlank() || it.supportsResource("stream"))
+            }
             if (addons.isEmpty()) {
                 Log.d(TAG, "No stream-capable addons installed")
                 emit(emptyList())

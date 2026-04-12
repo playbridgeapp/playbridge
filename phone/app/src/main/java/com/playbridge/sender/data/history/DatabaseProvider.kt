@@ -41,6 +41,21 @@ object DatabaseProvider {
         }
     }
 
+    private val MIGRATION_8_9 = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE installed_addons ADD COLUMN isEnabled INTEGER NOT NULL DEFAULT 1")
+            db.execSQL("ALTER TABLE installed_addons ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    private val MIGRATION_9_10 = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Comma-separated list of resource names the user has disabled per-addon,
+            // e.g. "catalog,meta". Empty string = all features active.
+            db.execSQL("ALTER TABLE installed_addons ADD COLUMN disabledFeatures TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
     @Volatile
     private var INSTANCE: HistoryDatabase? = null
 
@@ -51,7 +66,7 @@ object DatabaseProvider {
                 HistoryDatabase::class.java,
                 "history_database"
             )
-            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8)
+            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
             .fallbackToDestructiveMigration()
             .build()
             INSTANCE = instance

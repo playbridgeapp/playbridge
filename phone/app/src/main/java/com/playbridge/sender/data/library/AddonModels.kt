@@ -25,7 +25,10 @@ data class InstalledAddonEntity(
     val types: String = "",    // Comma-separated: "movie,series"
     val resources: String = "",      // JSON array of resource names, e.g. ["stream","catalog","meta","subtitles"]
     val catalogsJson: String = "",    // JSON array of StremioResource objects from manifest.catalogs
-    val installedAt: Long = System.currentTimeMillis()
+    val installedAt: Long = System.currentTimeMillis(),
+    val isEnabled: Boolean = true,        // Master switch — false skips the addon entirely
+    val sortOrder: Int = 0,               // User-defined display/resolution order (lower = higher priority)
+    val disabledFeatures: String = ""     // Comma-separated resource names the user has turned off, e.g. "catalog,meta"
 )
 
 fun InstalledAddonEntity.supportsResource(name: String): Boolean {
@@ -35,6 +38,25 @@ fun InstalledAddonEntity.supportsResource(name: String): Boolean {
     } catch (e: Exception) {
         false
     }
+}
+
+/**
+ * Returns the set of resource names the user has explicitly disabled for this addon,
+ * e.g. `setOf("catalog", "meta")`.  Empty when nothing is disabled.
+ */
+fun InstalledAddonEntity.disabledFeatureSet(): Set<String> {
+    if (disabledFeatures.isBlank()) return emptySet()
+    return disabledFeatures.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
+}
+
+/**
+ * Returns true when this addon should be used for the given [resource]
+ * (e.g. "stream", "catalog", "meta", "subtitles").
+ * Respects both the master [isEnabled] switch and the per-feature [disabledFeatures] list.
+ */
+fun InstalledAddonEntity.isFeatureEnabled(resource: String): Boolean {
+    if (!isEnabled) return false
+    return resource !in disabledFeatureSet()
 }
 
 /**
