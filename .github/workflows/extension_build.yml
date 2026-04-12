@@ -14,6 +14,9 @@ jobs:
     defaults:
       run:
         working-directory: ./extension
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
 
     steps:
     - uses: actions/checkout@v4
@@ -26,12 +29,19 @@ jobs:
         VERSION=$(jq -r '.version' src/manifest.json)
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-    - name: Check tag
+    - name: Check version status
       id: check_tag
       run: |
-        if git rev-parse "extension-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+        VERSION="${{ steps.version.outputs.version }}"
+        # Try to get version from previous commit to check for bumps
+        PREV_VERSION=$(git show HEAD^:extension/src/manifest.json 2>/dev/null | jq -r '.version' 2>/dev/null || echo "none")
+        
+        if git rev-parse "extension-v$VERSION" >/dev/null 2>&1; then
           echo "skipped=true" >> $GITHUB_OUTPUT
-          echo "⏭️ extension-v${{ steps.version.outputs.version }} already exists, skipping."
+          echo "⏭️ extension-v$VERSION already exists (tag found), skipping."
+        elif [ "$VERSION" == "$PREV_VERSION" ]; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ Version $VERSION matches previous commit (no bump), skipping."
         else
           echo "skipped=false" >> $GITHUB_OUTPUT
         fi
