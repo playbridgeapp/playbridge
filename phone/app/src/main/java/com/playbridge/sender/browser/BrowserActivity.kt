@@ -414,6 +414,7 @@ class BrowserActivity : ComponentActivity() {
             val preferredAudioLang by remember { mutableStateOf(prefs.getString("preferred_audio_lang", "") ?: "") }
             val preferredSubLang by remember { mutableStateOf(prefs.getString("preferred_subtitle_lang", "") ?: "") }
             val defaultVideoQuality by remember { mutableStateOf(prefs.getString("default_video_quality", "Auto") ?: "Auto") }
+            val maxBitrateCapMbps by remember { mutableStateOf(prefs.getString("auto_stream_max_mbps", "")?.toDoubleOrNull()) }
 
             var detectVideosEnabled by remember { mutableStateOf(prefs.getBoolean("detect_videos", true)) }
             var isDesktopMode by remember { mutableStateOf(false) }
@@ -465,6 +466,13 @@ class BrowserActivity : ComponentActivity() {
             var forcedVideos by remember { mutableStateOf<List<DetectedVideo>?>(null) }
             var castSheetInitialMode by remember { mutableStateOf("play") }
             var castSheetBrowseOverride by remember { mutableStateOf<String?>(null) }
+            // Holds SeriesContext and quality tier while the cast sheet is open for a library
+            // series cast. Both are cleared after the command is sent or the sheet is dismissed.
+            var pendingSeriesContext by remember { mutableStateOf<com.playbridge.protocol.SeriesContext?>(null) }
+            // Quality tier selected by the user in the stream picker ("2160p", "1080p", "720p", or null).
+            // Override quality/bitrate from the library stream picker for this cast only.
+            var pendingQualityTier by remember { mutableStateOf<String?>(null) }
+            var pendingBitrateCapMbps by remember { mutableStateOf<Double?>(null) }
             val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
                 derivedStateOf {
                     // Read processingVersion so this re-derives whenever any video's
@@ -597,11 +605,12 @@ class BrowserActivity : ComponentActivity() {
                 isConnected = connectionState is WebSocketClient.ConnectionState.Connected,
                 onPlayOnTv = { linkUrl ->
                     val cmd = com.playbridge.protocol.createPlayCommandJson(
-                        url = linkUrl, 
+                        url = linkUrl,
                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
                         preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
                         preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
+                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                        maxBitrateCapMbps = maxBitrateCapMbps
                     )
                     connectionViewModel.sendCommandAndRecord(cmd, "play", linkUrl, "Video Link")
                     Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
@@ -1805,7 +1814,10 @@ class BrowserActivity : ComponentActivity() {
                                                     castSheetBrowseOverride = trailerUrl
                                                     showVideoSheet = true
                                                 },
-                                                onPlayStream = { url, title, subtitles ->
+                                                onPlayStream = { url, title, subtitles, seriesContext, defaultQuality, streamMaxMbps ->
+                                                    // Always show the cast sheet so the user can confirm TV device,
+                                                    // player mode, etc. For series casts, stash the SeriesContext so
+                                                    // onVideoClick can attach it to the command.
                                                     val mainVideo = DetectedVideo(
                                                         url = url,
                                                         title = title,
@@ -1824,6 +1836,9 @@ class BrowserActivity : ComponentActivity() {
                                                         )
                                                     } ?: emptyList()
                                                     scope.launch {
+                                                        pendingSeriesContext = seriesContext
+                                                        pendingQualityTier = defaultQuality
+                                                        pendingBitrateCapMbps = streamMaxMbps
                                                         forcedVideos = listOf(mainVideo) + subVideos
                                                         showVideoSheet = true
                                                     }
@@ -1835,7 +1850,8 @@ class BrowserActivity : ComponentActivity() {
                                                             playerMode = playerMode,
                                                             preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
                                                             preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                                            defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" }
+                                                            defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" },
+                                                            maxBitrateCapMbps = maxBitrateCapMbps
                                                         )
                                                     }
                                                     val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode)
@@ -1847,7 +1863,8 @@ class BrowserActivity : ComponentActivity() {
                                                         playerMode = playerMode,
                                                         preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
                                                         preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                                        defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" }
+                                                        defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" },
+                                                        maxBitrateCapMbps = maxBitrateCapMbps
                                                     )
                                                     connectionViewModel.webSocketClient.send(
                                                         com.playbridge.protocol.createQueueAddCommandJson(itemWithPrefs)
@@ -1913,6 +1930,9 @@ class BrowserActivity : ComponentActivity() {
                             forcedVideos = null
                             castSheetInitialMode = "play"
                             castSheetBrowseOverride = null
+                            pendingSeriesContext = null
+                            pendingQualityTier = null
+                            pendingBitrateCapMbps = null
                         },
                         playerMode = sheetPlayerMode,
                         onPlayerModeChange = { mode ->
@@ -1958,6 +1978,14 @@ class BrowserActivity : ComponentActivity() {
                                             headers["Referer"] = video.originUrl
                                         }
 
+                                        // Quality / bitrate priority: library stream picker > global prefs.
+                                        // pendingQualityTier and pendingBitrateCapMbps are set by the library
+                                        // flow (auto quality key or picked stream's quality/bitrate).
+                                        // Fall back to the global PlaybackSettings prefs only when casting
+                                        // from the browser video detector (not from the library).
+                                        val effectiveQuality = pendingQualityTier
+                                            ?: defaultVideoQuality.takeIf { it != "Auto" }
+                                        val effectiveBitrateCap = pendingBitrateCapMbps ?: maxBitrateCapMbps
                                         val commandJson = com.playbridge.protocol.createPlayCommandJson(
                                             url = video.url,
                                             title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
@@ -1968,8 +1996,13 @@ class BrowserActivity : ComponentActivity() {
                                             playerMode = sheetPlayerMode.takeIf { it != "tv" },
                                             preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
                                             preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
+                                            defaultVideoQuality = effectiveQuality,
+                                            maxBitrateCapMbps = effectiveBitrateCap,
+                                            seriesContext = pendingSeriesContext
                                         )
+                                        pendingSeriesContext = null
+                                        pendingQualityTier = null
+                                        pendingBitrateCapMbps = null
                                         Log.d(TAG, "Sending play command: $commandJson")
                                         connectionViewModel.sendCommandAndRecord(commandJson, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
                                         val sent = connectionViewModel.webSocketClient.send(commandJson)
@@ -2140,7 +2173,8 @@ class BrowserActivity : ComponentActivity() {
                                     playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
                                     preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
                                     preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                    defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
+                                    defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                                    maxBitrateCapMbps = maxBitrateCapMbps
                                 )
                                 connectionViewModel.sendCommandAndRecord(commandJson, "play", download.url, selectedTab?.content?.title ?: download.fileName ?: "Video from browser")
                                 val sent = connectionViewModel.webSocketClient.send(commandJson)
@@ -2186,7 +2220,8 @@ class BrowserActivity : ComponentActivity() {
                                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
                                         preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
                                         preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }
+                                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                                        maxBitrateCapMbps = maxBitrateCapMbps
                                     )
                                 }
 

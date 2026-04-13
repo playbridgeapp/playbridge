@@ -187,6 +187,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 )
             )
         }
+        Log.d(TAG, "Sending command payload: $commandJson")
         webSocketClient.send(commandJson)
     }
     // Timestamp of the last requestPairing call (per-instance debounce).

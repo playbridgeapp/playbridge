@@ -66,7 +66,7 @@ fun LibraryDetailScreen(
     id: String,
     type: String,
     addonRepository: AddonRepository,
-    onPlayStream: (url: String, title: String, subtitles: List<String>?) -> Unit = { _, _, _ -> },
+    onPlayStream: (url: String, title: String, subtitles: List<String>?, seriesContext: com.playbridge.protocol.SeriesContext?, streamQuality: String?, streamMaxMbps: Double?) -> Unit = { _, _, _, _, _, _ -> },
     onPlayTrailer: ((String) -> Unit)? = null,
     onPlayPlaylist: (items: List<com.playbridge.protocol.PlayPayload>) -> Unit = {},
     onQueueAdd: (com.playbridge.protocol.PlayPayload) -> Unit = {},
@@ -327,7 +327,16 @@ fun LibraryDetailScreen(
                         if (forPhone) {
                             openInExternalPlayer(context, streamUrl, null, null)
                         } else {
-                            onPlayStream(streamUrl, resTitle, null)
+                            val seriesCtx = buildSeriesContext(
+                                isSeries, resolvedImdbId, selectedSeason,
+                                currentEpisodeSelection, displayTitle, addonMeta?.videos,
+                                addonRepository
+                            )
+                            onPlayStream(
+                                streamUrl, resTitle, null, seriesCtx,
+                                autoQualityKey.takeIf { it.isNotEmpty() }, // configured quality tier, not stream's qualityTier (title can contaminate)
+                                autoMaxMbps                                 // configured max bitrate cap
+                            )
                             Toast.makeText(context, "Auto-selected: ${finalSelection.stream.name}", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -388,7 +397,16 @@ fun LibraryDetailScreen(
                             emptyList()
                         }
 
-                        onPlayStream(streamUrl, streamPickerTitle, subtitles.ifEmpty { null })
+                        val seriesCtx = buildSeriesContext(
+                            isSeries, resolvedImdbId, selectedSeason,
+                            currentEpisodeSelection, displayTitle, addonMeta?.videos,
+                            addonRepository
+                        )
+                        onPlayStream(
+                            streamUrl, streamPickerTitle, subtitles.ifEmpty { null }, seriesCtx,
+                            resolved.stream.qualityTier,                   // quality from stream name (name-first, reliable)
+                            StreamSelector.estimatedMbps(resolved, null)   // actual stream bitrate; null if no size metadata
+                        )
                         resolutionState = ResolutionState()
                         if (isSeries && currentEpisodeSelection != null) {
                             onNowPlayingStarted(resolvedTmdbId ?: 0, selectedSeason, currentEpisodeSelection!!.episode ?: 1)
@@ -1640,6 +1658,55 @@ private fun EpisodeItem(
             overflow = TextOverflow.Ellipsis
         )
     }
+}
+
+// ==================== Series Context Builder ====================
+
+/**
+ * Builds a [SeriesContext] to attach to a play command when casting a Stremio series episode.
+ * Returns null for movies, when no IMDB ID is available, or when no stream-capable addons
+ * are installed (TV would have nothing to resolve with).
+ *
+ * Must be called from a coroutine (needs [AddonRepository.getInstalledAddons]).
+ */
+private suspend fun buildSeriesContext(
+    isSeries: Boolean,
+    resolvedImdbId: String?,
+    selectedSeason: Int,
+    currentEpisodeSelection: com.playbridge.sender.data.library.StremioVideo?,
+    displayTitle: String,
+    addonVideos: List<com.playbridge.sender.data.library.StremioVideo>?,
+    addonRepository: AddonRepository
+): com.playbridge.protocol.SeriesContext? {
+    if (!isSeries || resolvedImdbId == null || currentEpisodeSelection == null) return null
+
+    val addonBaseUrls = addonRepository.getInstalledAddons()
+        .filter { it.isEnabled && (it.resources.isBlank() || it.supportsResource("stream")) }
+        .map { it.baseUrl }
+
+    if (addonBaseUrls.isEmpty()) return null   // TV would have nothing to resolve with
+
+    val allEpisodes = addonVideos
+        ?.filter { it.season != null && it.episode != null && it.season > 0 }
+        ?.distinctBy { Pair(it.season, it.episode) }
+        ?.map { vid ->
+            com.playbridge.protocol.SeriesEpisodeRef(
+                season  = vid.season!!,
+                episode = vid.episode!!,
+                title   = vid.title.ifBlank { null }
+            )
+        }
+        ?.sortedWith(compareBy({ it.season }, { it.episode }))
+
+    return com.playbridge.protocol.SeriesContext(
+        imdbId       = resolvedImdbId,
+        season       = selectedSeason,
+        episode      = currentEpisodeSelection.episode ?: 1,
+        seriesTitle  = displayTitle.ifBlank { null },
+        episodeTitle = currentEpisodeSelection.title.ifBlank { null },
+        addonBaseUrls = addonBaseUrls,
+        allEpisodes  = allEpisodes
+    )
 }
 
 // ==================== Episode Date Helpers ====================

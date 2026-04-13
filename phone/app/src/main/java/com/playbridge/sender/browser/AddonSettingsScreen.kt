@@ -554,7 +554,10 @@ private fun AddonCard(
 @Composable
 private fun AddonCapabilityBadges(addon: InstalledAddonEntity) {
     val resources = listOf("stream", "catalog", "meta", "subtitles")
-    val supported = resources.filter { addon.supportsResource(it) }
+    // Include "catalog" if the addon has catalog entries even when it doesn't declare
+    // "catalog" in its resources array (Torrentio with RealDebrid is the canonical case).
+    val hasCatalogEntries = remember(addon.catalogsJson) { addon.parsedCatalogEntries().isNotEmpty() }
+    val supported = resources.filter { addon.supportsResource(it) || (it == "catalog" && hasCatalogEntries) }
     if (supported.isEmpty()) return
 
     val catalogCount = remember(addon.catalogsJson) { addon.parsedCatalogEntries().size }
@@ -655,8 +658,14 @@ private fun AddonConfigureDialog(
 ) {
     // Derive supported resources from the addon's declared resource list,
     // falling back to all known types for pre-Phase-1 addons with blank resources.
-    val supportedResources = remember(addon.resources) {
-        if (addon.resources.isBlank()) KNOWN_RESOURCES
+    // Also include "catalog" when the addon has catalog entries even if it doesn't
+    // list "catalog" in its resources array (e.g. Torrentio with RealDebrid exposes
+    // a catalog entry but only declares "stream" and "meta" in resources).
+    val hasCatalogEntries = remember(addon.catalogsJson) {
+        addon.parsedCatalogEntries().isNotEmpty()
+    }
+    val supportedResources = remember(addon.resources, hasCatalogEntries) {
+        val base = if (addon.resources.isBlank()) KNOWN_RESOURCES
         else {
             try {
                 val declared = kotlinx.serialization.json.Json
@@ -664,6 +673,7 @@ private fun AddonConfigureDialog(
                 KNOWN_RESOURCES.filter { it in declared }
             } catch (_: Exception) { KNOWN_RESOURCES }
         }
+        if (hasCatalogEntries && "catalog" !in base) base + "catalog" else base
     }
 
     var masterEnabled by remember { mutableStateOf(addon.isEnabled) }

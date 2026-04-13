@@ -8,6 +8,7 @@ import com.playbridge.sender.data.library.AddonRepository
 import com.playbridge.sender.data.library.AddonSearchResultGroup
 import com.playbridge.sender.data.library.InstalledAddonEntity
 import com.playbridge.sender.data.library.StremioMetaPreview
+import com.playbridge.sender.data.library.isFeatureEnabled
 import com.playbridge.sender.data.library.parsedCatalogEntries
 import com.playbridge.sender.data.library.TmdbMovie
 import com.playbridge.sender.data.library.TmdbMultiSearchResult
@@ -158,7 +159,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             }
 
             // Build skeleton rows so the UI shows shimmer/loading state right away
-            val skeletons = addons.flatMap { addon ->
+            val skeletons = addons.filter { it.isFeatureEnabled("catalog") }.flatMap { addon ->
                 addon.parsedCatalogEntries()
                     .filter { it.type.isNotBlank() && it.id.isNotBlank() }
                     .map { entry ->
@@ -178,7 +179,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             val filled = mutableListOf<AddonCatalogRow>()
             val mutex = kotlinx.coroutines.sync.Mutex()
 
-            val deferreds = addons.flatMap { addon ->
+            val deferreds = addons.filter { it.isFeatureEnabled("catalog") }.flatMap { addon ->
                 addon.parsedCatalogEntries()
                     .filter { it.type.isNotBlank() && it.id.isNotBlank() }
                     .map { entry ->
@@ -208,6 +209,71 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             // Store completed result in cache
             catalogCache = _catalogRows.value
             catalogCacheTime = System.currentTimeMillis()
+        }
+    }
+
+    /**
+     * Appends the next page (skip + 100) for a single addon catalog row.
+     * Safe to call repeatedly — guards against concurrent fetches via [isLoadingMore]
+     * and stops automatically once a page comes back empty ([hasMore] = false).
+     *
+     * Since [viewModelScope] dispatches on [Dispatchers.Main], the guard check and
+     * the [isLoadingMore] flag update both happen before the first suspension point,
+     * so there is no risk of two concurrent fetches for the same row.
+     */
+    fun loadMoreAddonRow(addonBaseUrl: String, type: String, catalogId: String) {
+        viewModelScope.launch {
+            val currentRows = _catalogRows.value
+            val rowIndex = currentRows.indexOfFirst {
+                it.addonBaseUrl == addonBaseUrl && it.type == type && it.catalogId == catalogId
+            }
+            if (rowIndex == -1) return@launch
+            val row = currentRows[rowIndex]
+            if (!row.hasMore || row.isLoadingMore) return@launch
+
+            // Mark as loading before the first suspension so the guard holds.
+            _catalogRows.value = currentRows.toMutableList().apply {
+                this[rowIndex] = row.copy(isLoadingMore = true)
+            }
+
+            val addon = addonRepository.getInstalledAddons()
+                .firstOrNull { it.baseUrl == addonBaseUrl }
+
+            if (addon == null) {
+                updateCatalogRow(addonBaseUrl, type, catalogId) {
+                    it.copy(isLoadingMore = false, hasMore = false)
+                }
+                return@launch
+            }
+
+            val nextSkip = row.currentSkip + 100
+            val newItems = runCatching {
+                addonRepository.fetchCatalog(addon, type, catalogId, skip = nextSkip)
+            }.getOrDefault(emptyList())
+
+            updateCatalogRow(addonBaseUrl, type, catalogId) { existing ->
+                existing.copy(
+                    items = existing.items + newItems,
+                    isLoadingMore = false,
+                    currentSkip = nextSkip,
+                    hasMore = newItems.isNotEmpty()
+                )
+            }
+        }
+    }
+
+    /** Applies [transform] to the matching row in [_catalogRows], leaving all others unchanged. */
+    private fun updateCatalogRow(
+        addonBaseUrl: String,
+        type: String,
+        catalogId: String,
+        transform: (AddonCatalogRow) -> AddonCatalogRow
+    ) {
+        _catalogRows.value = _catalogRows.value.toMutableList().apply {
+            val idx = indexOfFirst {
+                it.addonBaseUrl == addonBaseUrl && it.type == type && it.catalogId == catalogId
+            }
+            if (idx != -1) this[idx] = transform(this[idx])
         }
     }
 

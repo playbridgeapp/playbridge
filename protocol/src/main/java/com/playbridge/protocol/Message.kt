@@ -33,6 +33,41 @@ data class MessageEnvelope(
 // ==================== Payload Data Classes ====================
 
 /**
+ * A single episode reference within a series — carries just enough metadata for the TV
+ * to navigate prev/next without pre-resolving stream URLs.
+ * Covers all seasons in a flat list; the TV navigator locates the current position by index.
+ */
+@Serializable
+data class SeriesEpisodeRef(
+    val season: Int,
+    val episode: Int,
+    val title: String? = null   // episode title for UI display only
+)
+
+/**
+ * Series context attached to a PlayPayload when casting a Stremio series episode.
+ * Gives the TV everything it needs to resolve fresh stream URLs for prev/next episodes
+ * independently, without calling back to the phone.
+ *
+ * addonBaseUrls: base URLs of the user's stream-capable addons, e.g.
+ *   ["https://torrentio.strem.fun/sort=qualitysize|realdebrid=TOKEN"]
+ *   Addon auth tokens are embedded in the base URL (standard Stremio convention).
+ *
+ * allEpisodes: flat list of ALL episodes across ALL seasons, sorted by (season, episode).
+ *   Null if TMDB data was not available at cast time; TV falls back to optimistic +1 navigation.
+ */
+@Serializable
+data class SeriesContext(
+    val imdbId: String,
+    val season: Int,
+    val episode: Int,
+    val seriesTitle: String? = null,
+    val episodeTitle: String? = null,
+    val addonBaseUrls: List<String>,
+    val allEpisodes: List<SeriesEpisodeRef>? = null
+)
+
+/**
  * Play video command payload
  */
 @Serializable
@@ -46,7 +81,9 @@ data class PlayPayload(
     val playerMode: String? = null,
     val preferredAudioLanguage: String? = null,
     val preferredSubtitleLanguage: String? = null,
-    val defaultVideoQuality: String? = null
+    val defaultVideoQuality: String? = null,
+    val maxBitrateCapMbps: Double? = null,   // max bitrate cap for ExoPlayer ABR (Mbps); null = no cap
+    val seriesContext: SeriesContext? = null  // non-null only for Stremio series episodes
 )
 
 /**
@@ -299,7 +336,9 @@ sealed class Command {
         val playerMode: String?,
         val preferredAudioLanguage: String? = null,
         val preferredSubtitleLanguage: String? = null,
-        val defaultVideoQuality: String? = null
+        val defaultVideoQuality: String? = null,
+        val maxBitrateCapMbps: Double? = null,
+        val seriesContext: SeriesContext? = null
     ) : Command()
     data class Browser(val url: String, val browserMode: String?, val desktopMode: Boolean? = null) : Command()
     data class Control(val command: String) : Command()
@@ -345,7 +384,9 @@ fun parseCommand(jsonString: String): Command {
                             playerMode = payload?.playerMode,
                             preferredAudioLanguage = payload?.preferredAudioLanguage,
                             preferredSubtitleLanguage = payload?.preferredSubtitleLanguage,
-                            defaultVideoQuality = payload?.defaultVideoQuality
+                            defaultVideoQuality = payload?.defaultVideoQuality,
+                            maxBitrateCapMbps = payload?.maxBitrateCapMbps,
+                            seriesContext = payload?.seriesContext
                         )
                     }
                     "browser" -> {
@@ -434,7 +475,9 @@ fun createPlayCommandJson(
     playerMode: String? = null,
     preferredAudioLanguage: String? = null,
     preferredSubtitleLanguage: String? = null,
-    defaultVideoQuality: String? = null
+    defaultVideoQuality: String? = null,
+    maxBitrateCapMbps: Double? = null,
+    seriesContext: SeriesContext? = null
 ): String {
     return protocolJson.encodeToString(
         PlayCommand.serializer(),
@@ -448,7 +491,9 @@ fun createPlayCommandJson(
             playerMode = playerMode,
             preferredAudioLanguage = preferredAudioLanguage,
             preferredSubtitleLanguage = preferredSubtitleLanguage,
-            defaultVideoQuality = defaultVideoQuality
+            defaultVideoQuality = defaultVideoQuality,
+            maxBitrateCapMbps = maxBitrateCapMbps,
+            seriesContext = seriesContext
         ))
     )
 }

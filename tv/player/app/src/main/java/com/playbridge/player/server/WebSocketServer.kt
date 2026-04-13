@@ -275,6 +275,7 @@ class WebSocketServer(
                             }
                             is Command.Play -> {
                                 FileLogger.i(TAG, "Play command parsed - URL: ${command.url}, Title: ${command.title}")
+                                FileLogger.i(TAG, "Raw JSON body: $text")
                                 _commands.emit(command)
                             }
                             else -> {

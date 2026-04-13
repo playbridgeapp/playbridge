@@ -871,7 +871,10 @@ private fun LibraryScreenContent(
                                 AddonMediaRow(
                                     row = row,
                                     listState = viewModel.catalogRowScrollState(rowKey),
-                                    onItemClick = { item -> onAddonItemClick(item.id, item.type) }
+                                    onItemClick = { item -> onAddonItemClick(item.id, item.type) },
+                                    onLoadMore = {
+                                        viewModel.loadMoreAddonRow(row.addonBaseUrl, row.type, row.catalogId)
+                                    }
                                 )
                             }
                         }
@@ -1632,9 +1635,24 @@ private fun ApiKeyPrompt() {
 private fun AddonMediaRow(
     row: AddonCatalogRow,
     listState: LazyListState,
-    onItemClick: (StremioMetaPreview) -> Unit
+    onItemClick: (StremioMetaPreview) -> Unit,
+    onLoadMore: () -> Unit
 ) {
     if (row.isLoading && row.items.isEmpty()) return // hide until first page arrives
+
+    // Trigger load-more when the user scrolls within 4 items of the end.
+    val isNearEnd by remember(listState) {
+        derivedStateOf {
+            val total = listState.layoutInfo.totalItemsCount
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            total > 0 && lastVisible >= total - 4
+        }
+    }
+    LaunchedEffect(isNearEnd) {
+        if (isNearEnd && row.hasMore && !row.isLoadingMore) {
+            onLoadMore()
+        }
+    }
 
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         // Title + source chip
@@ -1688,6 +1706,22 @@ private fun AddonMediaRow(
                     rating = item.imdbRating ?: "",
                     onClick = { onItemClick(item) }
                 )
+            }
+            // Spinner appended at the end of the row while the next page loads
+            if (row.isLoadingMore) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .width(72.dp)
+                            .height(108.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                }
             }
         }
     }

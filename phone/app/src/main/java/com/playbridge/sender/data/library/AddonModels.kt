@@ -184,6 +184,30 @@ data class StremioStream(
     val qualityInfo: String get() = title ?: ""
 
     /**
+     * Normalised quality tier for TV-side stream resolution.
+     * Returns "2160p", "1080p", "720p", or null — matching QualityRanker strings.
+     *
+     * Checks [name] first, then falls back to [title].
+     * This is intentional: in Torrentio streams the [name] field (e.g. "[RD+] Torrentio 1080p")
+     * is the authoritative quality label, while [title] often describes the *source material*
+     * (e.g. "S01.2160p.UHD.BluRay..." for a 1080p downscale from a 4K source). Combining both
+     * fields into a single string causes the source quality to shadow the actual stream quality.
+     * AIOStreams also puts its quality label in [name], so name-first is safe for both addons.
+     */
+    val qualityTier: String? get() {
+        fun detect(text: String): String? {
+            val t = text.lowercase()
+            return when {
+                t.contains("2160p") || t.contains("4k") || t.contains("uhd") -> "2160p"
+                t.contains("1080p") || t.contains("1080") -> "1080p"
+                t.contains("720p")  || t.contains("720")  -> "720p"
+                else -> null
+            }
+        }
+        return detect(name.orEmpty()) ?: detect(title.orEmpty())
+    }
+
+    /**
      * Effective video size in bytes: behaviorHints.videoSize if present, otherwise parsed
      * from the 💾 emoji token in the title (e.g. Torrentio: "👤 12 💾 13.4 GB 🌐 Multi").
      */
@@ -213,11 +237,11 @@ data class StremioStream(
         }
     }
 
-    /** Estimate Mbps using effectiveVideoSizeBytes and runtime. */
+    /** Estimate Mbps using effectiveVideoSizeBytes and runtime.
+     *  Falls back to 120 min when [runtimeMinutes] is unavailable (same as StreamSelector). */
     fun estimateMbps(runtimeMinutes: Int?): String? {
         val size = effectiveVideoSizeBytes ?: return null
-        val runtime = runtimeMinutes ?: return null
-        if (runtime <= 0) return null
+        val runtime = (runtimeMinutes ?: 120).coerceAtLeast(1)
         val mbps = size * 8.0 / (runtime * 60 * 1_000_000.0)
         return "~%.1f Mbps".format(mbps)
     }
@@ -320,7 +344,10 @@ data class AddonCatalogRow(
     val catalogId: String,       // URL path segment, e.g. "top"
     val addonBaseUrl: String,    // for eviction / identification
     val items: List<StremioMetaPreview> = emptyList(),
-    val isLoading: Boolean = true
+    val isLoading: Boolean = true,
+    val isLoadingMore: Boolean = false,  // true while fetching a page beyond the first
+    val currentSkip: Int = 0,           // skip offset of the last successfully loaded page
+    val hasMore: Boolean = true         // false once a page fetch returns 0 new items
 )
 
 // ==================== Search Result Groups ====================

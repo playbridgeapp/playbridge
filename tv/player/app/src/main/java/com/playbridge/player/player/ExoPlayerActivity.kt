@@ -85,6 +85,10 @@ class ExoPlayerActivity : PlayerActivity() {
     private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
+    // Series navigator — non-null when a Stremio series episode was cast with SeriesContext.
+    // Takes over prev/next when no playlist queue is active.
+    private var seriesNavigator: com.playbridge.player.stremio.SeriesNavigator? = null
+
     private var activeDialog: android.app.Dialog? = null
 
     private val controlReceiver = object : BroadcastReceiver() {
@@ -294,6 +298,33 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+        // Store quality/bitrate preferences as fields so startPlayback() can apply them to the track selector
+        defaultVideoQuality = intent?.getStringExtra("default_video_quality")
+        maxBitrateCapMbps = if (intent?.hasExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS) == true)
+            intent.getDoubleExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS, 0.0).takeIf { it > 0.0 }
+        else null
+
+        // Restore SeriesNavigator from SeriesContext if present (Stremio series cast)
+        val seriesContextJson = intent?.getStringExtra(ServerService.EXTRA_SERIES_CONTEXT)
+        seriesNavigator = if (seriesContextJson != null) {
+            try {
+                val ctx = com.playbridge.protocol.protocolJson.decodeFromString(
+                    com.playbridge.protocol.SeriesContext.serializer(),
+                    seriesContextJson
+                )
+                com.playbridge.player.stremio.SeriesNavigator(ctx, this.defaultVideoQuality).also { nav ->
+                    // Seed source hint from the first episode's URL so subsequent
+                    // episode resolutions prefer the same release group / torrent source.
+                    nav.updateSourceHint(url = intent?.getStringExtra(ServerService.EXTRA_URL))
+                    FileLogger.i(TAG, "SeriesNavigator created: ${ctx.seriesTitle} " +
+                        "S${ctx.season}E${ctx.episode} addons=${ctx.addonBaseUrls.size} " +
+                        "sourceHint=${nav.currentSourceHint}")
+                }
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to deserialize SeriesContext: ${e.message}")
+                null
+            }
+        } else null
 
         // Read playlist if present
         val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
@@ -345,8 +376,13 @@ class ExoPlayerActivity : PlayerActivity() {
             playVideo(url, displayTitle, contentType, detectedBy, headers, subtitles)
         }
 
-        // Show playlist button only when a playlist is active
-        controlsManager.setPlaylistVisible(playlistItems.isNotEmpty())
+        // Show playlist button when a playlist is active OR series navigator has list mode
+        controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
+        
+        // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
+        if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
+            controlsManager.setNavigationVisible(true)
+        }
     }
 
     private fun initializePlayer() {
@@ -552,6 +588,31 @@ class ExoPlayerActivity : PlayerActivity() {
                     params.setPreferredTextLanguage(it)
                     params.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
                 }
+            }
+
+            // Apply video quality preference from phone as a max-size constraint.
+            // setExceedVideoConstraintsIfNecessary(true) means ExoPlayer falls back gracefully
+            // when the stream only has higher-quality tracks (e.g. phone wants 1080p, stream
+            // only has 4K — ExoPlayer picks 4K rather than refusing to play).
+            defaultVideoQuality?.let { quality ->
+                val (maxW, maxH) = when (quality.lowercase()) {
+                    "720p"        -> Pair(1280, 720)
+                    "1080p"       -> Pair(1920, 1080)
+                    "2160p", "4k" -> Pair(3840, 2160)
+                    else          -> null
+                } ?: run { null to null }
+                if (maxW != null && maxH != null) {
+                    FileLogger.i(TAG, "Applying video quality preference: $quality → maxSize=${maxW}x${maxH}")
+                    params.setMaxVideoSize(maxW, maxH)
+                }
+            }
+
+            // Apply explicit bitrate cap if provided (takes precedence over quality size alone
+            // for streams that report per-variant bitrates, e.g. HLS EXT-X-STREAM-INF:BANDWIDTH).
+            maxBitrateCapMbps?.let { cap ->
+                val capBps = (cap * 1_000_000).toInt()
+                FileLogger.i(TAG, "Applying max bitrate cap: ${cap} Mbps → ${capBps} bps")
+                params.setMaxVideoBitrate(capBps)
             }
 
             setParameters(params)
@@ -975,7 +1036,39 @@ class ExoPlayerActivity : PlayerActivity() {
      * Play the previous item in the playlist queue.
      */
     private fun playPreviousInPlaylist() {
-        if (playlistItems.isEmpty() || playlistIndex <= 0) {
+        // Series navigation path (no playlist queue active)
+        if (playlistItems.isEmpty()) {
+            val nav = seriesNavigator
+            if (nav != null && nav.hasPrev()) {
+                lifecycleScope.launch {
+                    FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
+                    controlsManager.showBuffering()
+                    val stream = nav.resolvePrev()
+                    controlsManager.hideBuffering()
+                    if (stream != null) {
+                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
+                        android.widget.Toast.makeText(
+                            this@ExoPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        playVideo(url = stream.url, title = epTitle)
+                        videoFilterManager.reapplyFilter()
+                        controlsManager.hideUI()
+                    } else {
+                        android.widget.Toast.makeText(
+                            this@ExoPlayerActivity,
+                            "Could not resolve previous episode",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            } else {
+                android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        // Playlist path
+        if (playlistIndex <= 0) {
             android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -1066,8 +1159,36 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             if (playlistItems.isEmpty()) {
-                FileLogger.i(TAG, "No playlist — finishing")
-                finish()
+                // No playlist queue — try series navigator if available
+                val nav = seriesNavigator
+                if (nav != null && nav.hasNext()) {
+                    FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
+                    controlsManager.showBuffering()
+                    val stream = nav.resolveNext()
+                    controlsManager.hideBuffering()
+                    if (stream != null) {
+                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
+                        android.widget.Toast.makeText(
+                            this@ExoPlayerActivity,
+                            "Next: $epTitle",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        playVideo(url = stream.url, title = epTitle)
+                        videoFilterManager.reapplyFilter()
+                        controlsManager.hideUI()
+                    } else {
+                        FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
+                        android.widget.Toast.makeText(
+                            this@ExoPlayerActivity,
+                            "No more episodes found",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        finish()
+                    }
+                } else {
+                    FileLogger.i(TAG, "No playlist and no series nav — finishing")
+                    finish()
+                }
                 return@launch
             }
 
@@ -1188,7 +1309,29 @@ class ExoPlayerActivity : PlayerActivity() {
      * Show the playlist picker dialog.
      */
     private fun showPlaylistPicker() {
-        if (playlistItems.isEmpty()) return
+        val displayItems: List<com.playbridge.protocol.PlayPayload>
+        val displayIndex: Int
+        val isSeriesMode: Boolean
+
+        if (playlistItems.isNotEmpty()) {
+            displayItems = playlistItems
+            displayIndex = playlistIndex
+            isSeriesMode = false
+        } else if (seriesNavigator?.episodeList?.isNotEmpty() == true) {
+            val nav = seriesNavigator!!
+            displayItems = nav.episodeList!!.map { ep ->
+                val s = ep.season.toString().padStart(2, '0')
+                val e = ep.episode.toString().padStart(2, '0')
+                com.playbridge.protocol.PlayPayload(
+                    url = "", // Not needed for UI
+                    title = "S${s}E${e} - ${ep.title ?: "Episode ${ep.episode}"}"
+                )
+            }
+            displayIndex = nav.currentIndex ?: 0
+            isSeriesMode = true
+        } else {
+            return
+        }
 
         val wasPlaying = player?.isPlaying == true
         if (wasPlaying) player?.pause()
@@ -1203,11 +1346,15 @@ class ExoPlayerActivity : PlayerActivity() {
         composeView.setContent {
             com.playbridge.player.ui.theme.PlayBridgeTVTheme {
                 PlaylistPickerDialog(
-                    items = playlistItems,
-                    currentIndex = playlistIndex,
+                    items = displayItems,
+                    currentIndex = displayIndex,
                     onItemSelected = { index ->
                         dialog.dismiss()
-                        playItemAtIndex(index)
+                        if (isSeriesMode) {
+                            playSeriesEpisodeAtIndex(index)
+                        } else {
+                            playItemAtIndex(index)
+                        }
                     },
                     onDismiss = {
                         dialog.dismiss()
@@ -1226,6 +1373,25 @@ class ExoPlayerActivity : PlayerActivity() {
         dialog.show()
     }
 
+    private fun playSeriesEpisodeAtIndex(index: Int) {
+        val nav = seriesNavigator ?: return
+        lifecycleScope.launch {
+            FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
+            controlsManager.showBuffering()
+            val stream = nav.resolveAndAdvanceToIndex(index)
+            controlsManager.hideBuffering()
+            if (stream != null) {
+                val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
+                android.widget.Toast.makeText(this@ExoPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
+                playVideo(url = stream.url, title = epTitle)
+                videoFilterManager.reapplyFilter()
+                controlsManager.hideUI()
+            } else {
+                android.widget.Toast.makeText(this@ExoPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     private var currentSubtitleUrl: String? = null
     private var currentPlaybackSpeed: Float = 1.0f
     private var currentVideoScalingMode: Int = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -1233,6 +1399,8 @@ class ExoPlayerActivity : PlayerActivity() {
     // Preferred language for playlists — persists across episodes
     private var preferredAudioLanguage: String? = null
     private var preferredSubtitleLanguage: String? = null
+    private var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p" — drives ExoPlayer track selection
+    private var maxBitrateCapMbps: Double? = null         // explicit bitrate cap from phone settings (Mbps)
 
     /**
      * Push current track/filter selections into ProgressManager so the next

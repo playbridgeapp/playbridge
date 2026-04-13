@@ -56,6 +56,20 @@ fun StreamPickerSheet(
     // Show a brief "Auto-picking…" message while we're about to dismiss
     var autoPickTriggered by remember { mutableStateOf(false) }
 
+    // When the sheet was forced open manually (hold gesture) and auto-prefs are set,
+    // compute which stream would have been auto-selected so we can badge it.
+    val autoMatchStream = remember(streams, autoFilter, autoMaxMbps, episodeRuntimeMinutes) {
+        if (forceManual && autoFilter != null && streams.isNotEmpty()) {
+            val best = StreamSelector.selectBest(
+                streams = streams,
+                preferredQuality = autoFilter,
+                maxMbps = autoMaxMbps,
+                runtimeMinutes = episodeRuntimeMinutes
+            )
+            best ?: streams.firstOrNull()
+        } else null
+    }
+
     // Auto-select: fires once when streams are fully loaded
     LaunchedEffect(isLoading, streams.size) {
         if (!forceManual && autoFilter != null && !isLoading && streams.isNotEmpty() && !autoPickFired) {
@@ -270,6 +284,7 @@ fun StreamPickerSheet(
                         StreamItem(
                             resolvedStream = resolved,
                             episodeRuntimeMinutes = episodeRuntimeMinutes,
+                            isAutoMatch = autoMatchStream == resolved,
                             onClick = { onStreamSelected(resolved) }
                         )
                     }
@@ -283,6 +298,7 @@ fun StreamPickerSheet(
 private fun StreamItem(
     resolvedStream: ResolvedStream,
     episodeRuntimeMinutes: Int? = null,
+    isAutoMatch: Boolean = false,
     onClick: () -> Unit
 ) {
     val stream = resolvedStream.stream
@@ -340,6 +356,32 @@ private fun StreamItem(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Auto-match badge (only visible when sheet was force-opened)
+                    if (isAutoMatch) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.tertiaryContainer
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(10.dp),
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "Would auto-pick",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            }
+                        }
+                    }
+
                     // File size
                     stream.fileSizeFormatted?.let { size ->
                         Surface(

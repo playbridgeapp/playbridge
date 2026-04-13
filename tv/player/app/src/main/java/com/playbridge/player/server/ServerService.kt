@@ -417,23 +417,35 @@ class ServerService : Service() {
                         putExtra(EXTRA_URL, command.url)
                         putExtra(EXTRA_TITLE, command.title)
                         putExtra(EXTRA_CONTENT_TYPE, command.contentType)
-                        if (command.detectedBy != null) {
-                            putExtra(EXTRA_DETECTED_BY, command.detectedBy)
+                        command.detectedBy?.let { detectedBy ->
+                            putExtra(EXTRA_DETECTED_BY, detectedBy)
                         }
-                        if (command.subtitles != null) {
-                            putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(command.subtitles))
+                        command.subtitles?.let { subtitles ->
+                            putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(subtitles))
                         }
-                        if (command.headers != null) {
-                            putExtra(EXTRA_HEADERS, HashMap(command.headers))
+                        command.headers?.let { headers ->
+                            putExtra(EXTRA_HEADERS, HashMap(headers))
                         }
-                        if (command.preferredAudioLanguage != null) {
-                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, command.preferredAudioLanguage)
+                        command.preferredAudioLanguage?.let { lang ->
+                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, lang)
                         }
-                        if (command.preferredSubtitleLanguage != null) {
-                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, command.preferredSubtitleLanguage)
+                        command.preferredSubtitleLanguage?.let { lang ->
+                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, lang)
                         }
-                        if (command.defaultVideoQuality != null) {
-                            putExtra("default_video_quality", command.defaultVideoQuality)
+                        command.defaultVideoQuality?.let { quality ->
+                            putExtra("default_video_quality", quality)
+                        }
+                        command.maxBitrateCapMbps?.let { cap ->
+                            putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, cap)
+                        }
+                        command.seriesContext?.let { seriesContext ->
+                            // Serialize SeriesContext to JSON string for Intent transport.
+                            // Deserialized in ExoPlayerActivity.handleIntent().
+                            val json = com.playbridge.protocol.protocolJson.encodeToString(
+                                com.playbridge.protocol.SeriesContext.serializer(),
+                                seriesContext
+                            )
+                            putExtra(EXTRA_SERIES_CONTEXT, json)
                         }
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                     }
@@ -555,6 +567,9 @@ class ServerService : Service() {
                         }
                         if (firstItem.defaultVideoQuality != null) {
                             putExtra("default_video_quality", firstItem.defaultVideoQuality)
+                        }
+                        if (firstItem.maxBitrateCapMbps != null) {
+                            putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, firstItem.maxBitrateCapMbps)
                         }
                     }
                     putExtra(EXTRA_IS_PLAYLIST, true)
@@ -836,6 +851,8 @@ class ServerService : Service() {
         const val EXTRA_EXTERNAL_SUBTITLE_URL = "external_subtitle_url"
         const val EXTRA_VIDEO_FILTER = "video_filter"
         const val EXTRA_CUSTOM_FILTER_VALUES = "custom_filter_values"
+        const val EXTRA_SERIES_CONTEXT = "series_context"        // JSON-encoded SeriesContext
+        const val EXTRA_MAX_BITRATE_CAP_MBPS = "max_bitrate_cap_mbps" // Double: max ABR bitrate cap for ExoPlayer
         const val ACTION_QUEUE_ADD = "com.playbridge.player.ACTION_QUEUE_ADD"
         const val ACTION_PLAYLIST_JUMP = "com.playbridge.player.ACTION_PLAYLIST_JUMP"
         // Sent to MainActivity (via startActivity) to navigate to the PairingScreen.
