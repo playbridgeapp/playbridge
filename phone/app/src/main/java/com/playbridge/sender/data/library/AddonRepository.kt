@@ -125,6 +125,7 @@ class AddonRepository(
 
                 val resourceNames = manifest.resources.map { it.name }.distinct()
                 val resourcesJson = json.encodeToString(resourceNames)
+                val resourceDetailsJson = json.encodeToString(manifest.resources)
                 val catalogsJson = json.encodeToString(manifest.catalogs)
 
                 val entity = InstalledAddonEntity(
@@ -135,6 +136,7 @@ class AddonRepository(
                     version = manifest.version,
                     types = manifest.types.joinToString(","),
                     resources = resourcesJson,
+                    resourceDetailsJson = resourceDetailsJson,
                     catalogsJson = catalogsJson
                 )
 
@@ -207,12 +209,14 @@ class AddonRepository(
                 val body = response.body?.string() ?: return@withContext null
                 val manifest = json.decodeFromString<StremioManifest>(body)
                 val resourceNames = manifest.resources.map { it.name }.distinct()
+                val resourceDetailsJson = json.encodeToString(manifest.resources)
                 val updated = addon.copy(
                     name = manifest.name.ifBlank { addon.name },
                     description = manifest.description,
                     version = manifest.version,
                     types = manifest.types.joinToString(","),
                     resources = json.encodeToString(resourceNames),
+                    resourceDetailsJson = resourceDetailsJson,
                     catalogsJson = json.encodeToString(manifest.catalogs)
                 )
                 addonDao.update(updated)
@@ -433,7 +437,8 @@ class AddonRepository(
         val addons = addonDao.getAllSync().filter { addon ->
             addon.isFeatureEnabled("meta") &&
                 addon.supportsResource("meta") &&
-                addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) }
+                addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) } &&
+                addon.canHandleMetaId(id)
         }
 
         if (addons.isEmpty()) {

@@ -231,7 +231,8 @@ data class TmdbTvDetails(
 
 @Serializable
 data class TmdbExternalIds(
-    @SerialName("imdb_id") val imdbId: String? = null
+    @SerialName("imdb_id") val imdbId: String? = null,
+    @SerialName("tvdb_id") val tvdbId: Int?    = null
 )
 
 @Serializable

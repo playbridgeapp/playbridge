@@ -28,8 +28,26 @@ data class InstalledAddonEntity(
     val installedAt: Long = System.currentTimeMillis(),
     val isEnabled: Boolean = true,        // Master switch — false skips the addon entirely
     val sortOrder: Int = 0,               // User-defined display/resolution order (lower = higher priority)
-    val disabledFeatures: String = ""     // Comma-separated resource names the user has turned off, e.g. "catalog,meta"
+    val disabledFeatures: String = "",     // Comma-separated resource names the user has turned off, e.g. "catalog,meta"
+    val resourceDetailsJson: String = ""  // Full StremioResource JSON (name + types + idPrefixes). Empty = accepts all IDs.
 )
+
+/** idPrefixes declared by this addon's "meta" resource. Empty = accepts any ID. */
+fun InstalledAddonEntity.metaIdPrefixes(): List<String> {
+    if (resourceDetailsJson.isBlank()) return emptyList()
+    return try {
+        kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.decodeFromString<List<StremioResource>>(resourceDetailsJson)
+            .firstOrNull { it.name == "meta" }?.idPrefixes ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+/** False only when the addon declares prefixes and none match [id]. */
+fun InstalledAddonEntity.canHandleMetaId(id: String): Boolean {
+    val prefixes = metaIdPrefixes()
+    return prefixes.isEmpty() || prefixes.any { id.startsWith(it) }
+}
 
 fun InstalledAddonEntity.supportsResource(name: String): Boolean {
     return try {
