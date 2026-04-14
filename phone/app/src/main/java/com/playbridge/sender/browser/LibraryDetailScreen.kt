@@ -94,6 +94,7 @@ fun LibraryDetailScreen(
     val tmdb = remember { TmdbRepository(context) }
     val omdb = remember { OmdbRepository(context) }
     val subtitleService = remember { StremioSubtitleService(addonRepository) }
+    val tvdb = remember { TvdbRepository(context) }
     val scope = rememberCoroutineScope()
 
     // Determine if this is a series or movie
@@ -131,114 +132,161 @@ fun LibraryDetailScreen(
     val episodeListState = rememberLazyListState()
     var episodesAscending by remember { mutableStateOf(true) }
 
-    // Load TMDB content based on ID type
+    // Load TMDB/TVDB/Addon content based on routing logic
     LaunchedEffect(id, type) {
         isLoading = true
         errorMessage = null
 
+        // Reset state
+        movieDetails = null
+        tvDetails = null
+        addonMeta = null
+        omdbDetails = null
+        resolvedTmdbId = null
+        resolvedImdbId = null
+        addonMetaSource = null
+
+        val useTvdb = isSeries && tvdb.shouldUseTvdb()
+
         when {
-            id.toIntOrNull() != null -> {
-                // Numeric TMDB ID — direct lookup
-                val numericId = id.toInt()
-                resolvedTmdbId = numericId
-                if (isSeries) {
-                    val tv = tmdb.getTvDetails(numericId)
-                    tvDetails = tv
-                    val imdbId = tv?.imdbId
-                    if (imdbId != null) {
-                        resolvedImdbId = imdbId
-                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
-                        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, imdbId) }.getOrNull()
-                        addonMeta = metaResult?.first
-                        addonMetaSource = metaResult?.second
-                    }
-                    trailerUrl = tmdb.getTvVideos(numericId)?.bestTrailerUrl
-                    watchProviders = tmdb.getTvWatchProviders(numericId)
-                } else {
-                    val movie = tmdb.getMovieDetails(numericId)
-                    movieDetails = movie
-                    val imdbId = movie?.imdbId
-                    if (imdbId != null) {
-                        resolvedImdbId = imdbId
-                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
-                        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, imdbId) }.getOrNull()
-                        addonMeta = metaResult?.first
-                        addonMetaSource = metaResult?.second
-                    }
-                    trailerUrl = tmdb.getMovieVideos(numericId)?.bestTrailerUrl
-                    watchProviders = tmdb.getMovieWatchProviders(numericId)
-                }
-            }
-            id.startsWith("tt") -> {
-                // IMDb ID — resolve via TMDB /find
-                val result = tmdb.findByImdbId(id)
-                when {
-                    result == null -> {
-                        errorMessage = "Could not reach TMDB. Check your API key and connection."
-                    }
-                    isSeries && result.tvResults.isNotEmpty() -> {
-                        val tvId = result.tvResults.first().id
-                        resolvedTmdbId = tvId
-                        resolvedImdbId = id
-                        val tv = tmdb.getTvDetails(tvId)
-                        tvDetails = tv
-                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
-                        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, id) }.getOrNull()
-                        addonMeta = metaResult?.first
-                        addonMetaSource = metaResult?.second
-                        trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
-                        watchProviders = tmdb.getTvWatchProviders(tvId)
-                    }
-                    !isSeries && result.movieResults.isNotEmpty() -> {
-                        val movieId = result.movieResults.first().id
-                        resolvedTmdbId = movieId
-                        resolvedImdbId = id
-                        val movie = tmdb.getMovieDetails(movieId)
-                        movieDetails = movie
-                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
-                        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, id) }.getOrNull()
-                        addonMeta = metaResult?.first
-                        addonMetaSource = metaResult?.second
-                        trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
-                        watchProviders = tmdb.getMovieWatchProviders(movieId)
-                    }
-                    result.movieResults.isNotEmpty() -> {
-                        val movieId = result.movieResults.first().id
-                        resolvedTmdbId = movieId
-                        resolvedImdbId = id
-                        val movie = tmdb.getMovieDetails(movieId)
-                        movieDetails = movie
-                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
-                        val metaResult = runCatching { addonRepository.fetchMetaWithSource("movie", id) }.getOrNull()
-                        addonMeta = metaResult?.first
-                        addonMetaSource = metaResult?.second
-                        trailerUrl = tmdb.getMovieVideos(movieId)?.bestTrailerUrl
-                        watchProviders = tmdb.getMovieWatchProviders(movieId)
-                    }
-                    result.tvResults.isNotEmpty() -> {
-                        val tvId = result.tvResults.first().id
-                        resolvedTmdbId = tvId
-                        resolvedImdbId = id
-                        val tv = tmdb.getTvDetails(tvId)
-                        tvDetails = tv
-                        if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(id)
-                        val metaResult = runCatching { addonRepository.fetchMetaWithSource("series", id) }.getOrNull()
-                        addonMeta = metaResult?.first
-                        addonMetaSource = metaResult?.second
-                        trailerUrl = tmdb.getTvVideos(tvId)?.bestTrailerUrl
-                        watchProviders = tmdb.getTvWatchProviders(tvId)
-                    }
-                    else -> {
-                        errorMessage = "\"$id\" was not found on TMDB."
-                    }
-                }
-            }
-            else -> {
-                // Addon-native ID (e.g. "kitsu:12345") — no TMDB lookup
+            // A: Addon-native IDs (skip TMDB/TVDB lookup)
+            id.contains(":") && !id.startsWith("tt") && !id.startsWith("tvdb:") -> {
                 val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, id) }.getOrNull()
                 addonMeta = metaResult?.first
                 addonMetaSource = metaResult?.second
             }
+
+            // B: Series Routing (TVDB priority)
+            useTvdb -> {
+                when {
+                    id.toIntOrNull() != null -> {
+                        // Numeric TMDB ID -> need cross-reference
+                        val numericId = id.toInt()
+                        resolvedTmdbId = numericId
+                        val tmdbSeries = tmdb.getTvDetails(numericId)
+                        tvDetails = tmdbSeries
+                        val tvdbId = tmdbSeries?.externalIds?.tvdbId
+                        if (tvdbId != null) {
+                            val tvdbEpisodes = tvdb.getEpisodes(tvdbId)
+                            val tvdbSeriesDetails = tvdb.getSeriesDetails(tvdbId)
+                            addonMeta = tvdb.buildStremioMeta(id, addonType, tmdbSeries, tvdbEpisodes, tvdbSeriesDetails)
+                            addonMetaSource = "TVDB"
+                        }
+                        resolvedImdbId = tmdbSeries?.imdbId
+                    }
+                    id.startsWith("tt") -> {
+                        // IMDb ID -> Parallel TMDB lookup + TVDB search, then synthesize
+                        resolvedImdbId = id
+                        var localTvDetails: com.playbridge.sender.data.library.TmdbTvDetails? = null
+                        val tmdbJob = scope.launch {
+                            val result = tmdb.findByImdbId(id)
+                            val tvId = result?.tvResults?.firstOrNull()?.id
+                            if (tvId != null) {
+                                resolvedTmdbId = tvId
+                                val details = tmdb.getTvDetails(tvId)
+                                tvDetails = details
+                                localTvDetails = details
+                            }
+                        }
+                        val tvdbJob = scope.launch {
+                            val tvdbSearch = tvdb.findSeriesByImdbId(id)
+                            val tvdbId = tvdbSearch?.tvdbId?.toIntOrNull()
+                            if (tvdbId != null) {
+                                val tvdbEpisodes = tvdb.getEpisodes(tvdbId)
+                                val tvdbSeriesDetails = tvdb.getSeriesDetails(tvdbId)
+                                // Wait for TMDB job so localTvDetails is populated before building meta
+                                tmdbJob.join()
+                                addonMeta = tvdb.buildStremioMeta(id, addonType, localTvDetails, tvdbEpisodes, tvdbSeriesDetails)
+                                addonMetaSource = "TVDB"
+                            }
+                        }
+                        tmdbJob.join()
+                        tvdbJob.join()
+                    }
+                    id.startsWith("tvdb:") -> {
+                        // Direct TVDB ID
+                        val tvdbId = id.removePrefix("tvdb:").toIntOrNull()
+                        if (tvdbId != null) {
+                            val tvdbEpisodes = tvdb.getEpisodes(tvdbId)
+                            val tvdbSeriesDetails = tvdb.getSeriesDetails(tvdbId)
+                            addonMeta = tvdb.buildStremioMeta(id, addonType, null, tvdbEpisodes, tvdbSeriesDetails)
+                            addonMetaSource = "TVDB"
+                        }
+                    }
+                }
+
+                // Fallback: If TVDB return no episodes, try addon
+                if (addonMeta == null || addonMeta!!.videos.isEmpty()) {
+                    val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, resolvedImdbId ?: id) }.getOrNull()
+                    if (metaResult != null) {
+                        addonMeta = metaResult.first
+                        addonMetaSource = metaResult.second
+                    }
+                }
+            }
+
+            // C: Standard Path (Movies or Series when TVDB is off)
+            else -> {
+                if (id.toIntOrNull() != null) {
+                    val numericId = id.toInt()
+                    resolvedTmdbId = numericId
+                    if (isSeries) {
+                        val tv = tmdb.getTvDetails(numericId)
+                        tvDetails = tv
+                        resolvedImdbId = tv?.imdbId
+                    } else {
+                        val movie = tmdb.getMovieDetails(numericId)
+                        movieDetails = movie
+                        resolvedImdbId = movie?.imdbId
+                    }
+                } else if (id.startsWith("tt")) {
+                    resolvedImdbId = id
+                    val result = tmdb.findByImdbId(id)
+                    if (result == null) {
+                        errorMessage = "Could not reach TMDB. Check your API key and connection."
+                    } else if (isSeries && result.tvResults.isNotEmpty()) {
+                        val tvId = result.tvResults.first().id
+                        resolvedTmdbId = tvId
+                        tvDetails = tmdb.getTvDetails(tvId)
+                    } else if (!isSeries && result.movieResults.isNotEmpty()) {
+                        val movieId = result.movieResults.first().id
+                        resolvedTmdbId = movieId
+                        movieDetails = tmdb.getMovieDetails(movieId)
+                    } else if (isSeries && result.movieResults.isNotEmpty()) {
+                        // Type mismatch fallback: found as movie, display it anyway
+                        val movieId = result.movieResults.first().id
+                        resolvedTmdbId = movieId
+                        movieDetails = tmdb.getMovieDetails(movieId)
+                    } else if (!isSeries && result.tvResults.isNotEmpty()) {
+                        // Type mismatch fallback: found as TV show, display it anyway
+                        val tvId = result.tvResults.first().id
+                        resolvedTmdbId = tvId
+                        tvDetails = tmdb.getTvDetails(tvId)
+                    } else {
+                        errorMessage = "\"$id\" was not found on TMDB."
+                    }
+                }
+
+                // Load Addon Meta
+                val metaId = resolvedImdbId ?: id
+                val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, metaId) }.getOrNull()
+                addonMeta = metaResult?.first
+                addonMetaSource = metaResult?.second
+            }
+        }
+
+        // Common supplementary data (Trailers, Providers, OMDB)
+        resolvedTmdbId?.let { tmdbId ->
+            if (isSeries) {
+                trailerUrl = tmdb.getTvVideos(tmdbId)?.bestTrailerUrl
+                watchProviders = tmdb.getTvWatchProviders(tmdbId)
+            } else {
+                trailerUrl = tmdb.getMovieVideos(tmdbId)?.bestTrailerUrl
+                watchProviders = tmdb.getMovieWatchProviders(tmdbId)
+            }
+        }
+        resolvedImdbId?.let { imdbId ->
+            if (omdb.isConfigured()) omdbDetails = omdb.getDetailsByImdbId(imdbId)
         }
 
         // Error if nothing loaded

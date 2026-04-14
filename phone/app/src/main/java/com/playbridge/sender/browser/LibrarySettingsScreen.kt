@@ -38,6 +38,11 @@ fun LibrarySettingsScreen(
     var omdbApiKey by remember { mutableStateOf(tmdbPrefs.getString("omdb_api_key", "") ?: "") }
     var showOmdbKey by remember { mutableStateOf(false) }
 
+    var tvdbApiKey by remember { mutableStateOf(tmdbPrefs.getString("tvdb_api_key", "") ?: "") }
+    var showTvdbKey by remember { mutableStateOf(false) }
+    var seriesSource by remember { mutableStateOf(tmdbPrefs.getString("series_meta_source", "auto") ?: "auto") }
+    var seriesSourceExpanded by remember { mutableStateOf(false) }
+
     var showCardTextOverlay by remember { mutableStateOf(tmdbPrefs.getBoolean("show_card_text_overlay", false)) }
 
     // Stream picker auto-select prefs
@@ -119,6 +124,74 @@ fun LibrarySettingsScreen(
                 },
                 modifier = Modifier.fillMaxWidth()
             )
+
+            OutlinedTextField(
+                value = tvdbApiKey,
+                onValueChange = { newKey ->
+                    tvdbApiKey = newKey
+                    tmdbPrefs.edit().putString("tvdb_api_key", newKey.trim()).apply()
+                },
+                label = { Text("TVDB API Key (Optional)") },
+                placeholder = { Text("Get one free at thetvdb.com/dashboard") },
+                visualTransformation = if (showTvdbKey) VisualTransformation.None
+                                       else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { showTvdbKey = !showTvdbKey }) {
+                        Icon(
+                            if (showTvdbKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = null
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+            )
+
+            if (tvdbApiKey.isNotBlank()) {
+                val sourceOptions = listOf(
+                    "auto" to "Auto (TVDB if configured)",
+                    "tvdb" to "Always TVDB",
+                    "tmdb" to "Always TMDB"
+                )
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = sourceOptions.firstOrNull { it.first == seriesSource }?.second ?: "Auto (TVDB if configured)",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Series metadata source") },
+                        trailingIcon = {
+                            Icon(
+                                if (seriesSourceExpanded) Icons.Default.ArrowDropUp
+                                else Icons.Default.ArrowDropDown,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clickable { seriesSourceExpanded = !seriesSourceExpanded }
+                    )
+                    DropdownMenu(
+                        expanded = seriesSourceExpanded,
+                        onDismissRequest = { seriesSourceExpanded = false },
+                        modifier = Modifier.fillMaxWidth(0.9f)
+                    ) {
+                        sourceOptions.forEach { (value, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    seriesSource = value
+                                    tmdbPrefs.edit().putString("series_meta_source", value).apply()
+                                    seriesSourceExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 

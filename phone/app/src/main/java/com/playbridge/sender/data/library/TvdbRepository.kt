@@ -144,12 +144,13 @@ class TvdbRepository(private val context: Context) {
                 ?.firstOrNull { it.type == "series" }
     }
 
-    /** Fetch series header (name, poster, overview, artworks). */
+    /** Fetch series header (name, poster, overview, artworks) in English. */
     suspend fun getSeriesDetails(tvdbId: Int): TvdbSeries? =
-        get<TvdbSeriesResponse>("/series/$tvdbId/extended")?.data
+        get<TvdbSeriesResponse>("/series/$tvdbId/extended?language=eng")?.data
 
     /**
      * Fetch all episodes in the "official" ordering (the TVDB canonical season structure).
+     * Requests English translations so titles/overviews are not in the show's original language.
      * Handles pagination automatically (max [MAX_PAGES] pages = 5 000 episodes).
      * Season 0 = specials/OVAs — included, filtered in UI if desired.
      */
@@ -158,7 +159,7 @@ class TvdbRepository(private val context: Context) {
         var page = 0
         repeat(MAX_PAGES) {
             val response = get<TvdbEpisodesResponse>(
-                "/series/$tvdbId/episodes/official?page=$page"
+                "/series/$tvdbId/episodes/official?page=$page&language=eng"
             ) ?: return@withContext allEpisodes
 
             allEpisodes.addAll(response.data?.episodes ?: emptyList())
@@ -191,6 +192,7 @@ class TvdbRepository(private val context: Context) {
         year        = tvDetails?.year       ?: tvdbSeries?.firstAired?.take(4),
         genres      = tvDetails?.genres?.map { it.name } ?: emptyList(),
         cast        = tvDetails?.cast       ?: emptyList(),
+        imdbRating  = tvDetails?.rating,
         videos      = episodes
             .sortedWith(compareBy({ it.seasonNumber }, { it.number }))
             .map { it.toStremioVideo() }
