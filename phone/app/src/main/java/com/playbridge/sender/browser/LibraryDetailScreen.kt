@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.ui.Alignment
@@ -125,6 +126,7 @@ fun LibraryDetailScreen(
     // Episode selection for stream picker
     var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
     // Triple: (episode, season number, isWatched at time of long-press)
+    var watchOnTv by rememberSaveable { mutableStateOf(tvName != null) }
 
     val episodeListState = rememberLazyListState()
     var episodesAscending by remember { mutableStateOf(true) }
@@ -478,6 +480,8 @@ fun LibraryDetailScreen(
                                 watchProviders = watchProviders,
                                 tvName = tvName,
                                 isTvConnected = isTvConnected,
+                                watchOnTv = watchOnTv,
+                                onWatchOnTvChange = { watchOnTv = it },
                                 availableTvDevices = availableTvDevices,
                                 selectedTvDevice = selectedTvDevice,
                                 onTvDeviceSelect = onTvDeviceSelect,
@@ -486,10 +490,10 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, false, firstEpisodeForTv)
+                                        startResolution(streamId, streamType, title, !watchOnTv, false, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, false, false, null)
+                                        startResolution(streamId, addonType, displayTitle, !watchOnTv, false, null)
                                     }
                                 },
                                 onWatchOnTvLongClick = {
@@ -497,10 +501,10 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, true, firstEpisodeForTv)
+                                        startResolution(streamId, streamType, title, !watchOnTv, true, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, false, true, null)
+                                        startResolution(streamId, addonType, displayTitle, !watchOnTv, true, null)
                                     }
                                 },
                                 onWatchOnPhone = {
@@ -554,6 +558,8 @@ fun LibraryDetailScreen(
                                     watchProviders = watchProviders,
                                     tvName = tvName,
                                     isTvConnected = isTvConnected,
+                                    watchOnTv = watchOnTv,
+                                    onWatchOnTvChange = { watchOnTv = it },
                                     watchLabel = "Watch $epLabel",
                                     availableTvDevices = availableTvDevices,
                                     selectedTvDevice = selectedTvDevice,
@@ -562,13 +568,13 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, false, nextUnwatchedEpisode)
+                                        startResolution(streamId, streamType, title, !watchOnTv, false, nextUnwatchedEpisode)
                                     },
                                     onWatchOnTvLongClick = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, true, nextUnwatchedEpisode)
+                                        startResolution(streamId, streamType, title, !watchOnTv, true, nextUnwatchedEpisode)
                                     },
                                     onWatchOnPhone = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
@@ -763,7 +769,7 @@ fun LibraryDetailScreen(
                                             val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
                                             val streamType = if (resolvedImdbId != null) "series" else addonType
                                             val title = "$displayTitle S${selectedSeason}E${epNum}"
-                                            startResolution(streamId, streamType, title, false, false, episode)
+                                            startResolution(streamId, streamType, title, !watchOnTv, false, episode)
                                         }
                                     }
                                 },
@@ -772,7 +778,7 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${epNum}"
-                                        startResolution(streamId, streamType, title, false, true, episode)
+                                        startResolution(streamId, streamType, title, !watchOnTv, true, episode)
                                     }
                                 },
                                 onToggleWatched = {
@@ -1097,6 +1103,8 @@ private fun SplitPlayButton(
     watchProviders: List<TmdbWatchProvider>,
     tvName: String? = null,
     isTvConnected: Boolean = false,
+    watchOnTv: Boolean,
+    onWatchOnTvChange: (Boolean) -> Unit,
     watchLabel: String = "Watch",
     availableTvDevices: List<TvDevice> = emptyList(),
     selectedTvDevice: TvDevice? = null,
@@ -1108,7 +1116,6 @@ private fun SplitPlayButton(
 ) {
     var showProvidersSheet by remember { mutableStateOf(false) }
     var showDeviceMenu by remember { mutableStateOf(false) }
-    var watchOnTv by remember { mutableStateOf(tvName != null) }
 
     val topProvider = watchProviders.firstOrNull()
     val isBusy = isTvResolving || isPhoneResolving
@@ -1139,7 +1146,7 @@ private fun SplitPlayButton(
                 modifier = Modifier.combinedClickable(
                     onClick = {
                         val togglingToTv = !watchOnTv
-                        watchOnTv = togglingToTv
+                        onWatchOnTvChange(togglingToTv)
                         // If switching to TV and not connected, try to connect to the selected device
                         if (togglingToTv && !isTvConnected && selectedTvDevice != null) {
                             onTvDeviceSelect?.invoke(selectedTvDevice)
