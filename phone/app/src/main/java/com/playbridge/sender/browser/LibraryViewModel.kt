@@ -384,24 +384,30 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             _isSearchLoading.value = true
+            _searchResults.value = emptyList()
             _addonSearchGroups.value = emptyList()
-            try {
-                // Save to history
-                searchHistoryDao.insert(com.playbridge.sender.data.history.SearchHistoryEntity(query, System.currentTimeMillis()))
 
-                // Fire TMDB and addon catalog searches concurrently
-                val tmdbDeferred = async {
-                    runCatching { tmdb.searchMulti(query) }.getOrNull()
-                }
-                val addonDeferred = async {
-                    runCatching { addonRepository.searchAllCatalogsGrouped(query) }.getOrNull()
-                }
-                _searchResults.value = tmdbDeferred.await()?.results
+            // Save to history
+            runCatching {
+                searchHistoryDao.insert(com.playbridge.sender.data.history.SearchHistoryEntity(query, System.currentTimeMillis()))
+            }
+
+            // TMDB: publish as soon as it responds, then clear the loading spinner
+            launch {
+                val tmdbResult = runCatching { tmdb.searchMulti(query) }.getOrNull()
+                _searchResults.value = tmdbResult?.results
                     ?.filter { it.isMovie || it.isTvShow }
                     ?: emptyList()
-                _addonSearchGroups.value = addonDeferred.await() ?: emptyList()
-            } finally {
                 _isSearchLoading.value = false
+            }
+
+            // Addons: each catalog publishes its group as soon as it responds
+            launch {
+                runCatching {
+                    addonRepository.searchAllCatalogsGroupedStreaming(query) { groups ->
+                        _addonSearchGroups.value = groups
+                    }
+                }
             }
         }
     }

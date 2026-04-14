@@ -11,7 +11,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -406,6 +409,50 @@ class AddonRepository(
             byAddon.entries
                 .filter { it.value.isNotEmpty() }
                 .map { AddonSearchResultGroup(addonName = it.key, items = it.value) }
+        }
+    }
+
+    /**
+     * Like [searchAllCatalogsGrouped] but invokes [onGroupsUpdated] each time an addon
+     * catalog responds — even before all catalogs have finished — so the UI can render
+     * results progressively instead of waiting for the slowest addon.
+     *
+     * Concurrency: all catalog searches fire in parallel; the callback is guarded by a
+     * mutex so it is never called simultaneously from two coroutines.
+     */
+    suspend fun searchAllCatalogsGroupedStreaming(
+        query: String,
+        onGroupsUpdated: suspend (List<AddonSearchResultGroup>) -> Unit
+    ) {
+        if (query.isBlank()) return
+        val addons = addonDao.getAllSync()
+        val resultGroups = mutableMapOf<String, MutableList<StremioMetaPreview>>()
+        val mutex = Mutex()
+
+        coroutineScope {
+            val jobs = addons.flatMap { addon ->
+                addon.parsedCatalogEntries()
+                    .filter { it.supportsSearch && it.type.isNotBlank() && it.id.isNotBlank() }
+                    .map { entry ->
+                        launch(Dispatchers.IO) {
+                            val items = searchCatalog(addon, entry.type, entry.id, query)
+                            if (items.isNotEmpty()) {
+                                val snapshot = mutex.withLock {
+                                    val bucket = resultGroups.getOrPut(addon.name) { mutableListOf() }
+                                    val seen = bucket.map { it.id }.toMutableSet()
+                                    items.forEach { item ->
+                                        if (item.id.isNotBlank() && seen.add(item.id)) bucket += item
+                                    }
+                                    resultGroups.entries
+                                        .filter { it.value.isNotEmpty() }
+                                        .map { AddonSearchResultGroup(addonName = it.key, items = it.value.toList()) }
+                                }
+                                onGroupsUpdated(snapshot)
+                            }
+                        }
+                    }
+            }
+            jobs.joinAll()
         }
     }
 
