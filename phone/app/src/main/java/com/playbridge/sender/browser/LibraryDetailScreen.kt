@@ -15,6 +15,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -46,6 +48,10 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material.ripple.rememberRipple
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import kotlin.math.roundToInt
 import com.playbridge.sender.model.TvDevice
 
 /**
@@ -119,7 +125,6 @@ fun LibraryDetailScreen(
     // Episode selection for stream picker
     var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
     // Triple: (episode, season number, isWatched at time of long-press)
-    var episodeSheetTarget by remember { mutableStateOf<Triple<StremioVideo, Int, Boolean>?>(null) }
 
     val episodeListState = rememberLazyListState()
     var episodesAscending by remember { mutableStateOf(true) }
@@ -763,7 +768,31 @@ fun LibraryDetailScreen(
                                     }
                                 },
                                 onLongClick = {
-                                    episodeSheetTarget = Triple(episode, selectedSeason, isEpWatched)
+                                    if (canResolveStreams) {
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${epNum}"
+                                        startResolution(streamId, streamType, title, false, true, episode)
+                                    }
+                                },
+                                onToggleWatched = {
+                                    val tmdbId = resolvedTmdbId
+                                    if (tmdbId != null) {
+                                        if (isEpWatched) {
+                                            viewModel.setEpisodeProgress(tmdbId, selectedSeason, (epNum - 1).coerceAtLeast(0))
+                                        } else {
+                                            viewModel.upsertTracked(
+                                                tmdbId = tmdbId,
+                                                mediaType = "tv",
+                                                title = displayTitle,
+                                                posterUrl = tvDetails?.posterUrl ?: addonMeta?.poster,
+                                                year = displayYear,
+                                                rating = displayRating,
+                                                status = WatchlistStatus.WATCHING,
+                                            )
+                                            viewModel.setEpisodeProgress(tmdbId, selectedSeason, epNum)
+                                        }
+                                    }
                                 }
                             )
                         }
@@ -818,45 +847,6 @@ fun LibraryDetailScreen(
             }
         }
 
-        // Episode options sheet
-        episodeSheetTarget?.let { (ep, epSeason, epIsWatched) ->
-            EpisodeOptionsSheet(
-                episode = ep,
-                season = epSeason,
-                isWatched = epIsWatched,
-                canResolve = canResolveStreams,
-                onPickStream = {
-                    episodeSheetTarget = null
-                    val epNum = ep.episode ?: 0
-                    val streamId = if (resolvedImdbId != null) "$resolvedImdbId:$epSeason:$epNum" else ep.id
-                    val streamType = if (resolvedImdbId != null) "series" else addonType
-                    val title = "$displayTitle S${epSeason}E$epNum"
-                    startResolution(streamId, streamType, title, false, true, ep)
-                },
-                onMarkWatched = {
-                    episodeSheetTarget = null
-                    resolvedTmdbId?.let { tmdbId ->
-                        viewModel.upsertTracked(
-                            tmdbId = tmdbId,
-                            mediaType = "tv",
-                            title = displayTitle,
-                            posterUrl = tvDetails?.posterUrl ?: addonMeta?.poster,
-                            year = displayYear,
-                            rating = displayRating,
-                            status = WatchlistStatus.WATCHING,
-                        )
-                        viewModel.setEpisodeProgress(tmdbId, epSeason, ep.episode ?: 0)
-                    }
-                },
-                onUnmarkWatched = {
-                    episodeSheetTarget = null
-                    resolvedTmdbId?.let { tmdbId ->
-                        viewModel.setEpisodeProgress(tmdbId, epSeason, ((ep.episode ?: 1) - 1).coerceAtLeast(0))
-                    }
-                },
-                onDismiss = { episodeSheetTarget = null }
-            )
-        }
 
         TopAppBar(
             title = { },
@@ -1509,7 +1499,7 @@ private fun ActionButtons(
     } // close outer Column
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun EpisodeItem(
     episode: StremioVideo,
@@ -1520,6 +1510,7 @@ private fun EpisodeItem(
     isWatched: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onToggleWatched: () -> Unit = {}
 ) {
     val haptic = LocalHapticFeedback.current
     val containerColor = when {
@@ -1527,21 +1518,54 @@ private fun EpisodeItem(
         isInActivePlaylist -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
         else -> Color.Transparent
     }
-    Column(
+
+    val offsetX = remember { androidx.compose.animation.core.Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val maxSwipePx = with(density) { 100.dp.toPx() }
+    val triggerThresholdPx = with(density) { 60.dp.toPx() }
+
+    val currentOnToggleWatched by rememberUpdatedState(onToggleWatched)
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(containerColor)
-            .combinedClickable(
-                enabled = hasAddon && !isResolving,
-                onClick = onClick,
-                onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onLongClick()
-                }
-            )
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (offsetX.value < -triggerThresholdPx) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            currentOnToggleWatched()
+                        }
+                        scope.launch { offsetX.animateTo(0f, androidx.compose.animation.core.spring()) }
+                    },
+                    onDragCancel = {
+                        scope.launch { offsetX.animateTo(0f, androidx.compose.animation.core.spring()) }
+                    },
+                    onHorizontalDrag = { change: PointerInputChange, dragAmount: Float ->
+                        change.consume()
+                        val newOffset = (offsetX.value + dragAmount).coerceIn(-maxSwipePx, 0f)
+                        scope.launch { offsetX.snapTo(newOffset) }
+                    }
+                )
+            }
     ) {
-        Row(
+        Column(
+            modifier = Modifier
+                .offset { androidx.compose.ui.unit.IntOffset(offsetX.value.roundToInt(), 0) }
+                .fillMaxWidth()
+                .background(containerColor)
+                .combinedClickable(
+                    enabled = hasAddon && !isResolving,
+                    onClick = onClick,
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onLongClick()
+                    }
+                )
+                .padding(horizontal = 24.dp, vertical = 16.dp)
+        ) {
+            Row(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Episode Image with badge
@@ -1635,15 +1659,21 @@ private fun EpisodeItem(
                 }
             }
 
-            // Watched indicator — only shown when episode is watched
-            if (isWatched) {
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(
-                    Icons.Default.CheckCircle,
-                    contentDescription = "Watched",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp)
-                )
+            // Watched indicator — animated pop-in
+            AnimatedVisibility(
+                visible = isWatched,
+                enter = fadeIn() + scaleIn(initialScale = 0.6f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)),
+                exit = fadeOut() + scaleOut(targetScale = 0.6f)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = "Watched",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
 
@@ -1657,6 +1687,7 @@ private fun EpisodeItem(
             maxLines = 4,
             overflow = TextOverflow.Ellipsis
         )
+    }
     }
 }
 
@@ -1763,102 +1794,6 @@ private fun isEpisodeFuture(released: String): Boolean {
         }
         false
     } catch (_: Exception) { false }
-}
-
-// ==================== Episode Options Sheet ====================
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun EpisodeOptionsSheet(
-    episode: StremioVideo,
-    season: Int,
-    isWatched: Boolean,
-    canResolve: Boolean,
-    onPickStream: () -> Unit,
-    onMarkWatched: () -> Unit,
-    onUnmarkWatched: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 32.dp)
-        ) {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (episode.thumbnail != null) {
-                    AsyncImage(
-                        model = episode.thumbnail,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .width(72.dp)
-                            .height(44.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "S${season.toString().padStart(2,'0')}E${(episode.episode ?: 0).toString().padStart(2,'0')}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = episode.title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            HorizontalDivider()
-
-            // Pick stream
-            if (canResolve) {
-                ListItem(
-                    headlineContent = { Text("Pick stream") },
-                    leadingContent = {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurface)
-                    },
-                    modifier = Modifier.clickable { onPickStream() }
-                )
-            }
-
-            // Mark / Unmark watched
-            if (isWatched) {
-                ListItem(
-                    headlineContent = { Text("Unmark as watched") },
-                    leadingContent = {
-                        Icon(Icons.Default.Close, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurface)
-                    },
-                    modifier = Modifier.clickable { onUnmarkWatched() }
-                )
-            } else {
-                ListItem(
-                    headlineContent = { Text("Mark as watched") },
-                    leadingContent = {
-                        Icon(Icons.Default.CheckCircle, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurface)
-                    },
-                    modifier = Modifier.clickable { onMarkWatched() }
-                )
-            }
-        }
-    }
 }
 
 // ==================== Resolution States ====================
