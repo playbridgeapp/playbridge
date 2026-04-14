@@ -44,11 +44,22 @@ class BackupManager(private val context: Context) {
                !prefs.getString(KEY_SECRET_KEY, "").isNullOrBlank()
     }
 
-    fun getWeeklyFilename(): String {
-        val cal = Calendar.getInstance()
-        val week = cal.get(Calendar.WEEK_OF_YEAR)
-        val year = cal.get(Calendar.YEAR)
-        return "playbridge_backup_week_${week}_${year}.json"
+    fun getDeviceId(): String {
+        return android.provider.Settings.Secure.getString(
+            context.contentResolver,
+            android.provider.Settings.Secure.ANDROID_ID
+        ) ?: "unknown"
+    }
+
+    fun getBackupFilename(deviceId: String? = null, date: Date? = null): String {
+        val targetDate = date ?: Date()
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        dateFormat.timeZone = TimeZone.getTimeZone("UTC")
+        val dateStr = dateFormat.format(targetDate)
+        
+        val targetDeviceId = deviceId ?: getDeviceId()
+        
+        return "playbridge_backup_${targetDeviceId}_${dateStr}.json"
     }
 
     suspend fun uploadBackup(json: String): Boolean = withContext(Dispatchers.IO) {
@@ -59,7 +70,7 @@ class BackupManager(private val context: Context) {
         val accessKey = prefs.getString(KEY_ACCESS_KEY, "")!!
         val secretKey = prefs.getString(KEY_SECRET_KEY, "")!!
         val region = prefs.getString(KEY_REGION, "us-east-1")!!
-        val filename = getWeeklyFilename()
+        val filename = getBackupFilename()
 
         val url = if (endpoint.startsWith("http")) {
             "$endpoint/$bucket/$filename"
@@ -127,7 +138,7 @@ class BackupManager(private val context: Context) {
         }
     }
 
-    suspend fun downloadBackup(): String? = withContext(Dispatchers.IO) {
+    suspend fun downloadBackup(deviceId: String? = null, date: Date? = null): String? = withContext(Dispatchers.IO) {
         if (!isConfigured()) return@withContext null
 
         val endpoint = prefs.getString(KEY_ENDPOINT, "")!!
@@ -135,7 +146,7 @@ class BackupManager(private val context: Context) {
         val accessKey = prefs.getString(KEY_ACCESS_KEY, "")!!
         val secretKey = prefs.getString(KEY_SECRET_KEY, "")!!
         val region = prefs.getString(KEY_REGION, "us-east-1")!!
-        val filename = getWeeklyFilename()
+        val filename = getBackupFilename(deviceId, date)
 
         val url = if (endpoint.startsWith("http")) {
             "$endpoint/$bucket/$filename"

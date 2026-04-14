@@ -138,6 +138,10 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
     var isCloudRestoring by remember { mutableStateOf(false) }
     var lastBackupTimestamp by remember { mutableStateOf(backupManager.getLastBackupTimestamp()) }
 
+    var showCloudRestoreDialog by remember { mutableStateOf(false) }
+    var restoreDeviceId by remember { mutableStateOf(backupManager.getDeviceId()) }
+    var restoreDateMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+
     DisposableEffect(Unit) {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == BackupManager.KEY_LAST_BACKUP) {
@@ -437,27 +441,12 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
 
                 OutlinedButton(
                     onClick = {
-                        isCloudRestoring = true
-                        scope.launch {
-                            val json = backupManager.downloadBackup()
-                            if (json != null) {
-                                importSettings(json)
-                            } else {
-                                Toast.makeText(context, "Failed to download backup", Toast.LENGTH_LONG).show()
-                            }
-                            isCloudRestoring = false
-                        }
+                        showCloudRestoreDialog = true
                     },
                     modifier = Modifier.weight(1f),
                     enabled = !isCloudRestoring && backupManager.isConfigured()
                 ) {
-                    if (isCloudRestoring) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Restoring…")
-                    } else {
-                        Text("Restore from Cloud")
-                    }
+                    Text("Restore from Cloud")
                 }
             }
 
@@ -516,6 +505,88 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     }
                     importedTabsToRestore = null
                 }) { Text("Skip Duplicates") }
+            }
+        )
+    }
+
+    if (showCloudRestoreDialog) {
+        AlertDialog(
+            onDismissRequest = { showCloudRestoreDialog = false },
+            title = { Text("Restore from Cloud") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedTextField(
+                        value = restoreDeviceId,
+                        onValueChange = { restoreDeviceId = it },
+                        label = { Text("Source Device ID") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    
+                    Text("Select Backup Date", style = MaterialTheme.typography.labelLarge)
+                    
+                    OutlinedButton(
+                        onClick = {
+                            val cal = java.util.Calendar.getInstance()
+                            cal.timeInMillis = restoreDateMillis
+                            android.app.DatePickerDialog(
+                                context,
+                                { _, year, month, dayOfMonth ->
+                                    val selectedCal = java.util.Calendar.getInstance()
+                                    selectedCal.set(year, month, dayOfMonth)
+                                    restoreDateMillis = selectedCal.timeInMillis
+                                },
+                                cal.get(java.util.Calendar.YEAR),
+                                cal.get(java.util.Calendar.MONTH),
+                                cal.get(java.util.Calendar.DAY_OF_MONTH)
+                            ).apply {
+                                datePicker.maxDate = System.currentTimeMillis()
+                                show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        val formattedDate = remember(restoreDateMillis) {
+                            SimpleDateFormat("MMM dd, yyyy", Locale.US).format(Date(restoreDateMillis))
+                        }
+                        Text(formattedDate)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCloudRestoreDialog = false
+                        isCloudRestoring = true
+                        scope.launch {
+                            val selectedDate = Date(restoreDateMillis)
+                            val json = backupManager.downloadBackup(restoreDeviceId, selectedDate)
+                            if (json != null) {
+                                importSettings(json)
+                            } else {
+                                Toast.makeText(context, "Failed to download backup", Toast.LENGTH_LONG).show()
+                            }
+                            isCloudRestoring = false
+                        }
+                    },
+                    enabled = !isCloudRestoring
+                ) {
+                    if (isCloudRestoring) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Restoring…")
+                    } else {
+                        Text("Restore")
+                    }
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showCloudRestoreDialog = false }) {
+                    Text("Cancel")
+                }
             }
         )
     }
