@@ -96,6 +96,14 @@ class MpvControlsManager(
         }
     }
 
+    fun showBuffering() {
+        onBufferingChanged(true)
+    }
+
+    fun hideBuffering() {
+        onBufferingChanged(false)
+    }
+
     // ── Controls visibility ───────────────────────────────────────────────────
 
     fun showControls() {

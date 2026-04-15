@@ -85,6 +85,7 @@
         <activity
             android:name=".player.ExoPlayerActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <intent-filter>
@@ -96,6 +97,7 @@
         <activity
             android:name=".player.VlcPlayerActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
 

@@ -85,10 +85,6 @@ class ExoPlayerActivity : PlayerActivity() {
     private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
-    // Series navigator — non-null when a Stremio series episode was cast with SeriesContext.
-    // Takes over prev/next when no playlist queue is active.
-    private var seriesNavigator: com.playbridge.player.stremio.SeriesNavigator? = null
-
     private var activeDialog: android.app.Dialog? = null
 
     private val controlReceiver = object : BroadcastReceiver() {
@@ -298,33 +294,8 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
-        // Store quality/bitrate preferences as fields so startPlayback() can apply them to the track selector
-        defaultVideoQuality = intent?.getStringExtra("default_video_quality")
-        maxBitrateCapMbps = if (intent?.hasExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS) == true)
-            intent.getDoubleExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS, 0.0).takeIf { it > 0.0 }
-        else null
 
-        // Restore SeriesNavigator from SeriesContext if present (Stremio series cast)
-        val seriesContextJson = intent?.getStringExtra(ServerService.EXTRA_SERIES_CONTEXT)
-        seriesNavigator = if (seriesContextJson != null) {
-            try {
-                val ctx = com.playbridge.protocol.protocolJson.decodeFromString(
-                    com.playbridge.protocol.SeriesContext.serializer(),
-                    seriesContextJson
-                )
-                com.playbridge.player.stremio.SeriesNavigator(ctx, this.defaultVideoQuality).also { nav ->
-                    // Seed source hint from the first episode's URL so subsequent
-                    // episode resolutions prefer the same release group / torrent source.
-                    nav.updateSourceHint(url = intent?.getStringExtra(ServerService.EXTRA_URL))
-                    FileLogger.i(TAG, "SeriesNavigator created: ${ctx.seriesTitle} " +
-                        "S${ctx.season}E${ctx.episode} addons=${ctx.addonBaseUrls.size} " +
-                        "sourceHint=${nav.currentSourceHint}")
-                }
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Failed to deserialize SeriesContext: ${e.message}")
-                null
-            }
-        } else null
+        setupSeriesNavigator(intent)
 
         // Read playlist if present
         val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
@@ -426,6 +397,8 @@ class ExoPlayerActivity : PlayerActivity() {
             }
     }
 
+    private var playJob: kotlinx.coroutines.Job? = null
+
     private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "Target URL: $url")
@@ -436,7 +409,8 @@ class ExoPlayerActivity : PlayerActivity() {
 
         releasePlayer()
 
-        lifecycleScope.launch(Dispatchers.Main) {
+        playJob?.cancel()
+        playJob = lifecycleScope.launch(Dispatchers.Main) {
             var finalContentType = contentType
 
             FileLogger.d(TAG, "Attempting pre-flight sniff...")
@@ -1393,8 +1367,6 @@ class ExoPlayerActivity : PlayerActivity() {
     // Preferred language for playlists — persists across episodes
     private var preferredAudioLanguage: String? = null
     private var preferredSubtitleLanguage: String? = null
-    private var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p" — drives ExoPlayer track selection
-    private var maxBitrateCapMbps: Double? = null         // explicit bitrate cap from phone settings (Mbps)
 
     /**
      * Push current track/filter selections into ProgressManager so the next

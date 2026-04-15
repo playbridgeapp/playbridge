@@ -89,16 +89,19 @@ class VlcControlsManager(
         }
     }
 
-    init {
-        // Hide unused buttons that ExoPlayer uses but VLC doesn't (for now)
-        playlistButton.visibility = View.GONE
-        prevButton.visibility = View.GONE
-        nextButton.visibility = View.GONE
-        filterButton.visibility = View.GONE
-        streamInfoText.visibility = View.GONE
+    fun setPlaylistVisible(visible: Boolean) {
+        val vis = if (visible) View.VISIBLE else View.GONE
+        playlistButton.visibility = vis
+        prevButton.visibility = vis
+        nextButton.visibility = vis
+    }
 
+    init {
+        // Default visibility for non-playlist buttons
         tracksButton.visibility = View.VISIBLE
         loopButton.visibility = View.VISIBLE
+        filterButton.visibility = View.GONE
+        streamInfoText.visibility = View.GONE
 
         // Set up Play/Pause
         playPauseButton.setOnClickListener {
@@ -139,11 +142,12 @@ class VlcControlsManager(
         }
     }
 
-    fun setPlaylistVisible(visible: Boolean) {
-        val vis = if (visible) View.VISIBLE else View.GONE
-        playlistButton.visibility = vis
-        prevButton.visibility = vis
-        nextButton.visibility = vis
+    fun showBuffering() {
+        bufferingSpinner.visibility = View.VISIBLE
+    }
+
+    fun hideBuffering() {
+        bufferingSpinner.visibility = View.GONE
     }
 
     fun getTitle(): String? {

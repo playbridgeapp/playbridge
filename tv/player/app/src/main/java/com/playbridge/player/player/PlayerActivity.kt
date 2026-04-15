@@ -2,11 +2,14 @@ package com.playbridge.player.player
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.core.view.WindowCompat
 import com.playbridge.player.server.ServerService
+import com.playbridge.player.logging.FileLogger
 
 abstract class PlayerActivity : ComponentActivity() {
 
@@ -18,6 +21,37 @@ abstract class PlayerActivity : ComponentActivity() {
     abstract fun getCurrentPosition(): Long
     abstract fun seekTo(position: Long)
     abstract fun getVideoSurfaceView(): android.view.SurfaceView?
+
+    // Shared playback configuration and series navigation state
+    var seriesNavigator: com.playbridge.player.stremio.SeriesNavigator? = null
+    var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p"
+    var maxBitrateCapMbps: Double? = null         // explicit bitrate cap from phone settings (Mbps)
+
+    protected fun setupSeriesNavigator(intent: Intent?) {
+        defaultVideoQuality = intent?.getStringExtra("default_video_quality")
+        maxBitrateCapMbps = if (intent?.hasExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS) == true)
+            intent.getDoubleExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS, 0.0).takeIf { it > 0.0 }
+        else null
+
+        val seriesContextJson = intent?.getStringExtra(ServerService.EXTRA_SERIES_CONTEXT)
+        seriesNavigator = if (seriesContextJson != null) {
+            try {
+                val ctx = com.playbridge.protocol.protocolJson.decodeFromString(
+                    com.playbridge.protocol.SeriesContext.serializer(),
+                    seriesContextJson
+                )
+                com.playbridge.player.stremio.SeriesNavigator(ctx, defaultVideoQuality).also { nav ->
+                    nav.updateSourceHint(url = intent.getStringExtra(ServerService.EXTRA_URL))
+                    FileLogger.i("PlayerActivity", "SeriesNavigator created: ${ctx.seriesTitle} " +
+                        "S${ctx.season}E${ctx.episode} addons=${ctx.addonBaseUrls.size} " +
+                        "sourceHint=${nav.currentSourceHint}")
+                }
+            } catch (e: Exception) {
+                FileLogger.e("PlayerActivity", "Failed to deserialize SeriesContext: ${e.message}")
+                null
+            }
+        } else null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

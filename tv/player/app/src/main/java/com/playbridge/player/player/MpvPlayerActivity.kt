@@ -514,17 +514,20 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         @Suppress("UNCHECKED_CAST")
         val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
 
+        setupSeriesNavigator(intent)
+
         val isPlaylist      = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
         val inMemoryPlaylist = PlaylistStore.currentPlaylist
 
         if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
             playlistItems = inMemoryPlaylist.toMutableList()
             playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
-            controlsManager.setPlaylistVisible(true)
         } else {
             playlistItems = mutableListOf()
-            controlsManager.setPlaylistVisible(false)
         }
+
+        // Show playlist button when a playlist is active OR series navigator has list mode
+        controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
 
         if (url == null) {
             Toast.makeText(this, "No URL provided", Toast.LENGTH_SHORT).show()
@@ -667,14 +670,73 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // ── Playlist ─────────────────────────────────────────────────────────────
 
     private fun playNextInPlaylist() {
-        if (playlistItems.isEmpty() || playlistIndex >= playlistItems.size - 1) return
+        if (playlistItems.isEmpty()) {
+            // No playlist queue — try series navigator if available
+            val nav = seriesNavigator
+            if (nav != null && nav.hasNext()) {
+                lifecycleScope.launch {
+                    FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
+                    controlsManager.onBufferingChanged(true)
+                    val stream = nav.resolveNext()
+                    controlsManager.onBufferingChanged(false)
+                    if (stream != null) {
+                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
+                        android.widget.Toast.makeText(this@MpvPlayerActivity, "Next: $epTitle", android.widget.Toast.LENGTH_SHORT).show()
+                        playVideo(url = stream.url, headers = null)
+                        controlsManager.hideControls()
+                    } else {
+                        FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
+                        android.widget.Toast.makeText(this@MpvPlayerActivity, "No more episodes found", android.widget.Toast.LENGTH_SHORT).show()
+                        finish()
+                    }
+                }
+            } else {
+                FileLogger.i(TAG, "No playlist and no series nav — finishing")
+                finish()
+            }
+            return
+        }
+
+        if (playlistIndex >= playlistItems.size - 1) {
+            FileLogger.i(TAG, "Playlist complete ($playlistIndex/${playlistItems.size}) — finishing")
+            finish()
+            return
+        }
+
         playlistIndex++
         playPlaylistItem(playlistItems[playlistIndex])
         broadcastPlaylistStatus()
     }
 
     private fun playPreviousInPlaylist() {
-        if (playlistItems.isEmpty() || playlistIndex <= 0) return
+        if (playlistItems.isEmpty()) {
+            val nav = seriesNavigator
+            if (nav != null && nav.hasPrev()) {
+                lifecycleScope.launch {
+                    FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
+                    controlsManager.showBuffering()
+                    val stream = nav.resolvePrev()
+                    controlsManager.hideBuffering()
+                    if (stream != null) {
+                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
+                        android.widget.Toast.makeText(this@MpvPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
+                        playVideo(url = stream.url, headers = null)
+                        controlsManager.hideControls()
+                    } else {
+                        android.widget.Toast.makeText(this@MpvPlayerActivity, "Could not resolve previous episode", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else {
+                android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        if (playlistIndex <= 0) {
+            android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
         playlistIndex--
         playPlaylistItem(playlistItems[playlistIndex])
         broadcastPlaylistStatus()
@@ -858,7 +920,29 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun showPlaylistPicker() {
-        if (playlistItems.isEmpty()) return
+        val displayItems: List<com.playbridge.protocol.PlayPayload>
+        val displayIndex: Int
+        val isSeriesMode: Boolean
+
+        if (playlistItems.isNotEmpty()) {
+            displayItems = playlistItems
+            displayIndex = playlistIndex
+            isSeriesMode = false
+        } else if (seriesNavigator?.episodeList?.isNotEmpty() == true) {
+            val nav = seriesNavigator!!
+            displayItems = nav.episodeList!!.map { ep ->
+                val s = ep.season.toString().padStart(2, '0')
+                val e = ep.episode.toString().padStart(2, '0')
+                com.playbridge.protocol.PlayPayload(
+                    url = "", // Not needed for UI
+                    title = "S${s}E${e} - ${ep.title ?: "Episode ${ep.episode}"}"
+                )
+            }
+            displayIndex = nav.currentIndex ?: 0
+            isSeriesMode = true
+        } else {
+            return
+        }
 
         val wasPlaying = isPlayingState
         if (wasPlaying) pause()
@@ -871,11 +955,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         composeView.setContent {
             PlayBridgeTVTheme {
                 PlaylistPickerDialog(
-                    items = playlistItems,
-                    currentIndex = playlistIndex,
+                    items = displayItems,
+                    currentIndex = displayIndex,
                     onItemSelected = { index ->
                         dialog.dismiss()
-                        playItemAtIndex(index)
+                        if (isSeriesMode) {
+                            playSeriesEpisodeAtIndex(index)
+                        } else {
+                            playItemAtIndex(index)
+                        }
                     },
                     onDismiss = { dialog.dismiss() }
                 )
@@ -890,5 +978,31 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             controlsManager.showControls()
         }
         dialog.show()
+    }
+
+    private fun playSeriesEpisodeAtIndex(index: Int) {
+        val nav = seriesNavigator ?: return
+        lifecycleScope.launch {
+            FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
+
+            // Save progress for the current episode before switching
+            progressManager.saveProgress()
+
+            controlsManager.showBuffering()
+            val stream = nav.resolveAndAdvanceToIndex(index)
+            controlsManager.hideBuffering()
+            if (stream != null) {
+                val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
+                android.widget.Toast.makeText(this@MpvPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
+
+                // Update UI title so playVideo() logs and uses the correct metadata
+                controlsManager.setTitle(epTitle)
+
+                playVideo(url = stream.url, headers = null)
+                controlsManager.hideControls()
+            } else {
+                android.widget.Toast.makeText(this@MpvPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 }
