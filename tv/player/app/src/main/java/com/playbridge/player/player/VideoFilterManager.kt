@@ -1,12 +1,9 @@
 package com.playbridge.player.player
 
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.Paint
-import android.view.View
 import androidx.media3.ui.PlayerView
 
 /**
- * Applies [VideoFilter] color matrices to a [PlayerView] using hardware layer paint.
+ * Applies [VideoFilter] color matrices to an [androidx.media3.exoplayer.ExoPlayer] using Media3 GlEffects.
  * This is GPU-accelerated and adds zero overhead to the decode pipeline.
  */
 class VideoFilterManager(private val playerView: PlayerView) {
@@ -25,8 +22,15 @@ class VideoFilterManager(private val playerView: PlayerView) {
     private var exoPlayer: androidx.media3.exoplayer.ExoPlayer? = null
     val colorMatrixEffect = ColorMatrixEffect()
 
+    /**
+     * Tracks whether a GlEffect list is currently attached to the player.
+     * We use this to avoid redundant expensive setVideoEffects() calls.
+     */
+    private var isEffectApplied = false
+
     fun setPlayer(player: androidx.media3.exoplayer.ExoPlayer?) {
         this.exoPlayer = player
+        this.isEffectApplied = false // Reset for new player instance
         reapplyFilter()
     }
 
@@ -55,27 +59,35 @@ class VideoFilterManager(private val playerView: PlayerView) {
     }
 
     private fun applyMatrixToPlayer(matrix: android.graphics.ColorMatrix) {
-        exoPlayer?.setVideoEffects(listOf(colorMatrixEffect))
+        if (!isEffectApplied) {
+            exoPlayer?.setVideoEffects(listOf(colorMatrixEffect))
+            isEffectApplied = true
+        }
         colorMatrixEffect.setMatrix(matrix)
     }
 
     /** Re-apply the current filter (call after player recreation). */
     fun reapplyFilter() {
         if (currentFilter == VideoFilter.NONE) {
-            exoPlayer?.setVideoEffects(emptyList())
+            clearFilter()
             return
         }
         if (currentFilter == VideoFilter.CUSTOM) {
-            applyCustom(customBrightness, customContrast, customSaturation)
+            val matrix = VideoFilter.customMatrix(customBrightness, customContrast, customSaturation)
+            applyMatrixToPlayer(matrix)
         } else {
-            applyFilter(currentFilter)
+            val matrix = VideoFilter.matrixFor(currentFilter)
+            applyMatrixToPlayer(matrix)
         }
     }
 
     fun clearFilter() {
         currentFilter = VideoFilter.NONE
-        // By setting an empty list, ExoPlayer bypasses the GL shader and decodes directly to the surface,
-        // which saves significant GPU memory and prevents OOM crashes.
-        exoPlayer?.setVideoEffects(emptyList())
+        if (isEffectApplied) {
+            // By setting an empty list, ExoPlayer bypasses the GL shader and decodes directly to the surface,
+            // which saves significant GPU memory and prevents OOM crashes.
+            exoPlayer?.setVideoEffects(emptyList())
+            isEffectApplied = false
+        }
     }
 }

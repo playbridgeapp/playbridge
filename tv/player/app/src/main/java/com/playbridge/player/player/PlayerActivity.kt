@@ -86,6 +86,8 @@ abstract class PlayerActivity : ComponentActivity() {
         val demuxerMaxBytes: String,
         /** MPV demuxer-max-back-bytes option string */
         val demuxerMaxBackBytes: String,
+        /** Whether ExoPlayer should prioritize time goals over size thresholds. */
+        val prioritizeTime: Boolean,
     )
 
     fun computeBufferConfig(): BufferConfig {
@@ -94,10 +96,10 @@ abstract class PlayerActivity : ComponentActivity() {
         am.getMemoryInfo(memInfo)
         val availMb = memInfo.availMem / (1024L * 1024L)
         return when {
-            availMb >= 1_500 -> BufferConfig( 90_000, 800 * 1024 * 1024, "256MiB", "64MiB")
-            availMb >=   800 -> BufferConfig( 60_000, 400 * 1024 * 1024, "192MiB", "48MiB")
-            availMb >=   400 -> BufferConfig( 45_000, 200 * 1024 * 1024, "128MiB", "32MiB")
-            else             -> BufferConfig( 30_000, 100 * 1024 * 1024,  "64MiB", "16MiB")
+            availMb >= 1_500 -> BufferConfig( 90_000, 800 * 1024 * 1024, "256MiB", "64MiB", true)
+            availMb >=   800 -> BufferConfig( 60_000, 400 * 1024 * 1024, "192MiB", "48MiB", true)
+            availMb >=   400 -> BufferConfig( 45_000, 200 * 1024 * 1024, "128MiB", "32MiB", true)
+            else             -> BufferConfig( 30_000, 100 * 1024 * 1024,  "64MiB", "16MiB", false)
         }
     }
 

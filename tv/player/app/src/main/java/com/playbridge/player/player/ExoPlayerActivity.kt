@@ -378,7 +378,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
         // Show playlist button when a playlist is active OR series navigator has list mode
         controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
-        
+
         // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
         if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
             controlsManager.setNavigationVisible(true)
@@ -392,9 +392,8 @@ class ExoPlayerActivity : PlayerActivity() {
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
             .setTargetBufferBytes(bufCfg.targetBytes)
-            // Time-based primary: let maxBufferMs drive loading; targetBytes is a safety
-            // ceiling only (prevents runaway allocation on 4K REMUX / 100 Mbps streams).
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
+            .setBackBuffer(0, false)
             .build()
 
         val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
@@ -421,8 +420,6 @@ class ExoPlayerActivity : PlayerActivity() {
             .also { exoPlayer ->
                 playerView.player = exoPlayer
                 videoFilterManager.setPlayer(exoPlayer)
-
-                videoFilterManager.reapplyFilter()
 
                 exoPlayer.playWhenReady = true
                 exoPlayer.addListener(createPlayerListener())
@@ -567,9 +564,8 @@ class ExoPlayerActivity : PlayerActivity() {
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
             .setTargetBufferBytes(bufCfg.targetBytes)
-            // Time-based primary: let maxBufferMs drive loading; targetBytes is a safety
-            // ceiling only (prevents runaway allocation on 4K REMUX / 100 Mbps streams).
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
+            .setBackBuffer(0, false)
             .build()
 
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(this).apply {
@@ -666,8 +662,6 @@ class ExoPlayerActivity : PlayerActivity() {
             .also { exoPlayer ->
                 playerView.player = exoPlayer
                 videoFilterManager.setPlayer(exoPlayer)
-
-                videoFilterManager.reapplyFilter()
 
                 exoPlayer.setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
                 exoPlayer.playWhenReady = true
