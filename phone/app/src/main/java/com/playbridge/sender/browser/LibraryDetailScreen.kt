@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -104,6 +105,7 @@ fun LibraryDetailScreen(
     val subtitleService = remember { StremioSubtitleService(addonRepository) }
     val tvdb = remember { TvdbRepository(context) }
     val scope = rememberCoroutineScope()
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     // Determine if this is a series or movie
     val addonType = if (type == "tv") "series" else type
@@ -520,7 +522,7 @@ fun LibraryDetailScreen(
         )
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection)) {
         TranslucentBackground(backdropUrl = displayBackdrop, dominantColor = dominantColor)
         when {
             isLoading -> Box(
@@ -970,6 +972,7 @@ fun LibraryDetailScreen(
         TopAppBar(
             title = { },
             windowInsets = TopAppBarDefaults.windowInsets, // Respect status bar
+            scrollBehavior = scrollBehavior,
             navigationIcon = {
                 val btnBg = dominantColor ?: Color.Black
                 val btnIcon = if (btnBg.luminance() > 0.5f) Color.Black else Color.White
