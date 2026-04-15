@@ -390,7 +390,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
         val bufCfg = computeBufferConfig()
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
+            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 1000, 2500)
             .setTargetBufferBytes(bufCfg.targetBytes)
             .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
             .setBackBuffer(0, false)
@@ -562,7 +562,7 @@ class ExoPlayerActivity : PlayerActivity() {
         // 3. Configure Load Control — caps scale with available device RAM (see PlayerActivity.computeBufferConfig)
         val bufCfg = computeBufferConfig()
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 2500, 5000)
+            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 1000, 2500)
             .setTargetBufferBytes(bufCfg.targetBytes)
             .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
             .setBackBuffer(0, false)
@@ -663,7 +663,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 playerView.player = exoPlayer
                 videoFilterManager.setPlayer(exoPlayer)
 
-                exoPlayer.setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
+                exoPlayer.setSeekParameters(androidx.media3.exoplayer.SeekParameters.DEFAULT)
                 exoPlayer.playWhenReady = true
                 exoPlayer.addListener(createPlayerListener())
             }
