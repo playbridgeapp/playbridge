@@ -64,6 +64,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.compose.ui.text.google.fonts)
+    implementation(libs.androidx.palette.ktx)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -75,24 +76,24 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended:1.7.6")
     implementation(libs.coil.compose)
-    
-    
+
+
     // OkHttp WebSocket
     implementation(libs.okhttp)
-    
+
     // DataStore
     implementation(libs.androidx.datastore)
-    
+
     // Multiplatform Settings
-    
+
     // Room Database
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
-    
+
     // Kotlin Serialization
     implementation(libs.kotlinx.serialization.json)
-    
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
@@ -117,7 +118,7 @@ dependencies {
 
     // GeckoView
     implementation(libs.geckoview.omni)
-    
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

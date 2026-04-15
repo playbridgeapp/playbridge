@@ -144,11 +144,11 @@ fun AnimatedMenuItem(
 }
 
 class BrowserActivity : ComponentActivity() {
-    
+
     companion object {
         private const val TAG = "BrowserActivity"
     }
-    
+
     private val connectionViewModel: ConnectionViewModel by viewModels()
     private val tabManager = TabManager()
     private lateinit var database: HistoryDatabase
@@ -179,7 +179,7 @@ class BrowserActivity : ComponentActivity() {
             val state = Components.store.state
             val tabs = state.tabs
             val selectedId = state.selectedTabId
-            
+
             val entities = tabs.map { tab ->
                 TabEntity(
                     id = tab.id,
@@ -198,15 +198,15 @@ class BrowserActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
 
-        
+
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
         }
         VideoDetector.init(applicationContext)
-        
+
         // Set tabManager reference for resolving Kotlin tab IDs from extension messages
         Components.tabManager = tabManager
-        
+
         // Install the bundled video detector extension
         Components.installBundledExtension()
 
@@ -272,7 +272,7 @@ class BrowserActivity : ComponentActivity() {
             val context = LocalContext.current
             val connectionState by connectionViewModel.connectionState.collectAsState()
             val scope = rememberCoroutineScope()
-            
+
             // Database and History
             // Uses the activity-scoped database instance
             val historyDao = remember { database.historyDao() }
@@ -281,7 +281,7 @@ class BrowserActivity : ComponentActivity() {
             val addonRepository = remember { com.playbridge.sender.data.library.AddonRepository(addonDao, cacheDir) }
             val subtitleService = remember { com.playbridge.sender.data.library.StremioSubtitleService(addonRepository) }
             val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
-            
+
             // Suggestions State
             var isEditing by remember { mutableStateOf(false) }
             var editUrl by remember { mutableStateOf("") }
@@ -300,14 +300,14 @@ class BrowserActivity : ComponentActivity() {
                     urlPanelClipboard = null
                 }
             }
-            
+
             // Connection ViewModel State
             val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
             val discoveredDevices by connectionViewModel.discoveredDevices.collectAsState()
             val history by connectionViewModel.deviceHistory.collectAsState(initial = emptyList())
 
             // Connection logic is now handled in ConnectionViewModel
-            
+
             // Session and navigation state from BrowserStore
             val store = Components.store
             var browserState by remember {
@@ -382,14 +382,14 @@ class BrowserActivity : ComponentActivity() {
                 // No spinner — just return and let the background show through while sessions init
                 return@setContent
             }
-            
+
             // Existing state variables
             var currentUrl by remember { mutableStateOf("about:blank") }
             var isLoading by remember { mutableStateOf(false) }
             var browserCanGoBack by remember { mutableStateOf(false) }
             var browserCanGoForward by remember { mutableStateOf(false) }
             var menuExpanded by remember { mutableStateOf(false) }
-            
+
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
             val browserSettings = remember { getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
@@ -422,7 +422,7 @@ class BrowserActivity : ComponentActivity() {
             var siteSecurityInfo by remember { mutableStateOf<SiteSecurityInfo?>(null) }
             var showSiteInfoSheet by remember { mutableStateOf(false) }
             var isFullscreen by remember { mutableStateOf(false) }
-            
+
             // Fullscreen: hide/show system bars
             val view = LocalView.current
             LaunchedEffect(isFullscreen) {
@@ -436,29 +436,29 @@ class BrowserActivity : ComponentActivity() {
                     controller.show(WindowInsetsCompat.Type.systemBars())
                 }
             }
-            
+
             // Update simple UI state from selected tab
             LaunchedEffect(selectedTab?.id) {
                 if (selectedTab != null) {
                     currentUrl = selectedTab.content.url
                 }
             }
-            
+
             // View state - browser
             // var showScanner by remember { mutableStateOf(false) } (deleted)
-            
+
             // FAB Drag state
             var fabOffsetX by remember { mutableFloatStateOf(0f) }
             var fabOffsetY by remember { mutableFloatStateOf(0f) }
-            
+
             // Back press handling
             var backPressedTime by remember { mutableLongStateOf(0L) }
-            
+
             // Magnet parsing state
             var interceptedMagnet by remember { mutableStateOf<String?>(null) }
             var interceptedTorrentBytes by remember { mutableStateOf<ByteArray?>(null) }
             val debridRepository = remember { com.playbridge.sender.data.debrid.DebridRepository(applicationContext) }
-            
+
             // Video detection state — per-tab
             var showVideoSheet by remember { mutableStateOf(false) }
             var sheetPlayerMode by remember { mutableStateOf(prefs.getString("tv_player_mode", "tv") ?: "tv") }
@@ -512,10 +512,10 @@ class BrowserActivity : ComponentActivity() {
             var nowPlayingTvId by remember { mutableStateOf<Int?>(null) }
             var nowPlayingSeason by remember { mutableStateOf<Int?>(null) }
             var nowPlayingEpisodeStart by remember { mutableStateOf<Int>(1) } // episode number of playlist index 0
-            
+
             // Find in Page state
             var showFindBar by remember { mutableStateOf(false) }
-            
+
             var pendingPopup by remember { mutableStateOf<PendingPopup?>(null) }
 
             // Clear finding when bar closes
@@ -551,16 +551,16 @@ class BrowserActivity : ComponentActivity() {
                         } catch (_: Exception) { }
                     }
                 }
-                
+
                 // Token listening is now handled in ConnectionViewModel
             }
-            
+
             // Track previous URL to avoid clearing on hash changes
             var previousUrl by remember { mutableStateOf("") }
-            
+
             // Context menu state for "Open in new tab"
             var contextMenuUrl by remember { mutableStateOf<String?>(null) }
-            
+
             // Mutable state wrappers for SessionObserverSetup
             val currentUrlState = remember { mutableStateOf(currentUrl) }
             val isLoadingState = remember { mutableStateOf(isLoading) }
@@ -585,7 +585,7 @@ class BrowserActivity : ComponentActivity() {
             isSecureConnection = isSecureConnectionState.value
             siteSecurityInfo = siteSecurityInfoState.value
             pendingPopup = pendingPopupState.value
-            
+
             // Sync wrapper states from BrowserStore when the selected tab changes
             // This ensures the URL bar shows the correct URL immediately on tab switch
             LaunchedEffect(selectedTab?.id) {
@@ -598,7 +598,7 @@ class BrowserActivity : ComponentActivity() {
             // isDesktopMode is controlled by the UI, so we sync downwards to the observer setup
             // which will react to changes
 
-            
+
             // Link context menu
             LinkContextMenu(
                 url = contextMenuUrl,
@@ -640,7 +640,7 @@ class BrowserActivity : ComponentActivity() {
                     contextMenuUrlState.value = null
                 }
             )
-            
+
             // Register navigation observer & GeckoSession delegates
             SessionObserverSetup(
                 session = session,
@@ -698,7 +698,7 @@ class BrowserActivity : ComponentActivity() {
                         val hashData = url.substringAfter("#playbridge-video=")
                         val decoded = java.net.URLDecoder.decode(hashData, "UTF-8")
                         Log.d(TAG, "PlayBridge video signal for tab $kotlinTabId: $decoded")
-                        
+
                         val json = kotlinx.serialization.json.Json.parseToJsonElement(decoded)
                         if (json is kotlinx.serialization.json.JsonObject) {
                             VideoDetector.onMessageReceived(kotlinx.serialization.json.JsonObject(mapOf(
@@ -722,7 +722,7 @@ class BrowserActivity : ComponentActivity() {
             )
 
 
-            
+
             val handleBookmarkClick = {
                 scope.launch(Dispatchers.IO) {
                     val title = selectedTab?.content?.title
@@ -741,7 +741,7 @@ class BrowserActivity : ComponentActivity() {
                     }
                 }
             }
-            
+
 
 
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -876,7 +876,7 @@ class BrowserActivity : ComponentActivity() {
                                             isDesktopMode = isDesktopMode,
                                             onDesktopModeChange = { isDesktopMode = it },
                                             onBookmarkClick = { handleBookmarkClick() },
-                                            onEditingChange = { editing -> 
+                                            onEditingChange = { editing ->
                                                 isEditing = editing
                                                 if (editing) {
                                                     editUrl = currentUrl
@@ -886,7 +886,7 @@ class BrowserActivity : ComponentActivity() {
                                                 editUrl = url
                                                 urlBarTapped = false
                                             },
-                                            onNavigate = { url -> 
+                                            onNavigate = { url ->
                                                 session.loadUrl(url)
                                                 isEditing = false
                                             },
@@ -918,7 +918,7 @@ class BrowserActivity : ComponentActivity() {
                                                     Row(
                                                         modifier = Modifier
                                                             .fillMaxWidth()
-                                                            .padding(vertical = 8.dp), 
+                                                            .padding(vertical = 8.dp),
                                                         horizontalArrangement = Arrangement.SpaceEvenly,
                                                         verticalAlignment = Alignment.CenterVertically
                                                     ) {
@@ -962,9 +962,9 @@ class BrowserActivity : ComponentActivity() {
                                                         }
                                                     }
                                                 }
-                                                
+
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                                
+
 
                                                 AnimatedMenuItem(
                                                     index = 3,
@@ -1006,12 +1006,12 @@ class BrowserActivity : ComponentActivity() {
                                                 ) { onClick ->
                                                     DropdownMenuItem(
                                                         text = { Text("Detect Videos", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { 
+                                                        leadingIcon = {
                                                             Icon(
-                                                                if (detectVideosEnabled) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked, 
-                                                                null, 
+                                                                if (detectVideosEnabled) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                                                                null,
                                                                 tint = if (detectVideosEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                                            ) 
+                                                            )
                                                         },
                                                         onClick = onClick,
                                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
@@ -1032,7 +1032,7 @@ class BrowserActivity : ComponentActivity() {
                                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                                     )
                                                 }
-                                                
+
                                                 AnimatedMenuItem(
                                                     index = 5,
                                                     onClick = {
@@ -1049,7 +1049,7 @@ class BrowserActivity : ComponentActivity() {
                                                 }
 
                                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                                
+
                                                 // Bookmarks
                                                 AnimatedMenuItem(
                                                     index = 8,
@@ -1091,7 +1091,7 @@ class BrowserActivity : ComponentActivity() {
                                                     }
                                                 ) { onClick ->
                                                     DropdownMenuItem(
-                                                        text = { 
+                                                        text = {
                                                             Row(
                                                                 modifier = Modifier.fillMaxWidth(),
                                                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1100,7 +1100,7 @@ class BrowserActivity : ComponentActivity() {
                                                                 Text("Desktop Site", style = MaterialTheme.typography.bodyLarge)
                                                                 Switch(
                                                                     checked = isDesktopMode,
-                                                                    onCheckedChange = { 
+                                                                    onCheckedChange = {
                                                                         isDesktopMode = it
                                                                     },
                                                                     modifier = Modifier.scale(0.8f)
@@ -1115,9 +1115,9 @@ class BrowserActivity : ComponentActivity() {
                                             }
                                             }
                                         )
-                                        
 
-                                    
+
+
                                     // Find on Page Bar
                                      if (showFindBar) {
                                         FindOnPageBar(
@@ -1260,7 +1260,7 @@ class BrowserActivity : ComponentActivity() {
                                                     }
                                                 }
                                             }
-                                            
+
                                             // Editing mode: back dismisses URL bar — registered last so has highest priority
                                             BackHandler(enabled = isEditing) {
                                                 isEditing = false
@@ -1279,14 +1279,14 @@ class BrowserActivity : ComponentActivity() {
                                                 // Home Screen Overlay
                                                 if (currentUrl == "about:blank") {
                                                     HomeScreen(
-                                                        onNavigate = { url -> 
-                                                            session.loadUrl(url) 
+                                                        onNavigate = { url ->
+                                                            session.loadUrl(url)
                                                         },
                                                         historyDao = historyDao,
                                                         bookmarkDao = bookmarkDao
                                                     )
                                                 }
-                                                
+
                                                 // Editing Overlay (Full Screen)
                                                 if (isEditing) {
                                                     Box(
@@ -1463,7 +1463,7 @@ class BrowserActivity : ComponentActivity() {
                                                         }
                                                     }
                                                 }
-                                                
+
                                                 // Draggable Video FAB
                                                 val tabUrl = selectedTab?.content?.url.orEmpty()
                                                 if (!isEditing && tabUrl.isNotEmpty() && tabUrl != "about:blank") {
@@ -1749,9 +1749,9 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Home -> {
-                                            BackHandler { 
+                                            BackHandler {
                                                 if (browserCanGoBack) {
-                                                    session.goBack() 
+                                                    session.goBack()
                                                 } else {
                                                     finish()
                                                 }
@@ -1885,7 +1885,19 @@ class BrowserActivity : ComponentActivity() {
                                                     tvPlaylistState?.let { nowPlayingEpisodeStart + it.currentIndex }
                                                 } else null,
                                                 playlistState = tvPlaylistState,
-                                                onBack = { currentScreen = Screen.Library }
+                                                onBack = { currentScreen = Screen.Library },
+                                                onShare = { title, imdbId ->
+                                                    val shareText = if (imdbId != null && imdbId.startsWith("tt")) {
+                                                        "Check out $title on IMDb: https://www.imdb.com/title/$imdbId/"
+                                                    } else {
+                                                        "Check out $title on PlayBridge"
+                                                    }
+                                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                                        type = "text/plain"
+                                                        putExtra(Intent.EXTRA_TEXT, shareText)
+                                                    }
+                                                    startActivity(Intent.createChooser(intent, "Share $title"))
+                                                }
                                             )
                                         }
                                         Screen.AddonSettings -> {
@@ -1954,11 +1966,11 @@ class BrowserActivity : ComponentActivity() {
                             Log.d(TAG, "Video URL: ${video.url}")
                             Log.d(TAG, "Subtitles: $subtitles")
                             Log.d(TAG, "Connection state: $connectionState")
-                            
+
                             when (val state = connectionState) {
                                 is WebSocketClient.ConnectionState.Connected -> {
                                     Log.d(TAG, "Connected to: ${state.serverName}")
-                                    
+
                                     if (video.playlistPayload != null) {
                                         val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = video.playlistPayload)
                                         val sent = connectionViewModel.webSocketClient.send(cmd)
@@ -2208,7 +2220,7 @@ class BrowserActivity : ComponentActivity() {
                             magnetUri = interceptedMagnet,
                             torrentBytes = interceptedTorrentBytes,
                             provider = provider,
-                            onDismiss = { 
+                            onDismiss = {
                                 interceptedMagnet = null
                                 interceptedTorrentBytes = null
                             },
@@ -2261,7 +2273,7 @@ class BrowserActivity : ComponentActivity() {
         // webSocketClient destruction is now handled by ConnectionViewModel's onCleared
         super.onDestroy()
     }
-    
+
 
     @Composable
     fun BrowserView(session: EngineSession, onLongPressLink: (String) -> Unit) {
@@ -2276,7 +2288,7 @@ class BrowserActivity : ComponentActivity() {
                 view.render(session)
             }
         )
-        
+
         // Context menu handling verification
         // Logic removed temporarily as GeckoEngineSession.geckoSession is internal
         // TODO: Implement context menu using proper EngineSession API or custom GeckoView integration

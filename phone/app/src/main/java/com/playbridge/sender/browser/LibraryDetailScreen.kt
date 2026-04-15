@@ -2,6 +2,7 @@ package com.playbridge.sender.browser
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -40,6 +41,10 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
+import androidx.palette.graphics.Palette
 import com.playbridge.sender.data.library.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -91,6 +96,7 @@ fun LibraryDetailScreen(
     selectedTvDevice: TvDevice? = null,
     onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
     onBack: () -> Unit,
+    onShare: (title: String, imdbId: String?) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val tmdb = remember { TmdbRepository(context) }
@@ -128,6 +134,7 @@ fun LibraryDetailScreen(
     var lastResolvedId by remember { mutableStateOf<String?>(null) }
     var lastResolvedType by remember { mutableStateOf<String?>(null) }
     var resolutionJob by remember { mutableStateOf<Job?>(null) }
+    var dominantColor by remember { mutableStateOf<Color?>(null) }
 
     // Episode selection for stream picker
     var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
@@ -514,7 +521,7 @@ fun LibraryDetailScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        TranslucentBackground(backdropUrl = displayBackdrop)
+        TranslucentBackground(backdropUrl = displayBackdrop, dominantColor = dominantColor)
         when {
             isLoading -> Box(
                 modifier = Modifier.fillMaxSize(),
@@ -546,7 +553,8 @@ fun LibraryDetailScreen(
                             rating = displayRating,
                             runtime = displayRuntime,
                             genres = displayGenres,
-                            omdbDetails = omdbDetails
+                            omdbDetails = omdbDetails,
+                            onColorExtracted = { dominantColor = it }
                         )
                     }
 
@@ -615,7 +623,8 @@ fun LibraryDetailScreen(
                                         val streamId = resolvedImdbId ?: id
                                         startResolution(streamId, addonType, displayTitle, true, true, null)
                                     }
-                                }
+                                },
+                                themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                             )
                         } else {
                             // Series with episodes — play the next unwatched episode
@@ -677,7 +686,8 @@ fun LibraryDetailScreen(
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
                                         startResolution(streamId, streamType, title, true, true, nextUnwatchedEpisode)
-                                    }
+                                    },
+                                    themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                                 )
                             }
                         }
@@ -711,7 +721,8 @@ fun LibraryDetailScreen(
                                     }
                                 },
                                 trailerUrl = trailerUrl,
-                                onPlayTrailer = onPlayTrailer
+                                onPlayTrailer = onPlayTrailer,
+                                themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -786,13 +797,24 @@ fun LibraryDetailScreen(
                                 ) {
                                     seasons.forEach { seasonNumber ->
                                         val isSelected = selectedSeason == seasonNumber
+                                        val themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
+                                        val contentColor = if (themeColor.luminance() > 0.5f) Color.Black else Color.White
                                         ElevatedFilterChip(
                                             selected = isSelected,
                                             onClick = {
                                                 if (isSelected) return@ElevatedFilterChip
                                                 selectedSeason = seasonNumber
                                             },
-                                            label = { Text("S$seasonNumber") }
+                                            label = { Text("S$seasonNumber") },
+                                            colors = FilterChipDefaults.elevatedFilterChipColors(
+                                                containerColor = Color.White.copy(alpha = 0.1f),
+                                                selectedContainerColor = themeColor,
+                                                selectedLabelColor = contentColor,
+                                                labelColor = Color.White.copy(alpha = 0.7f),
+                                                selectedLeadingIconColor = contentColor,
+                                                selectedTrailingIconColor = contentColor
+                                            ),
+                                            border = null
                                         )
                                     }
                                 }
@@ -889,7 +911,8 @@ fun LibraryDetailScreen(
                                             viewModel.setEpisodeProgress(tmdbId, selectedSeason, epNum)
                                         }
                                     }
-                                }
+                                },
+                                themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -946,24 +969,88 @@ fun LibraryDetailScreen(
 
         TopAppBar(
             title = { },
+            windowInsets = TopAppBarDefaults.windowInsets, // Respect status bar
             navigationIcon = {
-                Surface(
-                    onClick = onBack,
-                    shape = CircleShape,
-                    color = Color.Black.copy(alpha = 0.3f),
-                    shadowElevation = 4.dp,
-                    modifier = Modifier.padding(start = 8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier.size(40.dp),
-                        contentAlignment = Alignment.Center
+                val btnBg = dominantColor ?: Color.Black
+                val btnIcon = if (btnBg.luminance() > 0.5f) Color.Black else Color.White
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight().padding(start = 12.dp)) {
+                    Surface(
+                        onClick = onBack,
+                        shape = CircleShape,
+                        color = btnBg,
+                        shadowElevation = 4.dp
                     ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            "Back",
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
+                        Box(
+                            modifier = Modifier.size(40.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                "Back",
+                                tint = btnIcon,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            actions = {
+                val btnBg = dominantColor ?: Color.Black
+                val btnIcon = if (btnBg.luminance() > 0.5f) Color.Black else Color.White
+                var showMenu by remember { mutableStateOf(false) }
+
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight().padding(end = 12.dp)) {
+                    Box {
+                        Surface(
+                            onClick = { showMenu = true },
+                            shape = CircleShape,
+                            color = btnBg,
+                            shadowElevation = 4.dp
+                        ) {
+                            Box(
+                                modifier = Modifier.size(40.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.MoreVert,
+                                    "More",
+                                    tint = btnIcon,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                            containerColor = (dominantColor ?: Color.Black).copy(alpha = 0.95f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.border(
+                                1.dp,
+                                (dominantColor ?: Color.White).copy(alpha = 0.2f),
+                                RoundedCornerShape(12.dp)
+                            )
+                        ) {
+                            val themeColor = dominantColor ?: Color.Black
+                            val contentColor = if (themeColor.luminance() > 0.5f) Color.Black else Color.White
+
+                            DropdownMenuItem(
+                                text = {
+                                    Text("Share", color = contentColor)
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Share, contentDescription = null, tint = contentColor)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onShare(displayTitle, resolvedImdbId)
+                                },
+                                colors = MenuDefaults.itemColors(
+                                    textColor = contentColor,
+                                    leadingIconColor = contentColor
+                                )
+                            )
+                        }
                     }
                 }
             },
@@ -986,10 +1073,12 @@ private fun BackdropSection(
     rating: String,
     runtime: String,
     genres: List<String>,
-    omdbDetails: OmdbResponse? = null
+    omdbDetails: OmdbResponse? = null,
+    onColorExtracted: (Color) -> Unit = {}
 ) {
     val config = androidx.compose.ui.platform.LocalConfiguration.current
     val height = (config.screenHeightDp * 0.65).dp
+    val context = LocalContext.current
 
     Box(
         modifier = Modifier
@@ -1014,10 +1103,25 @@ private fun BackdropSection(
         ) {
             if (backdropUrl != null) {
                 AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
+                    model = ImageRequest.Builder(context)
                         .data(backdropUrl)
                         .crossfade(true)
+                        .allowHardware(false) // Required for Palette extraction
                         .build(),
+                    onSuccess = { result ->
+                        val bitmap = (result.result.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                        if (bitmap != null) {
+                            Palette.from(bitmap).generate { palette ->
+                                // Try to get a light vibrant or just vibrant color
+                                val swatch = palette?.lightVibrantSwatch ?: palette?.vibrantSwatch ?: palette?.dominantSwatch
+                                swatch?.let {
+                                    val extracted = Color(it.rgb)
+                                    // Make it significantly lighter (40% towards white)
+                                    onColorExtracted(lerp(extracted, Color.White, 0.4f))
+                                }
+                            }
+                        }
+                    },
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
                     placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
@@ -1108,7 +1212,7 @@ private fun BackdropSection(
                         )
                     }
                 }
-                
+
                 if (runtime.isNotBlank()) {
                     Text(
                         text = runtime,
@@ -1117,7 +1221,7 @@ private fun BackdropSection(
                         modifier = Modifier.align(Alignment.CenterVertically)
                     )
                 }
-                
+
                 if (rating.isNotBlank() && rating != "0.0") {
                     RatingBadge("TMDB", rating, Color(0xFF01B4E4))
                 }
@@ -1218,7 +1322,8 @@ private fun SplitPlayButton(
     onWatchOnTv: () -> Unit,
     onWatchOnTvLongClick: (() -> Unit)? = null,
     onWatchOnPhone: () -> Unit = {},
-    onWatchOnPhoneLongClick: (() -> Unit)? = null
+    onWatchOnPhoneLongClick: (() -> Unit)? = null,
+    themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
     var showProvidersSheet by remember { mutableStateOf(false) }
     var showDeviceMenu by remember { mutableStateOf(false) }
@@ -1376,10 +1481,11 @@ private fun SplitPlayButton(
                 ),
             shape = RoundedCornerShape(16.dp),
             color = if (!isBusy && canPlay)
-                MaterialTheme.colorScheme.primary
+                themeColor
             else
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                themeColor.copy(alpha = 0.4f)
         ) {
+            val contentColor = if (themeColor.luminance() > 0.5f) Color.Black else Color.White
             Box(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
                 contentAlignment = Alignment.Center
@@ -1392,9 +1498,9 @@ private fun SplitPlayButton(
                         .align(Alignment.CenterStart)
                         .size(24.dp),
                     tint = if (!isBusy && canPlay)
-                        MaterialTheme.colorScheme.onPrimary
+                        contentColor
                     else
-                        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.4f)
+                        contentColor.copy(alpha = 0.4f)
                 )
                 // Text centered in the button
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1403,7 +1509,7 @@ private fun SplitPlayButton(
                             text = resolvingLabel.ifBlank { "Resolving…" },
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.4f)
+                            color = contentColor.copy(alpha = 0.4f)
                         )
                     } else {
                         Text(
@@ -1411,15 +1517,15 @@ private fun SplitPlayButton(
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleSmall,
                             color = if (!isBusy && canPlay)
-                                MaterialTheme.colorScheme.onPrimary
+                                contentColor
                             else
-                                MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.4f)
+                                contentColor.copy(alpha = 0.4f)
                         )
                         if (topProvider != null) {
                             Text(
                                 text = topProvider.providerName,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f)
+                                color = contentColor.copy(alpha = 0.75f)
                             )
                         }
                     }
@@ -1532,7 +1638,8 @@ private fun ActionButtons(
     tracked: WatchlistEntity? = null,
     onToggleWatchlist: () -> Unit,
     trailerUrl: String? = null,
-    onPlayTrailer: ((String) -> Unit)? = null
+    onPlayTrailer: ((String) -> Unit)? = null,
+    themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
     val trailerReady = trailerUrl != null && onPlayTrailer != null
     val status = tracked?.let { WatchlistStatus.from(it.status) }
@@ -1547,7 +1654,7 @@ private fun ActionButtons(
         // Status chip — shown when the item is tracked with a meaningful status
         if (status != null && status != WatchlistStatus.PLAN_TO_WATCH) {
             val statusColor = when (status) {
-                WatchlistStatus.WATCHING      -> MaterialTheme.colorScheme.primary
+                WatchlistStatus.WATCHING      -> themeColor
                 WatchlistStatus.COMPLETED     -> Color(0xFF4CAF50)
                 WatchlistStatus.ON_HOLD       -> Color(0xFFFF9800)
                 WatchlistStatus.DROPPED       -> MaterialTheme.colorScheme.error
@@ -1582,13 +1689,13 @@ private fun ActionButtons(
             Icon(
                 if (isWatchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                 contentDescription = if (isWatchlisted) "Remove from Watchlist" else "Add to Watchlist",
-                tint = if (isWatchlisted) MaterialTheme.colorScheme.primary else Color.White.copy(alpha=0.7f)
+                tint = if (isWatchlisted) themeColor else Color.White.copy(alpha=0.7f)
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 if (isWatchlisted) "In Watchlist" else "Add to Watchlist",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (isWatchlisted) MaterialTheme.colorScheme.primary else Color.White.copy(alpha=0.7f)
+                color = if (isWatchlisted) themeColor else Color.White.copy(alpha=0.7f)
             )
         }
         Spacer(modifier = Modifier.width(48.dp))
@@ -1623,11 +1730,12 @@ private fun EpisodeItem(
     isWatched: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
-    onToggleWatched: () -> Unit = {}
+    onToggleWatched: () -> Unit = {},
+    themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
     val haptic = LocalHapticFeedback.current
     val containerColor = when {
-        isPlaying -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+        isPlaying -> themeColor.copy(alpha = 0.15f)
         isInActivePlaylist -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
         else -> Color.Transparent
     }
@@ -1693,18 +1801,18 @@ private fun EpisodeItem(
                         model = episode.thumbnail,
                         contentDescription = episode.title,
                         contentScale = ContentScale.Crop,
-                        placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
-                        error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                        placeholder = ColorPainter(themeColor.copy(alpha = 0.1f)),
+                        error = ColorPainter(themeColor.copy(alpha = 0.1f)),
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                            .background(themeColor.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White.copy(alpha = 0.5f))
+                        Icon(Icons.Default.Movie, contentDescription = null, tint = themeColor.copy(alpha = 0.4f))
                     }
                 }
 
@@ -1765,7 +1873,7 @@ private fun EpisodeItem(
                         text = formattedDate,
                         style = MaterialTheme.typography.labelMedium,
                         color = if (isFuture)
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                            themeColor.copy(alpha = 0.9f)
                         else
                             Color.White.copy(alpha = 0.7f)
                     )
@@ -1783,7 +1891,7 @@ private fun EpisodeItem(
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Watched",
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = themeColor,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -1938,9 +2046,9 @@ data class PlaylistUiState(
 )
 
 @Composable
-fun TranslucentBackground(backdropUrl: String?) {
-    if (backdropUrl != null) {
-        Box(modifier = Modifier.fillMaxSize()) {
+fun TranslucentBackground(backdropUrl: String?, dominantColor: Color? = null) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (backdropUrl != null) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(backdropUrl)
@@ -1959,12 +2067,21 @@ fun TranslucentBackground(backdropUrl: String?) {
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.65f))
             )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+            )
         }
-    } else {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-        )
+
+        // Apply dominant color overlay if available
+        dominantColor?.let { color ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(color.copy(alpha = 0.15f))
+            )
+        }
     }
 }
