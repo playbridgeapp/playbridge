@@ -53,10 +53,34 @@ object StreamSelector {
         streams: List<ResolvedStream>,
         preferredQuality: QualityFilter?,
         maxMbps: Double? = null,
-        runtimeMinutes: Int? = null
+        runtimeMinutes: Int? = null,
+        preferredAddon: String? = null
     ): ResolvedStream? {
         if (preferredQuality == null || streams.isEmpty()) return null
 
+        // If a preferred addon is set, try it first
+        if (!preferredAddon.isNullOrBlank()) {
+            val addonStreams = streams.filter { it.addonName == preferredAddon }
+            if (addonStreams.isNotEmpty()) {
+                val best = selectBestFromPool(addonStreams, preferredQuality, maxMbps, runtimeMinutes)
+                if (best != null) return best
+                // Preferred addon had streams but none matched quality/bitrate — fall through to full pool
+            }
+            // Preferred addon had no streams at all — fall through to full pool
+        }
+
+        return selectBestFromPool(streams, preferredQuality, maxMbps, runtimeMinutes)
+    }
+
+    /**
+     * Internal: applies quality + bitrate filtering to a pool without addon filtering.
+     */
+    private fun selectBestFromPool(
+        streams: List<ResolvedStream>,
+        preferredQuality: QualityFilter,
+        maxMbps: Double?,
+        runtimeMinutes: Int?
+    ): ResolvedStream? {
         // 1. Filter to the desired quality tier
         var candidates = streams.filter { matchesFilter(it, preferredQuality) }
         if (candidates.isEmpty()) return null // No matches for this quality tier

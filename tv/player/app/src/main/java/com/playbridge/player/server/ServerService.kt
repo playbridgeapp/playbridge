@@ -571,6 +571,13 @@ class ServerService : Service() {
                         if (firstItem.maxBitrateCapMbps != null) {
                             putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, firstItem.maxBitrateCapMbps)
                         }
+                        firstItem.seriesContext?.let { seriesContext ->
+                            val json = com.playbridge.protocol.protocolJson.encodeToString(
+                                com.playbridge.protocol.SeriesContext.serializer(),
+                                seriesContext
+                            )
+                            putExtra(EXTRA_SERIES_CONTEXT, json)
+                        }
                     }
                     putExtra(EXTRA_IS_PLAYLIST, true)
                     putExtra(EXTRA_PLAYLIST_INDEX, command.startIndex)

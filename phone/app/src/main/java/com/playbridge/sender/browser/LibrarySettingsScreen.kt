@@ -21,6 +21,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
+import com.playbridge.sender.data.history.DatabaseProvider
+import com.playbridge.sender.data.library.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,6 +62,19 @@ fun LibrarySettingsScreen(
     var autoMaxMbpsText by remember {
         mutableStateOf(browserPrefs.getString("auto_stream_max_mbps", "") ?: "")
     }
+
+    val addonDao = remember {
+        DatabaseProvider.getDatabase(context).addonDao()
+    }
+    val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
+    val streamAddons = remember(installedAddons) {
+        installedAddons.filter { it.isEnabled && it.supportsResource("stream") && it.isFeatureEnabled("stream") }
+    }
+
+    var autoAddon by remember {
+        mutableStateOf(browserPrefs.getString("auto_stream_addon", "") ?: "")
+    }
+    var addonExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -288,6 +303,52 @@ fun LibrarySettingsScreen(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                if (streamAddons.isNotEmpty()) {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            readOnly = true,
+                            value = if (autoAddon.isEmpty()) "Any addon" else autoAddon,
+                            onValueChange = {},
+                            label = { Text("Preferred Addon") },
+                            supportingText = { Text("Streams from this addon are tried first before falling back to others.") },
+                            trailingIcon = {
+                                IconButton(onClick = { addonExpanded = !addonExpanded }) {
+                                    Icon(
+                                        if (addonExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                                        contentDescription = null
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.matchParentSize().clickable { addonExpanded = !addonExpanded })
+                        DropdownMenu(
+                            expanded = addonExpanded,
+                            onDismissRequest = { addonExpanded = false },
+                            modifier = Modifier.fillMaxWidth(0.9f)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Any addon") },
+                                onClick = {
+                                    autoAddon = ""
+                                    browserPrefs.edit().putString("auto_stream_addon", "").apply()
+                                    addonExpanded = false
+                                }
+                            )
+                            streamAddons.forEach { addon ->
+                                DropdownMenuItem(
+                                    text = { Text(addon.name) },
+                                    onClick = {
+                                        autoAddon = addon.name
+                                        browserPrefs.edit().putString("auto_stream_addon", addon.name).apply()
+                                        addonExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))

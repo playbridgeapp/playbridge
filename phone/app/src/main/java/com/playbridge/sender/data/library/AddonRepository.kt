@@ -89,6 +89,25 @@ class AddonRepository(
         }
     }
 
+    /**
+     * Clear the stream cache for a specific content item (movie or episode).
+     * Used when the user manually triggers a refresh to bypass cached results.
+     */
+    fun clearStreamCache(type: String, id: String) {
+        val cacheKey = "$type:$id"
+        val suffix = ":$type:$id"
+
+        // 1. Clear top-level aggregated entry
+        streamCache.remove(cacheKey)
+
+        // 2. Clear individual addon entries for this specific item
+        // Use removeIf for efficient bulk removal in ConcurrentHashMap
+        streamCache.keys.removeIf { it.endsWith(suffix) }
+
+        saveCacheToDisk()
+        Log.d(TAG, "Cleared stream cache for $cacheKey (and all addon-specific entries)")
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -838,6 +857,7 @@ class AddonRepository(
             val cached = streamCache[cacheKey]
             if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
                 if (cached.streams.hasRateLimitError()) {
+                    Log.d(TAG, "Removing rate-limited cache for $cacheKey")
                     streamCache.remove(cacheKey)
                 } else {
                     Log.d(TAG, "Using cached streams for $cacheKey flow")
@@ -845,6 +865,9 @@ class AddonRepository(
                     return@flow
                 }
             }
+
+            Log.d(TAG, "Starting fresh resolution for $cacheKey (cache empty or expired)")
+            emit(emptyList()) // Immediate clear for UI feedback
 
             // Include addons that explicitly support "stream" OR have no resource data
             // (pre-Phase 1 installs have resources = "" and must not be silently excluded).

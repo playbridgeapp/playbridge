@@ -37,6 +37,7 @@ fun StreamPickerSheet(
     episodeRuntimeMinutes: Int? = null,
     forceManual: Boolean = false,
     onStreamSelected: (ResolvedStream) -> Unit,
+    onRefresh: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -48,6 +49,7 @@ fun StreamPickerSheet(
         val raw = prefs.getString("auto_stream_max_mbps", "") ?: ""
         raw.toDoubleOrNull()
     }
+    val autoAddonKey = remember { prefs.getString("auto_stream_addon", "") ?: "" }
     // Resolve the QualityFilter enum matching the pref key (e.g. "2160p" → UHD)
     val autoFilter = remember(autoQualityKey) { QualityFilter.fromKey(autoQualityKey) }
 
@@ -56,15 +58,24 @@ fun StreamPickerSheet(
     // Show a brief "Auto-picking…" message while we're about to dismiss
     var autoPickTriggered by remember { mutableStateOf(false) }
 
+    // Reset auto-pick flags if streams are cleared while loading (e.g. on manual refresh)
+    LaunchedEffect(streams, isLoading) {
+        if (streams.isEmpty() && isLoading) {
+            autoPickFired = false
+            autoPickTriggered = false
+        }
+    }
+
     // When the sheet was forced open manually (hold gesture) and auto-prefs are set,
     // compute which stream would have been auto-selected so we can badge it.
-    val autoMatchStream = remember(streams, autoFilter, autoMaxMbps, episodeRuntimeMinutes) {
+    val autoMatchStream = remember(streams, autoFilter, autoMaxMbps, episodeRuntimeMinutes, autoAddonKey) {
         if (forceManual && autoFilter != null && streams.isNotEmpty()) {
             val best = StreamSelector.selectBest(
                 streams = streams,
                 preferredQuality = autoFilter,
                 maxMbps = autoMaxMbps,
-                runtimeMinutes = episodeRuntimeMinutes
+                runtimeMinutes = episodeRuntimeMinutes,
+                preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() }
             )
             best ?: streams.firstOrNull()
         } else null
@@ -81,7 +92,8 @@ fun StreamPickerSheet(
                 streams = streams,
                 preferredQuality = autoFilter,
                 maxMbps = autoMaxMbps,
-                runtimeMinutes = episodeRuntimeMinutes
+                runtimeMinutes = episodeRuntimeMinutes,
+                preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() }
             )
 
             // 2. Fallback: if no candidates in the tier, use the first stream
@@ -123,12 +135,37 @@ fun StreamPickerSheet(
                 .padding(bottom = 32.dp)
         ) {
             // Header
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp).padding(4.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    IconButton(onClick = onRefresh) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Refresh streams",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
 
             // Quality filter chips (always visible)
             LazyRow(

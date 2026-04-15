@@ -64,7 +64,8 @@ data class SeriesContext(
     val seriesTitle: String? = null,
     val episodeTitle: String? = null,
     val addonBaseUrls: List<String>,
-    val allEpisodes: List<SeriesEpisodeRef>? = null
+    val allEpisodes: List<SeriesEpisodeRef>? = null,
+    val preferredAddonBaseUrl: String? = null   // NEW — base URL of the preferred addon
 )
 
 /**

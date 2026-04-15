@@ -159,12 +159,13 @@ class SeriesNavigator(
 
         Log.d(TAG, "resolveNext: resolving S${nextRef.season}E${nextRef.episode}")
         val stream = StremioClient.resolveEpisode(
-            addonBaseUrls     = context.addonBaseUrls,
-            imdbId            = context.imdbId,
-            season            = nextRef.season,
-            episode           = nextRef.episode,
-            qualityPreference = qualityPreference,
-            sourceHint        = currentSourceHint
+            addonBaseUrls          = context.addonBaseUrls,
+            imdbId                 = context.imdbId,
+            season                 = nextRef.season,
+            episode                = nextRef.episode,
+            qualityPreference      = qualityPreference,
+            sourceHint             = currentSourceHint,
+            preferredAddonBaseUrl  = context.preferredAddonBaseUrl
         )
 
         return if (stream != null) {
@@ -192,12 +193,13 @@ class SeriesNavigator(
 
         Log.d(TAG, "resolvePrev: resolving S${prevRef.season}E${prevRef.episode}")
         val stream = StremioClient.resolveEpisode(
-            addonBaseUrls     = context.addonBaseUrls,
-            imdbId            = context.imdbId,
-            season            = prevRef.season,
-            episode           = prevRef.episode,
-            qualityPreference = qualityPreference,
-            sourceHint        = currentSourceHint
+            addonBaseUrls          = context.addonBaseUrls,
+            imdbId                 = context.imdbId,
+            season                 = prevRef.season,
+            episode                = prevRef.episode,
+            qualityPreference      = qualityPreference,
+            sourceHint             = currentSourceHint,
+            preferredAddonBaseUrl  = context.preferredAddonBaseUrl
         )
 
         return if (stream != null) {
@@ -221,12 +223,13 @@ class SeriesNavigator(
 
         Log.d(TAG, "resolveAndAdvanceToIndex: resolving S${targetRef.season}E${targetRef.episode}")
         val stream = StremioClient.resolveEpisode(
-            addonBaseUrls     = context.addonBaseUrls,
-            imdbId            = context.imdbId,
-            season            = targetRef.season,
-            episode           = targetRef.episode,
-            qualityPreference = qualityPreference,
-            sourceHint        = currentSourceHint
+            addonBaseUrls          = context.addonBaseUrls,
+            imdbId                 = context.imdbId,
+            season                 = targetRef.season,
+            episode                = targetRef.episode,
+            qualityPreference      = qualityPreference,
+            sourceHint             = currentSourceHint,
+            preferredAddonBaseUrl  = context.preferredAddonBaseUrl
         )
 
         return if (stream != null) {

@@ -227,6 +227,7 @@ object StremioClient {
      * @param sourceHint         Release group / source token from the previous episode
      *                           (e.g. "FLUX", "NF"). Used to prefer the same torrent
      *                           source across consecutive episodes. Null = no preference.
+     * @param preferredAddonBaseUrl Base URL of the preferred addon to try first.
      * @return Best matching stream, or null if all addons fail or return empty
      */
     suspend fun resolveEpisode(
@@ -235,7 +236,8 @@ object StremioClient {
         season: Int,
         episode: Int,
         qualityPreference: String? = null,
-        sourceHint: String? = null
+        sourceHint: String? = null,
+        preferredAddonBaseUrl: String? = null
     ): ResolvedStremioStream? = withContext(Dispatchers.IO) {
         if (addonBaseUrls.isEmpty()) {
             Log.w(TAG, "resolveEpisode called with no addon URLs")
@@ -245,6 +247,19 @@ object StremioClient {
         // Stremio stream ID for series: "{imdbId}:{season}:{episode}"
         val stremioId = "$imdbId:$season:$episode"
         Log.d(TAG, "Resolving streams for $stremioId via ${addonBaseUrls.size} addon(s)")
+
+        // If a preferred addon is specified, try it in isolation first.
+        // Only fall back to all addons when the preferred one returns nothing.
+        if (!preferredAddonBaseUrl.isNullOrBlank() && preferredAddonBaseUrl in addonBaseUrls) {
+            Log.d(TAG, "Trying preferred addon first: $preferredAddonBaseUrl")
+            val preferredStreams = fetchFromAddon(preferredAddonBaseUrl, stremioId)
+            if (preferredStreams.isNotEmpty()) {
+                Log.d(TAG, "Preferred addon returned ${preferredStreams.size} stream(s); skipping other addons")
+                val result = pickBest(preferredStreams, qualityPreference, sourceHint)
+                if (result != null) return@withContext result
+                Log.d(TAG, "No qualifying stream from preferred addon; falling back to all addons")
+            }
+        }
 
         // Fetch from all addons in parallel, collect all direct-URL streams
         val allStreams: List<StremioStreamItem> = coroutineScope {

@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,6 +41,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.CheckCircle
@@ -123,11 +125,23 @@ fun LibraryDetailScreen(
     var showStreamPicker by remember { mutableStateOf(false) }
     var streamPickerTitle by remember { mutableStateOf("Select Stream") }
     var forceManualInPicker by remember { mutableStateOf(false) }
+    var lastResolvedId by remember { mutableStateOf<String?>(null) }
+    var lastResolvedType by remember { mutableStateOf<String?>(null) }
+    var resolutionJob by remember { mutableStateOf<Job?>(null) }
 
     // Episode selection for stream picker
     var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
-    // Triple: (episode, season number, isWatched at time of long-press)
-    var watchOnTv by rememberSaveable { mutableStateOf(tvName != null) }
+    // Persist watch mode preference in browser_prefs
+    val browserPrefs = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+    var watchOnTv by remember {
+        mutableStateOf(
+            if (browserPrefs.contains("watch_on_tv")) {
+                browserPrefs.getBoolean("watch_on_tv", tvName != null)
+            } else {
+                tvName != null
+            }
+        )
+    }
 
     val episodeListState = rememberLazyListState()
     var episodesAscending by remember { mutableStateOf(true) }
@@ -341,6 +355,7 @@ fun LibraryDetailScreen(
     // Stream resolution helper
     val autoQualityKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_quality", "") ?: "" }
     val autoMaxMbps = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_max_mbps", "")?.toDoubleOrNull() }
+    val autoAddonKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_addon", "") ?: "" }
     val episodesInSeason = addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList()
 
     // Unified stream resolution function
@@ -356,12 +371,15 @@ fun LibraryDetailScreen(
         currentEpisodeSelection = episode
         streamPickerTitle = resTitle
         resolvedStreams = emptyList()
+        lastResolvedId = streamId
+        lastResolvedType = streamType
 
         if (forcePicker || autoQualityKey.isEmpty()) {
             showStreamPicker = true
         }
 
-        scope.launch {
+        resolutionJob?.cancel()
+        resolutionJob = scope.launch {
             addonRepository.resolveStreamsFlow(streamType, streamId).collect { latest ->
                 resolvedStreams = latest
             }
@@ -373,7 +391,8 @@ fun LibraryDetailScreen(
                     streams = resolvedStreams,
                     preferredQuality = QualityFilter.fromKey(autoQualityKey),
                     maxMbps = autoMaxMbps,
-                    runtimeMinutes = if (!isSeries) movieDetails?.runtime else null
+                    runtimeMinutes = if (!isSeries) movieDetails?.runtime else null,
+                    preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() }
                 )
                 val finalSelection = best ?: resolvedStreams.firstOrNull()
                 if (finalSelection != null) {
@@ -385,7 +404,8 @@ fun LibraryDetailScreen(
                             val seriesCtx = buildSeriesContext(
                                 isSeries, resolvedImdbId, selectedSeason,
                                 currentEpisodeSelection, displayTitle, addonMeta?.videos,
-                                addonRepository
+                                addonRepository,
+                                preferredAddonName = autoAddonKey.takeIf { it.isNotEmpty() }
                             )
                             onPlayStream(
                                 streamUrl, resTitle, null, seriesCtx,
@@ -408,7 +428,7 @@ fun LibraryDetailScreen(
             streams = resolvedStreams,
             isLoading = resolutionState.isResolving,
             title = streamPickerTitle,
-            episodeRuntimeMinutes = null,
+            episodeRuntimeMinutes = if (!isSeries) movieDetails?.runtime else null,
             forceManual = forceManualInPicker,
             onStreamSelected = { resolved ->
                 val forPhone = resolutionState.target == ResolutionTarget.PHONE
@@ -455,12 +475,14 @@ fun LibraryDetailScreen(
                         val seriesCtx = buildSeriesContext(
                             isSeries, resolvedImdbId, selectedSeason,
                             currentEpisodeSelection, displayTitle, addonMeta?.videos,
-                            addonRepository
+                            addonRepository,
+                            preferredAddonName = resolved.addonName
                         )
+                        val estimatedMbps = StreamSelector.estimatedMbps(resolved, if (!isSeries) movieDetails?.runtime else null)
                         onPlayStream(
                             streamUrl, streamPickerTitle, subtitles.ifEmpty { null }, seriesCtx,
-                            resolved.stream.qualityTier,                   // quality from stream name (name-first, reliable)
-                            StreamSelector.estimatedMbps(resolved, null)   // actual stream bitrate; null if no size metadata
+                            resolved.stream.qualityTier,   // quality from stream name (name-first, reliable)
+                            estimatedMbps                  // actual stream bitrate; null if no size metadata
                         )
                         resolutionState = ResolutionState()
                         if (isSeries && currentEpisodeSelection != null) {
@@ -468,6 +490,20 @@ fun LibraryDetailScreen(
                         }
                         Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
                     }
+                }
+            },
+            onRefresh = {
+                val id = lastResolvedId
+                val type = lastResolvedType
+                if (id != null && type != null) {
+                    addonRepository.clearStreamCache(type, id)
+                    // Trigger resolution again with same params
+                    startResolution(
+                        id, type, streamPickerTitle,
+                        resolutionState.target == ResolutionTarget.PHONE,
+                        true, // force picker
+                        currentEpisodeSelection
+                    )
                 }
             },
             onDismiss = {
@@ -529,7 +565,10 @@ fun LibraryDetailScreen(
                                 tvName = tvName,
                                 isTvConnected = isTvConnected,
                                 watchOnTv = watchOnTv,
-                                onWatchOnTvChange = { watchOnTv = it },
+                                onWatchOnTvChange = {
+    watchOnTv = it
+    browserPrefs.edit().putBoolean("watch_on_tv", it).apply()
+},
                                 availableTvDevices = availableTvDevices,
                                 selectedTvDevice = selectedTvDevice,
                                 onTvDeviceSelect = onTvDeviceSelect,
@@ -607,7 +646,10 @@ fun LibraryDetailScreen(
                                     tvName = tvName,
                                     isTvConnected = isTvConnected,
                                     watchOnTv = watchOnTv,
-                                    onWatchOnTvChange = { watchOnTv = it },
+                                    onWatchOnTvChange = {
+    watchOnTv = it
+    browserPrefs.edit().putBoolean("watch_on_tv", it).apply()
+},
                                     watchLabel = "Watch $epLabel",
                                     availableTvDevices = availableTvDevices,
                                     selectedTvDevice = selectedTvDevice,
@@ -905,8 +947,24 @@ fun LibraryDetailScreen(
         TopAppBar(
             title = { },
             navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                Surface(
+                    onClick = onBack,
+                    shape = CircleShape,
+                    color = Color.Black.copy(alpha = 0.3f),
+                    shadowElevation = 4.dp,
+                    modifier = Modifier.padding(start = 8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier.size(40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            "Back",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -1762,15 +1820,22 @@ private suspend fun buildSeriesContext(
     currentEpisodeSelection: com.playbridge.sender.data.library.StremioVideo?,
     displayTitle: String,
     addonVideos: List<com.playbridge.sender.data.library.StremioVideo>?,
-    addonRepository: AddonRepository
+    addonRepository: AddonRepository,
+    preferredAddonName: String? = null
 ): com.playbridge.protocol.SeriesContext? {
     if (!isSeries || resolvedImdbId == null || currentEpisodeSelection == null) return null
 
-    val addonBaseUrls = addonRepository.getInstalledAddons()
+    val installedStreamAddons = addonRepository.getInstalledAddons()
         .filter { it.isEnabled && (it.resources.isBlank() || it.supportsResource("stream")) }
-        .map { it.baseUrl }
+
+    val addonBaseUrls = installedStreamAddons.map { it.baseUrl }
 
     if (addonBaseUrls.isEmpty()) return null   // TV would have nothing to resolve with
+
+    // Resolve name → base URL for the preferred addon (null if not set or not found)
+    val preferredAddonBaseUrl = preferredAddonName?.takeIf { it.isNotEmpty() }?.let { name ->
+        installedStreamAddons.firstOrNull { it.name == name }?.baseUrl
+    }
 
     val allEpisodes = addonVideos
         ?.filter { it.season != null && it.episode != null && it.season > 0 }
@@ -1791,7 +1856,8 @@ private suspend fun buildSeriesContext(
         seriesTitle  = displayTitle.ifBlank { null },
         episodeTitle = currentEpisodeSelection.title.ifBlank { null },
         addonBaseUrls = addonBaseUrls,
-        allEpisodes  = allEpisodes
+        allEpisodes  = allEpisodes,
+        preferredAddonBaseUrl = preferredAddonBaseUrl
     )
 }
 
