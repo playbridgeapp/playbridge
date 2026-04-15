@@ -87,6 +87,8 @@ com.playbridge.sender/
 │   │   ├── HistoryDao.kt
 │   │   ├── HistoryDatabase.kt
 │   │   ├── HistoryEntity.kt
+│   │   ├── SearchHistoryDao.kt
+│   │   ├── SearchHistoryEntity.kt
 │   │   ├── TabDao.kt
 │   │   └── TabEntity.kt
 │   └── library
@@ -98,10 +100,11 @@ com.playbridge.sender/
 │       ├── StremioSubtitleService.kt
 │       ├── TmdbModels.kt
 │       ├── TmdbRepository.kt
+│       ├── TvdbModels.kt
+│       ├── TvdbRepository.kt
 │       ├── WatchlistDao.kt
 │       ├── WatchlistEntity.kt
-│       ├── WatchlistStatus.kt
-│       └── WatchlistStatusConverter.kt
+│       └── WatchlistStatus.kt
 ├── model
 │   └── TvDevice.kt
 └── ui

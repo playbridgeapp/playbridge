@@ -192,9 +192,9 @@ PlayBridge/
 │   │   ├── android_build.yml
 │   │   └── extension_build.yml  # NEW
 │   └── PULL_REQUEST_TEMPLATE.md # NEW
-├── publish_releases.sh          # Script to automate GitHub releases using gh CLI
-├── update_ublock.sh             # Script to update uBlock Origin assets in TV GeckoView
-├── test_script.sh               # General testing utility script
+├── scripts/
+│   ├── publish_releases.sh      # Script to automate GitHub releases using gh CLI
+│   └── update_ublock.sh         # Script to update uBlock Origin assets in TV GeckoView
 ├── extension/                   # Standalone Desktop Web Extension (Firefox native)
 │   └── src/                     # Extension source code
 │       ├── background.js
