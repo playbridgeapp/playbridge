@@ -21,6 +21,8 @@ abstract class PlayerActivity : ComponentActivity() {
     abstract fun getCurrentPosition(): Long
     abstract fun seekTo(position: Long)
     abstract fun getVideoSurfaceView(): android.view.SurfaceView?
+    /** Stop current playback and clear the video surface (make it black) for a smooth transition. */
+    abstract fun stopPlayback()
 
     // Shared playback configuration and series navigation state
     var seriesNavigator: com.playbridge.player.stremio.SeriesNavigator? = null

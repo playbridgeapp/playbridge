@@ -60,6 +60,15 @@ class ExoPlayerActivity : PlayerActivity() {
     override fun getCurrentPosition(): Long = player?.currentPosition ?: 0L
     override fun seekTo(position: Long) { player?.seekTo(position) }
     override fun getVideoSurfaceView(): android.view.SurfaceView? = playerView.videoSurfaceView as? android.view.SurfaceView
+
+    override fun stopPlayback() {
+        FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
+        releasePlayer()
+        runOnUiThread {
+            playerView.visibility = android.view.View.INVISIBLE
+        }
+    }
+
     private var audioDiscontinuityRetryCount = 0
     private var videoDecoderRetryCount = 0
     private var malformedContentRetryCount = 0
@@ -117,6 +126,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
 
                     if (url != null) {
+                        stopPlayback()
                         playVideo(url, title, contentType, detectedBy, headers, subtitles)
                     }
                 }
@@ -278,6 +288,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        stopPlayback()
         handleIntent(intent)
     }
 
@@ -412,6 +423,9 @@ class ExoPlayerActivity : PlayerActivity() {
         playJob?.cancel()
         playJob = lifecycleScope.launch(Dispatchers.Main) {
             var finalContentType = contentType
+
+            // Re-show playerView for the new video
+            playerView.visibility = android.view.View.VISIBLE
 
             FileLogger.d(TAG, "Attempting pre-flight sniff...")
             val sniffedType = contentSniffer.sniffContent(url, intentHeaders)
@@ -1010,9 +1024,11 @@ class ExoPlayerActivity : PlayerActivity() {
             if (nav != null && nav.hasPrev()) {
                 lifecycleScope.launch {
                     FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
+
+                    stopPlayback()
                     controlsManager.showBuffering()
+
                     val stream = nav.resolvePrev()
-                    controlsManager.hideBuffering()
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(
@@ -1022,6 +1038,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         videoFilterManager.reapplyFilter()
                         controlsManager.hideUI()
                     } else {
+                        controlsManager.hideBuffering()
                         android.widget.Toast.makeText(
                             this@ExoPlayerActivity,
                             "Could not resolve previous episode",
@@ -1131,9 +1148,11 @@ class ExoPlayerActivity : PlayerActivity() {
                 val nav = seriesNavigator
                 if (nav != null && nav.hasNext()) {
                     FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
+
+                    stopPlayback()
                     controlsManager.showBuffering()
+
                     val stream = nav.resolveNext()
-                    controlsManager.hideBuffering()
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(
@@ -1145,6 +1164,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         videoFilterManager.reapplyFilter()
                         controlsManager.hideUI()
                     } else {
+                        controlsManager.hideBuffering()
                         FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
                         android.widget.Toast.makeText(
                             this@ExoPlayerActivity,
@@ -1153,8 +1173,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         ).show()
                         finish()
                     }
-                } else {
-                    FileLogger.i(TAG, "No playlist and no series nav — finishing")
+                } else {                    FileLogger.i(TAG, "No playlist and no series nav — finishing")
                     finish()
                 }
                 return@launch
@@ -1222,6 +1241,7 @@ class ExoPlayerActivity : PlayerActivity() {
             FileLogger.i(TAG, "Jumping to playlist item $index: $title")
             android.widget.Toast.makeText(this@ExoPlayerActivity, title, android.widget.Toast.LENGTH_SHORT).show()
 
+            stopPlayback()
             playVideo(
                 url = item.url,
                 title = title,
@@ -1345,9 +1365,10 @@ class ExoPlayerActivity : PlayerActivity() {
         val nav = seriesNavigator ?: return
         lifecycleScope.launch {
             FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
+
+            stopPlayback()
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
-            controlsManager.hideBuffering()
             if (stream != null) {
                 val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                 android.widget.Toast.makeText(this@ExoPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
@@ -1355,6 +1376,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 videoFilterManager.reapplyFilter()
                 controlsManager.hideUI()
             } else {
+                controlsManager.hideBuffering()
                 android.widget.Toast.makeText(this@ExoPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
             }
         }

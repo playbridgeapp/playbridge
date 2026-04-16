@@ -165,6 +165,13 @@ class ProgressManager(
      */
     suspend fun captureBitmapSuspend(): Bitmap? {
         val surfaceView = playerActivity.getVideoSurfaceView() ?: return null
+        val holder = surfaceView.holder
+        val surface = holder.surface
+        if (surface == null || !surface.isValid) {
+            Log.d(TAG, "Cannot capture bitmap: surface is invalid or null")
+            return null
+        }
+
         val width = surfaceView.width
         val height = surfaceView.height
 
@@ -182,6 +189,9 @@ class ProgressManager(
                         continuation.resume(null) { }
                     }
                 }, android.os.Handler(android.os.Looper.getMainLooper()))
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Failed to capture screenshot: ${e.message}")
+                continuation.resume(null) { }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to capture screenshot", e)
                 continuation.resume(null) { }

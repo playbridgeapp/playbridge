@@ -135,6 +135,18 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     override fun getVideoSurfaceView(): SurfaceView? =
         if (this::surfaceView.isInitialized) surfaceView else null
 
+    override fun stopPlayback() {
+        FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
+        if (mpvInitialized) {
+            MPVLib.command("stop")
+        }
+        runOnUiThread {
+            if (::surfaceView.isInitialized) {
+                surfaceView.visibility = android.view.View.INVISIBLE
+            }
+        }
+    }
+
     // ── MPVLib.EventObserver ─────────────────────────────────────────────────
 
     override fun eventProperty(property: String) {}
@@ -429,6 +441,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        stopPlayback()
         handleIntent(intent)
     }
 
@@ -629,8 +642,17 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             runOnUiThread {
                 isLoadingNewStream = true
                 applyHttpHeaders(headers)
+
+                // Re-show surface for the new video
+                if (::surfaceView.isInitialized) {
+                    surfaceView.visibility = android.view.View.VISIBLE
+                }
+
                 FileLogger.i(TAG, "loadfile: $url")
                 MPVLib.command("loadfile", url)
+                // Ensure the new video starts playing immediately
+                MPVLib.setPropertyBoolean("pause", false)
+
                 controlsManager.onBufferingChanged(true)
             }
         }
@@ -670,27 +692,33 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // ── Playlist ─────────────────────────────────────────────────────────────
 
     private fun playNextInPlaylist() {
+        isLoadingNewStream = true
         if (playlistItems.isEmpty()) {
             // No playlist queue — try series navigator if available
             val nav = seriesNavigator
             if (nav != null && nav.hasNext()) {
                 lifecycleScope.launch {
                     FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
+
+                    stopPlayback()
                     controlsManager.onBufferingChanged(true)
+
                     val stream = nav.resolveNext()
-                    controlsManager.onBufferingChanged(false)
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(this@MpvPlayerActivity, "Next: $epTitle", android.widget.Toast.LENGTH_SHORT).show()
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
                     } else {
+                        isLoadingNewStream = false
+                        controlsManager.onBufferingChanged(false)
                         FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
                         android.widget.Toast.makeText(this@MpvPlayerActivity, "No more episodes found", android.widget.Toast.LENGTH_SHORT).show()
                         finish()
                     }
                 }
             } else {
+                isLoadingNewStream = false
                 FileLogger.i(TAG, "No playlist and no series nav — finishing")
                 finish()
             }
@@ -698,6 +726,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
 
         if (playlistIndex >= playlistItems.size - 1) {
+            isLoadingNewStream = false
             FileLogger.i(TAG, "Playlist complete ($playlistIndex/${playlistItems.size}) — finishing")
             finish()
             return
@@ -709,30 +738,37 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun playPreviousInPlaylist() {
+        isLoadingNewStream = true
         if (playlistItems.isEmpty()) {
             val nav = seriesNavigator
             if (nav != null && nav.hasPrev()) {
                 lifecycleScope.launch {
                     FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
+
+                    stopPlayback()
                     controlsManager.showBuffering()
+
                     val stream = nav.resolvePrev()
-                    controlsManager.hideBuffering()
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(this@MpvPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
                     } else {
+                        isLoadingNewStream = false
+                        controlsManager.hideBuffering()
                         android.widget.Toast.makeText(this@MpvPlayerActivity, "Could not resolve previous episode", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 }
             } else {
+                isLoadingNewStream = false
                 android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
             }
             return
         }
 
         if (playlistIndex <= 0) {
+            isLoadingNewStream = false
             android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -750,7 +786,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun playPlaylistItem(item: com.playbridge.protocol.PlayPayload) {
+        isLoadingNewStream = true
         progressManager.saveProgress()
+        stopPlayback()
         controlsManager.setTitle(item.title)
         subtitleUrls = item.subtitles ?: emptyList()
         playVideo(item.url, item.headers)
@@ -983,14 +1021,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private fun playSeriesEpisodeAtIndex(index: Int) {
         val nav = seriesNavigator ?: return
         lifecycleScope.launch {
+            isLoadingNewStream = true
             FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
 
             // Save progress for the current episode before switching
             progressManager.saveProgress()
 
+            stopPlayback()
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
-            controlsManager.hideBuffering()
             if (stream != null) {
                 val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                 android.widget.Toast.makeText(this@MpvPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
@@ -1001,6 +1040,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 playVideo(url = stream.url, headers = null)
                 controlsManager.hideControls()
             } else {
+                isLoadingNewStream = false
+                controlsManager.hideBuffering()
                 android.widget.Toast.makeText(this@MpvPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
             }
         }

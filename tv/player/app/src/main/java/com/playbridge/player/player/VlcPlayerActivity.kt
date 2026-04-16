@@ -56,6 +56,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             }
 
             val player = MediaPlayer(libVLC)
+            runOnUiThread {
+                if (::surfaceView.isInitialized) {
+                    surfaceView.visibility = android.view.View.VISIBLE
+                }
+            }
             player.vlcVout.apply {
                 setVideoView(surfaceView)
                 addCallback(this@VlcPlayerActivity)
@@ -83,6 +88,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
             MediaPlayer.Event.Playing -> {
                 FileLogger.i(TAG, "Playing at ${mediaPlayer?.time ?: 0}ms")
+                isLoadingNewStream = false
                 // Defer resume seek until VLC is actually playing and ready to accept seeks.
                 pendingResumeTime?.let { resumeAt ->
                     pendingResumeTime = null
@@ -99,6 +105,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
             MediaPlayer.Event.EncounteredError -> {
                 FileLogger.e(TAG, "VLC encountered an error (url=${originalM3u8Url ?: "(unknown)"})")
+                isLoadingNewStream = false
                 handleVlcError()
             }
 
@@ -109,10 +116,25 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         mediaPlayer?.time = 0
                         mediaPlayer?.play()
                     }
-                } else if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
-                    runOnUiThread { playNextInPlaylist() }
                 } else {
-                    runOnUiThread { finish() }
+                    runOnUiThread {
+                        if (isLoadingNewStream) {
+                            FileLogger.i(TAG, "Ignoring EndReached because new stream is loading")
+                            return@runOnUiThread
+                        }
+
+                        if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
+                            playNextInPlaylist()
+                        } else {
+                            // Check if series navigator has a next episode before finishing
+                            val nav = seriesNavigator
+                            if (nav != null && nav.hasNext()) {
+                                playNextInPlaylist()
+                            } else {
+                                finish()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -135,6 +157,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     // Loop state
     private var isLooping = false
+    private var isLoadingNewStream = false
 
     // Settings dialog state
     private var activeDialog: android.app.Dialog? = null
@@ -207,6 +230,19 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         seekHandler.removeCallbacks(performSeekRunnable)
     }
     override fun getVideoSurfaceView(): android.view.SurfaceView? = if (this::surfaceView.isInitialized) surfaceView else null
+
+    override fun stopPlayback() {
+        FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
+        mediaPlayer?.let { player ->
+            player.stop()
+            player.vlcVout.detachViews()
+        }
+        runOnUiThread {
+            if (::surfaceView.isInitialized) {
+                surfaceView.visibility = android.view.View.INVISIBLE
+            }
+        }
+    }
 
     private val remoteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -360,6 +396,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        stopPlayback()
         handleIntent(intent)
     }
 
@@ -452,21 +489,25 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun playNextInPlaylist() {
+        isLoadingNewStream = true
         if (playlistItems.isEmpty()) {
             // No playlist queue — try series navigator if available
             val nav = seriesNavigator
             if (nav != null && nav.hasNext()) {
                 lifecycleScope.launch {
                     FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
+
+                    stopPlayback()
                     controlsManager.showBuffering()
+
                     val stream = nav.resolveNext()
-                    controlsManager.hideBuffering()
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "Next: $epTitle", android.widget.Toast.LENGTH_SHORT).show()
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
                     } else {
+                        controlsManager.hideBuffering()
                         FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "No more episodes found", android.widget.Toast.LENGTH_SHORT).show()
                         finish()
@@ -492,20 +533,24 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun playPreviousInPlaylist() {
+        isLoadingNewStream = true
         if (playlistItems.isEmpty()) {
             val nav = seriesNavigator
             if (nav != null && nav.hasPrev()) {
                 lifecycleScope.launch {
                     FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
+
+                    stopPlayback()
                     controlsManager.showBuffering()
+
                     val stream = nav.resolvePrev()
-                    controlsManager.hideBuffering()
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(this@VlcPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
                     } else {
+                        controlsManager.hideBuffering()
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve previous episode", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -629,15 +674,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private fun playSeriesEpisodeAtIndex(index: Int) {
         val nav = seriesNavigator ?: return
         lifecycleScope.launch {
+            isLoadingNewStream = true
             FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
 
             // Save progress for the current episode before switching
             syncSelectionsToProgressManager()
             progressManager.saveProgress()
 
+            stopPlayback()
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
-            controlsManager.hideBuffering()
             if (stream != null) {
                 val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                 android.widget.Toast.makeText(this@VlcPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
@@ -648,15 +694,19 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 playVideo(url = stream.url, headers = null)
                 controlsManager.hideControls()
             } else {
+                isLoadingNewStream = false
+                controlsManager.hideBuffering()
                 android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     private fun playPlaylistItem(item: com.playbridge.protocol.PlayPayload) {
+        isLoadingNewStream = true
         syncSelectionsToProgressManager()
         progressManager.saveProgress()
 
+        stopPlayback()
         controlsManager.setTitle(item.title)
         originalM3u8Url = item.url
         currentHeaders = item.headers
