@@ -1,5 +1,5 @@
 # Phone App — AI Context
-_Last verified: 2026-04-11_
+_Last verified: 2026-04-15_
 
 ## Ownership
 The `phone/` module handles all UI and networking for the Android sender application. It provides a full-featured GeckoView web browser, Debrid integration, history tracking, and connects directly to the TV application via WebSockets to send video payloads. It does NOT own protocol data structures.
@@ -10,6 +10,7 @@ The `phone/` module handles all UI and networking for the Android sender applica
 - `app/src/main/java/com/playbridge/sender/browser/TabManager.kt` — session lifecycle and tab switching
 - `app/src/main/java/com/playbridge/sender/browser/MediaDownloadService.kt` — handles file/HLS downloads
 - `app/src/main/assets/extensions/video_detector/background.js` — detects videos in GeckoView tabs
+- `app/src/main/java/com/playbridge/sender/browser/SessionObserverSetup.kt` — centralizes GeckoView context menu logic
 
 ## Inter-module Contracts
 - Calls into: `protocol/` module for structured `Message` data classes.
@@ -19,12 +20,12 @@ The `phone/` module handles all UI and networking for the Android sender applica
 ## Gotchas
 WARNING: The `video_detector` extension is embedded in `assets/extensions/video_detector/` and depends on Mozilla Android Components AddonManager.
 WARNING: Debrid APIs (Real-Debrid, Premiumize) logic is highly sensitive to token management; ensure credentials are not accidentally logged.
-GOTCHA: Context menu requires proper EngineSession API or custom GeckoView integration (BrowserActivity.kt).
+GOTCHA: Context menu logic is centralized in `SessionObserverSetup.kt`; avoid redundant implementation in `BrowserActivity`'s `BrowserView`.
 WARNING: Missing error handling in extensions. Browser extension silently catches errors in background.js (e.g. lines 109, 267, 273, 297). Ensure proper error logging.
 WARNING: `network_security_config.xml` has a global `<base-config cleartextTrafficPermitted="true">` for local networking.
 
 ## Current State
-_As of 2026-04-11:_
+_As of 2026-04-15:_
 - Working: Core Infrastructure, Browser Setup, WebSocket Client, WebExtension Support, QR Scanner, URL bar, Extension Management, Local history DB
 - Broken/degraded: nothing critical
 - In progress: TabManager, TabsScreen, Native App Integration for Video Detector, Video FAB & Bottom Sheet, Send to TV UI
