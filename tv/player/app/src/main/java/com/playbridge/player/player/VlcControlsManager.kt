@@ -15,6 +15,7 @@ class VlcControlsManager(
     private val seekBar: SeekBar,
     private val playPauseButton: ImageButton,
     private val streamInfoText: TextView,
+    private val seasonInfoText: TextView,
     private val elapsedText: TextView,
     private val remainingText: TextView,
     private val titleText: TextView,
@@ -176,6 +177,24 @@ class VlcControlsManager(
         titleText.text = title ?: ""
     }
 
+    fun setSeasonInfo(info: String?) {
+        if (info.isNullOrBlank()) {
+            seasonInfoText.visibility = View.GONE
+        } else {
+            seasonInfoText.text = info
+            seasonInfoText.visibility = View.VISIBLE
+        }
+    }
+
+    fun setStreamInfo(info: String) {
+        if (info.isBlank()) {
+            streamInfoText.visibility = View.GONE
+        } else {
+            streamInfoText.text = "VLC | $info"
+            streamInfoText.visibility = View.VISIBLE
+        }
+    }
+
     fun toggleControls() {
         if (isControlsVisible) hideControls() else showControls()
     }
@@ -209,7 +228,8 @@ class VlcControlsManager(
         controlsRoot.visibility = View.VISIBLE
         controlsPanel.visibility = View.GONE
         titleText.visibility = View.GONE
-        streamInfoText.visibility = View.GONE
+        seasonInfoText.visibility = View.GONE
+        streamInfoText.visibility = View.VISIBLE
         seekBar.visibility = View.VISIBLE
 
         // Reset hide timer

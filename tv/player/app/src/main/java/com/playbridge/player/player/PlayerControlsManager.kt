@@ -31,6 +31,7 @@ class PlayerControlsManager(
     private val filterButton: ImageButton,
     private val loopButton: ImageButton,
     private val streamInfoText: TextView,
+    private val seasonInfoText: TextView,
     private val elapsedText: TextView,
     private val remainingText: TextView,
     private val titleText: TextView,
@@ -70,6 +71,15 @@ class PlayerControlsManager(
 
     fun setTitle(title: String?) {
         titleText.text = title ?: ""
+    }
+
+    fun setSeasonInfo(info: String?) {
+        if (info.isNullOrBlank()) {
+            seasonInfoText.visibility = View.GONE
+        } else {
+            seasonInfoText.text = info
+            seasonInfoText.visibility = View.VISIBLE
+        }
     }
 
     /**
@@ -185,7 +195,7 @@ class PlayerControlsManager(
                 .setDuration(FADE_DURATION)
                 .start()
         }
-        
+
         controlsPanel.visibility = View.VISIBLE
         seekBar.visibility = View.VISIBLE
         titleText.visibility = View.VISIBLE
@@ -220,12 +230,14 @@ class PlayerControlsManager(
                 .setDuration(FADE_DURATION)
                 .start()
         }
-        
+
         controlsPanel.visibility = View.GONE // Hide bottom buttons, show only seekbar
         titleText.visibility = View.GONE
-        streamInfoText.visibility = View.GONE
+        seasonInfoText.visibility = View.GONE
+        streamInfoText.visibility = View.VISIBLE
         seekBar.visibility = View.VISIBLE
 
+        updateStreamInfo()
         if (!isScrubbing) updateProgress()
         startUpdateProgress()
 
@@ -291,6 +303,7 @@ class PlayerControlsManager(
             val progress = (1000 * scrubPosition / duration).toInt()
             seekBar.progress = progress
             updateTimeLabels(scrubPosition, duration)
+            updateStreamInfo()
 
             commitSeekHandler.removeCallbacks(commitSeekRunnable)
             commitSeekHandler.postDelayed(commitSeekRunnable, 400) // Lower commit delay for faster responsiveness
@@ -318,8 +331,10 @@ class PlayerControlsManager(
         }
 
         val parts = mutableListOf<String>()
+        parts.add("ExoPlayer")
 
         // Get video and audio format from selected tracks (source format, not decoded)
+
         var videoFormat: Format? = null
         var audioFormat: Format? = null
         for (group in player.currentTracks.groups) {
@@ -394,7 +409,7 @@ class PlayerControlsManager(
         }
 
         if (parts.isNotEmpty()) {
-            streamInfoText.text = parts.joinToString("  •  ")
+            streamInfoText.text = "ExoPlayer | " + parts.filter { it != "ExoPlayer" }.joinToString("  •  ")
             streamInfoText.visibility = View.VISIBLE
         } else {
             streamInfoText.visibility = View.GONE

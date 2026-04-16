@@ -57,13 +57,31 @@
 
         <!-- ===== TOP BAR ===== -->
         <TextView
+            android:id="@+id/tv_season_info"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:layout_alignParentStart="true"
+            android:paddingStart="40dp"
+            android:paddingTop="32dp"
+            android:textColor="#B0B0B0"
+            android:textSize="14sp"
+            android:fontFamily="sans-serif"
+            android:maxLines="1"
+            android:visibility="gone"
+            android:shadowColor="@android:color/black"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="3" />
+
+        <TextView
             android:id="@+id/title_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_alignParentTop="true"
+            android:layout_below="@id/tv_season_info"
             android:paddingStart="40dp"
             android:paddingEnd="40dp"
-            android:paddingTop="32dp"
+            android:paddingTop="4dp"
             android:textColor="@android:color/white"
             android:textSize="22sp"
             android:fontFamily="sans-serif-medium"

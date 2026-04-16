@@ -389,6 +389,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             seekBar               = findViewById(R.id.player_seekbar),
             playPauseButton       = findViewById(R.id.btn_play_pause),
             streamInfoText        = findViewById(R.id.tv_stream_info),
+            seasonInfoText        = findViewById(R.id.tv_season_info),
             elapsedText           = findViewById(R.id.tv_elapsed),
             remainingText         = findViewById(R.id.tv_remaining),
             titleText             = findViewById(R.id.title_text),
@@ -542,6 +543,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Show playlist button when a playlist is active OR series navigator has list mode
         controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
 
+        seriesNavigator?.let { nav ->
+            val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+            controlsManager.setSeasonInfo(seasonInfo)
+        }
+
         if (url == null) {
             Toast.makeText(this, "No URL provided", Toast.LENGTH_SHORT).show()
             finish()
@@ -584,6 +590,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private fun playVideo(url: String, headers: Map<String, String>?) {
         currentUrl = url
+        if (seriesNavigator == null) {
+            controlsManager.setSeasonInfo(null)
+        }
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "URL: $url")
         FileLogger.i(TAG, "Title: ${controlsManager.getTitle()}")
@@ -707,6 +716,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(this@MpvPlayerActivity, "Next: $epTitle", android.widget.Toast.LENGTH_SHORT).show()
+
+                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                        controlsManager.setSeasonInfo(seasonInfo)
+
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
                     } else {
@@ -752,6 +765,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(this@MpvPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
+
+                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                        controlsManager.setSeasonInfo(seasonInfo)
+
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
                     } else {
@@ -1033,6 +1050,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             if (stream != null) {
                 val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                 android.widget.Toast.makeText(this@MpvPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
+
+                // Display season info on top left (e.g. "Season 1 (1x5)")
+                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                controlsManager.setSeasonInfo(seasonInfo)
 
                 // Update UI title so playVideo() logs and uses the correct metadata
                 controlsManager.setTitle(epTitle)

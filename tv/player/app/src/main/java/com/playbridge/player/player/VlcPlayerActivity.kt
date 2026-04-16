@@ -89,6 +89,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             MediaPlayer.Event.Playing -> {
                 FileLogger.i(TAG, "Playing at ${mediaPlayer?.time ?: 0}ms")
                 isLoadingNewStream = false
+                updateStreamInfo()
                 // Defer resume seek until VLC is actually playing and ready to accept seeks.
                 pendingResumeTime?.let { resumeAt ->
                     pendingResumeTime = null
@@ -342,6 +343,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             seekBar = findViewById(R.id.player_seekbar),
             playPauseButton = findViewById(R.id.btn_play_pause),
             streamInfoText = findViewById(R.id.tv_stream_info),
+            seasonInfoText = findViewById(R.id.tv_season_info),
             elapsedText = findViewById(R.id.tv_elapsed),
             remainingText = findViewById(R.id.tv_remaining),
             titleText = findViewById(R.id.title_text),
@@ -437,6 +439,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Show playlist button when a playlist is active OR series navigator has list mode
         controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
 
+        seriesNavigator?.let { nav ->
+            val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+            controlsManager.setSeasonInfo(seasonInfo)
+        }
+
         // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
         if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
             // VlcControlsManager doesn't have setNavigationVisible yet, but we can ensure they are showing
@@ -504,6 +511,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "Next: $epTitle", android.widget.Toast.LENGTH_SHORT).show()
+
+                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                        controlsManager.setSeasonInfo(seasonInfo)
+
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
                     } else {
@@ -547,6 +558,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     if (stream != null) {
                         val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                         android.widget.Toast.makeText(this@VlcPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
+
+                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                        controlsManager.setSeasonInfo(seasonInfo)
+
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
                     } else {
@@ -688,6 +703,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                 android.widget.Toast.makeText(this@VlcPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
 
+                // Display season info on top left (e.g. "Season 1 (1x5)")
+                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                controlsManager.setSeasonInfo(seasonInfo)
+
                 // Update UI title so playVideo() logs and uses the correct metadata
                 controlsManager.setTitle(epTitle)
 
@@ -810,6 +829,28 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
+    private fun updateStreamInfo() {
+        val player = mediaPlayer ?: return
+        val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+        val audioTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)
+
+        val info = buildString {
+            if (videoTrack != null) {
+                // Resolution
+                val videoData = videoTrack as? org.videolan.libvlc.MediaPlayer.TrackDescription
+                // VLC doesn't expose resolution easily here without deeper track parsing
+                // but we can at least show codec name if available
+                append(videoTrack.name ?: "Video")
+            }
+            if (audioTrack != null) {
+                if (isNotEmpty()) append("  •  ")
+                append("\uD83D\uDD0A ")
+                append(audioTrack.name ?: "Audio")
+            }
+        }
+        runOnUiThread { controlsManager.setStreamInfo(info) }
+    }
+
     private fun handleVlcError() {
         FileLogger.e(TAG, "handleVlcError — playlist size=${playlistItems.size}, index=$playlistIndex, url=${originalM3u8Url ?: "(unknown)"}")
         runOnUiThread {
@@ -869,6 +910,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private suspend fun playVideoInternal(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
         val title = controlsManager.getTitle()
+        if (seriesNavigator == null) {
+            controlsManager.setSeasonInfo(null)
+        }
 
         // Handle cancellation gracefully during history restoration
         val historyItem = try {

@@ -22,6 +22,7 @@ class MpvControlsManager(
     private val seekBar: SeekBar,
     private val playPauseButton: ImageButton,
     private val streamInfoText: TextView,
+    private val seasonInfoText: TextView,
     private val elapsedText: TextView,
     private val remainingText: TextView,
     private val titleText: TextView,
@@ -132,7 +133,8 @@ class MpvControlsManager(
         controlsRoot.visibility = View.VISIBLE
         controlsPanel.visibility = View.GONE
         titleText.visibility = View.GONE
-        streamInfoText.visibility = View.GONE
+        seasonInfoText.visibility = View.GONE
+        streamInfoText.visibility = View.VISIBLE
         seekBar.visibility = View.VISIBLE
 
         handler.removeCallbacks(autoHideRunnable)
@@ -192,11 +194,20 @@ class MpvControlsManager(
         titleText.text = title ?: ""
     }
 
+    fun setSeasonInfo(info: String?) {
+        if (info.isNullOrBlank()) {
+            seasonInfoText.visibility = View.GONE
+        } else {
+            seasonInfoText.text = info
+            seasonInfoText.visibility = View.VISIBLE
+        }
+    }
+
     fun setStreamInfo(info: String) {
         if (info.isBlank()) {
             streamInfoText.visibility = View.GONE
         } else {
-            streamInfoText.text = info
+            streamInfoText.text = "MPV | $info"
             streamInfoText.visibility = View.VISIBLE
         }
     }

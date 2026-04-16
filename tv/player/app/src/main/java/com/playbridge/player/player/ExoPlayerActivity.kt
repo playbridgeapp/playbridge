@@ -201,6 +201,7 @@ class ExoPlayerActivity : PlayerActivity() {
         val nextButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_next)
         val filterButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_filter)
         val streamInfoText = findViewById<android.widget.TextView>(com.playbridge.player.R.id.tv_stream_info)
+        val seasonInfoText = findViewById<android.widget.TextView>(com.playbridge.player.R.id.tv_season_info)
         val elapsedText = findViewById<android.widget.TextView>(com.playbridge.player.R.id.tv_elapsed)
         val remainingText = findViewById<android.widget.TextView>(com.playbridge.player.R.id.tv_remaining)
         val titleText = findViewById<android.widget.TextView>(com.playbridge.player.R.id.title_text)
@@ -229,6 +230,7 @@ class ExoPlayerActivity : PlayerActivity() {
             filterButton = filterButton,
             loopButton = loopButton,
             streamInfoText = streamInfoText,
+            seasonInfoText = seasonInfoText,
             elapsedText = elapsedText,
             remainingText = remainingText,
             titleText = titleText,
@@ -361,6 +363,11 @@ class ExoPlayerActivity : PlayerActivity() {
         // Show playlist button when a playlist is active OR series navigator has list mode
         controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
 
+        seriesNavigator?.let { nav ->
+            val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+            controlsManager.setSeasonInfo(seasonInfo)
+        }
+
         // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
         if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
             controlsManager.setNavigationVisible(true)
@@ -411,6 +418,9 @@ class ExoPlayerActivity : PlayerActivity() {
     private var playJob: kotlinx.coroutines.Job? = null
 
     private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
+        if (seriesNavigator == null) {
+            controlsManager.setSeasonInfo(null)
+        }
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "Target URL: $url")
         FileLogger.i(TAG, "Target Title: $title")
@@ -1034,6 +1044,10 @@ class ExoPlayerActivity : PlayerActivity() {
                         android.widget.Toast.makeText(
                             this@ExoPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT
                         ).show()
+
+                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                        controlsManager.setSeasonInfo(seasonInfo)
+
                         playVideo(url = stream.url, title = epTitle)
                         videoFilterManager.reapplyFilter()
                         controlsManager.hideUI()
@@ -1160,6 +1174,10 @@ class ExoPlayerActivity : PlayerActivity() {
                             "Next: $epTitle",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
+
+                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                        controlsManager.setSeasonInfo(seasonInfo)
+
                         playVideo(url = stream.url, title = epTitle)
                         videoFilterManager.reapplyFilter()
                         controlsManager.hideUI()
@@ -1372,6 +1390,11 @@ class ExoPlayerActivity : PlayerActivity() {
             if (stream != null) {
                 val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
                 android.widget.Toast.makeText(this@ExoPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
+
+                // Display season info on top left (e.g. "Season 1 (1x5)")
+                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                controlsManager.setSeasonInfo(seasonInfo)
+
                 playVideo(url = stream.url, title = epTitle)
                 videoFilterManager.reapplyFilter()
                 controlsManager.hideUI()
