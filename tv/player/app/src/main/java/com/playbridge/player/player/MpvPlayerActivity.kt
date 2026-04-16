@@ -548,13 +548,20 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             controlsManager.setSeasonInfo(seasonInfo)
         }
 
+        val nav = seriesNavigator
+        val displayTitle = if (nav != null && nav.seriesTitle != null) {
+            nav.seriesTitle
+        } else {
+            title
+        }
+
         if (url == null) {
             Toast.makeText(this, "No URL provided", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
 
-        title?.let {
+        displayTitle?.let {
             Toast.makeText(this, it, Toast.LENGTH_SHORT).show()
             controlsManager.setTitle(it)
         }
@@ -589,6 +596,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // ── Playback ─────────────────────────────────────────────────────────────
 
     private fun playVideo(url: String, headers: Map<String, String>?) {
+        setupSeriesNavigator(intent)
         currentUrl = url
         if (seriesNavigator == null) {
             controlsManager.setSeasonInfo(null)
@@ -714,11 +722,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
-                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                        android.widget.Toast.makeText(this@MpvPlayerActivity, "Next: $epTitle", android.widget.Toast.LENGTH_SHORT).show()
-
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
+
+                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                        controlsManager.setTitle(mainTitle)
+
+                        // Update intent
+                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
@@ -763,11 +775,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
-                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                        android.widget.Toast.makeText(this@MpvPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
-
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
+
+                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                        controlsManager.setTitle(mainTitle)
+
+                        // Update intent
+                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
@@ -1048,15 +1064,17 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
             if (stream != null) {
-                val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                android.widget.Toast.makeText(this@MpvPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
-
                 // Display season info on top left (e.g. "Season 1 (1x5)")
                 val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                 controlsManager.setSeasonInfo(seasonInfo)
 
-                // Update UI title so playVideo() logs and uses the correct metadata
-                controlsManager.setTitle(epTitle)
+                // Use the series title for the main title bar if available, else SxE
+                val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                controlsManager.setTitle(mainTitle)
+
+                // Update intent
+                intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                 playVideo(url = stream.url, headers = null)
                 controlsManager.hideControls()

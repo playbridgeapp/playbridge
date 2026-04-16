@@ -444,6 +444,18 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             controlsManager.setSeasonInfo(seasonInfo)
         }
 
+        val nav = seriesNavigator
+        val displayTitle = if (nav != null && nav.seriesTitle != null) {
+            nav.seriesTitle
+        } else {
+            title
+        }
+
+        displayTitle?.let {
+            Toast.makeText(this, it, Toast.LENGTH_SHORT).show()
+            controlsManager.setTitle(it)
+        }
+
         // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
         if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
             // VlcControlsManager doesn't have setNavigationVisible yet, but we can ensure they are showing
@@ -509,11 +521,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
-                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                        android.widget.Toast.makeText(this@VlcPlayerActivity, "Next: $epTitle", android.widget.Toast.LENGTH_SHORT).show()
-
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
+
+                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                        controlsManager.setTitle(mainTitle)
+
+                        // Update intent
+                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
@@ -556,11 +572,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
-                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                        android.widget.Toast.makeText(this@VlcPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
-
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
+
+                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                        controlsManager.setTitle(mainTitle)
+
+                        // Update intent
+                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
                         controlsManager.hideControls()
@@ -700,15 +720,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
             if (stream != null) {
-                val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                android.widget.Toast.makeText(this@VlcPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
-
                 // Display season info on top left (e.g. "Season 1 (1x5)")
                 val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                 controlsManager.setSeasonInfo(seasonInfo)
 
-                // Update UI title so playVideo() logs and uses the correct metadata
-                controlsManager.setTitle(epTitle)
+                // Use the series title for the main title bar if available, else SxE
+                val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                controlsManager.setTitle(mainTitle)
+
+                // Update intent
+                intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                 playVideo(url = stream.url, headers = null)
                 controlsManager.hideControls()
@@ -836,10 +858,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         val info = buildString {
             if (videoTrack != null) {
-                // Resolution
-                val videoData = videoTrack as? org.videolan.libvlc.MediaPlayer.TrackDescription
-                // VLC doesn't expose resolution easily here without deeper track parsing
-                // but we can at least show codec name if available
                 append(videoTrack.name ?: "Video")
             }
             if (audioTrack != null) {
@@ -909,6 +927,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private suspend fun playVideoInternal(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
+        setupSeriesNavigator(intent)
         val title = controlsManager.getTitle()
         if (seriesNavigator == null) {
             controlsManager.setSeasonInfo(null)

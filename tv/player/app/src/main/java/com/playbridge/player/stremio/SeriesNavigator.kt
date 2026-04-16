@@ -33,6 +33,10 @@ class SeriesNavigator(
     val episodeList: List<SeriesEpisodeRef>? =
         context.allEpisodes?.sortedWith(compareBy({ it.season }, { it.episode }))
 
+    /** Series title for display. */
+    val seriesTitle: String?
+        get() = context.seriesTitle
+
     /**
      * Release-group / source hint for the currently playing stream.
      * Seeded by [updateSourceHint] once the player starts, then updated automatically

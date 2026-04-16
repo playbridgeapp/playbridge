@@ -132,8 +132,8 @@ class MpvControlsManager(
 
         controlsRoot.visibility = View.VISIBLE
         controlsPanel.visibility = View.GONE
-        titleText.visibility = View.GONE
-        seasonInfoText.visibility = View.GONE
+        titleText.visibility = View.VISIBLE
+        seasonInfoText.visibility = if (!seasonInfoText.text.isNullOrBlank()) View.VISIBLE else View.GONE
         streamInfoText.visibility = View.VISIBLE
         seekBar.visibility = View.VISIBLE
 

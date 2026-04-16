@@ -350,11 +350,18 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         if (url != null) {
-            val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
-            val displayTitle = if (playlistItems.isNotEmpty() && title?.contains(suffix) != true) {
-                "$title $suffix"
+            val nav = seriesNavigator
+            val baseTitle = if (nav != null && nav.seriesTitle != null) {
+                nav.seriesTitle
             } else {
                 title
+            }
+
+            val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
+            val displayTitle = if (playlistItems.isNotEmpty() && baseTitle?.contains(suffix) != true) {
+                "$baseTitle $suffix"
+            } else {
+                baseTitle
             }
             FileLogger.i(TAG, "Playing video: $url (title: $displayTitle, type: $contentType, subs: $subtitles, detectedBy: $detectedBy)")
             playVideo(url, displayTitle, contentType, detectedBy, headers, subtitles)
@@ -418,6 +425,7 @@ class ExoPlayerActivity : PlayerActivity() {
     private var playJob: kotlinx.coroutines.Job? = null
 
     private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
+        setupSeriesNavigator(intent)
         if (seriesNavigator == null) {
             controlsManager.setSeasonInfo(null)
         }
@@ -1040,15 +1048,17 @@ class ExoPlayerActivity : PlayerActivity() {
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
-                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                        android.widget.Toast.makeText(
-                            this@ExoPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT
-                        ).show()
-
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
 
-                        playVideo(url = stream.url, title = epTitle)
+                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                        controlsManager.setTitle(mainTitle)
+
+                        // Update intent
+                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
+
+                        playVideo(url = stream.url, title = mainTitle)
                         videoFilterManager.reapplyFilter()
                         controlsManager.hideUI()
                     } else {
@@ -1168,17 +1178,17 @@ class ExoPlayerActivity : PlayerActivity() {
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
-                        val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                        android.widget.Toast.makeText(
-                            this@ExoPlayerActivity,
-                            "Next: $epTitle",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
-
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
 
-                        playVideo(url = stream.url, title = epTitle)
+                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                        controlsManager.setTitle(mainTitle)
+
+                        // Update intent so that history saving and re-init works with the new stream
+                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
+
+                        playVideo(url = stream.url, title = mainTitle)
                         videoFilterManager.reapplyFilter()
                         controlsManager.hideUI()
                     } else {
@@ -1388,14 +1398,19 @@ class ExoPlayerActivity : PlayerActivity() {
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
             if (stream != null) {
-                val epTitle = "S${nav.currentSeason}E${nav.currentEpisode}"
-                android.widget.Toast.makeText(this@ExoPlayerActivity, epTitle, android.widget.Toast.LENGTH_SHORT).show()
-
                 // Display season info on top left (e.g. "Season 1 (1x5)")
                 val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                 controlsManager.setSeasonInfo(seasonInfo)
 
-                playVideo(url = stream.url, title = epTitle)
+                // Use the series title for the main title bar if available, else SxE
+                val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                controlsManager.setTitle(mainTitle)
+
+                // Update intent
+                intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
+
+                playVideo(url = stream.url, title = mainTitle)
                 videoFilterManager.reapplyFilter()
                 controlsManager.hideUI()
             } else {
