@@ -34,6 +34,14 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.media3.common.Tracks
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Text
 
 private const val TAG = "ExoPlayerActivity"
 
@@ -197,6 +205,7 @@ class ExoPlayerActivity : PlayerActivity() {
         val playPauseButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_play_pause)
         val tracksButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_tracks)
         val playlistButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_playlist)
+        val streamsButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_streams)
         val prevButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_prev)
         val nextButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_next)
         val filterButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_filter)
@@ -225,6 +234,7 @@ class ExoPlayerActivity : PlayerActivity() {
             playPauseButton = playPauseButton,
             tracksButton = tracksButton,
             playlistButton = playlistButton,
+            streamsButton = streamsButton,
             prevButton = prevButton,
             nextButton = nextButton,
             filterButton = filterButton,
@@ -238,6 +248,7 @@ class ExoPlayerActivity : PlayerActivity() {
             playerProvider = { player },
             onShowTrackSelection = { showTrackSelectionDialog() },
             onShowPlaylist = { showPlaylistPicker() },
+            onShowStreams = { showStreamSelectionDialog() },
             onShowFilter = { showVideoFilterDialog() },
             onPrevious = { playPreviousInPlaylist() },
             onNext = { playNextInPlaylist() },
@@ -370,6 +381,9 @@ class ExoPlayerActivity : PlayerActivity() {
         // Show playlist button when a playlist is active OR series navigator has list mode
         controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
 
+        // Show streams button when series navigator is active
+        controlsManager.setStreamsVisible(seriesNavigator != null)
+
         seriesNavigator?.let { nav ->
             val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
             controlsManager.setSeasonInfo(seasonInfo)
@@ -429,6 +443,7 @@ class ExoPlayerActivity : PlayerActivity() {
         if (seriesNavigator == null) {
             controlsManager.setSeasonInfo(null)
         }
+        controlsManager.setStreamsVisible(seriesNavigator != null)
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "Target URL: $url")
         FileLogger.i(TAG, "Target Title: $title")
@@ -1324,6 +1339,71 @@ class ExoPlayerActivity : PlayerActivity() {
     /**
      * Show the playlist picker dialog.
      */
+    /**
+     * Show the stream selection dialog for Stremio sources.
+     */
+    @OptIn(ExperimentalTvMaterial3Api::class)
+    private fun showStreamSelectionDialog() {
+        val nav = seriesNavigator ?: return
+        val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
+
+        val wasPlaying = player?.isPlaying == true
+        if (wasPlaying) player?.pause()
+
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
+        val composeView = androidx.compose.ui.platform.ComposeView(this)
+
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+
+        composeView.setContent {
+            var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
+            var isLoading by remember { mutableStateOf(true) }
+
+            LaunchedEffect(Unit) {
+                streams = nav.resolveCurrentStreams()
+                isLoading = false
+            }
+
+            PlayBridgeTVTheme {
+                if (isLoading) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(text = "Loading sources...", color = Color(0xFF00D9FF))
+                    }
+                } else {
+                    StreamSelectionDialog(
+                        streams = streams,
+                        currentUrl = currentUrl,
+                        onStreamSelected = { stream ->
+                            dialog.dismiss()
+                            val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+
+                            // Update intent
+                            intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+
+                            playVideo(url = stream.url, title = mainTitle)
+                            videoFilterManager.reapplyFilter()
+                            controlsManager.hideUI()
+                        },
+                        onDismiss = {
+                            dialog.dismiss()
+                        }
+                    )
+                }
+            }
+        }
+
+        dialog.setContentView(composeView)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener {
+            activeDialog = null
+            if (wasPlaying) player?.play()
+            controlsManager.showControlsUI()
+        }
+        dialog.show()
+    }
+
     private fun showPlaylistPicker() {
         val displayItems: List<com.playbridge.protocol.PlayPayload>
         val displayIndex: Int

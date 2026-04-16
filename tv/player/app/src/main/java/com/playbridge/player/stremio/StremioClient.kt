@@ -51,6 +51,21 @@ data class ResolvedStremioStream(
     val title: String? = null
 )
 
+/**
+ * A stream candidate with its associated score and ranking metadata.
+ * Returned by [resolveStreams] to allow for manual selection.
+ */
+data class ScoredStremioStream(
+    val url: String,
+    val name: String? = null,
+    val title: String? = null,
+    val score: Int,
+    val rank: Int,
+    val isSeasonPack: Boolean,
+    val isExtras: Boolean,
+    val isTargetTier: Boolean
+)
+
 // ==================== Quality Ranking ====================
 
 /**
@@ -230,6 +245,55 @@ object StremioClient {
      * @param preferredAddonBaseUrl Base URL of the preferred addon to try first.
      * @return Best matching stream, or null if all addons fail or return empty
      */
+    /**
+     * Resolve all direct HTTP streams for a series episode across all provided addons.
+     * Unlike [resolveEpisode], this returns the full list of candidates (scored and sorted)
+     * so the user can manually pick an alternative if the "best" match is poor.
+     */
+    suspend fun resolveStreams(
+        addonBaseUrls: List<String>,
+        imdbId: String,
+        season: Int,
+        episode: Int,
+        qualityPreference: String? = null,
+        sourceHint: String? = null,
+        preferredAddonBaseUrl: String? = null
+    ): List<ScoredStremioStream> = withContext(Dispatchers.IO) {
+        if (addonBaseUrls.isEmpty()) return@withContext emptyList()
+
+        val stremioId = "$imdbId:$season:$episode"
+
+        // Fetch from all addons in parallel
+        val allStreams: List<StremioStreamItem> = coroutineScope {
+            addonBaseUrls.map { baseUrl ->
+                async { fetchFromAddon(baseUrl, stremioId) }
+            }.flatMap { it.await() }
+        }
+
+        if (allStreams.isEmpty()) return@withContext emptyList()
+
+        val targetRank = QualityRanker.targetRank(qualityPreference)
+        fun score(s: StremioStreamItem): Int =
+            QualityRanker.rank(s) * 100 +
+            (if (isSeasonPack(s)) 10 else 0) +
+            sourceMatchScore(s, sourceHint)
+
+        return@withContext allStreams
+            .map { item ->
+                ScoredStremioStream(
+                    url = item.url!!,
+                    name = item.name,
+                    title = item.title,
+                    score = score(item),
+                    rank = QualityRanker.rank(item),
+                    isSeasonPack = isSeasonPack(item),
+                    isExtras = isExtrasContent(item),
+                    isTargetTier = targetRank > 0 && QualityRanker.rank(item) == targetRank
+                )
+            }
+            .sortedByDescending { it.score }
+    }
+
     suspend fun resolveEpisode(
         addonBaseUrls: List<String>,
         imdbId: String,

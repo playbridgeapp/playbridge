@@ -26,6 +26,7 @@ class PlayerControlsManager(
     private val playPauseButton: ImageButton,
     private val tracksButton: ImageButton,
     private val playlistButton: ImageButton,
+    private val streamsButton: ImageButton,
     private val prevButton: ImageButton,
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
@@ -39,6 +40,7 @@ class PlayerControlsManager(
     private val playerProvider: () -> ExoPlayer?,
     private val onShowTrackSelection: () -> Unit,
     private val onShowPlaylist: () -> Unit,
+    private val onShowStreams: () -> Unit,
     private val onShowFilter: () -> Unit,
     private val onPrevious: () -> Unit,
     private val onNext: () -> Unit,
@@ -100,6 +102,10 @@ class PlayerControlsManager(
             onShowPlaylist()
         }
 
+        streamsButton.setOnClickListener {
+            onShowStreams()
+        }
+
         filterButton.setOnClickListener {
             onShowFilter()
         }
@@ -132,6 +138,13 @@ class PlayerControlsManager(
         playlistButton.visibility = vis
         prevButton.visibility = vis
         nextButton.visibility = vis
+    }
+
+    /**
+     * Show or hide the stream selection button.
+     */
+    fun setStreamsVisible(visible: Boolean) {
+        streamsButton.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     /**

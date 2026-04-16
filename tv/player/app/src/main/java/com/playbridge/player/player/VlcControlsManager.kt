@@ -23,12 +23,14 @@ class VlcControlsManager(
     private val playerProvider: () -> MediaPlayer?,
     private val tracksButton: ImageButton,
     private val playlistButton: ImageButton,
+    private val streamsButton: ImageButton,
     private val prevButton: ImageButton,
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
     private val loopButton: ImageButton,
     private val onShowSettings: () -> Unit,
     private val onShowPlaylist: () -> Unit,
+    private val onShowStreams: () -> Unit,
     private val onError: () -> Unit,
     private val onSeekForwardRequested: () -> Unit,
     private val onSeekBackwardRequested: () -> Unit,
@@ -97,6 +99,10 @@ class VlcControlsManager(
         nextButton.visibility = vis
     }
 
+    fun setStreamsVisible(visible: Boolean) {
+        streamsButton.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
     init {
         // Default visibility for non-playlist buttons
         tracksButton.visibility = View.VISIBLE
@@ -116,6 +122,10 @@ class VlcControlsManager(
 
         playlistButton.setOnClickListener {
             onShowPlaylist()
+        }
+
+        streamsButton.setOnClickListener {
+            onShowStreams()
         }
 
         prevButton.setOnClickListener {

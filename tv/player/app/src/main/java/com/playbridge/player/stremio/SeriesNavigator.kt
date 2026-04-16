@@ -3,6 +3,7 @@ package com.playbridge.player.stremio
 import android.util.Log
 import com.playbridge.protocol.SeriesContext
 import com.playbridge.protocol.SeriesEpisodeRef
+import com.playbridge.player.stremio.ScoredStremioStream
 
 private const val TAG = "SeriesNavigator"
 
@@ -145,6 +146,23 @@ class SeriesNavigator(
     }
 
     // ── Resolution ────────────────────────────────────────────────────────────
+
+    /**
+     * Resolve all available streams for the current episode.
+     * Useful for showing a "Stream Selection" dialog to the user.
+     */
+    suspend fun resolveCurrentStreams(): List<ScoredStremioStream> {
+        Log.d(TAG, "resolveCurrentStreams: resolving S${currentSeason}E${currentEpisode}")
+        return StremioClient.resolveStreams(
+            addonBaseUrls          = context.addonBaseUrls,
+            imdbId                 = context.imdbId,
+            season                 = currentSeason,
+            episode                = currentEpisode,
+            qualityPreference      = qualityPreference,
+            sourceHint             = currentSourceHint,
+            preferredAddonBaseUrl  = context.preferredAddonBaseUrl
+        )
+    }
 
     /**
      * Resolve a fresh stream URL for the next episode.

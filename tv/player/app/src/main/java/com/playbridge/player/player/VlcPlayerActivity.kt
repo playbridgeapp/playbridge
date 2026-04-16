@@ -22,6 +22,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Modifier
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Text
+import androidx.compose.runtime.getValue
 import com.playbridge.player.R
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.data.HistoryStore
@@ -351,12 +360,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             playerProvider = { mediaPlayer },
             tracksButton = findViewById(R.id.btn_tracks),
             playlistButton = findViewById(R.id.btn_playlist),
+            streamsButton = findViewById(R.id.btn_streams),
             prevButton = findViewById(R.id.btn_prev),
             nextButton = findViewById(R.id.btn_next),
             filterButton = findViewById(R.id.btn_filter),
             loopButton = findViewById(R.id.btn_loop),
             onShowSettings = { showSettingsDialog() },
             onShowPlaylist = { showPlaylistPicker() },
+            onShowStreams = { showStreamSelectionDialog() },
             onError = { handleVlcError() },
             onSeekForwardRequested = { handleSeek(1) },
             onSeekBackwardRequested = { handleSeek(-1) },
@@ -438,6 +449,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         // Show playlist button when a playlist is active OR series navigator has list mode
         controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
+
+        // Show streams button when series navigator is active
+        controlsManager.setStreamsVisible(seriesNavigator != null)
 
         seriesNavigator?.let { nav ->
             val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
@@ -638,6 +652,68 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         } catch (e: Exception) {
             FileLogger.e(TAG, "Failed to broadcast playlist status: ${e.message}")
         }
+    }
+
+    /**
+     * Show the stream selection dialog for Stremio sources.
+     */
+    @OptIn(ExperimentalTvMaterial3Api::class)
+    private fun showStreamSelectionDialog() {
+        val nav = seriesNavigator ?: return
+        val currentUrl = intent?.getStringExtra(ServerService.EXTRA_URL)
+
+        val wasPlaying = mediaPlayer?.isPlaying == true
+        if (wasPlaying) mediaPlayer?.pause()
+
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
+        val composeView = androidx.compose.ui.platform.ComposeView(this)
+
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+
+        composeView.setContent {
+            var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
+            var isLoading by remember { mutableStateOf(true) }
+
+            LaunchedEffect(Unit) {
+                streams = nav.resolveCurrentStreams()
+                isLoading = false
+            }
+
+            PlayBridgeTVTheme {
+                if (isLoading) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(text = "Loading sources...", color = Color(0xFF00D9FF))
+                    }
+                } else {
+                    StreamSelectionDialog(
+                        streams = streams,
+                        currentUrl = currentUrl,
+                        onStreamSelected = { stream ->
+                            dialog.dismiss()
+
+                            // Update intent
+                            intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+
+                            playVideo(url = stream.url, headers = currentHeaders)
+                            controlsManager.hideControls()
+                        },
+                        onDismiss = {
+                            dialog.dismiss()
+                        }
+                    )
+                }
+            }
+        }
+        dialog.setContentView(composeView)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener {
+            activeDialog = null
+            if (wasPlaying) mediaPlayer?.play()
+            controlsManager.showControls()
+        }
+        dialog.show()
     }
 
     private fun showPlaylistPicker() {

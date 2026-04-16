@@ -219,6 +219,22 @@
                     android:focusable="true"
                     android:visibility="gone"
                     android:nextFocusUp="@id/player_seekbar"
+                    android:nextFocusRight="@id/btn_streams" />
+
+                <ImageButton
+                    android:id="@+id/btn_streams"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="12dp"
+                    android:background="@drawable/selector_player_button"
+                    android:src="@drawable/ic_dns"
+                    android:scaleType="fitCenter"
+                    android:padding="6dp"
+                    android:contentDescription="Stream Selection"
+                    android:focusable="true"
+                    android:visibility="gone"
+                    android:nextFocusUp="@id/player_seekbar"
+                    android:nextFocusLeft="@id/btn_playlist"
                     android:nextFocusRight="@id/btn_filter" />
 
                 <ImageButton

@@ -29,6 +29,7 @@ class MpvControlsManager(
     private val bufferingSpinner: ProgressBar,
     private val tracksButton: ImageButton,
     private val playlistButton: ImageButton,
+    private val streamsButton: ImageButton,
     private val prevButton: ImageButton,
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
@@ -39,6 +40,7 @@ class MpvControlsManager(
     private val onTogglePlayPause: () -> Unit,
     private val onShowSettings: () -> Unit,
     private val onShowPlaylist: () -> Unit,
+    private val onShowStreams: () -> Unit,
     private val onSeekForwardRequested: () -> Unit,
     private val onSeekBackwardRequested: () -> Unit,
     private val onPrevious: () -> Unit,
@@ -65,6 +67,7 @@ class MpvControlsManager(
 
     init {
         playlistButton.visibility = View.GONE
+        streamsButton.visibility = View.GONE
         prevButton.visibility = View.GONE
         nextButton.visibility = View.GONE
         filterButton.visibility = View.GONE
@@ -73,6 +76,7 @@ class MpvControlsManager(
         playPauseButton.setOnClickListener { togglePlayPause() }
         tracksButton.setOnClickListener { onShowSettings() }
         playlistButton.setOnClickListener { onShowPlaylist() }
+        streamsButton.setOnClickListener { onShowStreams() }
         prevButton.setOnClickListener { onPrevious() }
         nextButton.setOnClickListener { onNext() }
 
@@ -219,6 +223,10 @@ class MpvControlsManager(
         playlistButton.visibility = vis
         prevButton.visibility = vis
         nextButton.visibility = vis
+    }
+
+    fun setStreamsVisible(visible: Boolean) {
+        streamsButton.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     fun detachPlayer() {

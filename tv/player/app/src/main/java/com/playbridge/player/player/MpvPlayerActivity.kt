@@ -19,9 +19,23 @@ import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import com.playbridge.player.logging.FileLogger
+import androidx.annotation.OptIn
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Modifier
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Text
+// ComposeOptIn alias removed — androidx.compose.runtime.OptIn does not exist
 
 /**
  * MPV-based video player activity.
@@ -100,10 +114,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // ── PlayerActivity abstract impl ─────────────────────────────────────────
 
     override fun play() {
+        if (!mpvInitialized) return
         MPVLib.setPropertyBoolean("pause", false)
     }
 
     override fun pause() {
+        if (!mpvInitialized) return
         MPVLib.setPropertyBoolean("pause", true)
     }
 
@@ -114,162 +130,23 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     override fun getCurrentPosition(): Long = positionMs
 
     override fun seekTo(position: Long) {
-        if (durationMs == 0L) {
-            // File not loaded yet — ProgressManager called us to restore position;
-            // stash it and apply once MPV_EVENT_FILE_LOADED fires.
+        if (!mpvInitialized) return
+        if (durationMs > 0) {
+            preSeePositionMs = positionMs
+            MPVLib.command("seek", (position / 1000.0).toString(), "absolute+keyframes")
+            scheduleSeekTimeout()
+        } else {
+            // Restore position on load
             pendingResumePositionMs = position
-            return
         }
-        preSeePositionMs = positionMs
-        val seconds = position / 1000.0
-        MPVLib.command("seek", seconds.toString(), "absolute+keyframes")
     }
 
-    /** Exact seek used only for resume-position restore where precision matters. */
-    private fun seekExact(position: Long) {
-        preSeePositionMs = positionMs
-        val seconds = position / 1000.0
-        MPVLib.command("seek", seconds.toString(), "absolute")
-    }
-
-    override fun getVideoSurfaceView(): SurfaceView? =
-        if (this::surfaceView.isInitialized) surfaceView else null
+    override fun getVideoSurfaceView(): android.view.SurfaceView? = surfaceView
 
     override fun stopPlayback() {
-        FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
-        if (mpvInitialized) {
-            MPVLib.command("stop")
-        }
-        runOnUiThread {
-            if (::surfaceView.isInitialized) {
-                surfaceView.visibility = android.view.View.INVISIBLE
-            }
-        }
-    }
-
-    // ── MPVLib.EventObserver ─────────────────────────────────────────────────
-
-    override fun eventProperty(property: String) {}
-    override fun eventProperty(property: String, value: Double) {
-        if (property == "demuxer-cache-time") {
-            bufferAheadMs = (value * 1000L).toLong()
-        }
-    }
-    override fun eventProperty(property: String, value: MPVNode) {}
-
-    override fun eventProperty(property: String, value: String) {
-        when (property) {
-            "video-codec"    -> { videoCodecRaw = value; updateStreamInfo() }
-            "audio-codec"    -> { audioCodecRaw = value; updateStreamInfo() }
-            "audio-channels" -> { audioChannels = value; updateStreamInfo() }
-        }
-    }
-
-    override fun eventProperty(property: String, value: Long) {
-        when (property) {
-            "time-pos"      -> positionMs = value * 1000L
-            "duration"      -> durationMs = value * 1000L
-            "height"        -> { videoHeight = value; updateStreamInfo() }
-            "video-bitrate" -> { videoBitrateBps = value; updateStreamInfo() }
-        }
-    }
-
-    override fun eventProperty(property: String, value: Boolean) {
-        if (property == "pause") {
-            isPlayingState = !value
-            runOnUiThread { controlsManager.onPlayingChanged(isPlayingState) }
-        }
-    }
-
-    override fun event(eventId: Int, data: MPVNode) {
-        when (eventId) {
-            8 -> { // MPV_EVENT_FILE_LOADED
-                FileLogger.i(TAG, "File loaded — duration=${durationMs}ms, resume=${pendingResumePositionMs}ms")
-                runOnUiThread {
-                    seekHandler.removeCallbacks(seekTimeoutRunnable)
-                    isLoadingNewStream = false
-                    controlsManager.onBufferingChanged(false)
-                    // Apply resume position stashed by seekTo() before the file was loaded.
-                    // At this point durationMs > 0 so seekTo() will execute the MPV command.
-                    val resumeAt = pendingResumePositionMs
-                    pendingResumePositionMs = 0L
-                    if (resumeAt > 0) seekExact(resumeAt)
-                    // Load first external subtitle if provided
-                    subtitleUrls.firstOrNull()?.let { sub ->
-                        MPVLib.command("sub-add", sub, "select")
-                    }
-                }
-            }
-            7 -> { // MPV_EVENT_END_FILE
-                FileLogger.i(TAG, "End-file url=${currentUrl ?: "(unknown)"}")
-                runOnUiThread {
-                    // Suppress if we already issued a new loadfile (stream switch via onNewIntent).
-                    // MPV fires END_FILE for the old stream before FILE_LOADED for the new one.
-                    if (isLoadingNewStream) return@runOnUiThread
-                    if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
-                        playNextInPlaylist()
-                    } else {
-                        progressManager.saveProgress()
-                        finish()
-                    }
-                }
-            }
-            20 -> { // MPV_EVENT_SEEK
-                FileLogger.d(TAG, "Seek — buffering")
-                runOnUiThread {
-                    controlsManager.onBufferingChanged(true)
-                    seekHandler.removeCallbacks(seekTimeoutRunnable)
-                    seekHandler.postDelayed(seekTimeoutRunnable, seekTimeoutMs)
-                }
-            }
-            21 -> { // MPV_EVENT_PLAYBACK_RESTART
-                FileLogger.d(TAG, "Playback restart — buffering done")
-                runOnUiThread {
-                    seekHandler.removeCallbacks(seekTimeoutRunnable)
-                    controlsManager.onBufferingChanged(false)
-                }
-            }
-        }
-    }
-
-    // ── Broadcast receiver ───────────────────────────────────────────────────
-
-    private val remoteReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                ServerService.ACTION_REMOTE -> {
-                    when (intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)) {
-                        "up", "down", "left", "right" -> {
-                            if (!controlsManager.isControlsVisible()) controlsManager.showControls()
-                        }
-                        "enter" -> controlsManager.toggleControls()
-                        "back" -> {
-                            if (controlsManager.isControlsVisible()) controlsManager.hideControls()
-                            else finish()
-                        }
-                    }
-                }
-                ServerService.ACTION_CONTROL -> {
-                    when (intent.getStringExtra(ServerService.EXTRA_COMMAND)) {
-                        "play_pause" -> controlsManager.togglePlayPause()
-                        "stop" -> finish()
-                        "seek_fwd" -> controlsManager.onSeekForward()
-                        "seek_rev" -> controlsManager.onSeekBackward()
-                    }
-                }
-                ServerService.ACTION_QUEUE_ADD -> {
-                    ServerService.drainPendingQueueItems().forEach { payload ->
-                        playlistItems.add(payload)
-                    }
-                    controlsManager.setPlaylistVisible(true)
-                    broadcastPlaylistStatus()
-                }
-                ServerService.ACTION_PLAYLIST_JUMP -> {
-                    val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
-                    if (index >= 0) playItemAtIndex(index)
-                }
-            }
-        }
+        if (!mpvInitialized) return
+        FileLogger.i(TAG, "stopPlayback() — clearing MPV state for transition")
+        MPVLib.command("stop")
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -352,21 +229,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         MPVLib.init()
 
-        // Observe the properties we care about.
-        // Format IDs from mpv/client.h: MPV_FORMAT_FLAG=3, MPV_FORMAT_INT64=4
-        MPVLib.addObserver(this)
-        // Format IDs: MPV_FORMAT_STRING=1, MPV_FORMAT_FLAG=3, MPV_FORMAT_INT64=4
-        MPVLib.observeProperty("pause",               3) // Boolean
-        MPVLib.observeProperty("time-pos",            4) // Long (seconds)
-        MPVLib.observeProperty("duration",            4) // Long (seconds)
-        MPVLib.observeProperty("height",              4) // Long (px)
-        MPVLib.observeProperty("video-bitrate",       4) // Long (bits/s)
-        MPVLib.observeProperty("video-codec",         1) // String
-        MPVLib.observeProperty("audio-codec",         1) // String
-        MPVLib.observeProperty("audio-channels",      1) // String e.g. "stereo", "5.1"
-        MPVLib.observeProperty("demuxer-cache-time",  5) // Double (seconds buffered ahead)
-
         // Attach MPV rendering surface
+        // NOTE: addObserver is called AFTER controlsManager is initialized below to avoid
+        // a race where MPV's native event thread fires callbacks before controlsManager exists.
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 MPVLib.attachSurface(holder.surface)
@@ -396,6 +261,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             bufferingSpinner      = findViewById(R.id.buffering_spinner),
             tracksButton          = findViewById(R.id.btn_tracks),
             playlistButton        = findViewById(R.id.btn_playlist),
+            streamsButton         = findViewById(R.id.btn_streams),
             prevButton            = findViewById(R.id.btn_prev),
             nextButton            = findViewById(R.id.btn_next),
             filterButton          = findViewById(R.id.btn_filter),
@@ -406,13 +272,28 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             onTogglePlayPause     = {
                 MPVLib.setPropertyBoolean("pause", isPlayingState) // toggle
             },
-            onShowSettings        = { showSettingsDialog() },
+            onShowSettings        = { showTrackSelectionDialog() },
             onShowPlaylist        = { showPlaylistPicker() },
+            onShowStreams         = { showStreamSelectionDialog() },
             onSeekForwardRequested  = { handleSeek(1) },
             onSeekBackwardRequested = { handleSeek(-1) },
             onPrevious            = { playPreviousInPlaylist() },
             onNext                = { playNextInPlaylist() }
         )
+
+        // Register MPV observer NOW — after controlsManager is initialized — so that
+        // property-change callbacks can safely reference controlsManager without crashing.
+        // Format IDs: MPV_FORMAT_STRING=1, MPV_FORMAT_FLAG=3, MPV_FORMAT_INT64=4, MPV_FORMAT_DOUBLE=5
+        MPVLib.addObserver(this)
+        MPVLib.observeProperty("pause",               3) // Boolean
+        MPVLib.observeProperty("time-pos",            4) // Long (seconds)
+        MPVLib.observeProperty("duration",            4) // Long (seconds)
+        MPVLib.observeProperty("height",              4) // Long (px)
+        MPVLib.observeProperty("video-bitrate",       4) // Long (bits/s)
+        MPVLib.observeProperty("video-codec",         1) // String
+        MPVLib.observeProperty("audio-codec",         1) // String
+        MPVLib.observeProperty("audio-channels",      1) // String e.g. "stereo", "5.1"
+        MPVLib.observeProperty("demuxer-cache-time",  5) // Double (seconds buffered ahead)
 
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
@@ -430,9 +311,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         handleIntent(intent)
 
-        // Drain queue items that arrived before our receiver was registered
+        // Drain any queue items that arrived before our receiver was registered.
+        // Must happen AFTER handleIntent because handleIntent replaces playlistItems.
         ServerService.drainPendingQueueItems().forEach { payload ->
             playlistItems.add(payload)
+            FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
         }
         if (playlistItems.isNotEmpty()) {
             controlsManager.setPlaylistVisible(true)
@@ -442,165 +325,373 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        stopPlayback()
         handleIntent(intent)
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (event?.action != KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
+    override fun onStart() {
+        super.onStart()
+    }
 
-        val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
+    override fun onPause() {
+        super.onPause()
+        if (::progressManager.isInitialized) progressManager.saveProgress()
+    }
 
-        if (isFullOverlayVisible) {
-            // Controls overlay is up — let system handle D-pad focus navigation,
-            // but eat up/down so focus doesn't escape the controls row.
-            return when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> true
-                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { controlsManager.togglePlayPause(); true }
-                KeyEvent.KEYCODE_MEDIA_PLAY  -> { play();  true }
-                KeyEvent.KEYCODE_MEDIA_PAUSE -> { pause(); true }
-                else -> super.onKeyDown(keyCode, event)
-            }
-        }
-
-        // Normal mode — D-pad drives seeking/volume, center pauses and opens overlay.
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        return when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER,
-            KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                pause()
-                controlsManager.showControls()
-                true
-            }
-            KeyEvent.KEYCODE_DPAD_LEFT -> {
-                val multiplier = if ((event.repeatCount) > 10) 5 else 1
-                handleSeek(-multiplier)
-                true
-            }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                val multiplier = if ((event.repeatCount) > 10) 5 else 1
-                handleSeek(multiplier)
-                true
-            }
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
-                true
-            }
-            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
-                true
-            }
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { controlsManager.togglePlayPause(); true }
-            KeyEvent.KEYCODE_MEDIA_PLAY  -> { play();  true }
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> { pause(); true }
-            KeyEvent.KEYCODE_MEDIA_STOP  -> { finish(); true }
-            else -> super.onKeyDown(keyCode, event)
+    override fun onStop() {
+        super.onStop()
+        if (!isFinishing && !isChangingConfigurations) {
+            finish()
         }
     }
 
     override fun onDestroy() {
-        FileLogger.i(TAG, "=== MpvPlayerActivity DESTROYED ===")
-        seekHandler.removeCallbacks(seekTimeoutRunnable)
-        super.onDestroy()
-        if (::progressManager.isInitialized) progressManager.saveProgress()
-        if (::controlsManager.isInitialized) controlsManager.detachPlayer()
         if (receiverRegistered) {
             unregisterReceiver(remoteReceiver)
             receiverRegistered = false
         }
+        activeDialog?.dismiss()
+        activeDialog = null
         if (mpvInitialized) {
-            MPVLib.removeObserver(this)
             MPVLib.destroy()
+            mpvInitialized = false
+        }
+        super.onDestroy()
+    }
+
+    // ── MPV Events ───────────────────────────────────────────────────────────
+
+    override fun eventProperty(property: String, value: Boolean) {
+        if (property == "pause") {
+            isPlayingState = !value
+            // Must post to the UI thread: this callback fires on MPV's native event thread.
+            runOnUiThread {
+                if (::controlsManager.isInitialized) {
+                    controlsManager.onPlayingChanged(isPlayingState)
+                }
+            }
         }
     }
 
-    // ── Intent handling ──────────────────────────────────────────────────────
-
-    private fun handleIntent(intent: Intent) {
-        val url   = intent.getStringExtra(ServerService.EXTRA_URL)
-        val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
-
-        intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)?.let {
-            subtitleUrls = it
+    override fun eventProperty(property: String, value: Long) {
+        when (property) {
+            "time-pos" -> {
+                positionMs = value * 1000
+            }
+            "duration" -> {
+                durationMs = value * 1000
+            }
+            "height" -> {
+                videoHeight = value
+                updateStreamInfo()
+            }
+            "video-bitrate" -> {
+                videoBitrateBps = value
+                updateStreamInfo()
+            }
         }
+    }
 
-        @Suppress("UNCHECKED_CAST")
-        val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
+    override fun eventProperty(property: String, value: String) {
+        when (property) {
+            "video-codec" -> {
+                videoCodecRaw = value
+                updateStreamInfo()
+            }
+            "audio-codec" -> {
+                audioCodecRaw = value
+                updateStreamInfo()
+            }
+            "audio-channels" -> {
+                audioChannels = value
+                updateStreamInfo()
+            }
+        }
+    }
 
-        setupSeriesNavigator(intent)
+    override fun eventProperty(property: String, value: Double) {
+        if (property == "demuxer-cache-time") {
+            bufferAheadMs = (value * 1000).toLong()
+        }
+    }
 
-        val isPlaylist      = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
+    // Required by MPVLib.EventObserver — no-op for untyped property changes
+    override fun eventProperty(property: String) {}
+
+    // Required by MPVLib.EventObserver — no-op for MPVNode-typed property changes
+    override fun eventProperty(property: String, value: MPVNode) {}
+
+    override fun event(eventId: Int, data: MPVNode) {
+        when (eventId) {
+            MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
+                runOnUiThread { controlsManager.showBuffering() }
+            }
+            MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
+                isLoadingNewStream = false
+                runOnUiThread {
+                    controlsManager.hideBuffering()
+                    if (pendingResumePositionMs > 0) {
+                        MPVLib.command("seek", (pendingResumePositionMs / 1000.0).toString(), "absolute+keyframes")
+                        pendingResumePositionMs = 0
+                    }
+                }
+            }
+            MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
+                // Fired when playback resumes after buffering or seek
+                seekHandler.removeCallbacks(seekTimeoutRunnable)
+                runOnUiThread { controlsManager.hideBuffering() }
+            }
+            MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
+                if (isLoadingNewStream) return
+                runOnUiThread {
+                    if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
+                        playNextInPlaylist()
+                    } else {
+                        finish()
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Internal Helpers ─────────────────────────────────────────────────────
+
+    private val remoteReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                ServerService.ACTION_REMOTE -> {
+                    val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
+                    handleRemoteKey(key)
+                }
+                ServerService.ACTION_CONTROL -> {
+                    val cmd = intent.getStringExtra(ServerService.EXTRA_COMMAND)
+                    handleControlCommand(cmd)
+                }
+                ServerService.ACTION_QUEUE_ADD -> {
+                    ServerService.drainPendingQueueItems().forEach { payload ->
+                        playlistItems.add(payload)
+                        FileLogger.i(TAG, "Queue add: ${payload.title ?: payload.url}")
+                    }
+                    controlsManager.setPlaylistVisible(true)
+                    broadcastPlaylistStatus()
+                }
+                ServerService.ACTION_PLAYLIST_JUMP -> {
+                    val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
+                    if (index >= 0) {
+                        FileLogger.i(TAG, "Playlist jump to index: $index")
+                        playItemAtIndex(index)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        val url = intent?.getStringExtra(ServerService.EXTRA_URL) ?: return
+        val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getSerializableExtra(ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
+        } else {
+            @Suppress("UNCHECKED_CAST")
+            intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
+        }
+        val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
+        val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+
+        // Read playlist if present
+        val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
         val inMemoryPlaylist = PlaylistStore.currentPlaylist
-
         if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
             playlistItems = inMemoryPlaylist.toMutableList()
             playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
+            FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
         } else {
             playlistItems = mutableListOf()
         }
 
+        // Apply title immediately if known
+        title?.let { controlsManager.setTitle(it) }
+
+        // Setup series navigator
+        setupSeriesNavigator(intent)
+
         // Show playlist button when a playlist is active OR series navigator has list mode
         controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
+
+        // Show streams button when series navigator is active
+        controlsManager.setStreamsVisible(seriesNavigator != null)
 
         seriesNavigator?.let { nav ->
             val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
             controlsManager.setSeasonInfo(seasonInfo)
         }
 
-        val nav = seriesNavigator
-        val displayTitle = if (nav != null && nav.seriesTitle != null) {
-            nav.seriesTitle
+        val displayTitle = if (seriesNavigator != null && seriesNavigator?.seriesTitle != null) {
+            seriesNavigator?.seriesTitle
         } else {
             title
         }
+        displayTitle?.let { controlsManager.setTitle(it) }
 
-        if (url == null) {
-            Toast.makeText(this, "No URL provided", Toast.LENGTH_SHORT).show()
-            finish()
-            return
-        }
+        this.subtitleUrls = subtitles ?: emptyList()
+        this.currentHeaders = headers
+        playVideo(url, headers)
+    }
 
-        displayTitle?.let {
-            Toast.makeText(this, it, Toast.LENGTH_SHORT).show()
-            controlsManager.setTitle(it)
-        }
-
-        currentHeaders = headers
-
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-            val urlWithoutQuery = url.substringBefore("?")
-            if (urlWithoutQuery.endsWith(".m3u")) {
-                try {
-                    val parsedPlaylist = M3uParser.fetchAndParseM3u(url, headers)
-                    if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
-                        playlistItems = parsedPlaylist.toMutableList()
-                        PlaylistStore.currentPlaylist = parsedPlaylist
-                        playlistIndex = 0
-                        controlsManager.setPlaylistVisible(true)
-
-                        val firstItem = parsedPlaylist[0]
-                        controlsManager.setTitle(firstItem.title ?: title)
-                        subtitleUrls = firstItem.subtitles ?: emptyList()
-                        playVideo(firstItem.url, firstItem.headers)
-                        return@launch
-                    }
-                } catch (e: Exception) {
-                    FileLogger.e(TAG,"Error parsing M3U", e)
+    private fun handleRemoteKey(key: String?) {
+        when (key) {
+            "up"    -> controlsManager.showControls()
+            "down"  -> controlsManager.showControls()
+            "left"  -> {
+                if (controlsManager.isFullOverlayVisible()) {
+                    // D-pad navigation handles focus
+                } else {
+                    handleSeek(-1)
                 }
             }
-            playVideo(url, headers)
+            "right" -> {
+                if (controlsManager.isFullOverlayVisible()) {
+                    // D-pad navigation handles focus
+                } else {
+                    handleSeek(1)
+                }
+            }
+            "center", "enter" -> {
+                if (controlsManager.isFullOverlayVisible()) {
+                    // D-pad center click handles button actions
+                } else {
+                    controlsManager.showControls()
+                }
+            }
+            "back" -> {
+                if (controlsManager.isControlsVisible()) {
+                    controlsManager.hideControls()
+                } else {
+                    finish()
+                }
+            }
+            "play_pause" -> {
+                if (isPlayingState) pause() else play()
+            }
         }
+    }
+
+    private fun handleControlCommand(command: String?) {
+        when (command) {
+            "play"  -> play()
+            "pause" -> pause()
+            "toggle_play_pause" -> if (isPlayingState) pause() else play()
+            "seek_forward"  -> handleSeek(1)
+            "seek_backward" -> handleSeek(-1)
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (!::controlsManager.isInitialized) return super.onKeyDown(keyCode, event)
+
+        val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
+
+        if (isFullOverlayVisible) {
+            return when (keyCode) {
+                // While full overlay (stream picker / episode list) is open, consume
+                // directional keys silently so the Compose focus system handles them,
+                // but pass through everything else.
+                android.view.KeyEvent.KEYCODE_DPAD_UP,
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> true
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { controlsManager.togglePlayPause(); true }
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY  -> { play(); true }
+                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> { pause(); true }
+                else -> super.onKeyDown(keyCode, event)
+            }
+        }
+
+        return when (keyCode) {
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+            android.view.KeyEvent.KEYCODE_ENTER,
+            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (controlsManager.isControlsVisible()) {
+                    // Controls already showing — center click is handled by Compose focus
+                    super.onKeyDown(keyCode, event)
+                } else {
+                    controlsManager.showControls()
+                    true
+                }
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                if (controlsManager.isControlsVisible()) {
+                    super.onKeyDown(keyCode, event)
+                } else {
+                    val multiplier = if ((event?.repeatCount ?: 0) > 10) 5 else 1
+                    handleSeek(-multiplier)
+                    true
+                }
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (controlsManager.isControlsVisible()) {
+                    super.onKeyDown(keyCode, event)
+                } else {
+                    val multiplier = if ((event?.repeatCount ?: 0) > 10) 5 else 1
+                    handleSeek(multiplier)
+                    true
+                }
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                am.adjustStreamVolume(
+                    android.media.AudioManager.STREAM_MUSIC,
+                    android.media.AudioManager.ADJUST_RAISE,
+                    android.media.AudioManager.FLAG_SHOW_UI
+                )
+                true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                am.adjustStreamVolume(
+                    android.media.AudioManager.STREAM_MUSIC,
+                    android.media.AudioManager.ADJUST_LOWER,
+                    android.media.AudioManager.FLAG_SHOW_UI
+                )
+                true
+            }
+            android.view.KeyEvent.KEYCODE_BACK -> {
+                if (controlsManager.isControlsVisible()) {
+                    controlsManager.hideControls()
+                } else {
+                    finish()
+                }
+                true
+            }
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { controlsManager.togglePlayPause(); true }
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY  -> { play(); true }
+            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> { pause(); true }
+            else -> super.onKeyDown(keyCode, event)
+        }
+    }
+
+    private fun handleSeek(direction: Int) {
+        val delta = 10_000L * direction
+        val newPos = (positionMs + delta).coerceIn(0, durationMs)
+        controlsManager.setPendingSeekTime(newPos)
+        seekTo(newPos)
+        controlsManager.showSeekUI()
+    }
+
+    private fun scheduleSeekTimeout() {
+        seekHandler.removeCallbacks(seekTimeoutRunnable)
+        seekHandler.postDelayed(seekTimeoutRunnable, seekTimeoutMs)
     }
 
     // ── Playback ─────────────────────────────────────────────────────────────
 
     private fun playVideo(url: String, headers: Map<String, String>?) {
-        setupSeriesNavigator(intent)
+        // Guard against MPV_EVENT_END_FILE from a prior stop() or a failed first HTTP attempt
+        // triggering finish() before the new stream has loaded.
+        isLoadingNewStream = true
+        // Note: setupSeriesNavigator is already called by handleIntent before playVideo;
+        // calling it again here would create a redundant SeriesNavigator instance.
         currentUrl = url
         if (seriesNavigator == null) {
             controlsManager.setSeasonInfo(null)
         }
+        controlsManager.setStreamsVisible(seriesNavigator != null)
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "URL: $url")
         FileLogger.i(TAG, "Title: ${controlsManager.getTitle()}")
@@ -612,296 +703,116 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             // seekTo() will intercept this call while durationMs == 0 (file not yet loaded)
             // and stash the position in pendingResumePositionMs; it is applied on FILE_LOADED.
             val historyItem = progressManager.restoreProgress(url)
-
-            // Restore playlist from history if needed
-            if (playlistItems.isEmpty() && historyItem?.playlistJson != null) {
-                try {
-                    val decoded = com.playbridge.protocol.protocolJson.decodeFromString(
-                        kotlinx.serialization.builtins.ListSerializer(
-                            com.playbridge.protocol.PlayPayload.serializer()
-                        ),
-                        historyItem.playlistJson!!
-                    )
-                    if (decoded.isNotEmpty()) {
-                        playlistItems = decoded.toMutableList()
-                        playlistIndex = historyItem.playlistIndex
-                        runOnUiThread { controlsManager.setPlaylistVisible(true) }
-                    }
-                } catch (e: Exception) {
-                    FileLogger.w(TAG,"Failed to restore playlist: ${e.message}")
+            if (historyItem != null) {
+                // Apply playback speed
+                if (historyItem.playbackSpeed != null) {
+                    currentPlaybackSpeed = historyItem.playbackSpeed
+                    MPVLib.setPropertyDouble("speed", currentPlaybackSpeed.toDouble())
                 }
             }
 
-            val plistJson = if (playlistItems.isNotEmpty()) {
-                try {
-                    com.playbridge.protocol.protocolJson.encodeToString(
-                        kotlinx.serialization.builtins.ListSerializer(
-                            com.playbridge.protocol.PlayPayload.serializer()
-                        ),
-                        playlistItems
-                    )
-                } catch (e: Exception) { null }
-            } else null
+            MPVLib.command("stop")
 
-            progressManager.setCurrentMedia(
-                url                       = url,
-                title                     = controlsManager.getTitle(),
-                contentType               = null,
-                headers                   = headers,
-                playlistJson              = plistJson,
-                playlistIndex             = playlistIndex,
-                preferredAudioLanguage    = null,
-                preferredSubtitleLanguage = null,
-                externalSubtitleUrl       = subtitleUrls.firstOrNull(),
-                playbackSpeed             = currentPlaybackSpeed
-            )
-
-            runOnUiThread {
-                isLoadingNewStream = true
-                applyHttpHeaders(headers)
-
-                // Re-show surface for the new video
-                if (::surfaceView.isInitialized) {
-                    surfaceView.visibility = android.view.View.VISIBLE
+            // Headers
+            headers?.forEach { (k, v) ->
+                if (k.equals("user-agent", true)) {
+                    MPVLib.setOptionString("user-agent", v)
                 }
+            }
+            val headerString = headers?.entries?.joinToString(",") { "${it.key}: ${it.value}" } ?: ""
+            MPVLib.setOptionString("http-header-fields", headerString)
 
-                FileLogger.i(TAG, "loadfile: $url")
-                MPVLib.command("loadfile", url)
-                // Ensure the new video starts playing immediately
-                MPVLib.setPropertyBoolean("pause", false)
+            MPVLib.command("loadfile", url)
+            play()
+        }
+    }
 
-                controlsManager.onBufferingChanged(true)
+    private fun updateStreamInfo() {
+        val info = buildString {
+            if (videoHeight > 0) append("${videoHeight}p")
+            if (videoCodecRaw.isNotEmpty()) {
+                val short = when {
+                    videoCodecRaw.contains("h264") -> "H.264"
+                    videoCodecRaw.contains("hevc") -> "H.265"
+                    videoCodecRaw.contains("vp9")  -> "VP9"
+                    videoCodecRaw.contains("av1")  -> "AV1"
+                    else -> videoCodecRaw.uppercase()
+                }
+                if (isNotEmpty()) append(" • ")
+                append(short)
+            }
+            if (videoBitrateBps > 0) {
+                val mbps = videoBitrateBps / 1_000_000.0
+                if (isNotEmpty()) append(" • ")
+                append("%.1f Mbps".format(mbps))
+            }
+            if (audioCodecRaw.isNotEmpty()) {
+                val short = audioCodecRaw.uppercase()
+                if (isNotEmpty()) append("  •  \uD83D\uDD0A $short")
+                val ch = when (audioChannels.lowercase()) {
+                    "stereo"              -> "2.0"
+                    "5.1", "5.1(side)"   -> "5.1"
+                    "7.1", "7.1(wide-side)" -> "7.1"
+                    "mono"               -> "Mono"
+                    else                 -> audioChannels
+                }
+                if (isNotEmpty()) append(" $ch")
             }
         }
+        runOnUiThread { controlsManager.setStreamInfo(info) }
     }
 
     /**
-     * Translate the headers map into MPV options before each loadfile call.
-     * Must be called on the main thread, before MPVLib.command("loadfile", …).
+     * Show the stream selection dialog for Stremio sources.
      */
-    private fun applyHttpHeaders(headers: Map<String, String>?) {
-        if (headers.isNullOrEmpty()) return
+    @OptIn(ExperimentalTvMaterial3Api::class)
+    private fun showStreamSelectionDialog() {
+        val nav = seriesNavigator ?: return
+        val currentUrl = this.currentUrl
 
-        headers["User-Agent"]?.let { MPVLib.setOptionString("user-agent", it) }
-        headers["Referer"]?.let { MPVLib.setOptionString("referrer", it) }
-
-        val skipKeys = setOf("User-Agent", "Referer", "Range", "Accept", "Accept-Language",
-            "Sec-Fetch-Dest", "Sec-Fetch-Site", "Sec-Fetch-Mode")
-        val extra = headers.filterKeys { it !in skipKeys }
-        if (extra.isNotEmpty()) {
-            MPVLib.setOptionString(
-                "http-header-fields",
-                extra.entries.joinToString(",") { "${it.key}: ${it.value}" }
-            )
-        }
-    }
-
-    // ── Seek ─────────────────────────────────────────────────────────────────
-
-    private fun handleSeek(direction: Int) {
-        val seekStepMs = 10_000L * direction
-        val target = (positionMs + seekStepMs).coerceIn(0, durationMs)
-        controlsManager.setPendingSeekTime(target)
-        controlsManager.showSeekUI()
-        seekTo(target)
-    }
-
-    // ── Playlist ─────────────────────────────────────────────────────────────
-
-    private fun playNextInPlaylist() {
-        isLoadingNewStream = true
-        if (playlistItems.isEmpty()) {
-            // No playlist queue — try series navigator if available
-            val nav = seriesNavigator
-            if (nav != null && nav.hasNext()) {
-                lifecycleScope.launch {
-                    FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
-
-                    stopPlayback()
-                    controlsManager.onBufferingChanged(true)
-
-                    val stream = nav.resolveNext()
-                    if (stream != null) {
-                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                        controlsManager.setSeasonInfo(seasonInfo)
-
-                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                        controlsManager.setTitle(mainTitle)
-
-                        // Update intent
-                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
-                        playVideo(url = stream.url, headers = null)
-                        controlsManager.hideControls()
-                    } else {
-                        isLoadingNewStream = false
-                        controlsManager.onBufferingChanged(false)
-                        FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
-                        android.widget.Toast.makeText(this@MpvPlayerActivity, "No more episodes found", android.widget.Toast.LENGTH_SHORT).show()
-                        finish()
-                    }
-                }
-            } else {
-                isLoadingNewStream = false
-                FileLogger.i(TAG, "No playlist and no series nav — finishing")
-                finish()
-            }
-            return
-        }
-
-        if (playlistIndex >= playlistItems.size - 1) {
-            isLoadingNewStream = false
-            FileLogger.i(TAG, "Playlist complete ($playlistIndex/${playlistItems.size}) — finishing")
-            finish()
-            return
-        }
-
-        playlistIndex++
-        playPlaylistItem(playlistItems[playlistIndex])
-        broadcastPlaylistStatus()
-    }
-
-    private fun playPreviousInPlaylist() {
-        isLoadingNewStream = true
-        if (playlistItems.isEmpty()) {
-            val nav = seriesNavigator
-            if (nav != null && nav.hasPrev()) {
-                lifecycleScope.launch {
-                    FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
-
-                    stopPlayback()
-                    controlsManager.showBuffering()
-
-                    val stream = nav.resolvePrev()
-                    if (stream != null) {
-                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                        controlsManager.setSeasonInfo(seasonInfo)
-
-                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                        controlsManager.setTitle(mainTitle)
-
-                        // Update intent
-                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
-                        playVideo(url = stream.url, headers = null)
-                        controlsManager.hideControls()
-                    } else {
-                        isLoadingNewStream = false
-                        controlsManager.hideBuffering()
-                        android.widget.Toast.makeText(this@MpvPlayerActivity, "Could not resolve previous episode", android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } else {
-                isLoadingNewStream = false
-                android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-
-        if (playlistIndex <= 0) {
-            isLoadingNewStream = false
-            android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        playlistIndex--
-        playPlaylistItem(playlistItems[playlistIndex])
-        broadcastPlaylistStatus()
-    }
-
-    private fun playItemAtIndex(index: Int) {
-        if (playlistItems.isEmpty() || index < 0 || index >= playlistItems.size) return
-        playlistIndex = index
-        playPlaylistItem(playlistItems[index])
-        broadcastPlaylistStatus()
-    }
-
-    private fun playPlaylistItem(item: com.playbridge.protocol.PlayPayload) {
-        isLoadingNewStream = true
-        progressManager.saveProgress()
-        stopPlayback()
-        controlsManager.setTitle(item.title)
-        subtitleUrls = item.subtitles ?: emptyList()
-        playVideo(item.url, item.headers)
-    }
-
-    private fun broadcastPlaylistStatus() {
-        if (playlistItems.isEmpty()) return
-        try {
-            val itemsArray = org.json.JSONArray()
-            playlistItems.forEachIndexed { index, item ->
-                itemsArray.put(org.json.JSONObject().apply {
-                    put("index", index)
-                    put("title", item.title ?: "Item ${index + 1}")
-                })
-            }
-            val statusJson = org.json.JSONObject().apply {
-                put("type", "playlist_status")
-                put("items", itemsArray)
-                put("currentIndex", playlistIndex)
-                put("totalCount", playlistItems.size)
-            }.toString()
-            ServerService.broadcastPlaylistStatus(statusJson)
-        } catch (e: Exception) {
-            FileLogger.e(TAG,"Failed to broadcast playlist status", e)
-        }
-    }
-
-    // ── Dialogs ───────────────────────────────────────────────────────────────
-
-    private fun showSettingsDialog() {
         val wasPlaying = isPlayingState
         if (wasPlaying) pause()
-
-        val tracks = buildTrackList()
-        val audioTracks = tracks.filter { it.type == "audio" }
-        val subtitleTracks = tracks.filter { it.type == "sub" }
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
         activeDialog = dialog
         val composeView = androidx.compose.ui.platform.ComposeView(this)
+
         composeView.setViewTreeLifecycleOwner(this)
         composeView.setViewTreeSavedStateRegistryOwner(this)
+
         composeView.setContent {
+            var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
+            var isLoading by remember { mutableStateOf(true) }
+
+            LaunchedEffect(Unit) {
+                streams = nav.resolveCurrentStreams()
+                isLoading = false
+            }
+
             PlayBridgeTVTheme {
-                MpvTrackSelectionDialog(
-                    audioTracks              = audioTracks,
-                    subtitleTracks           = subtitleTracks,
-                    externalSubtitleUrls     = subtitleUrls,
-                    currentExternalSubtitleUrl = currentSubtitleUrl,
-                    currentPlaybackSpeed     = currentPlaybackSpeed,
-                    onDismiss                = { dialog.dismiss() },
-                    onAudioTrackSelected     = { id ->
-                        if (id != null) MPVLib.command("set", "aid", id.toString())
-                        dialog.dismiss()
-                    },
-                    onSubtitleTrackSelected  = { id ->
-                        if (id != null) {
-                            MPVLib.command("set", "sid", id.toString())
-                            currentSubtitleUrl = null
-                        } else {
-                            MPVLib.command("set", "sid", "no")
-                            currentSubtitleUrl = null
-                        }
-                        dialog.dismiss()
-                    },
-                    onExternalSubtitleSelected = { url ->
-                        currentSubtitleUrl = url
-                        if (url != null) {
-                            MPVLib.command("sub-add", url, "select")
-                        } else {
-                            MPVLib.command("set", "sid", "no")
-                        }
-                        dialog.dismiss()
-                    },
-                    onPlaybackSpeedSelected  = { speed ->
-                        currentPlaybackSpeed = speed
-                        MPVLib.setPropertyDouble("speed", speed.toDouble())
-                        dialog.dismiss()
+                if (isLoading) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(text = "Loading sources...", color = Color(0xFF00D9FF))
                     }
-                )
+                } else {
+                    StreamSelectionDialog(
+                        streams = streams,
+                        currentUrl = currentUrl,
+                        onStreamSelected = { stream ->
+                            dialog.dismiss()
+
+                            // Update currentUrl so history saving works
+                            this@MpvPlayerActivity.currentUrl = stream.url
+
+                            playVideo(url = stream.url, headers = currentHeaders)
+                            controlsManager.hideControls()
+
+                        },
+                        onDismiss = {
+                            dialog.dismiss()
+                        }
+                    )
+                }
             }
         }
 
@@ -913,81 +824,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             controlsManager.showControls()
         }
         dialog.show()
-    }
-
-    private fun buildTrackList(): List<MpvTrack> {
-        val json = try { MPVLib.getPropertyString("track-list") ?: return emptyList() }
-                   catch (e: Exception) { return emptyList() }
-        return try {
-            val arr = org.json.JSONArray(json)
-            (0 until arr.length()).mapNotNull { i ->
-                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-                val type = obj.optString("type")
-                if (type !in listOf("audio", "sub")) return@mapNotNull null
-                val id    = obj.optInt("id")
-                val title = obj.optString("title").takeIf { it.isNotBlank() }
-                    ?: obj.optString("lang").takeIf { it.isNotBlank() }
-                    ?: "Track $id"
-                MpvTrack(
-                    id         = id,
-                    type       = type,
-                    title      = title,
-                    lang       = obj.optString("lang").takeIf { it.isNotBlank() },
-                    codec      = obj.optString("codec").takeIf { it.isNotBlank() },
-                    isSelected = obj.optBoolean("selected")
-                )
-            }
-        } catch (e: Exception) { emptyList() }
-    }
-
-    private fun updateStreamInfo() {
-        val info = buildString {
-            if (videoHeight > 0) append("${videoHeight}p")
-            if (videoCodecRaw.isNotBlank()) {
-                val codec = when {
-                    videoCodecRaw.contains("hevc", ignoreCase = true) ||
-                    videoCodecRaw.contains("h265", ignoreCase = true) -> "HEVC"
-                    videoCodecRaw.contains("avc",  ignoreCase = true) ||
-                    videoCodecRaw.contains("h264", ignoreCase = true) -> "H.264"
-                    videoCodecRaw.contains("av1",  ignoreCase = true) -> "AV1"
-                    videoCodecRaw.contains("vp9",  ignoreCase = true) -> "VP9"
-                    videoCodecRaw.contains("vp8",  ignoreCase = true) -> "VP8"
-                    else -> videoCodecRaw.uppercase()
-                }
-                if (isNotEmpty()) append(" ")
-                append(codec)
-            }
-            if (videoBitrateBps > 0) {
-                if (isNotEmpty()) append(" ")
-                append("%.1fMbps".format(videoBitrateBps / 1_000_000.0))
-            }
-            if (audioCodecRaw.isNotBlank()) {
-                val codec = when {
-                    audioCodecRaw.contains("eac3",  ignoreCase = true) ||
-                    audioCodecRaw.contains("e-ac-3", ignoreCase = true) -> "EAC3"
-                    audioCodecRaw.contains("ac3",   ignoreCase = true) ||
-                    audioCodecRaw.contains("ac-3",  ignoreCase = true) -> "AC3"
-                    audioCodecRaw.contains("aac",   ignoreCase = true) -> "AAC"
-                    audioCodecRaw.contains("dts",   ignoreCase = true) -> "DTS"
-                    audioCodecRaw.contains("flac",  ignoreCase = true) -> "FLAC"
-                    audioCodecRaw.contains("mp3",   ignoreCase = true) -> "MP3"
-                    else -> audioCodecRaw.uppercase()
-                }
-                if (isNotEmpty()) append(" · ")
-                append(codec)
-            }
-            if (audioChannels.isNotBlank()) {
-                val ch = when (audioChannels) {
-                    "stereo"              -> "2.0"
-                    "5.1", "5.1(side)"   -> "5.1"
-                    "7.1", "7.1(wide-side)" -> "7.1"
-                    "mono"               -> "Mono"
-                    else                 -> audioChannels
-                }
-                if (isNotEmpty()) append(" $ch")
-            }
-        }
-        runOnUiThread { controlsManager.setStreamInfo(info) }
     }
 
     private fun showPlaylistPicker() {
@@ -1084,5 +920,214 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 android.widget.Toast.makeText(this@MpvPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    /**
+     * Jump to a specific item in the playlist by index.
+     */
+    private fun playItemAtIndex(index: Int) {
+        if (index < 0 || index >= playlistItems.size) return
+
+        lifecycleScope.launch {
+            // Save progress for the current episode before jumping, if it was playing
+            if (::progressManager.isInitialized) progressManager.saveProgress()
+
+            playlistIndex = index
+            val item = playlistItems[index]
+            val title = if (item.title != null) {
+                "${item.title} (${index + 1}/${playlistItems.size})"
+            } else {
+                "Item ${index + 1}/${playlistItems.size}"
+            }
+
+            FileLogger.i(TAG, "Jumping to playlist item $index: $title")
+            runOnUiThread {
+                Toast.makeText(this@MpvPlayerActivity, title, Toast.LENGTH_SHORT).show()
+                controlsManager.setTitle(title)
+                controlsManager.hideControls()
+            }
+
+            stopPlayback()
+            currentHeaders = item.headers
+            playVideo(item.url, item.headers)
+            broadcastPlaylistStatus()
+        }
+    }
+
+    private fun playPreviousInPlaylist() {
+        if (playlistItems.isEmpty()) {
+            val nav = seriesNavigator
+            if (nav != null && nav.hasPrev()) {
+                lifecycleScope.launch {
+                    isLoadingNewStream = true
+                    FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
+                    progressManager.saveProgress()
+                    stopPlayback()
+                    controlsManager.showBuffering()
+
+                    val stream = nav.resolvePrev()
+                    if (stream != null) {
+                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                        controlsManager.setSeasonInfo(seasonInfo)
+                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                        controlsManager.setTitle(mainTitle)
+                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
+                        playVideo(url = stream.url, headers = null)
+                        controlsManager.hideControls()
+                    } else {
+                        isLoadingNewStream = false
+                        controlsManager.hideBuffering()
+                        Toast.makeText(this@MpvPlayerActivity, "Could not resolve previous episode", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else {
+                Toast.makeText(this, "Already on first episode", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        if (playlistIndex <= 0) {
+            Toast.makeText(this, "Already on first episode", Toast.LENGTH_SHORT).show()
+            return
+        }
+        playItemAtIndex(playlistIndex - 1)
+    }
+
+    private fun playNextInPlaylist() {
+        if (playlistItems.isEmpty()) {
+            val nav = seriesNavigator
+            if (nav != null && nav.hasNext()) {
+                lifecycleScope.launch {
+                    isLoadingNewStream = true
+                    FileLogger.i(TAG, "SeriesNavigator: resolving next episode")
+                    progressManager.saveProgress()
+                    stopPlayback()
+                    controlsManager.showBuffering()
+
+                    val stream = nav.resolveNext()
+                    if (stream != null) {
+                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                        controlsManager.setSeasonInfo(seasonInfo)
+                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                        controlsManager.setTitle(mainTitle)
+                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
+                        playVideo(url = stream.url, headers = null)
+                        controlsManager.hideControls()
+                    } else {
+                        isLoadingNewStream = false
+                        controlsManager.hideBuffering()
+                        Toast.makeText(this@MpvPlayerActivity, "No more episodes found", Toast.LENGTH_SHORT).show()
+                        finish()
+                    }
+                }
+            } else {
+                finish()
+            }
+            return
+        }
+
+        if (playlistIndex >= playlistItems.size - 1) {
+            finish()
+            return
+        }
+        playItemAtIndex(playlistIndex + 1)
+    }
+
+    private fun broadcastPlaylistStatus() {
+        if (playlistItems.isEmpty()) return
+        try {
+            val itemsArray = org.json.JSONArray()
+            playlistItems.forEachIndexed { index, item ->
+                itemsArray.put(org.json.JSONObject().apply {
+                    put("index", index)
+                    put("title", item.title ?: "Item ${index + 1}")
+                })
+            }
+            val statusJson = org.json.JSONObject().apply {
+                put("type", "playlist_status")
+                put("items", itemsArray)
+                put("currentIndex", playlistIndex)
+                put("totalCount", playlistItems.size)
+            }.toString()
+            ServerService.broadcastPlaylistStatus(statusJson)
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Failed to broadcast playlist status: ${e.message}")
+        }
+    }
+
+    private fun showTrackSelectionDialog() {
+        val wasPlaying = isPlayingState
+        if (wasPlaying) pause()
+
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
+        val composeView = androidx.compose.ui.platform.ComposeView(this)
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+        composeView.setContent {
+            PlayBridgeTVTheme {
+                MpvTrackSelectionDialog(
+                    audioTracks = buildTrackList().filter { it.type == "audio" },
+                    subtitleTracks = buildTrackList().filter { it.type == "sub" },
+                    externalSubtitleUrls = subtitleUrls,
+                    currentExternalSubtitleUrl = currentSubtitleUrl,
+                    currentPlaybackSpeed = currentPlaybackSpeed,
+                    onDismiss = { dialog.dismiss() },
+                    onAudioTrackSelected = { id ->
+                        if (id != null) MPVLib.setPropertyInt("aid", id)
+                        dialog.dismiss()
+                    },
+                    onSubtitleTrackSelected = { id ->
+                        if (id != null) MPVLib.setPropertyInt("sid", id)
+                        else MPVLib.command("set", "sid", "no")
+                        dialog.dismiss()
+                    },
+                    onExternalSubtitleSelected = { url ->
+                        currentSubtitleUrl = url
+                        if (url != null) {
+                            MPVLib.command("sub-add", url, "select")
+                        } else {
+                            MPVLib.command("set", "sid", "no")
+                        }
+                        dialog.dismiss()
+                    },
+                    onPlaybackSpeedSelected  = { speed ->
+                        currentPlaybackSpeed = speed
+                        MPVLib.setPropertyDouble("speed", speed.toDouble())
+                        dialog.dismiss()
+                    }
+                )
+            }
+        }
+
+        dialog.setContentView(composeView)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener {
+            activeDialog = null
+            if (wasPlaying) play()
+            controlsManager.showControls()
+        }
+        dialog.show()
+    }
+
+    private fun buildTrackList(): List<MpvTrack> {
+        val json = try { MPVLib.getPropertyString("track-list") ?: return emptyList() }
+                   catch (e: Exception) { return emptyList() }
+        return try {
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.getJSONObject(i)
+                MpvTrack(
+                    id = obj.getInt("id"),
+                    type = obj.getString("type"),
+                    title = obj.optString("title", "Track ${obj.getInt("id")}"),
+                    lang = obj.optString("lang", null),
+                    codec = obj.optString("codec", null),
+                    isSelected = obj.optBoolean("selected", false)
+                )
+            }
+        } catch (e: Exception) { emptyList() }
     }
 }
