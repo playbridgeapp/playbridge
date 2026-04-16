@@ -57,6 +57,9 @@ com.playbridge.player/
 │   ├── OverlayWindowHelper.kt
 │   ├── ServerService.kt
 │   └── WebSocketServer.kt
+├── stremio
+│   ├── SeriesNavigator.kt
+│   └── StremioClient.kt
 └── ui
     ├── HomeScreen.kt
     ├── LibraryScreen.kt
@@ -146,7 +149,6 @@ com.playbridge.player/
 
 | Issue | Details |
 |---|---|
-| **No test directory** | No tests exist under `tv/app/src/test/` or `tv/app/src/androidTest/` |
 | **No crash reporting** | No Firebase Crashlytics or equivalent. Hard to debug post-launch issues |
 | **`largeHeap="true"`** | May cause ANR issues on low-memory TV devices |
 | **`isMinifyEnabled = false`** | No R8/ProGuard minification for release builds. App size is large due to GeckoView |
