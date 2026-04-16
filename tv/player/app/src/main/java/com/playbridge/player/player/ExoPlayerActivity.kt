@@ -30,6 +30,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.media3.common.Tracks
@@ -1358,6 +1359,7 @@ class ExoPlayerActivity : PlayerActivity() {
         composeView.setViewTreeSavedStateRegistryOwner(this)
 
         composeView.setContent {
+            val scope = rememberCoroutineScope()
             var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
             var isLoading by remember { mutableStateOf(true) }
 
@@ -1385,6 +1387,18 @@ class ExoPlayerActivity : PlayerActivity() {
                             playVideo(url = stream.url, title = mainTitle)
                             videoFilterManager.reapplyFilter()
                             controlsManager.hideUI()
+                        },
+                        onRefresh = {
+                            com.playbridge.player.stremio.StremioClient.clearCache(
+                                nav.context.imdbId,
+                                nav.currentSeason,
+                                nav.currentEpisode
+                            )
+                            isLoading = true
+                            scope.launch {
+                                streams = nav.resolveCurrentStreams()
+                                isLoading = false
+                            }
                         },
                         onDismiss = {
                             dialog.dismiss()

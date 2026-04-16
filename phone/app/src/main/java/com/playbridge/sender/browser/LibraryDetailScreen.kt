@@ -1940,6 +1940,7 @@ private suspend fun buildSeriesContext(
         .filter { it.isEnabled && (it.resources.isBlank() || it.supportsResource("stream")) }
 
     val addonBaseUrls = installedStreamAddons.map { it.baseUrl }
+    val addonNames = installedStreamAddons.map { it.name }
 
     if (addonBaseUrls.isEmpty()) return null   // TV would have nothing to resolve with
 
@@ -1967,8 +1968,10 @@ private suspend fun buildSeriesContext(
         seriesTitle  = displayTitle.ifBlank { null },
         episodeTitle = currentEpisodeSelection.title.ifBlank { null },
         addonBaseUrls = addonBaseUrls,
+        addonNames   = addonNames,
         allEpisodes  = allEpisodes,
-        preferredAddonBaseUrl = preferredAddonBaseUrl
+        preferredAddonBaseUrl = preferredAddonBaseUrl,
+        preferredAddonName = preferredAddonName
     )
 }
 

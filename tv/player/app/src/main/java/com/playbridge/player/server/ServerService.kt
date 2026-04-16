@@ -34,28 +34,28 @@ private const val NOTIFICATION_ID = 1
 private const val NOTIFICATION_ID_LAUNCH = 2
 
 class ServerService : Service() {
-    
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocketServer: WebSocketServer? = null
     private var bluetoothServer: BluetoothServer? = null
     private lateinit var pairingStore: PairingStore
     private lateinit var overlayWindow: OverlayWindowHelper
-    
+
     // Track what is currently active on the TV
     private var activeContext: String = "idle" // "player", "browser", or "idle"
-    
+
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
     val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
-    
+
     data class ServerInfo(
         val ip: String,
         val port: Int,
         val token: String
     )
-    
+
     private lateinit var nsdManager: android.net.nsd.NsdManager
     private var registrationListener: android.net.nsd.NsdManager.RegistrationListener? = null
-    
+
     // Receives ACTION_CONTEXT_IDLE from the tv/browser app (separate APK) when its
     // BrowserActivity is destroyed, so activeContext can be reset to "idle".
     private val contextIdleReceiver = object : android.content.BroadcastReceiver() {
@@ -72,6 +72,10 @@ class ServerService : Service() {
         pairingStore = PairingStore(applicationContext)
         overlayWindow = OverlayWindowHelper(applicationContext)
         nsdManager = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
+
+        // Initialize Stremio client with cache
+        com.playbridge.player.stremio.StremioClient.init(applicationContext)
+
         createNotificationChannel()
         val filter = android.content.IntentFilter(ACTION_CONTEXT_IDLE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -80,7 +84,7 @@ class ServerService : Service() {
             registerReceiver(contextIdleReceiver, filter)
         }
     }
-    
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -95,7 +99,7 @@ class ServerService : Service() {
         startServer()
         return START_STICKY
     }
-    
+
     private fun registerNsdService(port: Int) {
         if (registrationListener != null) return // Already registered
 
@@ -174,14 +178,14 @@ class ServerService : Service() {
             registrationListener
         )
     }
-    
+
     private fun startServer() {
         if (webSocketServer != null) return  // Already running from a previous onStartCommand
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val token = pairingStore.getOrCreateToken()
             val port = pairingStore.serverPort.first()
             val ip = getLocalIpAddress(applicationContext) ?: "unknown"
-            
+
             bluetoothServer = BluetoothServer(applicationContext) { command ->
                 handleCommand(command)
             }.also { server ->
@@ -191,18 +195,18 @@ class ServerService : Service() {
             val subtitleDir = java.io.File(cacheDir, "subtitles").also { it.mkdirs() }
             webSocketServer = WebSocketServer(port = port, authToken = token, subtitleDir = subtitleDir).also { server ->
                 server.start()
-                
+
                 // Register NSD service
                 registerNsdService(port)
-                
+
                 _serverInfo.value = ServerInfo(ip = ip, port = port, token = token)
-                
+
                 // Observe connection state for notification updates and expose to UI
                 launch {
                     server.connectionState.collect { state ->
                         updateNotification(state)
                         _connectionState.value = state
-                        
+
                         // Show/hide overlay window tied to connection:
                         // When the overlay is visible, Android's BAL check sees
                         // callingUidHasNonAppVisibleWindow=true which exempts us from
@@ -225,14 +229,14 @@ class ServerService : Service() {
                         }
                     }
                 }
-                
+
                 // Observe connected client count
                 launch {
                     server.connectedClientCount.collect { count ->
                         _connectedClientCount.value = count
                     }
                 }
-                
+
                 // Expose commands for the activity to observe
                 launch {
                     server.commands.collect { command ->
@@ -286,17 +290,17 @@ class ServerService : Service() {
                     }
                 }
             }
-            
+
             FileLogger.i(TAG, "Server started at $ip:$port")
         }
     }
-    
+
     private fun handleCommand(command: Command) {
         if (command !is Command.Mouse) {
             FileLogger.i(TAG, "=== COMMAND RECEIVED ===")
             FileLogger.i(TAG, "Command type: ${command.javaClass.simpleName}")
         }
-        
+
         when (command) {
             is Command.Play -> {
                 FileLogger.i(TAG, "=== PLAY COMMAND ===")
@@ -379,14 +383,14 @@ class ServerService : Service() {
                         // rather than just the ones explicitly registering for strict mime types like application/x-mpegURL
                         setDataAndType(android.net.Uri.parse(command.url), "video/*")
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        
+
                         // Pass title to external player (many players read this specifically)
                         command.title?.let { title ->
                             putExtra(Intent.EXTRA_TITLE, title)
                             // MX Player specific title extra
                             putExtra("title", title)
                         }
-                        
+
                         // Pass headers to external player if supported
                         command.headers?.let { headersMap ->
                             val bundle = android.os.Bundle()
@@ -612,7 +616,7 @@ class ServerService : Service() {
             }
         }
     }
-    
+
     private fun broadcastContext() {
         scope.launch {
             webSocketServer?.broadcastStatus(createContextJson(activeContext))
@@ -640,7 +644,7 @@ class ServerService : Service() {
         broadcastContext()
         FileLogger.d(TAG, "activeContext reset to idle by activity lifecycle")
     }
-    
+
     /**
      * Downloads subtitle URLs to the local subtitle cache directory using the provided headers.
      * Returns the list of successfully downloaded [File]s in the same order as [subtitleUrls].
@@ -737,7 +741,7 @@ class ServerService : Service() {
             manager.createNotificationChannel(launchChannel)
         }
     }
-    
+
     private fun createNotification(status: String = "Starting..."): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -745,7 +749,7 @@ class ServerService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("PlayBridge")
             .setContentText(status)
@@ -754,7 +758,7 @@ class ServerService : Service() {
             .setOngoing(true)
             .build()
     }
-    
+
     private fun updateNotification(state: WebSocketServer.ConnectionState) {
         val status = when (state) {
             is WebSocketServer.ConnectionState.Stopped -> "Stopped"
@@ -763,11 +767,11 @@ class ServerService : Service() {
             is WebSocketServer.ConnectionState.Connected -> "Phone connected"
             is WebSocketServer.ConnectionState.Error -> "Error: ${state.message}"
         }
-        
+
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, createNotification(status))
     }
-    
+
     private fun getLocalIpAddress(context: android.content.Context): String? {
         val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
         val preferredIp = prefs.getString("preferred_ip", "auto")
@@ -779,7 +783,7 @@ class ServerService : Service() {
             while (interfaces.hasMoreElements()) {
                 val networkInterface = interfaces.nextElement()
                 if (networkInterface.isLoopback || !networkInterface.isUp) continue
-                
+
                 val addresses = networkInterface.inetAddresses
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
@@ -806,9 +810,9 @@ class ServerService : Service() {
             backupIp
         }
     }
-    
+
     override fun onBind(intent: Intent?): IBinder? = null
-    
+
     override fun onDestroy() {
         try { unregisterReceiver(contextIdleReceiver) } catch (_: Exception) {}
         if (registrationListener != null) {
@@ -830,7 +834,7 @@ class ServerService : Service() {
         scope.cancel()
         super.onDestroy()
     }
-    
+
     companion object {
         const val ACTION_PLAY = "com.playbridge.player.ACTION_PLAY"
         const val ACTION_BROWSER = "com.playbridge.player.ACTION_BROWSER"
@@ -873,15 +877,15 @@ class ServerService : Service() {
         const val EXTRA_QUEUE_ITEM_CONTENT_TYPE = "queue_item_content_type"
         const val EXTRA_QUEUE_ITEM_DETECTED_BY = "queue_item_detected_by"
         const val EXTRA_PLAYLIST_JUMP_INDEX = "playlist_jump_index"
-        
+
         // Static flow for UI to observe connection state
         private val _connectionState = MutableStateFlow<WebSocketServer.ConnectionState>(WebSocketServer.ConnectionState.Stopped)
         val connectionState: StateFlow<WebSocketServer.ConnectionState> = _connectionState.asStateFlow()
-        
+
         // Static flow for UI to observe connected client count
         private val _connectedClientCount = MutableStateFlow(0)
         val connectedClientCount: StateFlow<Int> = _connectedClientCount.asStateFlow()
-        
+
         fun start(context: Context) {
             val intent = Intent(context, ServerService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -890,7 +894,7 @@ class ServerService : Service() {
                 context.startService(intent)
             }
         }
-        
+
         fun stop(context: Context) {
             context.stopService(Intent(context, ServerService::class.java))
         }

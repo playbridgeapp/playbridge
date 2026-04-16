@@ -18,6 +18,7 @@ import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.setViewTreeLifecycleOwner
@@ -673,6 +674,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         composeView.setViewTreeSavedStateRegistryOwner(this)
 
         composeView.setContent {
+            val scope = rememberCoroutineScope()
             var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
             var isLoading by remember { mutableStateOf(true) }
 
@@ -698,6 +700,18 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                             playVideo(url = stream.url, headers = currentHeaders)
                             controlsManager.hideControls()
+                        },
+                        onRefresh = {
+                            com.playbridge.player.stremio.StremioClient.clearCache(
+                                nav.context.imdbId,
+                                nav.currentSeason,
+                                nav.currentEpisode
+                            )
+                            isLoading = true
+                            scope.launch {
+                                streams = nav.resolveCurrentStreams()
+                                isLoading = false
+                            }
                         },
                         onDismiss = {
                             dialog.dismiss()

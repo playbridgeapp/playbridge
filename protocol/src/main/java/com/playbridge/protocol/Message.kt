@@ -64,8 +64,10 @@ data class SeriesContext(
     val seriesTitle: String? = null,
     val episodeTitle: String? = null,
     val addonBaseUrls: List<String>,
+    val addonNames: List<String>? = null,      // NEW — Display names for the above URLs
     val allEpisodes: List<SeriesEpisodeRef>? = null,
-    val preferredAddonBaseUrl: String? = null   // NEW — base URL of the preferred addon
+    val preferredAddonBaseUrl: String? = null,
+    val preferredAddonName: String? = null      // NEW — Name of the preferred addon
 )
 
 /**
@@ -365,7 +367,7 @@ sealed class Command {
 fun parseCommand(jsonString: String): Command {
     return try {
         val envelope = protocolJson.decodeFromString<MessageEnvelope>(jsonString)
-        
+
         when (envelope.type) {
             "ping" -> Command.Ping
             "request_pairing" -> Command.RequestPairing

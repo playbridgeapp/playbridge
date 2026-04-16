@@ -1,14 +1,17 @@
 package com.playbridge.player.stremio
 
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "StremioClient"
@@ -21,23 +24,32 @@ private const val TAG = "StremioClient"
  * to avoid cross-module coupling.
  */
 @Serializable
-private data class StremioStreamItem(
+internal data class StremioStreamItem(
     val url: String? = null,
     val name: String? = null,
     val title: String? = null,
+    val addonName: String? = null, // NEW — Captured from the phone's addon list
     val behaviorHints: StremioStreamBehaviorHints? = null
 ) {
     val isDirectUrl: Boolean get() = url?.startsWith("http") == true
 }
 
 @Serializable
-private data class StremioStreamBehaviorHints(
+internal data class StremioStreamBehaviorHints(
     val videoSize: Long? = null
 )
 
 @Serializable
 private data class StremioStreamsResponse(
     val streams: List<StremioStreamItem>? = null
+)
+
+// ==================== Caching ====================
+
+@Serializable
+private data class StreamCacheEntry(
+    val streams: List<StremioStreamItem>,
+    val timestamp: Long
 )
 
 // ==================== Result Type ====================
@@ -59,6 +71,7 @@ data class ScoredStremioStream(
     val url: String,
     val name: String? = null,
     val title: String? = null,
+    val addonName: String? = null,    // NEW — Actual addon display name (e.g. "Torrentio")
     val score: Int,
     val rank: Int,
     val isSeasonPack: Boolean,
@@ -220,6 +233,7 @@ object StremioClient {
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+        encodeDefaults = true
     }
 
     private val client = OkHttpClient.Builder()
@@ -227,6 +241,104 @@ object StremioClient {
         .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
+
+    // ── Caching ──────────────────────────────────────────────────────────────
+
+    private val cache = mutableMapOf<String, StreamCacheEntry>()
+    private var cacheDurationHours: Int = 0
+    private var cacheFile: File? = null
+
+    /**
+     * Initialize the client with a context to load settings and setup persistent cache.
+     * Called from ServerService on start.
+     */
+    fun init(context: Context) {
+        val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        cacheDurationHours = prefs.getInt("stream_cache_hours", 0)
+        cacheFile = File(context.cacheDir, "stremio_streams_cache.json")
+        loadCache()
+    }
+
+    /**
+     * Update the cache duration from settings at runtime.
+     */
+    fun updateCacheDuration(hours: Int) {
+        if (cacheDurationHours != hours) {
+            Log.d(TAG, "Cache duration updated: $cacheDurationHours → $hours hours")
+            cacheDurationHours = hours
+            if (hours <= 0) {
+                cache.clear()
+                saveCache()
+            }
+        }
+    }
+
+    /**
+     * Clear the cache for a specific episode.
+     */
+    fun clearCache(imdbId: String, season: Int, episode: Int) {
+        val stremioId = "$imdbId:$season:$episode"
+        if (cache.remove(stremioId) != null) {
+            Log.d(TAG, "Cleared cache for $stremioId")
+            saveCache()
+        }
+    }
+
+    /**
+     * Clear all cached streams.
+     */
+    fun clearAllCache() {
+        Log.d(TAG, "Clearing all cached streams")
+        cache.clear()
+        saveCache()
+    }
+
+    private fun loadCache() {
+        val file = cacheFile ?: return
+        if (!file.exists()) return
+        try {
+            val text = file.readText()
+            val loaded = json.decodeFromString<Map<String, StreamCacheEntry>>(text)
+            val now = System.currentTimeMillis()
+            // Only keep non-expired entries
+            cache.clear()
+            cache.putAll(loaded.filter {
+                cacheDurationHours > 0 && (now - it.value.timestamp < cacheDurationHours * 3600 * 1000L)
+            })
+            Log.d(TAG, "Loaded ${cache.size} entries from cache")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load cache: ${e.message}")
+        }
+    }
+
+    private fun saveCache() {
+        val file = cacheFile ?: return
+        try {
+            val text = json.encodeToString(cache)
+            file.writeText(text)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save cache: ${e.message}")
+        }
+    }
+
+    private fun getFromCache(stremioId: String): List<StremioStreamItem>? {
+        if (cacheDurationHours <= 0) return null
+        val entry = cache[stremioId] ?: return null
+        val now = System.currentTimeMillis()
+        if (now - entry.timestamp > cacheDurationHours * 3600 * 1000L) {
+            cache.remove(stremioId)
+            saveCache()
+            return null
+        }
+        Log.d(TAG, "Cache hit for $stremioId (${entry.streams.size} streams)")
+        return entry.streams
+    }
+
+    private fun saveToCache(stremioId: String, streams: List<StremioStreamItem>) {
+        if (cacheDurationHours <= 0) return
+        cache[stremioId] = StreamCacheEntry(streams, System.currentTimeMillis())
+        saveCache()
+    }
 
     /**
      * Resolve streams for a series episode across all provided addon base URLs.
@@ -252,6 +364,7 @@ object StremioClient {
      */
     suspend fun resolveStreams(
         addonBaseUrls: List<String>,
+        addonNames: List<String>? = null,   // NEW
         imdbId: String,
         season: Int,
         episode: Int,
@@ -263,11 +376,28 @@ object StremioClient {
 
         val stremioId = "$imdbId:$season:$episode"
 
-        // Fetch from all addons in parallel
-        val allStreams: List<StremioStreamItem> = coroutineScope {
-            addonBaseUrls.map { baseUrl ->
-                async { fetchFromAddon(baseUrl, stremioId) }
-            }.flatMap { it.await() }
+        // Check cache first
+        val cached = getFromCache(stremioId)
+        val allStreams: List<StremioStreamItem> = if (cached != null) {
+            // If cached items lack addonName (old cache), try to fill them from current addonNames if count matches
+            if (cached.all { it.addonName == null } && addonNames != null && addonBaseUrls.size == addonNames.size) {
+                 // We don't know which stream came from which addon URL in the flat cached list
+                 // unless we stored that info. For now, cached items without addonName will
+                 // remain name-less until they expire, or we can just return null to force refresh.
+                 cached
+            } else {
+                cached
+            }
+        } else {
+            // Fetch from all addons in parallel
+            val fetched = coroutineScope {
+                addonBaseUrls.mapIndexed { index, baseUrl ->
+                    val displayName = addonNames?.getOrNull(index)
+                    async { fetchFromAddon(baseUrl, stremioId, displayName) }
+                }.flatMap { it.await() }
+            }
+            if (fetched.isNotEmpty()) saveToCache(stremioId, fetched)
+            fetched
         }
 
         if (allStreams.isEmpty()) return@withContext emptyList()
@@ -284,6 +414,7 @@ object StremioClient {
                     url = item.url!!,
                     name = item.name,
                     title = item.title,
+                    addonName = item.addonName, // Use the persisted display name
                     score = score(item),
                     rank = QualityRanker.rank(item),
                     isSeasonPack = isSeasonPack(item),
@@ -293,7 +424,6 @@ object StremioClient {
             }
             .sortedByDescending { it.score }
     }
-
     suspend fun resolveEpisode(
         addonBaseUrls: List<String>,
         imdbId: String,
@@ -312,6 +442,12 @@ object StremioClient {
         val stremioId = "$imdbId:$season:$episode"
         Log.d(TAG, "Resolving streams for $stremioId via ${addonBaseUrls.size} addon(s)")
 
+        // Check cache first
+        val cached = getFromCache(stremioId)
+        if (cached != null) {
+            return@withContext pickBest(cached, qualityPreference, sourceHint)
+        }
+
         // If a preferred addon is specified, try it in isolation first.
         // Only fall back to all addons when the preferred one returns nothing.
         if (!preferredAddonBaseUrl.isNullOrBlank() && preferredAddonBaseUrl in addonBaseUrls) {
@@ -320,7 +456,10 @@ object StremioClient {
             if (preferredStreams.isNotEmpty()) {
                 Log.d(TAG, "Preferred addon returned ${preferredStreams.size} stream(s); skipping other addons")
                 val result = pickBest(preferredStreams, qualityPreference, sourceHint)
-                if (result != null) return@withContext result
+                if (result != null) {
+                    // We don't save to cache here because it's only a partial result (one addon)
+                    return@withContext result
+                }
                 Log.d(TAG, "No qualifying stream from preferred addon; falling back to all addons")
             }
         }
@@ -340,6 +479,7 @@ object StremioClient {
         }
 
         Log.d(TAG, "Got ${allStreams.size} stream candidate(s) for $stremioId")
+        saveToCache(stremioId, allStreams)
         pickBest(allStreams, qualityPreference, sourceHint)
     }
 
@@ -349,7 +489,7 @@ object StremioClient {
      * Fetch streams from a single addon base URL.
      * Returns only direct HTTP streams; silently returns empty list on any error.
      */
-    private fun fetchFromAddon(baseUrl: String, stremioId: String): List<StremioStreamItem> {
+    private fun fetchFromAddon(baseUrl: String, stremioId: String, displayName: String? = null): List<StremioStreamItem> {
         val url = "${baseUrl.trimEnd('/')}/stream/series/$stremioId.json"
         return try {
             Log.d(TAG, "Fetching: $url")
@@ -366,7 +506,8 @@ object StremioClient {
 
             (parsed.streams ?: emptyList())
                 .filter { it.isDirectUrl }
-                .also { Log.d(TAG, "  → ${it.size} direct stream(s) from $baseUrl") }
+                .map { it.copy(addonName = displayName) }
+                .also { Log.d(TAG, "  → ${it.size} direct stream(s) from $baseUrl ($displayName)") }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching from $baseUrl: ${e.message}")

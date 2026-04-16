@@ -1,12 +1,15 @@
 package com.playbridge.player.player
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,16 +36,34 @@ fun StreamSelectionDialog(
     streams: List<ScoredStremioStream>,
     currentUrl: String?,
     onStreamSelected: (stream: ScoredStremioStream) -> Unit,
+    onRefresh: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val listState = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
 
-    val currentIndex = streams.indexOfFirst { it.url == currentUrl }.coerceAtLeast(0)
+    // State for filtering
+    var selectedRank by remember { mutableStateOf<Int?>(null) } // null = All
+    var selectedAddon by remember { mutableStateOf<String?>(null) } // null = All
 
-    // Scroll to and focus the current item on open
-    LaunchedEffect(currentIndex) {
-        if (currentIndex >= 0) {
+    val addons = remember(streams) {
+        streams.mapNotNull { it.addonName }.distinct().sorted()
+    }
+
+    val filteredStreams = remember(streams, selectedRank, selectedAddon) {
+        streams.filter { stream ->
+            (selectedRank == null || stream.rank == selectedRank) &&
+            (selectedAddon == null || stream.addonName == selectedAddon)
+        }
+    }
+
+    // Scroll to and focus the current item on open or filter change
+    val currentIndex = remember(filteredStreams, currentUrl) {
+        filteredStreams.indexOfFirst { it.url == currentUrl }.coerceAtLeast(0)
+    }
+
+    LaunchedEffect(currentIndex, selectedRank, selectedAddon) {
+        if (currentIndex >= 0 && filteredStreams.isNotEmpty()) {
             listState.scrollToItem(maxOf(0, currentIndex - 2))
         }
         try {
@@ -58,8 +79,8 @@ fun StreamSelectionDialog(
     ) {
         Column(
             modifier = Modifier
-                .width(420.dp)
-                .fillMaxHeight(0.85f)
+                .width(440.dp)
+                .fillMaxHeight(0.9f)
                 .padding(end = 24.dp)
                 .background(Color(0xF21A1A2E), RoundedCornerShape(14.dp))
                 .padding(16.dp)
@@ -68,7 +89,7 @@ fun StreamSelectionDialog(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp),
+                    .padding(bottom = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -78,20 +99,107 @@ fun StreamSelectionDialog(
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
-                Text(
-                    text = "${streams.size} sources",
-                    color = Color.Gray,
-                    fontSize = 13.sp
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${filteredStreams.size} / ${streams.size} sources",
+                        color = Color.Gray,
+                        fontSize = 13.sp
+                    )
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    var isRefreshFocused by remember { mutableStateOf(false) }
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(if (isRefreshFocused) Color.White.copy(alpha = 0.1f) else Color.Transparent)
+                            .onFocusChanged { isRefreshFocused = it.isFocused }
+                            .clickable { onRefresh() }
+                            .focusable(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "↻",
+                            color = if (isRefreshFocused) Color(0xFF00D9FF) else Color.Gray,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            // ── Quality Chips ──
+            Text(
+                text = "Quality",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.Gray,
+                modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val qualities = listOf(
+                    null to "All",
+                    4 to "4K",
+                    3 to "1080p",
+                    2 to "720p",
+                    1 to "SD"
                 )
+                qualities.forEach { (rank, label) ->
+                    val isSelected = selectedRank == rank
+                    StreamFilterChip(
+                        selected = isSelected,
+                        onClick = { selectedRank = rank },
+                        label = label
+                    )
+                }
+            }
+
+            // ── Addon Chips ──
+            if (addons.isNotEmpty()) {
+                Text(
+                    text = "Addons",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
+                )
+                // LazyRow for many addons to avoid overflow
+                androidx.compose.foundation.lazy.LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp)
+                ) {
+                    item {
+                        StreamFilterChip(
+                            selected = selectedAddon == null,
+                            onClick = { selectedAddon = null },
+                            label = "All"
+                        )
+                    }
+                    items(addons) { addon ->
+                        StreamFilterChip(
+                            selected = selectedAddon == addon,
+                            onClick = { selectedAddon = addon },
+                            label = addon
+                        )
+                    }
+                }
             }
 
             // Stream list
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                itemsIndexed(streams) { index, stream ->
+                itemsIndexed(filteredStreams) { index, stream ->
                     val isCurrent = stream.url == currentUrl
                     var isFocused by remember { mutableStateOf(false) }
 
@@ -106,7 +214,7 @@ fun StreamSelectionDialog(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .background(backgroundColor)
-                            .then(if (index == 0 && !isCurrent) Modifier.focusRequester(focusRequester) else if (isCurrent) Modifier.focusRequester(focusRequester) else Modifier)
+                            .then(if (index == currentIndex && filteredStreams.isNotEmpty()) Modifier.focusRequester(focusRequester) else Modifier)
                             .onFocusChanged { isFocused = it.isFocused }
                             .clickable { onStreamSelected(stream) }
                             .focusable()
@@ -134,7 +242,7 @@ fun StreamSelectionDialog(
                                 2 -> Color(0xFF2196F3) // 720p
                                 else -> Color.Gray
                             }
-                            val qualityText = when(stream.rank) {
+                            val qualityShort = when(stream.rank) {
                                 4 -> "4K"
                                 3 -> "1080p"
                                 2 -> "720p"
@@ -149,7 +257,7 @@ fun StreamSelectionDialog(
                                 modifier = Modifier.padding(end = 8.dp)
                             ) {
                                 Text(
-                                    text = qualityText,
+                                    text = qualityShort,
                                     fontSize = 10.sp,
                                     color = qualityColor,
                                     fontWeight = FontWeight.Bold,
@@ -177,12 +285,20 @@ fun StreamSelectionDialog(
 
                             Spacer(modifier = Modifier.weight(1f))
 
-                            // Addon Name
+                            // Addon Name (in the row too for clarity when filtering is Off)
                             Text(
-                                text = stream.name ?: "",
+                                text = stream.addonName ?: stream.name ?: "",
                                 fontSize = 11.sp,
                                 color = Color.Gray
                             )
+                        }
+                    }
+                }
+
+                if (filteredStreams.isEmpty()) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                            Text(text = "No matching streams", color = Color.Gray)
                         }
                     }
                 }
@@ -192,4 +308,44 @@ fun StreamSelectionDialog(
 
     // Back handler to dismiss
     androidx.activity.compose.BackHandler { onDismiss() }
+}
+
+@Composable
+private fun StreamFilterChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String
+) {
+    var isFocused by remember { mutableStateOf(false) }
+
+    val bgColor = when {
+        selected -> Color(0xFF00D9FF).copy(alpha = 0.15f)
+        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+        else -> Color(0xFF1E1E38)
+    }
+    val borderColor = when {
+        selected -> Color(0xFF00D9FF).copy(alpha = 0.5f)
+        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+        else -> Color.Transparent
+    }
+
+    Box(
+        modifier = Modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(bgColor)
+            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+            .onFocusChanged { isFocused = it.isFocused }
+            .clickable { onClick() }
+            .focusable()
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = if (selected) "✓ $label" else label,
+            color = if (selected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+        )
+    }
 }

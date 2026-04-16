@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import android.app.Activity
+import android.widget.Toast
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.theme.AppTheme
 import kotlinx.coroutines.delay
@@ -222,6 +223,42 @@ fun SettingsScreen(
                     (context as? Activity)?.recreate()
                 }
             )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // ── Stream Cache ──
+            var cacheHours by remember {
+                mutableStateOf(prefs.getInt("stream_cache_hours", 0))
+            }
+
+            SettingsDropdown(
+                label = "Stream Cache Duration",
+                description = "How long to cache resolved stream links. Useful for skipping resolution when re-watching or navigating back/forward.",
+                options = listOf(
+                    "0" to "Disabled",
+                    "1" to "1 Hour",
+                    "6" to "6 Hours",
+                    "12" to "12 Hours",
+                    "24" to "24 Hours",
+                    "48" to "48 Hours"
+                ),
+                selected = cacheHours.toString(),
+                onSelected = { hours ->
+                    val h = hours.toInt()
+                    cacheHours = h
+                    prefs.edit().putInt("stream_cache_hours", h).apply()
+                    com.playbridge.player.stremio.StremioClient.updateCacheDuration(h)
+                }
+            )
+
+            Button(
+                onClick = {
+                    com.playbridge.player.stremio.StremioClient.clearAllCache()
+                    Toast.makeText(context, "Stream cache cleared", Toast.LENGTH_SHORT).show()
+                }
+            ) {
+                Text("Clear Stream Cache")
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
 

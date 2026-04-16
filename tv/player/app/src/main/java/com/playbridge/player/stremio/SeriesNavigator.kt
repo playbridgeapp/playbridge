@@ -23,7 +23,7 @@ private const val TAG = "SeriesNavigator"
  *    from [resolveNext] signals the addon returned nothing (end of series).
  */
 class SeriesNavigator(
-    private val context: SeriesContext,
+    val context: SeriesContext,
     /** Mirrors PlayPayload.defaultVideoQuality — "2160p", "1080p", "720p", or null for best. */
     private val qualityPreference: String? = null
 ) {
@@ -155,6 +155,7 @@ class SeriesNavigator(
         Log.d(TAG, "resolveCurrentStreams: resolving S${currentSeason}E${currentEpisode}")
         return StremioClient.resolveStreams(
             addonBaseUrls          = context.addonBaseUrls,
+            addonNames             = context.addonNames,
             imdbId                 = context.imdbId,
             season                 = currentSeason,
             episode                = currentEpisode,
