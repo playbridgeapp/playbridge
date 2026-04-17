@@ -1,14 +1,19 @@
 # Phone App — AI Context
-_Last verified: 2026-04-15_
+_Last verified: 2026-04-17_
 
 ## Ownership
 The `phone/` module handles all UI and networking for the Android sender application. It provides a full-featured GeckoView web browser, Debrid integration, history tracking, and connects directly to the TV application via WebSockets to send video payloads. It does NOT own protocol data structures.
 
 ## Key Files
 - `app/src/main/java/com/playbridge/sender/browser/BrowserActivity.kt` — primary activity hosting GeckoView
+- `app/src/main/java/com/playbridge/sender/connection/WebSocketClient.kt` — core networking for communication with the TV
 - `app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt` — manages WebSocket state with TV
 - `app/src/main/java/com/playbridge/sender/browser/TabManager.kt` — session lifecycle and tab switching
-- `app/src/main/java/com/playbridge/sender/browser/MediaDownloadService.kt` — handles file/HLS downloads
+- `app/src/main/java/com/playbridge/sender/browser/LibraryViewModel.kt` — manages state for the library, including handoff logic
+- `app/src/main/java/com/playbridge/sender/browser/LibraryDetailScreen.kt` — handles metadata display and TV handoff for library items
+- `app/src/main/java/com/playbridge/sender/browser/CastSheet.kt` — UI for choosing player and initiating cast
+- `app/src/main/java/com/playbridge/sender/data/history/HistoryDatabase.kt` — entry point for local persistence
+- `app/src/main/java/com/playbridge/sender/data/backup/BackupManager.kt` — handles cloud sync and backup
 - `app/src/main/assets/extensions/video_detector/background.js` — detects videos in GeckoView tabs
 - `app/src/main/java/com/playbridge/sender/browser/SessionObserverSetup.kt` — centralizes GeckoView context menu logic
 
@@ -25,8 +30,8 @@ WARNING: Missing error handling in extensions. Browser extension silently catche
 WARNING: `network_security_config.xml` has a global `<base-config cleartextTrafficPermitted="true">` for local networking.
 
 ## Current State
-_As of 2026-04-15:_
-- Working: Core Infrastructure, Browser Setup, WebSocket Client, WebExtension Support, QR Scanner, URL bar, Extension Management, Local history DB
+_As of 2026-04-17:_
+- Working: Core Infrastructure, Browser Setup, WebSocket Client, WebExtension Support, QR Scanner, URL bar, Extension Management, Local history DB, Metadata-based library handoff, Kitsu/MAL ID normalization.
 - Broken/degraded: nothing critical
-- In progress: TabManager, TabsScreen, Native App Integration for Video Detector, Video FAB & Bottom Sheet, Send to TV UI
-- Blockers: none
+- In progress: TabManager, TabsScreen, Native App Integration for Video Detector, Video FAB & Bottom Sheet, Send to TV UI.
+- Blockers: none.
