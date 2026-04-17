@@ -31,6 +31,7 @@ class PlayerControlsManager(
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
     private val loopButton: ImageButton,
+    private val switchPlayerButton: ImageButton,
     private val streamInfoText: TextView,
     private val seasonInfoText: TextView,
     private val elapsedText: TextView,
@@ -42,6 +43,7 @@ class PlayerControlsManager(
     private val onShowPlaylist: () -> Unit,
     private val onShowStreams: () -> Unit,
     private val onShowFilter: () -> Unit,
+    private val onSwitchPlayer: () -> Unit,
     private val onPrevious: () -> Unit,
     private val onNext: () -> Unit,
     private val onToggleLoop: () -> Unit
@@ -112,6 +114,10 @@ class PlayerControlsManager(
 
         loopButton.setOnClickListener {
             onToggleLoop()
+        }
+
+        switchPlayerButton.setOnClickListener {
+            onSwitchPlayer()
         }
 
         prevButton.setOnClickListener {

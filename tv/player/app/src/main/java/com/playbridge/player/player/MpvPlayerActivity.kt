@@ -163,6 +163,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         MPVLib.command("stop")
     }
 
+    override fun getPlayerProgressManager(): ProgressManager? = if (::progressManager.isInitialized) progressManager else null
+
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -302,6 +304,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             prevButton            = findViewById(R.id.btn_prev),
             nextButton            = findViewById(R.id.btn_next),
             filterButton          = findViewById(R.id.btn_filter),
+            switchPlayerButton    = findViewById(R.id.btn_switch_player),
             getPosition           = { positionMs },
             getDuration           = { durationMs },
             getBufferedPosition   = { (positionMs + bufferAheadMs).coerceAtMost(durationMs) },
@@ -312,6 +315,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             onShowSettings        = { showTrackSelectionDialog() },
             onShowPlaylist        = { showPlaylistPicker() },
             onShowStreams         = { showStreamSelectionDialog() },
+            onSwitchPlayer        = { showSwitchPlayerDialog("internal_mpv") },
             onSeekForwardRequested  = { handleSeek(1) },
             onSeekBackwardRequested = { handleSeek(-1) },
             onPrevious            = { playPreviousInPlaylist() },
@@ -788,6 +792,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 currentPlaybackSpeed = historyItem.playbackSpeed
                 MPVLib.setPropertyDouble("speed", currentPlaybackSpeed.toDouble())
             }
+        }
+
+        val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
+        if (startPos > 0L) {
+            seekTo(startPos)
         }
 
         MPVLib.command("stop")

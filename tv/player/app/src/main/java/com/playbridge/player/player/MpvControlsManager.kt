@@ -33,6 +33,7 @@ class MpvControlsManager(
     private val prevButton: ImageButton,
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
+    private val switchPlayerButton: ImageButton,
     private val getPosition: () -> Long,       // current position in ms
     private val getDuration: () -> Long,       // total duration in ms
     private val getBufferedPosition: () -> Long, // furthest buffered position in ms
@@ -41,6 +42,7 @@ class MpvControlsManager(
     private val onShowSettings: () -> Unit,
     private val onShowPlaylist: () -> Unit,
     private val onShowStreams: () -> Unit,
+    private val onSwitchPlayer: () -> Unit,
     private val onSeekForwardRequested: () -> Unit,
     private val onSeekBackwardRequested: () -> Unit,
     private val onPrevious: () -> Unit,
@@ -79,6 +81,7 @@ class MpvControlsManager(
         streamsButton.setOnClickListener { onShowStreams() }
         prevButton.setOnClickListener { onPrevious() }
         nextButton.setOnClickListener { onNext() }
+        switchPlayerButton.setOnClickListener { onSwitchPlayer() }
 
         hideControls()
     }

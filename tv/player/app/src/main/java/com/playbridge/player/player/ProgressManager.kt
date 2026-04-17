@@ -39,6 +39,16 @@ class ProgressManager(
     private var currentPlaybackSpeed: Float? = null
     private var currentVideoScalingMode: Int? = null
 
+    val url: String? get() = currentUrl
+    val title: String? get() = currentTitle
+    val contentType: String? get() = currentContentType
+    val headers: Map<String, String>? get() = currentHeaders
+    val preferredAudioLanguage: String? get() = currentPreferredAudioLanguage
+    val preferredSubtitleLanguage: String? get() = currentPreferredSubtitleLanguage
+    val externalSubtitleUrl: String? get() = currentExternalSubtitleUrl
+    val playbackSpeed: Float? get() = currentPlaybackSpeed
+    val videoScalingMode: Int? get() = currentVideoScalingMode
+
     /**
      * Store metadata for the currently playing video so it can be saved to history.
      */

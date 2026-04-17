@@ -79,6 +79,8 @@ class ExoPlayerActivity : PlayerActivity() {
         }
     }
 
+    override fun getPlayerProgressManager(): ProgressManager? = if (::progressManager.isInitialized) progressManager else null
+
     private var audioDiscontinuityRetryCount = 0
     private var videoDecoderRetryCount = 0
     private var malformedContentRetryCount = 0
@@ -260,6 +262,7 @@ class ExoPlayerActivity : PlayerActivity() {
         videoFilterManager = VideoFilterManager(playerView)
 
         val loopButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_loop)
+        val switchPlayerButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_switch_player)
 
         // Initialize managers
         controlsManager = PlayerControlsManager(
@@ -274,6 +277,7 @@ class ExoPlayerActivity : PlayerActivity() {
             nextButton = nextButton,
             filterButton = filterButton,
             loopButton = loopButton,
+            switchPlayerButton = switchPlayerButton,
             streamInfoText = streamInfoText,
             seasonInfoText = seasonInfoText,
             elapsedText = elapsedText,
@@ -285,6 +289,7 @@ class ExoPlayerActivity : PlayerActivity() {
             onShowPlaylist = { showPlaylistPicker() },
             onShowStreams = { showStreamSelectionDialog() },
             onShowFilter = { showVideoFilterDialog() },
+            onSwitchPlayer = { showSwitchPlayerDialog("internal_exo") },
             onPrevious = { playPreviousInPlaylist() },
             onNext = { playNextInPlaylist() },
             onToggleLoop = { setLooping(!isLooping) }
@@ -813,6 +818,11 @@ class ExoPlayerActivity : PlayerActivity() {
                 if (historyItem.videoScalingMode != null) {
                     applyVideoScalingMode(historyItem.videoScalingMode)
                 }
+            }
+
+            val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
+            if (startPos > 0L) {
+                player?.seekTo(startPos)
             }
         }
 

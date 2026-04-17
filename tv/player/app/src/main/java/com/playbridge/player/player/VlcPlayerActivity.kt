@@ -271,6 +271,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
+    override fun getPlayerProgressManager(): ProgressManager? = if (::progressManager.isInitialized) progressManager else null
+
     private val remoteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == ServerService.ACTION_REMOTE) {
@@ -405,9 +407,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             nextButton = findViewById(R.id.btn_next),
             filterButton = findViewById(R.id.btn_filter),
             loopButton = findViewById(R.id.btn_loop),
+            switchPlayerButton = findViewById(R.id.btn_switch_player),
             onShowSettings = { showSettingsDialog() },
             onShowPlaylist = { showPlaylistPicker() },
             onShowStreams = { showStreamSelectionDialog() },
+            onSwitchPlayer = { showSwitchPlayerDialog("internal_vlc") },
             onError = { handleVlcError() },
             onSeekForwardRequested = { handleSeek(1) },
             onSeekBackwardRequested = { handleSeek(-1) },
@@ -1159,7 +1163,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             videoScalingMode = vlcScalingModeToInt(currentVideoScalingMode)
         )
 
-        val finalResumeTime = resumeTime ?: historyItem?.position
+        val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
+        val finalResumeTime = if (startPos > 0L) startPos else (resumeTime ?: historyItem?.position)
 
         val media = Media(libVLC, Uri.parse(url)).apply {
             setHWDecoderEnabled(true, true)

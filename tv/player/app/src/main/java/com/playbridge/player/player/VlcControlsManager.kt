@@ -28,9 +28,11 @@ class VlcControlsManager(
     private val nextButton: ImageButton,
     private val filterButton: ImageButton,
     private val loopButton: ImageButton,
+    private val switchPlayerButton: ImageButton,
     private val onShowSettings: () -> Unit,
     private val onShowPlaylist: () -> Unit,
     private val onShowStreams: () -> Unit,
+    private val onSwitchPlayer: () -> Unit,
     private val onError: () -> Unit,
     private val onSeekForwardRequested: () -> Unit,
     private val onSeekBackwardRequested: () -> Unit,
@@ -149,6 +151,10 @@ class VlcControlsManager(
 
         loopButton.setOnClickListener {
             onToggleLoop()
+        }
+
+        switchPlayerButton.setOnClickListener {
+            onSwitchPlayer()
         }
 
         // Initially hide controls

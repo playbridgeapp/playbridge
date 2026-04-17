@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.logging.FileLogger
 
@@ -23,6 +25,7 @@ abstract class PlayerActivity : ComponentActivity() {
     abstract fun getVideoSurfaceView(): android.view.SurfaceView?
     /** Stop current playback and clear the video surface (make it black) for a smooth transition. */
     abstract fun stopPlayback()
+    protected open fun getPlayerProgressManager(): ProgressManager? = null
 
     // Shared playback configuration and series navigation state
     var seriesNavigator: com.playbridge.player.stremio.SeriesNavigator? = null
@@ -171,6 +174,135 @@ abstract class PlayerActivity : ComponentActivity() {
         }
     }
 
+    protected fun showSwitchPlayerDialog(currentPlayerId: String) {
+        val wasPlaying = isPlaying()
+        if (wasPlaying) pause()
+
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        val composeView = androidx.compose.ui.platform.ComposeView(this)
+
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+
+        composeView.setContent {
+            androidx.tv.material3.MaterialTheme {
+                SwitchPlayerDialog(
+                    currentPlayer = currentPlayerId,
+                    onPlayerSelected = { selectedPlayerId ->
+                        dialog.dismiss()
+                        switchPlayer(selectedPlayerId)
+                    },
+                    onDismiss = {
+                        dialog.dismiss()
+                    }
+                )
+            }
+        }
+
+        dialog.setContentView(composeView)
+        dialog.setOnDismissListener {
+            if (wasPlaying) play()
+        }
+        dialog.show()
+    }
+
+    private fun switchPlayer(newMode: String) {
+        val currentPosition = getCurrentPosition()
+        val pm = getPlayerProgressManager()
+        val url = pm?.url ?: intent.getStringExtra(ServerService.EXTRA_URL)
+        val title = pm?.title ?: intent.getStringExtra(ServerService.EXTRA_TITLE)
+
+        if (url == null) {
+            FileLogger.e("PlayerActivity", "Cannot switch player without a valid URL")
+            return
+        }
+
+        if (newMode == "external" || newMode == "external_mpv") {
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(android.net.Uri.parse(url), "video/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (title != null) {
+                    putExtra(Intent.EXTRA_TITLE, title)
+                    putExtra("title", title)
+                }
+                @Suppress("UNCHECKED_CAST")
+                val headers = pm?.headers ?: intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? java.util.HashMap<String, String>
+                if (headers != null) {
+                    val bundle = android.os.Bundle()
+                    headers.forEach { (key, value) -> bundle.putString(key, value) }
+                    putExtra(android.provider.Browser.EXTRA_HEADERS, bundle)
+                    val headersArray = headers.flatMap { listOf(it.key, it.value) }.toTypedArray()
+                    putExtra("headers", headersArray)
+                }
+            }
+            val chooserIntent = Intent.createChooser(viewIntent, "Open video with...")
+            chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            startActivity(chooserIntent)
+
+            // Wait briefly before finishing to allow external player to launch smoothly
+            window.decorView.postDelayed({ finish() }, 1000)
+            return
+        }
+
+        val activityClass = when (newMode) {
+            "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
+            "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
+            else -> com.playbridge.player.player.ExoPlayerActivity::class.java
+        }
+
+        // Just launch a new instance of the selected player activity with the same intent extras,
+        // but tell it to start from currentPosition.
+        val newIntent = Intent(intent)
+        newIntent.setClass(this, activityClass)
+
+        // Remove EXTRA_CONTENT_PAYLOAD so we don't re-resolve streams
+        newIntent.removeExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
+
+        // Persist SeriesNavigator state into EXTRA_SERIES_CONTEXT
+        seriesNavigator?.let { nav ->
+            try {
+                val json = com.playbridge.protocol.protocolJson.encodeToString(
+                    com.playbridge.protocol.SeriesContext.serializer(),
+                    nav.context
+                )
+                newIntent.putExtra(ServerService.EXTRA_SERIES_CONTEXT, json)
+            } catch (e: Exception) {
+                FileLogger.e("PlayerActivity", "Failed to serialize SeriesContext for player switch", e)
+            }
+        }
+
+        newIntent.putExtra(ServerService.EXTRA_URL, url)
+        newIntent.putExtra(ServerService.EXTRA_TITLE, title)
+
+        if (pm?.contentType != null) {
+            newIntent.putExtra(ServerService.EXTRA_CONTENT_TYPE, pm.contentType)
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val headers = pm?.headers ?: intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? java.util.HashMap<String, String>
+        if (headers != null) {
+            newIntent.putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(headers))
+        }
+
+        if (pm?.preferredAudioLanguage != null) {
+            newIntent.putExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG, pm.preferredAudioLanguage)
+        }
+        if (pm?.preferredSubtitleLanguage != null) {
+            newIntent.putExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG, pm.preferredSubtitleLanguage)
+        }
+        if (pm?.externalSubtitleUrl != null) {
+            newIntent.putExtra(ServerService.EXTRA_EXTERNAL_SUBTITLE_URL, pm.externalSubtitleUrl)
+        }
+
+        newIntent.putExtra("extra_start_position", currentPosition)
+        newIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+        // Clear the explicit package/component if it was set by the original intent
+        newIntent.component = android.content.ComponentName(this, activityClass)
+
+        startActivity(newIntent)
+        finish()
+    }
     companion object {
         @Volatile
         private var current: java.lang.ref.WeakReference<PlayerActivity>? = null
