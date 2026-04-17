@@ -17,8 +17,8 @@ android {
         applicationId = "com.playbridge.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 38
-        versionName = "0.1.38"
+        versionCode = 39
+        versionName = "0.1.39"
 
     }
 
