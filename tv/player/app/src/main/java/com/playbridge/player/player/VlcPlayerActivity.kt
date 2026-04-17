@@ -612,7 +612,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             // No playlist queue — try series navigator if available
             val nav = seriesNavigator
             if (nav != null && nav.hasNext()) {
-                lifecycleScope.launch {
+                navigationJob?.cancel()
+                navigationJob = lifecycleScope.launch {
                     FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
 
                     stopPlayback()
@@ -620,6 +621,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
+                        // Early-return guard: a cancelled coroutine that slipped through
+                        // the mutex might resolve the same URL we are already playing.
+                        val currentUrl = originalM3u8Url
+                        if (stream.url == currentUrl) {
+                            controlsManager.hideBuffering()
+                            return@launch
+                        }
+
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
 
@@ -663,7 +672,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         if (playlistItems.isEmpty()) {
             val nav = seriesNavigator
             if (nav != null && nav.hasPrev()) {
-                lifecycleScope.launch {
+                navigationJob?.cancel()
+                navigationJob = lifecycleScope.launch {
                     FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
 
                     stopPlayback()
@@ -671,6 +681,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
+                        // Early-return guard: avoid flicker if a cancelled coroutine slips through
+                        val currentUrl = originalM3u8Url
+                        if (stream.url == currentUrl) {
+                            controlsManager.hideBuffering()
+                            return@launch
+                        }
+
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
 
@@ -885,7 +902,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private fun playSeriesEpisodeAtIndex(index: Int) {
         val nav = seriesNavigator ?: return
-        lifecycleScope.launch {
+        navigationJob?.cancel()
+        navigationJob = lifecycleScope.launch {
             isLoadingNewStream = true
             FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
 
@@ -897,6 +915,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
             if (stream != null) {
+                // Early-return guard: a cancelled coroutine that slipped through the mutex
+                // might resolve the same URL we are already playing — skip to avoid flicker.
+                val currentUrl = originalM3u8Url
+                if (stream.url == currentUrl) {
+                    controlsManager.hideBuffering()
+                    return@launch
+                }
+
                 // Display season info on top left (e.g. "Season 1 (1x5)")
                 val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                 controlsManager.setSeasonInfo(seasonInfo)
@@ -1060,6 +1086,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private var playJob: kotlinx.coroutines.Job? = null
+    /** Serialises Stremio series navigation. Cancelled before each new nav request. */
+    private var navigationJob: kotlinx.coroutines.Job? = null
 
     private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
         isLoadingNewStream = true
@@ -1105,7 +1133,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private suspend fun playVideoInternal(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
-        setupSeriesNavigator(intent)
+        // Only rebuild the navigator on cold start / onNewIntent. During Stremio episode
+        // switches the navigator already exists with its advanced currentIndex — rebuilding
+        // from the intent would throw away that state and cause index drift.
+        if (seriesNavigator == null) {
+            setupSeriesNavigator(intent)
+        }
         val title = controlsManager.getTitle()
         if (seriesNavigator == null) {
             controlsManager.setSeasonInfo(null)
@@ -1210,14 +1243,28 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 currentVideoScalingMode = vlcScalingModeFromInt(it)
                 runOnUiThread { applyVlcScalingMode(currentVideoScalingMode) }
             }
-            historyItem?.externalSubtitleUrl?.let {
-                currentSubtitleUrl = it
+            if (historyItem?.externalSubtitleUrl != null) {
+                // Per-URL history has a subtitle — use it (most specific, wins over session)
+                currentSubtitleUrl = historyItem.externalSubtitleUrl
+                val subUrl = historyItem.externalSubtitleUrl
                 runOnUiThread {
                     player.addSlave(
                         org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle,
-                        android.net.Uri.parse(it),
+                        android.net.Uri.parse(subUrl),
                         true
                     )
+                }
+            } else {
+                // No per-URL history — carry the current session subtitle forward so
+                // Stremio episode switches don't silently drop the user's sidecar sub.
+                currentSubtitleUrl?.let { subUrl ->
+                    runOnUiThread {
+                        player.addSlave(
+                            org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle,
+                            android.net.Uri.parse(subUrl),
+                            true
+                        )
+                    }
                 }
             }
 

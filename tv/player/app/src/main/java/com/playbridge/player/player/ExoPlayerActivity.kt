@@ -515,9 +515,16 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private var playJob: kotlinx.coroutines.Job? = null
+    /** Serialises Stremio series navigation. Cancelled before each new nav request. */
+    private var navigationJob: kotlinx.coroutines.Job? = null
 
     private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
-        setupSeriesNavigator(intent)
+        // Only rebuild the navigator on cold start / onNewIntent. During Stremio episode
+        // switches the navigator already exists with its advanced currentIndex — rebuilding
+        // from the intent would throw away that state and cause index drift.
+        if (seriesNavigator == null) {
+            setupSeriesNavigator(intent)
+        }
         if (seriesNavigator == null) {
             controlsManager.setSeasonInfo(null)
         }
@@ -594,10 +601,13 @@ class ExoPlayerActivity : PlayerActivity() {
             } catch (e: Exception) { null }
         } else null
 
-        if (plistJson == null) {
-            applyPlaybackSpeed(1.0f)
-            applyVideoScalingMode(androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT)
-        }
+        // Always carry the current session speed and scale into the new player instance.
+        // The per-URL restoreProgress() below overrides these if the new episode has a
+        // saved value in history — session value is the correct fallback, not hardcoded
+        // defaults. (Previously this block reset to defaults only when plistJson==null,
+        // which meant Stremio series users lost their speed/aspect setting every episode.)
+        applyPlaybackSpeed(currentPlaybackSpeed)
+        applyVideoScalingMode(currentVideoScalingMode)
 
         progressManager.setCurrentMedia(url, title, contentType, intentHeaders, plistJson, playlistIndex)
         controlsManager.setTitle(title)
@@ -672,17 +682,18 @@ class ExoPlayerActivity : PlayerActivity() {
                 .setExceedVideoConstraintsIfNecessary(true)
                 .setExceedRendererCapabilitiesIfNecessary(true)
 
-            // Reapply saved language preferences for playlist continuity
-            if (playlistItems.isNotEmpty()) {
-                preferredAudioLanguage?.let {
-                    FileLogger.i(TAG, "Reapplying preferred audio language: $it")
-                    params.setPreferredAudioLanguage(it)
-                }
-                preferredSubtitleLanguage?.let {
-                    FileLogger.i(TAG, "Reapplying preferred subtitle language: $it")
-                    params.setPreferredTextLanguage(it)
-                    params.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
-                }
+            // Reapply saved language preferences for both playlist and Stremio series
+            // continuity. The previous gate on playlistItems.isNotEmpty() accidentally
+            // prevented language preferences from being honoured in Stremio series mode
+            // (where playlistItems is always empty).
+            preferredAudioLanguage?.let {
+                FileLogger.i(TAG, "Reapplying preferred audio language: $it")
+                params.setPreferredAudioLanguage(it)
+            }
+            preferredSubtitleLanguage?.let {
+                FileLogger.i(TAG, "Reapplying preferred subtitle language: $it")
+                params.setPreferredTextLanguage(it)
+                params.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
             }
 
             // Apply video quality preference from phone as a max-size constraint.
@@ -1138,7 +1149,8 @@ class ExoPlayerActivity : PlayerActivity() {
         if (playlistItems.isEmpty()) {
             val nav = seriesNavigator
             if (nav != null && nav.hasPrev()) {
-                lifecycleScope.launch {
+                navigationJob?.cancel()
+                navigationJob = lifecycleScope.launch {
                     FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
 
                     stopPlayback()
@@ -1146,6 +1158,13 @@ class ExoPlayerActivity : PlayerActivity() {
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
+                        // Early-return guard: avoid flicker if a cancelled coroutine slips through
+                        val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
+                        if (stream.url == currentUrl) {
+                            controlsManager.hideBuffering()
+                            return@launch
+                        }
+
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
 
@@ -1156,7 +1175,8 @@ class ExoPlayerActivity : PlayerActivity() {
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
-                        playVideo(url = stream.url, title = mainTitle)
+                        val forwardedSubs = currentSubtitleUrl?.let { arrayListOf(it) }
+                        playVideo(url = stream.url, title = mainTitle, subtitles = forwardedSubs)
                         videoFilterManager.reapplyFilter()
                         controlsManager.hideUI()
                     } else {
@@ -1250,7 +1270,8 @@ class ExoPlayerActivity : PlayerActivity() {
      * Play the next item in the playlist queue, or finish if at the end.
      */
     private fun playNextInPlaylist() {
-        lifecycleScope.launch {
+        navigationJob?.cancel()
+        navigationJob = lifecycleScope.launch {
             // Save progress for the current episode before advancing,
             // but only if playback was actually ready (to avoid crashes on failed streams)
             val state = player?.playbackState
@@ -1276,6 +1297,14 @@ class ExoPlayerActivity : PlayerActivity() {
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
+                        // Early-return guard: a cancelled coroutine that slipped through
+                        // the mutex might resolve the same URL we are already playing.
+                        val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
+                        if (stream.url == currentUrl) {
+                            controlsManager.hideBuffering()
+                            return@launch
+                        }
+
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
 
@@ -1286,7 +1315,10 @@ class ExoPlayerActivity : PlayerActivity() {
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
-                        playVideo(url = stream.url, title = mainTitle)
+                        // Forward the current external subtitle URL if the user picked one;
+                        // playVideo will disable it if the new episode's subtitle list clears it.
+                        val forwardedSubs = currentSubtitleUrl?.let { arrayListOf(it) }
+                        playVideo(url = stream.url, title = mainTitle, subtitles = forwardedSubs)
                         videoFilterManager.reapplyFilter()
                         controlsManager.hideUI()
                     } else {
@@ -1570,13 +1602,22 @@ class ExoPlayerActivity : PlayerActivity() {
 
     private fun playSeriesEpisodeAtIndex(index: Int) {
         val nav = seriesNavigator ?: return
-        lifecycleScope.launch {
+        navigationJob?.cancel()
+        navigationJob = lifecycleScope.launch {
             FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
 
             stopPlayback()
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
             if (stream != null) {
+                // Early-return guard: a cancelled coroutine that slipped through the mutex
+                // might resolve the same URL we are already playing — skip to avoid flicker.
+                val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
+                if (stream.url == currentUrl) {
+                    controlsManager.hideBuffering()
+                    return@launch
+                }
+
                 // Display season info on top left (e.g. "Season 1 (1x5)")
                 val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                 controlsManager.setSeasonInfo(seasonInfo)
@@ -1589,7 +1630,8 @@ class ExoPlayerActivity : PlayerActivity() {
                 intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                 intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
-                playVideo(url = stream.url, title = mainTitle)
+                val forwardedSubs = currentSubtitleUrl?.let { arrayListOf(it) }
+                playVideo(url = stream.url, title = mainTitle, subtitles = forwardedSubs)
                 videoFilterManager.reapplyFilter()
                 controlsManager.hideUI()
             } else {

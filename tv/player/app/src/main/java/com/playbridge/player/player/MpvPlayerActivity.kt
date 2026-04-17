@@ -121,6 +121,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private var resolutionJob: kotlinx.coroutines.Job? = null
     private var launchJob: kotlinx.coroutines.Job? = null
     private var playJob: kotlinx.coroutines.Job? = null
+    /** Serialises Stremio series navigation. Cancelled before each new nav request. */
+    private var navigationJob: kotlinx.coroutines.Job? = null
 
     // ── PlayerActivity abstract impl ─────────────────────────────────────────
 
@@ -496,7 +498,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
                         playNextInPlaylist()
                     } else {
-                        finish()
+                        val nav = seriesNavigator
+                        if (nav != null && nav.hasNext()) {
+                            playNextInPlaylist()
+                        } else {
+                            finish()
+                        }
                     }
                 }
             }
@@ -792,6 +799,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 currentPlaybackSpeed = historyItem.playbackSpeed
                 MPVLib.setPropertyDouble("speed", currentPlaybackSpeed.toDouble())
             }
+            // Apply saved external subtitle URL; takes priority over any session-carried sub
+            if (historyItem.externalSubtitleUrl != null) {
+                currentSubtitleUrl = historyItem.externalSubtitleUrl
+            }
         }
 
         val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
@@ -820,6 +831,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
 
         MPVLib.command("loadfile", url)
+
+        // Re-apply external subtitle if present.
+        // History-restored URL was already written to currentSubtitleUrl above; for Stremio
+        // episode switches with no history entry the session-level currentSubtitleUrl carries
+        // forward. MPV's sub-add must be issued AFTER loadfile so the file is in context.
+        currentSubtitleUrl?.let { subUrl ->
+            MPVLib.command("sub-add", subUrl, "select")
+        }
+
         if (!startPaused) play()
     }
 
@@ -1012,7 +1032,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private fun playSeriesEpisodeAtIndex(index: Int) {
         val nav = seriesNavigator ?: return
-        lifecycleScope.launch {
+        navigationJob?.cancel()
+        navigationJob = lifecycleScope.launch {
             isLoadingNewStream = true
             FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
 
@@ -1023,6 +1044,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
             if (stream != null) {
+                // Early-return guard: a cancelled coroutine that slipped through the mutex
+                // might resolve the same URL we are already playing — skip to avoid flicker.
+                if (stream.url == currentUrl) {
+                    controlsManager.hideBuffering()
+                    return@launch
+                }
+
                 // Display season info on top left (e.g. "Season 1 (1x5)")
                 val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                 controlsManager.setSeasonInfo(seasonInfo)
@@ -1081,7 +1109,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         if (playlistItems.isEmpty()) {
             val nav = seriesNavigator
             if (nav != null && nav.hasPrev()) {
-                lifecycleScope.launch {
+                navigationJob?.cancel()
+                navigationJob = lifecycleScope.launch {
                     isLoadingNewStream = true
                     FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
                     progressManager.saveProgress()
@@ -1090,6 +1119,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
+                        if (stream.url == currentUrl) {
+                            controlsManager.hideBuffering()
+                            return@launch
+                        }
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
                         val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
@@ -1121,7 +1154,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         if (playlistItems.isEmpty()) {
             val nav = seriesNavigator
             if (nav != null && nav.hasNext()) {
-                lifecycleScope.launch {
+                navigationJob?.cancel()
+                navigationJob = lifecycleScope.launch {
                     isLoadingNewStream = true
                     FileLogger.i(TAG, "SeriesNavigator: resolving next episode")
                     progressManager.saveProgress()
@@ -1130,6 +1164,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
+                        if (stream.url == currentUrl) {
+                            controlsManager.hideBuffering()
+                            return@launch
+                        }
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsManager.setSeasonInfo(seasonInfo)
                         val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"

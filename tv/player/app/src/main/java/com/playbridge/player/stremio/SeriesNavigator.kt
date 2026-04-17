@@ -4,6 +4,8 @@ import android.util.Log
 import com.playbridge.protocol.SeriesContext
 import com.playbridge.protocol.SeriesEpisodeRef
 import com.playbridge.player.stremio.ScoredStremioStream
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private const val TAG = "SeriesNavigator"
 
@@ -28,6 +30,16 @@ class SeriesNavigator(
     val qualityPreference: String? = null,
     val contentType: String = "series" // "movie" or "series"
 ) {
+
+    // ── Concurrency guard ─────────────────────────────────────────────────────
+
+    /**
+     * Serialises all resolution calls so that rapid Next/Prev taps or a user picker
+     * tap racing with auto-advance never run two network requests concurrently.
+     * Each suspend resolution function acquires this lock for its entire duration,
+     * so a second caller always observes the already-advanced [currentIndex].
+     */
+    private val mutex = Mutex()
 
     // ── State ──────────────────────────────────────────────────────────────────
 
@@ -153,9 +165,9 @@ class SeriesNavigator(
      * Resolve all available streams for the current content.
      * Useful for showing a "Stream Selection" dialog to the user.
      */
-    suspend fun resolveCurrentStreams(): List<ScoredStremioStream> {
+    suspend fun resolveCurrentStreams(): List<ScoredStremioStream> = mutex.withLock {
         Log.d(TAG, "resolveCurrentStreams: resolving $contentType ${context.imdbId}")
-        return StremioClient.resolveStreamsByContentId(
+        StremioClient.resolveStreamsByContentId(
             addonBaseUrls          = context.addonBaseUrls,
             addonNames             = context.addonNames,
             contentId              = context.imdbId,
@@ -177,12 +189,12 @@ class SeriesNavigator(
      *  - Already at the last episode (list mode)
      *  - The addon returns no streams (optimistic mode — likely end of series)
      */
-    suspend fun resolveNext(): ResolvedStremioStream? {
+    suspend fun resolveNext(): ResolvedStremioStream? = mutex.withLock {
         if (!hasNext()) {
             Log.d(TAG, "resolveNext: already at last known episode")
-            return null
+            return@withLock null
         }
-        val nextRef = peekNext() ?: return null
+        val nextRef = peekNext() ?: return@withLock null
 
         Log.d(TAG, "resolveNext: resolving S${nextRef.season}E${nextRef.episode}")
         val stream = StremioClient.resolveEpisode(
@@ -195,8 +207,8 @@ class SeriesNavigator(
             prefUrl                = context.preferredAddonBaseUrl
         )
 
-        return if (stream != null) {
-            advance(nextRef)
+        if (stream != null) {
+            jumpTo(nextRef)
             updateSourceHint(stream.url, stream.name, stream.title)
             stream
         } else {
@@ -211,12 +223,12 @@ class SeriesNavigator(
      * On success, rewinds internal state. Returns null if at the first episode or addon
      * returns nothing.
      */
-    suspend fun resolvePrev(): ResolvedStremioStream? {
+    suspend fun resolvePrev(): ResolvedStremioStream? = mutex.withLock {
         if (!hasPrev()) {
             Log.d(TAG, "resolvePrev: already at first episode")
-            return null
+            return@withLock null
         }
-        val prevRef = peekPrev() ?: return null
+        val prevRef = peekPrev() ?: return@withLock null
 
         Log.d(TAG, "resolvePrev: resolving S${prevRef.season}E${prevRef.episode}")
         val stream = StremioClient.resolveEpisode(
@@ -229,8 +241,8 @@ class SeriesNavigator(
             prefUrl                = context.preferredAddonBaseUrl
         )
 
-        return if (stream != null) {
-            rewind(prevRef)
+        if (stream != null) {
+            jumpTo(prevRef)
             updateSourceHint(stream.url, stream.name, stream.title)
             stream
         } else {
@@ -245,8 +257,8 @@ class SeriesNavigator(
      * On success, jumps the internal state to this index. Returns null if index is out of bounds
      * or addon returns nothing.
      */
-    suspend fun resolveAndAdvanceToIndex(index: Int): ResolvedStremioStream? {
-        val targetRef = episodeList?.getOrNull(index) ?: return null
+    suspend fun resolveAndAdvanceToIndex(index: Int): ResolvedStremioStream? = mutex.withLock {
+        val targetRef = episodeList?.getOrNull(index) ?: return@withLock null
 
         Log.d(TAG, "resolveAndAdvanceToIndex: resolving S${targetRef.season}E${targetRef.episode}")
         val stream = StremioClient.resolveEpisode(
@@ -259,12 +271,9 @@ class SeriesNavigator(
             prefUrl                = context.preferredAddonBaseUrl
         )
 
-        return if (stream != null) {
-            currentSeason = targetRef.season
-            currentEpisode = targetRef.episode
-            currentIndex = index
+        if (stream != null) {
+            jumpTo(targetRef)
             updateSourceHint(stream.url, stream.name, stream.title)
-            Log.d(TAG, "Jumped   → S${currentSeason}E${currentEpisode} (index=$currentIndex)")
             stream
         } else {
             Log.d(TAG, "resolveAndAdvanceToIndex: no streams for S${targetRef.season}E${targetRef.episode}")
@@ -274,17 +283,20 @@ class SeriesNavigator(
 
     // ── State mutation (private) ───────────────────────────────────────────────
 
-    private fun advance(to: SeriesEpisodeRef) {
-        currentSeason  = to.season
-        currentEpisode = to.episode
-        currentIndex   = currentIndex?.plus(1)
-        Log.d(TAG, "Advanced → S${currentSeason}E${currentEpisode} (index=$currentIndex)")
-    }
-
-    private fun rewind(to: SeriesEpisodeRef) {
-        currentSeason  = to.season
-        currentEpisode = to.episode
-        currentIndex   = currentIndex?.minus(1)
-        Log.d(TAG, "Rewound  → S${currentSeason}E${currentEpisode} (index=$currentIndex)")
+    /**
+     * Move internal state to the given episode ref.
+     *
+     * In list mode the new [currentIndex] is derived by looking up [ref] in [episodeList]
+     * rather than blindly doing ±1. This prevents index drift when concurrent calls are
+     * serialised by [mutex] — each call observes the already-updated state and calculates
+     * the correct position independently of call order.
+     */
+    private fun jumpTo(ref: SeriesEpisodeRef) {
+        currentSeason  = ref.season
+        currentEpisode = ref.episode
+        currentIndex   = episodeList?.indexOfFirst {
+            it.season == ref.season && it.episode == ref.episode
+        }?.takeIf { it >= 0 }
+        Log.d(TAG, "Jumped → S${currentSeason}E${currentEpisode} (index=$currentIndex)")
     }
 }
