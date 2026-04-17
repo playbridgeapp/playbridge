@@ -46,6 +46,12 @@ fun PrePlayScreen(
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    val willAutoPick = remember(payload) {
+        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        val autoQuality = payload.defaultVideoQuality ?: prefs.getString("auto_stream_quality", "") ?: ""
+        !payload.forcePicker && autoQuality.isNotEmpty()
+    }
+
     BackHandler(onBack = onBack)
 
     LaunchedEffect(payload) {
@@ -180,9 +186,9 @@ fun PrePlayScreen(
 
                 // Right: Stream List (Transparent area)
                 Column(modifier = Modifier.weight(0.55f)) {
-                    if (streams.isNotEmpty()) {
+                    if (streams.isNotEmpty() && !isLaunching && !willAutoPick) {
                         Text(
-                            if (isLaunching) "Launching..." else "Select a Stream",
+                            text = "Select a Stream",
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.padding(bottom = 16.dp),
                             color = Color.White
@@ -195,7 +201,7 @@ fun PrePlayScreen(
                             items(streams) { stream ->
                                 StreamItem(
                                     stream = stream,
-                                    onClick = { if (!isLaunching) onStreamSelected(stream) }
+                                    onClick = { onStreamSelected(stream) }
                                 )
                             }
                         }

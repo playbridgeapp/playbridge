@@ -236,7 +236,7 @@ fun SettingsScreen(
                 description = "How long to cache resolved stream links. Useful for skipping resolution when re-watching or navigating back/forward.",
                 options = listOf(
                     "0" to "Disabled",
-                    "1" to "1 Hour",
+                    "1" to "1 Hour (Recommended)",
                     "6" to "6 Hours",
                     "12" to "12 Hours",
                     "24" to "24 Hours",

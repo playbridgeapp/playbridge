@@ -351,6 +351,43 @@ class ExoPlayerActivity : PlayerActivity() {
     private fun handleIntent(intent: Intent?) {
         setupSeriesNavigator(intent)
 
+        // Read playlist if present - needed early for button visibility logic
+        val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
+        val inMemoryPlaylist = PlaylistStore.currentPlaylist
+        if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
+            playlistItems = inMemoryPlaylist.toMutableList()
+            playlistIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
+            FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
+        } else {
+            playlistItems = mutableListOf()
+        }
+
+        // Update button visibility based on navigator and playlist
+        val hasPlaylist = playlistItems.isNotEmpty()
+        val hasEpisodeList = seriesNavigator?.episodeList?.isNotEmpty() == true
+        val isSeries = seriesNavigator?.contentType == "series"
+
+        // Show playlist button when a playlist is active OR series navigator has list mode
+        controlsManager.setPlaylistVisible(hasPlaylist || hasEpisodeList)
+
+        // Show streams button when series navigator is active
+        controlsManager.setStreamsVisible(seriesNavigator != null)
+
+        seriesNavigator?.let { nav ->
+            if (nav.contentType == "series") {
+                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                controlsManager.setSeasonInfo(seasonInfo)
+            } else {
+                controlsManager.setSeasonInfo(null)
+            }
+        }
+
+        // Ensure prev/next buttons are visible for ANY series (including optimistic mode)
+        // or if a playlist is active. Movies with no playlist will have them hidden by setPlaylistVisible(false).
+        if (isSeries || hasPlaylist) {
+            controlsManager.setNavigationVisible(true)
+        }
+
         val payloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
         if (payloadJson != null) {
             try {
@@ -383,18 +420,6 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
-
-        // Read playlist if present
-        val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
-        val inMemoryPlaylist = PlaylistStore.currentPlaylist
-        if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
-            playlistItems = inMemoryPlaylist.toMutableList()
-            playlistIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
-            FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
-        } else {
-            playlistItems = mutableListOf()
-        }
-
         // Restore saved selections from history or incoming intent preferences
         intent?.getStringExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG)?.let {
             preferredAudioLanguage = it
@@ -439,31 +464,6 @@ class ExoPlayerActivity : PlayerActivity() {
             }
             FileLogger.i(TAG, "Playing video: $url (title: $displayTitle, type: $contentType, subs: $subtitles, detectedBy: $detectedBy)")
             playVideo(url, displayTitle, contentType, detectedBy, headers, subtitles)
-        }
-
-        val hasPlaylist = playlistItems.isNotEmpty()
-        val hasEpisodeList = seriesNavigator?.episodeList?.isNotEmpty() == true
-        val isSeries = seriesNavigator?.contentType == "series"
-
-        // Show playlist button when a playlist is active OR series navigator has list mode
-        controlsManager.setPlaylistVisible(hasPlaylist || hasEpisodeList)
-
-        // Show streams button when series navigator is active
-        controlsManager.setStreamsVisible(seriesNavigator != null)
-
-        seriesNavigator?.let { nav ->
-            if (nav.contentType == "series") {
-                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                controlsManager.setSeasonInfo(seasonInfo)
-            } else {
-                controlsManager.setSeasonInfo(null)
-            }
-        }
-
-        // Ensure prev/next buttons are visible for ANY series (including optimistic mode)
-        // or if a playlist is active. Movies with no playlist will have them hidden by setPlaylistVisible(false).
-        if (isSeries || hasPlaylist) {
-            controlsManager.setNavigationVisible(true)
         }
     }
 
