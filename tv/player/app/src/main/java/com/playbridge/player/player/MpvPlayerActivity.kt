@@ -112,6 +112,16 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private var activeDialog: android.app.Dialog? = null
 
+    // Pre-play state
+    private var prePlayPayload by mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null)
+    private var isPrePlayLaunching by mutableStateOf(false)
+    private var prePlayCountdown by androidx.compose.runtime.mutableIntStateOf(0)
+    private var isPreBuffering = false
+    private lateinit var composeView: androidx.compose.ui.platform.ComposeView
+    private var resolutionJob: kotlinx.coroutines.Job? = null
+    private var launchJob: kotlinx.coroutines.Job? = null
+    private var playJob: kotlinx.coroutines.Job? = null
+
     // ── PlayerActivity abstract impl ─────────────────────────────────────────
 
     override fun play() {
@@ -147,6 +157,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     override fun stopPlayback() {
         if (!mpvInitialized) return
         FileLogger.i(TAG, "stopPlayback() — clearing MPV state for transition")
+        resolutionJob?.cancel()
+        launchJob?.cancel()
+        isLoadingNewStream = true
         MPVLib.command("stop")
     }
 
@@ -173,6 +186,29 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         setContentView(R.layout.activity_mpv_player)
         surfaceView = findViewById(R.id.surface_view)
+
+        composeView = findViewById(R.id.preplay_compose_view)
+        composeView.setContent {
+            val p = prePlayPayload
+            if (p != null) {
+                com.playbridge.player.preplay.PrePlayScreen(
+                    payload = p,
+                    isLaunching = isPrePlayLaunching,
+                    launchCountdown = prePlayCountdown,
+                    onStreamSelected = { stream ->
+                        resolutionJob?.cancel()
+                        playVideoAfterResolution(stream.url, p)
+                    },
+                    onBack = {
+                        resolutionJob?.cancel()
+                        prePlayPayload = null
+                        composeView.visibility = android.view.View.GONE
+                        ServerService.notifyContextIdle()
+                        finish()
+                    }
+                )
+            }
+        }
 
         historyStore = HistoryStore(this)
         progressManager = ProgressManager(
@@ -326,6 +362,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        FileLogger.i(TAG, "onNewIntent received")
+
+        // Cancel any pending resolution or countdown from a previous intent
+        resolutionJob?.cancel()
+        launchJob?.cancel()
+        isPrePlayLaunching = false
+        isPreBuffering = false
+
+        stopPlayback()
         handleIntent(intent)
     }
 
@@ -488,30 +533,19 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private fun handleIntent(intent: Intent?) {
         setupSeriesNavigator(intent)
-        val url = intent?.getStringExtra(ServerService.EXTRA_URL) ?: return
-        val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getSerializableExtra(ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
-        } else {
-            @Suppress("UNCHECKED_CAST")
-            intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
-        }
-        val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
-        val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
 
         // Read playlist if present
-        val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
+        val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
         val inMemoryPlaylist = PlaylistStore.currentPlaylist
         if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
             playlistItems = inMemoryPlaylist.toMutableList()
-            playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
+            playlistIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
             FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
         } else {
             playlistItems = mutableListOf()
         }
 
-        // Apply title immediately if known
-        title?.let { controlsManager.setTitle(it) }
-
+        // Update button visibility based on navigator and playlist
         val hasPlaylist = playlistItems.isNotEmpty()
         val hasEpisodeList = seriesNavigator?.episodeList?.isNotEmpty() == true
         val isSeries = seriesNavigator?.contentType == "series"
@@ -531,11 +565,43 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             }
         }
 
-        // Ensure prev/next buttons are visible for ANY series (including optimistic mode)
-        // or if a playlist is active. Movies with no playlist will have them hidden by setPlaylistVisible(false).
+        // Ensure prev/next buttons are visible for ANY series
         if (isSeries || hasPlaylist) {
             controlsManager.setNavigationVisible(true)
         }
+
+        val payloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
+        if (payloadJson != null) {
+            try {
+                val p = com.playbridge.protocol.protocolJson.decodeFromString(
+                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                    payloadJson
+                )
+                prePlayPayload = p
+                composeView.visibility = android.view.View.VISIBLE
+                resolveStreamsAndPreBuffer(p)
+                return // resolveStreamsAndPreBuffer handles the rest
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to parse ContentPlayPayload", e)
+            }
+        }
+
+        // Standard direct URL path
+        composeView.visibility = android.view.View.GONE
+        prePlayPayload = null
+
+        val url = intent?.getStringExtra(ServerService.EXTRA_URL) ?: return
+        val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getSerializableExtra(ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
+        } else {
+            @Suppress("UNCHECKED_CAST")
+            intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
+        }
+        val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
+        val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+
+        // Apply title immediately if known
+        title?.let { controlsManager.setTitle(it) }
 
         val displayTitle = if (seriesNavigator != null && seriesNavigator?.seriesTitle != null) {
             seriesNavigator?.seriesTitle
@@ -601,14 +667,17 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         if (!::controlsManager.isInitialized) return super.onKeyDown(keyCode, event)
 
         val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
+        val isExternalOverlayVisible = prePlayPayload != null || activeDialog != null
 
-        if (isFullOverlayVisible) {
+        if (isFullOverlayVisible || isExternalOverlayVisible) {
             return when (keyCode) {
                 // While full overlay (stream picker / episode list) is open, consume
                 // directional keys silently so the Compose focus system handles them,
                 // but pass through everything else.
                 android.view.KeyEvent.KEYCODE_DPAD_UP,
-                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> true
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (isExternalOverlayVisible) false else true
+                }
                 android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { controlsManager.togglePlayPause(); true }
                 android.view.KeyEvent.KEYCODE_MEDIA_PLAY  -> { play(); true }
                 android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> { pause(); true }
@@ -694,10 +763,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     // ── Playback ─────────────────────────────────────────────────────────────
 
-    private fun playVideo(url: String, headers: Map<String, String>?) {
-        // Guard against MPV_EVENT_END_FILE from a prior stop() or a failed first HTTP attempt
-        // triggering finish() before the new stream has loaded.
-        isLoadingNewStream = true
+    private suspend fun playVideoInternal(url: String, headers: Map<String, String>?, startPaused: Boolean = false) {
         // Note: setupSeriesNavigator is already called by handleIntent before playVideo;
         // calling it again here would create a redundant SeriesNavigator instance.
         currentUrl = url
@@ -709,34 +775,53 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         FileLogger.i(TAG, "URL: $url")
         FileLogger.i(TAG, "Title: ${controlsManager.getTitle()}")
         FileLogger.i(TAG, "Headers: $headers")
+        FileLogger.i(TAG, "Start Paused: $startPaused")
         FileLogger.i(TAG, "===========================================")
 
 
-        lifecycleScope.launch {
-            // seekTo() will intercept this call while durationMs == 0 (file not yet loaded)
-            // and stash the position in pendingResumePositionMs; it is applied on FILE_LOADED.
-            val historyItem = progressManager.restoreProgress(url)
-            if (historyItem != null) {
-                // Apply playback speed
-                if (historyItem.playbackSpeed != null) {
-                    currentPlaybackSpeed = historyItem.playbackSpeed
-                    MPVLib.setPropertyDouble("speed", currentPlaybackSpeed.toDouble())
-                }
+        // seekTo() will intercept this call while durationMs == 0 (file not yet loaded)
+        // and stash the position in pendingResumePositionMs; it is applied on FILE_LOADED.
+        val historyItem = progressManager.restoreProgress(url)
+        if (historyItem != null) {
+            // Apply playback speed
+            if (historyItem.playbackSpeed != null) {
+                currentPlaybackSpeed = historyItem.playbackSpeed
+                MPVLib.setPropertyDouble("speed", currentPlaybackSpeed.toDouble())
             }
+        }
 
-            MPVLib.command("stop")
+        MPVLib.command("stop")
 
-            // Headers
-            headers?.forEach { (k, v) ->
-                if (k.equals("user-agent", true)) {
-                    MPVLib.setOptionString("user-agent", v)
-                }
+        var userAgentSet = false
+        // Headers
+        headers?.forEach { (k, v) ->
+            if (k.equals("user-agent", true)) {
+                MPVLib.setOptionString("user-agent", v)
+                userAgentSet = true
             }
-            val headerString = headers?.entries?.joinToString(",") { "${it.key}: ${it.value}" } ?: ""
-            MPVLib.setOptionString("http-header-fields", headerString)
+        }
+        if (!userAgentSet) {
+            MPVLib.setOptionString("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        }
+        val headerString = headers?.entries?.joinToString(",") { "${it.key}: ${it.value}" } ?: ""
+        MPVLib.setOptionString("http-header-fields", headerString)
 
-            MPVLib.command("loadfile", url)
-            play()
+        if (startPaused) {
+            MPVLib.setPropertyBoolean("pause", true)
+        }
+
+        MPVLib.command("loadfile", url)
+        if (!startPaused) play()
+    }
+
+    private fun playVideo(url: String, headers: Map<String, String>?, startPaused: Boolean = false) {
+        // Guard against MPV_EVENT_END_FILE from a prior stop() or a failed first HTTP attempt
+        // triggering finish() before the new stream has loaded.
+        isLoadingNewStream = true
+
+        playJob?.cancel()
+        playJob = lifecycleScope.launch {
+            playVideoInternal(url, headers, startPaused)
         }
     }
 
@@ -1141,6 +1226,94 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         dialog.show()
     }
 
+    private fun resolveStreamsAndPreBuffer(p: com.playbridge.protocol.ContentPlayPayload) {
+        resolutionJob?.cancel()
+        isPrePlayLaunching = false
+        prePlayCountdown = 0
+
+        resolutionJob = lifecycleScope.launch {
+            try {
+                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                val autoQuality = p.defaultVideoQuality ?: prefs.getString("auto_stream_quality", "") ?: ""
+                val preferredAddon = p.preferredAddonBaseUrl ?: prefs.getString("auto_stream_addon", "") ?: ""
+                val preferredAddonName = p.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
+
+                FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
+
+                val streams = com.playbridge.player.stremio.StremioClient.resolveStreamsByContentId(
+                    addonBaseUrls = p.addonBaseUrls,
+                    addonNames = p.addonNames,
+                    contentId = p.contentId,
+                    contentType = p.contentType,
+                    season = p.season,
+                    episode = p.episode,
+                    qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
+                    preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
+                    preferredAddonName = preferredAddonName
+                )
+
+                if (streams.isEmpty()) {
+                    FileLogger.w(TAG, "No streams resolved for ${p.contentId}")
+                    // UI will show error in PrePlayScreen
+                    return@launch
+                }
+
+                // Auto-pick the best stream (sorted by score)
+                val best = streams.firstOrNull()
+                if (best != null && !p.forcePicker && autoQuality.isNotEmpty()) {
+                    FileLogger.i(TAG, "Auto-picked stream for pre-buffering: ${best.name}")
+                    playVideoAfterResolution(best.url, p)
+                } else {
+                    FileLogger.i(TAG, "Manual picker required, waiting for user selection")
+                }
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Pre-play resolution failed", e)
+            }
+        }
+    }
+
+    private fun playVideoAfterResolution(url: String, p: com.playbridge.protocol.ContentPlayPayload) {
+        isPrePlayLaunching = true
+        isPreBuffering = true
+
+        // Start buffering in the background immediately
+        FileLogger.i(TAG, "Starting background pre-buffer for: $url")
+        val nav = seriesNavigator // setupSeriesNavigator called in handleIntent
+        val baseTitle = if (nav != null && nav.seriesTitle != null) {
+            nav.seriesTitle
+        } else {
+            p.title
+        }
+
+        val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
+        val displayTitle = if (playlistItems.isNotEmpty() && baseTitle?.contains(suffix) != true) {
+            "$baseTitle $suffix"
+        } else {
+            baseTitle
+        }
+
+        controlsManager.setTitle(displayTitle)
+
+        // Initialize player and start buffering but KEEP composeView visible
+        playVideo(url, null, startPaused = true)
+
+        // Start countdown
+        launchJob?.cancel()
+        launchJob = lifecycleScope.launch {
+            for (i in 5 downTo 1) {
+                prePlayCountdown = i
+                kotlinx.coroutines.delay(1000)
+            }
+
+            // Countdown finished, hide overlay and start playback
+            FileLogger.i(TAG, "Pre-buffer countdown finished, revealing player")
+            isPreBuffering = false
+            prePlayPayload = null
+            composeView.visibility = android.view.View.GONE
+            play() // Ensure it starts playing
+        }
+    }
+
     private fun buildTrackList(): List<MpvTrack> {
         val json = try { MPVLib.getPropertyString("track-list") ?: return emptyList() }
                    catch (e: Exception) { return emptyList() }
@@ -1152,8 +1325,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     id = obj.getInt("id"),
                     type = obj.getString("type"),
                     title = obj.optString("title", "Track ${obj.getInt("id")}"),
-                    lang = obj.optString("lang", null),
-                    codec = obj.optString("codec", null),
+                    lang = if (obj.has("lang")) obj.getString("lang") else null,
+                    codec = if (obj.has("codec")) obj.getString("codec") else null,
                     isSelected = obj.optBoolean("selected", false)
                 )
             }

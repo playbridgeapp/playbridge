@@ -106,6 +106,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     runOnUiThread { mediaPlayer?.time = resumeAt }
                 }
                 runOnUiThread { applyPreferredLanguages() }
+                if (isPreBuffering) {
+                    runOnUiThread { mediaPlayer?.pause() }
+                }
             }
 
             MediaPlayer.Event.Paused ->
@@ -172,6 +175,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     // Settings dialog state
     private var activeDialog: android.app.Dialog? = null
+
+    // Pre-play state
+    private var prePlayPayload by mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null)
+    private var isPrePlayLaunching by mutableStateOf(false)
+    private var prePlayCountdown by androidx.compose.runtime.mutableIntStateOf(0)
+    private var isPreBuffering = false
+    private lateinit var composeView: androidx.compose.ui.platform.ComposeView
+    private var resolutionJob: kotlinx.coroutines.Job? = null
+    private var launchJob: kotlinx.coroutines.Job? = null
+
     private var surfaceLayoutListener: android.view.View.OnLayoutChangeListener? = null
 
     private lateinit var progressManager: ProgressManager
@@ -244,6 +257,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun stopPlayback() {
         FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
+        resolutionJob?.cancel()
+        launchJob?.cancel()
+        isLoadingNewStream = true
         mediaPlayer?.let { player ->
             player.stop()
             player.vlcVout.detachViews()
@@ -318,6 +334,29 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         setContentView(R.layout.activity_vlc_player)
         surfaceView = findViewById(R.id.surface_view)
+
+        composeView = findViewById(R.id.preplay_compose_view)
+        composeView.setContent {
+            val p = prePlayPayload
+            if (p != null) {
+                com.playbridge.player.preplay.PrePlayScreen(
+                    payload = p,
+                    isLaunching = isPrePlayLaunching,
+                    launchCountdown = prePlayCountdown,
+                    onStreamSelected = { stream ->
+                        resolutionJob?.cancel()
+                        playVideoAfterResolution(stream.url, p)
+                    },
+                    onBack = {
+                        resolutionJob?.cancel()
+                        prePlayPayload = null
+                        composeView.visibility = android.view.View.GONE
+                        ServerService.notifyContextIdle()
+                        finish()
+                    }
+                )
+            }
+        }
 
         historyStore = HistoryStore(this)
         progressManager = ProgressManager(
@@ -410,37 +449,24 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        FileLogger.i(TAG, "onNewIntent received")
+
+        // Cancel any pending resolution or countdown from a previous intent
+        resolutionJob?.cancel()
+        launchJob?.cancel()
+        isPrePlayLaunching = false
+        isPreBuffering = false
+
         stopPlayback()
         handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent) {
         setupSeriesNavigator(intent)
-        val url = intent.getStringExtra(ServerService.EXTRA_URL)
-        val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
-
-        val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
-        if (subtitles != null) {
-            subtitleUrls = subtitles
-        }
-
-        @Suppress("UNCHECKED_CAST")
-        val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
 
         // Read playlist if present
         val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
         val inMemoryPlaylist = PlaylistStore.currentPlaylist
-
-        // Restore saved language preferences from history intent so they survive app restarts.
-        intent.getStringExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG)?.let {
-            preferredAudioLanguage = it
-            FileLogger.i(TAG, "Restored preferred audio language: $it")
-        }
-        intent.getStringExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG)?.let {
-            preferredSubtitleLanguage = it
-            FileLogger.i(TAG, "Restored preferred subtitle language: $it")
-        }
-
         if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
             playlistItems = inMemoryPlaylist.toMutableList()
             playlistIndex = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
@@ -467,10 +493,50 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             }
         }
 
-        // Ensure prev/next buttons are visible for ANY series (including optimistic mode)
-        // or if a playlist is active. Movies with no playlist will have them hidden by setPlaylistVisible(false).
+        // Ensure prev/next buttons are visible for ANY series
         if (isSeries || hasPlaylist) {
             controlsManager.setNavigationVisible(true)
+        }
+
+        val payloadJson = intent.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
+        if (payloadJson != null) {
+            try {
+                val p = com.playbridge.protocol.protocolJson.decodeFromString(
+                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                    payloadJson
+                )
+                prePlayPayload = p
+                composeView.visibility = android.view.View.VISIBLE
+                resolveStreamsAndPreBuffer(p)
+                return // resolveStreamsAndPreBuffer handles the rest
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to parse ContentPlayPayload", e)
+            }
+        }
+
+        // Standard direct URL path
+        composeView.visibility = android.view.View.GONE
+        prePlayPayload = null
+
+        val url = intent.getStringExtra(ServerService.EXTRA_URL)
+        val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
+
+        val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+        if (subtitles != null) {
+            subtitleUrls = subtitles
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val headers = intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? HashMap<String, String>
+
+        // Restore saved language preferences from history intent so they survive app restarts.
+        intent.getStringExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG)?.let {
+            preferredAudioLanguage = it
+            FileLogger.i(TAG, "Restored preferred audio language: $it")
+        }
+        intent.getStringExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG)?.let {
+            preferredSubtitleLanguage = it
+            FileLogger.i(TAG, "Restored preferred subtitle language: $it")
         }
 
         val nav = seriesNavigator
@@ -992,6 +1058,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var playJob: kotlinx.coroutines.Job? = null
 
     private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
+        isLoadingNewStream = true
         val title = controlsManager.getTitle()
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "URL: $url")
@@ -1098,13 +1165,20 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             setHWDecoderEnabled(true, true)
 
             val extraHeaders = mutableListOf<String>()
+            var userAgentSet = false
             headers?.forEach { (key, value) ->
                 when (key.lowercase()) {
-                    "user-agent" -> addOption(":http-user-agent=$value")
+                    "user-agent" -> {
+                        addOption(":http-user-agent=$value")
+                        userAgentSet = true
+                    }
                     "referer" -> addOption(":http-referrer=$value")
                     "cookie" -> addOption(":http-cookies=$value")
                     else -> extraHeaders.add("$key: $value")
                 }
+            }
+            if (!userAgentSet) {
+                addOption(":http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             }
             if (extraHeaders.isNotEmpty()) {
                 // VLC expects headers separated by \r\n with no trailing separator.
@@ -1146,11 +1220,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             // has buffered enough to reliably accept the command.
             pendingResumeTime = if (finalResumeTime != null && finalResumeTime > 0) finalResumeTime else null
 
-            if (startPaused) {
-                runOnUiThread { player.play(); player.pause() }
-            } else {
-                runOnUiThread { player.play() }
-            }
+            runOnUiThread { player.play() }
         }
     }
 
@@ -1333,13 +1403,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         if (event?.action != android.view.KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
 
         val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
+        val isExternalOverlayVisible = prePlayPayload != null || activeDialog != null
 
-        if (isFullOverlayVisible) {
+        if (isFullOverlayVisible || isExternalOverlayVisible) {
             // When full overlay is visible, let the system handle D-pad navigation for focus,
             // except for DPAD_UP/DPAD_DOWN which we ignore to prevent focus jumping off controls.
             return when (keyCode) {
                 android.view.KeyEvent.KEYCODE_DPAD_UP,
-                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> true
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (isExternalOverlayVisible) false else true
+                }
                 android.view.KeyEvent.KEYCODE_DPAD_LEFT,
                 android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
                 android.view.KeyEvent.KEYCODE_DPAD_CENTER,
@@ -1408,6 +1481,94 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
+
+    private fun resolveStreamsAndPreBuffer(p: com.playbridge.protocol.ContentPlayPayload) {
+        resolutionJob?.cancel()
+        isPrePlayLaunching = false
+        prePlayCountdown = 0
+
+        resolutionJob = lifecycleScope.launch {
+            try {
+                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                val autoQuality = p.defaultVideoQuality ?: prefs.getString("auto_stream_quality", "") ?: ""
+                val preferredAddon = p.preferredAddonBaseUrl ?: prefs.getString("auto_stream_addon", "") ?: ""
+                val preferredAddonName = p.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
+
+                FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
+
+                val streams = com.playbridge.player.stremio.StremioClient.resolveStreamsByContentId(
+                    addonBaseUrls = p.addonBaseUrls,
+                    addonNames = p.addonNames,
+                    contentId = p.contentId,
+                    contentType = p.contentType,
+                    season = p.season,
+                    episode = p.episode,
+                    qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
+                    preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
+                    preferredAddonName = preferredAddonName
+                )
+
+                if (streams.isEmpty()) {
+                    FileLogger.w(TAG, "No streams resolved for ${p.contentId}")
+                    // UI will show error in PrePlayScreen
+                    return@launch
+                }
+
+                // Auto-pick the best stream (sorted by score)
+                val best = streams.firstOrNull()
+                if (best != null && !p.forcePicker && autoQuality.isNotEmpty()) {
+                    FileLogger.i(TAG, "Auto-picked stream for pre-buffering: ${best.name}")
+                    playVideoAfterResolution(best.url, p)
+                } else {
+                    FileLogger.i(TAG, "Manual picker required, waiting for user selection")
+                }
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Pre-play resolution failed", e)
+            }
+        }
+    }
+
+    private fun playVideoAfterResolution(url: String, p: com.playbridge.protocol.ContentPlayPayload) {
+        isPrePlayLaunching = true
+        isPreBuffering = true
+
+        // Start buffering in the background immediately
+        FileLogger.i(TAG, "Starting background pre-buffer for: $url")
+        val nav = seriesNavigator // setupSeriesNavigator called in handleIntent
+        val baseTitle = if (nav != null && nav.seriesTitle != null) {
+            nav.seriesTitle
+        } else {
+            p.title
+        }
+
+        val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
+        val displayTitle = if (playlistItems.isNotEmpty() && baseTitle?.contains(suffix) != true) {
+            "$baseTitle $suffix"
+        } else {
+            baseTitle
+        }
+
+        controlsManager.setTitle(displayTitle)
+
+        // Initialize player and start buffering but KEEP composeView visible
+        playVideo(url, null, startPaused = true)
+
+        // Start countdown
+        launchJob?.cancel()
+        launchJob = lifecycleScope.launch {
+            for (i in 5 downTo 1) {
+                prePlayCountdown = i
+                kotlinx.coroutines.delay(1000)
+            }
+
+            // Countdown finished, hide overlay and start playback
+            FileLogger.i(TAG, "Pre-buffer countdown finished, revealing player")
+            isPreBuffering = false
+            prePlayPayload = null
+            composeView.visibility = android.view.View.GONE
+            play() // Ensure it starts playing
+        }
+    }
 
     override fun onPause() {
         super.onPause()

@@ -21,7 +21,8 @@ class InputHandler(
     private val activity: Activity,
     private val audioManager: AudioManager,
     private val playerProvider: () -> ExoPlayer?,
-    private val controls: PlayerControlsManager
+    private val controls: PlayerControlsManager,
+    private val isExternalOverlayVisible: () -> Boolean = { false }
 ) {
 
     /**
@@ -95,11 +96,15 @@ class InputHandler(
         // Only handle ACTION_DOWN
         if (event?.action != KeyEvent.ACTION_DOWN) return false
 
-        // --- Full controls overlay is visible (pause menu) ---
-        if (controls.isFullOverlayVisible) {
+        // --- Full controls overlay or external overlay is visible ---
+        if (controls.isFullOverlayVisible || isExternalOverlayVisible()) {
             return when (keyCode) {
                 // Up/Down: consume silently (no volume change in overlay)
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> true
+                // EXCEPT if it's an external overlay (like Compose PrePlay),
+                // we might want to let it handle DPAD navigation.
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (isExternalOverlayVisible()) false else true
+                }
                 // Left/Right: let system do focus navigation between buttons
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> false
                 // Center/Enter: let system deliver click to focused button

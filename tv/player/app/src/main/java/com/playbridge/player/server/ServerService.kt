@@ -476,26 +476,24 @@ class ServerService : Service() {
                     tvPref
                 }
 
-                val useExoPlayer = finalMode == "internal"
-                val targetActivity = if (useExoPlayer) {
-                    com.playbridge.player.player.ExoPlayerActivity::class.java
-                } else {
-                    com.playbridge.player.preplay.PrePlayActivity::class.java
+                val targetActivity = when (finalMode) {
+                    "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
+                    "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
+                    "external", "external_mpv" -> com.playbridge.player.preplay.PrePlayActivity::class.java
+                    else -> com.playbridge.player.player.ExoPlayerActivity::class.java
                 }
 
-                // Stop any running player if we are NOT reusing the active ExoPlayer instance.
-                // Reusing the instance is handled by onNewIntent in ExoPlayerActivity.
-                if (activeContext != "player" || !useExoPlayer) {
+                // Stop any running player if we are NOT reusing the active instance.
+                // Reusing the instance is handled by onNewIntent in PlayerActivities.
+                if (activeContext != "player") {
                     FileLogger.i(TAG, "Broadcasting stop command before launching new activity")
                     sendBroadcast(Intent(ACTION_CONTROL).apply {
                         putExtra(EXTRA_COMMAND, "stop")
                         setPackage(packageName)
                     })
-                } else {
-                    FileLogger.i(TAG, "Reusing active ExoPlayer instance, skipping stop broadcast")
                 }
 
-                activeContext = if (useExoPlayer) "player" else "preplay"
+                activeContext = "player"
                 broadcastContext()
                 val json = com.playbridge.protocol.protocolJson.encodeToString(
                     com.playbridge.protocol.ContentPlayPayload.serializer(),

@@ -302,7 +302,8 @@ class ExoPlayerActivity : PlayerActivity() {
             activity = this,
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
             playerProvider = { player },
-            controls = controlsManager
+            controls = controlsManager,
+            isExternalOverlayVisible = { prePlayPayload != null || activeDialog != null }
         )
 
         // Register broadcast receiver for control commands
