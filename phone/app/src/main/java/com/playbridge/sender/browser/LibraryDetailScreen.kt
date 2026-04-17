@@ -639,10 +639,10 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, !watchOnTv, false, firstEpisodeForTv)
+                                        startResolution(streamId, streamType, title, false, false, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, !watchOnTv, false, null)
+                                        startResolution(streamId, addonType, displayTitle, false, false, null)
                                     }
                                 },
                                 onWatchOnTvLongClick = {
@@ -650,10 +650,10 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, !watchOnTv, true, firstEpisodeForTv)
+                                        startResolution(streamId, streamType, title, false, true, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, !watchOnTv, true, null)
+                                        startResolution(streamId, addonType, displayTitle, false, true, null)
                                     }
                                 },
                                 onWatchOnPhone = {
@@ -721,13 +721,13 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, !watchOnTv, false, nextUnwatchedEpisode)
+                                        startResolution(streamId, streamType, title, false, false, nextUnwatchedEpisode)
                                     },
                                     onWatchOnTvLongClick = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, !watchOnTv, true, nextUnwatchedEpisode)
+                                        startResolution(streamId, streamType, title, false, true, nextUnwatchedEpisode)
                                     },
                                     onWatchOnPhone = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id

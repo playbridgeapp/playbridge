@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.foundation.Image
+import coil.compose.AsyncImage
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -144,11 +145,20 @@ fun CastSheet(
     mediaflowProxyPassword: String = "",
     mediaflowAutoSelect: Boolean = true,
     subtitleService: StremioSubtitleService = StremioSubtitleService(),
+    contentPayload: com.playbridge.protocol.ContentPlayPayload? = null,
+    onContentClick: (com.playbridge.protocol.ContentPlayPayload) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
     var sheetMode by remember { mutableStateOf(initialMode) } // "play" or "browse"
-    
+
+    // If we have content metadata but no videos, default to play mode
+    LaunchedEffect(contentPayload) {
+        if (contentPayload != null && videos.isEmpty()) {
+            sheetMode = "play"
+        }
+    }
+
     // Separate distinct videos and subtitles, and sort videos by priority
     val playableVideos = remember(videos) {
         videos.filter { !it.isSubtitle }
@@ -171,7 +181,7 @@ fun CastSheet(
               )
     }
     val allSubtitles = remember(videos) { videos.filter { it.isSubtitle } }
-    
+
     val isPlaylistMode = remember(playableVideos) {
         playableVideos.firstOrNull()?.playlistPayload != null
     }
@@ -340,6 +350,11 @@ fun CastSheet(
                     } else {
                         IconButton(
                             onClick = {
+                                if (contentPayload != null && selectedVideo == null) {
+                                    onContentClick(contentPayload)
+                                    return@IconButton
+                                }
+
                                 val specificUrl = selectedQualityUrl
                                 if (specificUrl != null) {
                                     val selectedQuality = selectedVideo!!.qualities.find { it.url == specificUrl }
@@ -362,18 +377,18 @@ fun CastSheet(
                                     onVideoClick(applyProxy(selectedVideo!!), selectedSubtitles.toList())
                                 }
                             },
-                            enabled = selectedVideo != null
+                            enabled = selectedVideo != null || contentPayload != null
                         ) {
                             Icon(
                                 Icons.Default.Send,
                                 contentDescription = "Play",
-                                tint = if (selectedVideo != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                tint = if (selectedVideo != null || contentPayload != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                             )
                         }
                     }
                 }
             }
-            
+
             // Compact player + TV selectors side by side
             val playerOptions = if (sheetMode == "browse") {
                 listOf(
@@ -542,7 +557,7 @@ fun CastSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             if (selectedTab == 0) {
-                if (playableVideos.isEmpty()) {
+                if (playableVideos.isEmpty() && contentPayload == null) {
                     // Empty state
                     Column(
                         modifier = Modifier
@@ -580,6 +595,79 @@ fun CastSheet(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        if (contentPayload != null) {
+                            item {
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedVideo = null
+                                            selectedQualityUrl = null
+                                        },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (selectedVideo == null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                    border = if (selectedVideo == null) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                                shape = MaterialTheme.shapes.small
+                                            ) {
+                                                Text(
+                                                    text = "Library Content",
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        AsyncImage(
+                                            model = contentPayload.backdropUrl ?: contentPayload.posterUrl,
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .aspectRatio(16f / 9f)
+                                                .clip(RoundedCornerShape(8.dp)),
+                                            contentScale = ContentScale.Crop
+                                        )
+
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        Text(
+                                            text = contentPayload.title,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+
+                                        if (contentPayload.contentType == "series" && contentPayload.season != null && contentPayload.episode != null) {
+                                            Text(
+                                                text = "S${contentPayload.season} E${contentPayload.episode}${if (contentPayload.episodeTitle != null) " - ${contentPayload.episodeTitle}" else ""}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "ID: ${contentPayload.contentId}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         items(playableVideos) { video ->
                             VideoItemDetailed(
                                 video = video,
@@ -879,7 +967,7 @@ private fun VideoItemDetailed(
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
     val videoType = remember(video) { getVideoType(video) }
     val timeString = remember(video.timestamp) { formatTimestamp(video.timestamp) }
-    
+
     // File size state - fetch asynchronously
     var fileSize by remember { mutableStateOf(video.fileSize) }
     var isLoadingSize by remember { mutableStateOf(!video.fileSizeChecked) }
@@ -918,7 +1006,7 @@ private fun VideoItemDetailed(
         val bmp = VideoDetector.fetchThumbnail(video)
         if (bmp != null) thumbnail = bmp else thumbnailFailed = true
     }
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -963,7 +1051,7 @@ private fun VideoItemDetailed(
                         )
                     }
                 }
-                
+
                 // Time detected
                 Text(
                     text = timeString,
@@ -971,7 +1059,7 @@ private fun VideoItemDetailed(
                     color = MaterialTheme.colorScheme.outline
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
 
             // Thumbnail — always shown for all video types
@@ -1034,9 +1122,9 @@ private fun VideoItemDetailed(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                
+
                 Spacer(modifier = Modifier.height(4.dp))
-                
+
                 // Full URL (truncated)
                 Text(
                     text = video.url,
@@ -1045,7 +1133,7 @@ private fun VideoItemDetailed(
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
+
                 // Additional info row
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
@@ -1096,7 +1184,7 @@ private fun VideoItemDetailed(
                     }
                 }
             }
-            
+
             // Raw JSON viewer
             AnimatedVisibility(visible = showRaw && video.originalMessage != null) {
                 Column(
@@ -1129,13 +1217,13 @@ private fun VideoItemDetailed(
                 Spacer(modifier = Modifier.height(8.dp))
                 Spacer(modifier = Modifier.height(12.dp))
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 Text(
                     text = "Qualities:",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline
                 )
-                
+
                 if (isLoadingQualities) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1161,11 +1249,11 @@ private fun VideoItemDetailed(
                             FilterChip(
                                 selected = isQualitySelected,
                                 onClick = { onQualityClick(quality.url) },
-                                label = { 
+                                label = {
                                     Text(
                                         text = quality.resolution,
                                         style = MaterialTheme.typography.labelMedium
-                                    ) 
+                                    )
                                 }
                             )
                         }
@@ -1270,8 +1358,8 @@ fun parseUrlInfo(url: String): UrlInfo {
         val uri = URI(url)
         val host = uri.host ?: "Unknown"
         val path = uri.path ?: ""
-        val extension = path.substringAfterLast('.', "").takeIf { 
-            it.isNotEmpty() && it.length <= 5 && !it.contains('/') 
+        val extension = path.substringAfterLast('.', "").takeIf {
+            it.isNotEmpty() && it.length <= 5 && !it.contains('/')
         }
         val filename = try {
             val name = path.substringAfterLast('/')
@@ -1345,34 +1433,34 @@ fun copyToClipboard(context: Context, text: String) {
 
 
 fun openInExternalPlayer(
-    context: Context, 
-    url: String, 
-    mimeType: String?, 
+    context: Context,
+    url: String,
+    mimeType: String?,
     headers: Map<String, String>?
 ) {
     try {
         val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
         val uri = android.net.Uri.parse(url)
-        
+
         // standard call
         if (mimeType != null) {
             intent.setDataAndType(uri, mimeType)
         } else {
             intent.setDataAndType(uri, "video/*")
         }
-        
+
         // Add headers for players that support it (VLC, MX Player, Just Player, etc.)
         if (headers != null && headers.isNotEmpty()) {
             val headersArray = headers.map { "${it.key}: ${it.value}" }.toTypedArray()
             intent.putExtra("headers", headersArray)
-            
+
             // Also add individual standard headers as potentially some apps look for them directly
             headers["User-Agent"]?.let { intent.putExtra("User-Agent", it); intent.putExtra("user_agent", it) }
             headers["Cookie"]?.let { intent.putExtra("Cookie", it) }
         }
-        
+
         intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        
+
         val chooser = android.content.Intent.createChooser(intent, "Open with")
         context.startActivity(chooser)
     } catch (e: Exception) {

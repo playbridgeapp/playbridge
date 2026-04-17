@@ -465,6 +465,7 @@ class BrowserActivity : ComponentActivity() {
             var forcedVideos by remember { mutableStateOf<List<DetectedVideo>?>(null) }
             var castSheetInitialMode by remember { mutableStateOf("play") }
             var castSheetBrowseOverride by remember { mutableStateOf<String?>(null) }
+            var pendingContentPayload by remember { mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null) }
             val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
                 derivedStateOf {
                     // Read processingVersion so this re-derives whenever any video's
@@ -1706,22 +1707,29 @@ class BrowserActivity : ComponentActivity() {
                                                     showVideoSheet = true
                                                 },
                                                 onPlayContent = { payload ->
-                                                    val cmd = com.playbridge.protocol.createPlayContentCommandJson(
-                                                        payload.copy(
-                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
-                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                                                            maxBitrateCapMbps = maxBitrateCapMbps
+                                                    if (payload.forcePicker) {
+                                                        scope.launch {
+                                                            pendingContentPayload = payload
+                                                            showVideoSheet = true
+                                                        }
+                                                    } else {
+                                                        val cmd = com.playbridge.protocol.createPlayContentCommandJson(
+                                                            payload.copy(
+                                                                playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                                                preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                                preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                                defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                                                                maxBitrateCapMbps = maxBitrateCapMbps
+                                                            )
                                                         )
-                                                    )
-                                                    connectionViewModel.webSocketClient.send(cmd)
-                                                    if (payload.contentType == "series") {
-                                                        nowPlayingTvId = screenNumericId
-                                                        nowPlayingSeason = payload.season
-                                                        nowPlayingEpisodeStart = payload.episode ?: 1
+                                                        connectionViewModel.webSocketClient.send(cmd)
+                                                        if (payload.contentType == "series") {
+                                                            nowPlayingTvId = screenNumericId
+                                                            nowPlayingSeason = payload.season
+                                                            nowPlayingEpisodeStart = payload.episode ?: 1
+                                                        }
+                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                     }
-                                                    Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                 },
                                                 onPlayStream = { url, title ->
                                                     val mainVideo = DetectedVideo(
@@ -1824,6 +1832,30 @@ class BrowserActivity : ComponentActivity() {
                 if (showVideoSheet) {
                     CastSheet(
                         videos = detectedVideos,
+                        contentPayload = pendingContentPayload,
+                        onContentClick = { payload ->
+                            val cmd = com.playbridge.protocol.createPlayContentCommandJson(
+                                payload.copy(
+                                    playerMode = sheetPlayerMode.takeIf { it != "tv" },
+                                    preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                    preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                    defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                                    maxBitrateCapMbps = maxBitrateCapMbps
+                                )
+                            )
+                            connectionViewModel.webSocketClient.send(cmd)
+                            if (payload.contentType == "series") {
+                                // ContentId might be tt... (IMDb) or kitsu... or numeric (TMDB)
+                                // nowPlayingTvId expects a TMDB ID if possible, but for non-TMDB titles
+                                // we can only store the numeric part if it's available or 0.
+                                nowPlayingTvId = payload.contentId.removePrefix("tt").toIntOrNull()
+                                nowPlayingSeason = payload.season
+                                nowPlayingEpisodeStart = payload.episode ?: 1
+                            }
+                            Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                            showVideoSheet = false
+                            pendingContentPayload = null
+                        },
                         playerMode = sheetPlayerMode,
                         onPlayerModeChange = { mode ->
                             sheetPlayerMode = mode
@@ -1914,6 +1946,7 @@ class BrowserActivity : ComponentActivity() {
                             forcedVideos = null
                             castSheetInitialMode = "play"
                             castSheetBrowseOverride = null
+                            pendingContentPayload = null
                         }
                     )
                 }

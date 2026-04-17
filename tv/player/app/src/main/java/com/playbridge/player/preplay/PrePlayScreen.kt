@@ -2,10 +2,13 @@ package com.playbridge.player.preplay
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +37,7 @@ import kotlinx.coroutines.delay
 fun PrePlayScreen(
     payload: ContentPlayPayload,
     isLaunching: Boolean = false,
+    launchCountdown: Int = 0,
     onStreamSelected: (ScoredStremioStream) -> Unit,
     onBack: () -> Unit
 ) {
@@ -59,7 +63,8 @@ fun PrePlayScreen(
                 season = payload.season,
                 episode = payload.episode,
                 qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
-                preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() }
+                preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
+                preferredAddonName = payload.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
             )
             if (streams.isEmpty()) {
                 error = "No streams found for this title."
@@ -164,32 +169,13 @@ fun PrePlayScreen(
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    if (isLoading || isLaunching) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(28.dp),
-                                strokeWidth = 3.dp
-                            )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Text(
-                                if (isLaunching) "Launching player..." else "Resolving streams...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color.White
-                            )
-                        }
-                    } else if (error != null) {
-                        Text(
-                            text = error!!,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = onBack) {
-                            Text("Go Back", color = Color.White)
-                        }
-                    }
+                    StatusSection(
+                        isLoading = isLoading,
+                        isLaunching = isLaunching,
+                        countdown = launchCountdown,
+                        error = error,
+                        onBack = onBack
+                    )
                 }
 
                 // Right: Stream List (Transparent area)
@@ -217,6 +203,105 @@ fun PrePlayScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatusSection(
+    isLoading: Boolean,
+    isLaunching: Boolean,
+    countdown: Int,
+    error: String?,
+    onBack: () -> Unit
+) {
+    AnimatedContent(
+        targetState = Triple(isLoading, isLaunching, error),
+        transitionSpec = {
+            fadeIn(animationSpec = tween(500)) togetherWith fadeOut(animationSpec = tween(500))
+        },
+        label = "StatusAnimation"
+    ) { (loading, launching, err) ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (loading || (launching && countdown == 0)) {
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp),
+                    strokeWidth = 3.dp
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = "Resolving streams...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+            } else if (launching && countdown > 0) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = Color(0xFF4CAF50),
+                    modifier = Modifier.size(28.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column {
+                    Text(
+                        text = "Streams ready",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF4CAF50),
+                        fontWeight = FontWeight.Bold
+                    )
+                    StatusText(countdown)
+                }
+            } else if (err != null) {
+                Column {
+                    Text(
+                        text = err,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = onBack) {
+                        Text("Go Back", color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusText(countdown: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "Playing starts in ",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White
+        )
+
+        AnimatedContent(
+            targetState = countdown,
+            transitionSpec = {
+                (slideInVertically { height -> height } + fadeIn()).togetherWith(
+                    slideOutVertically { height -> -height } + fadeOut()
+                )
+            },
+            label = "CountdownAnimation"
+        ) { targetCount ->
+            Text(
+                text = "$targetCount",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Text(
+            text = " seconds...",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White
+        )
     }
 }
 
