@@ -1,6 +1,7 @@
 package com.playbridge.player.stremio
 
 import android.util.Log
+import com.playbridge.player.logging.FileLogger
 import com.playbridge.protocol.SeriesContext
 import com.playbridge.protocol.SeriesEpisodeRef
 import com.playbridge.player.stremio.ScoredStremioStream
@@ -191,20 +192,22 @@ class SeriesNavigator(
      */
     suspend fun resolveNext(): ResolvedStremioStream? = mutex.withLock {
         if (!hasNext()) {
-            Log.d(TAG, "resolveNext: already at last known episode")
+            FileLogger.i(TAG, "resolveNext: already at last known episode")
             return@withLock null
         }
         val nextRef = peekNext() ?: return@withLock null
 
-        Log.d(TAG, "resolveNext: resolving S${nextRef.season}E${nextRef.episode}")
+        FileLogger.i(TAG, "Navigating to NEXT episode: S${nextRef.season}E${nextRef.episode}")
         val stream = StremioClient.resolveEpisode(
             addonBaseUrls          = context.addonBaseUrls,
+            addonNames             = context.addonNames,
             imdbId                 = context.imdbId,
             season                 = nextRef.season,
             episode                = nextRef.episode,
             qualityPref            = qualityPreference,
             hint                   = currentSourceHint,
-            prefUrl                = context.preferredAddonBaseUrl
+            prefUrl                = context.preferredAddonBaseUrl,
+            prefName               = context.preferredAddonName
         )
 
         if (stream != null) {
@@ -212,7 +215,7 @@ class SeriesNavigator(
             updateSourceHint(stream.url, stream.name, stream.title)
             stream
         } else {
-            Log.d(TAG, "resolveNext: no streams for S${nextRef.season}E${nextRef.episode} — likely series end")
+            FileLogger.w(TAG, "resolveNext: no streams for S${nextRef.season}E${nextRef.episode} — likely series end")
             null
         }
     }
@@ -225,20 +228,22 @@ class SeriesNavigator(
      */
     suspend fun resolvePrev(): ResolvedStremioStream? = mutex.withLock {
         if (!hasPrev()) {
-            Log.d(TAG, "resolvePrev: already at first episode")
+            FileLogger.i(TAG, "resolvePrev: already at first episode")
             return@withLock null
         }
         val prevRef = peekPrev() ?: return@withLock null
 
-        Log.d(TAG, "resolvePrev: resolving S${prevRef.season}E${prevRef.episode}")
+        FileLogger.i(TAG, "Navigating to PREVIOUS episode: S${prevRef.season}E${prevRef.episode}")
         val stream = StremioClient.resolveEpisode(
             addonBaseUrls          = context.addonBaseUrls,
+            addonNames             = context.addonNames,
             imdbId                 = context.imdbId,
             season                 = prevRef.season,
             episode                = prevRef.episode,
             qualityPref            = qualityPreference,
             hint                   = currentSourceHint,
-            prefUrl                = context.preferredAddonBaseUrl
+            prefUrl                = context.preferredAddonBaseUrl,
+            prefName               = context.preferredAddonName
         )
 
         if (stream != null) {
@@ -246,7 +251,7 @@ class SeriesNavigator(
             updateSourceHint(stream.url, stream.name, stream.title)
             stream
         } else {
-            Log.d(TAG, "resolvePrev: no streams for S${prevRef.season}E${prevRef.episode}")
+            FileLogger.w(TAG, "resolvePrev: no streams for S${prevRef.season}E${prevRef.episode}")
             null
         }
     }
@@ -260,15 +265,17 @@ class SeriesNavigator(
     suspend fun resolveAndAdvanceToIndex(index: Int): ResolvedStremioStream? = mutex.withLock {
         val targetRef = episodeList?.getOrNull(index) ?: return@withLock null
 
-        Log.d(TAG, "resolveAndAdvanceToIndex: resolving S${targetRef.season}E${targetRef.episode}")
+        FileLogger.i(TAG, "Jumping to episode index $index: S${targetRef.season}E${targetRef.episode}")
         val stream = StremioClient.resolveEpisode(
             addonBaseUrls          = context.addonBaseUrls,
+            addonNames             = context.addonNames,
             imdbId                 = context.imdbId,
             season                 = targetRef.season,
             episode                = targetRef.episode,
             qualityPref            = qualityPreference,
             hint                   = currentSourceHint,
-            prefUrl                = context.preferredAddonBaseUrl
+            prefUrl                = context.preferredAddonBaseUrl,
+            prefName               = context.preferredAddonName
         )
 
         if (stream != null) {
@@ -276,7 +283,7 @@ class SeriesNavigator(
             updateSourceHint(stream.url, stream.name, stream.title)
             stream
         } else {
-            Log.d(TAG, "resolveAndAdvanceToIndex: no streams for S${targetRef.season}E${targetRef.episode}")
+            FileLogger.w(TAG, "resolveAndAdvanceToIndex: no streams for S${targetRef.season}E${targetRef.episode}")
             null
         }
     }
@@ -297,6 +304,6 @@ class SeriesNavigator(
         currentIndex   = episodeList?.indexOfFirst {
             it.season == ref.season && it.episode == ref.episode
         }?.takeIf { it >= 0 }
-        Log.d(TAG, "Jumped → S${currentSeason}E${currentEpisode} (index=$currentIndex)")
+        FileLogger.i(TAG, "Playlist item picked → S${currentSeason}E${currentEpisode} (index=$currentIndex)")
     }
 }

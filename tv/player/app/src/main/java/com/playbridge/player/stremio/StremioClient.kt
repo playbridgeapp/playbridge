@@ -2,6 +2,7 @@ package com.playbridge.player.stremio
 
 import android.content.Context
 import android.util.Log
+import com.playbridge.player.logging.FileLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -182,12 +183,21 @@ object StremioClient {
         preferredAddonName: String? = null
     ): List<ScoredStremioStream> = withContext(Dispatchers.IO) {
         if (addonBaseUrls.isEmpty()) return@withContext emptyList()
+        FileLogger.i(TAG, "Resolving streams for $contentType $stremioId")
+        FileLogger.i(TAG, "  Preferences: quality=$qualityPreference, hint=$sourceHint, prefAddonName=$preferredAddonName")
+
         val cached = getFromCache(stremioId)
-        val allStreams = if (cached != null) cached else {
+        val allStreams = if (cached != null) {
+            FileLogger.i(TAG, "  Found ${cached.size} streams in cache")
+            cached
+        } else {
             val fetched = coroutineScope {
                 addonBaseUrls.mapIndexed { i, url -> async { fetchFromAddon(url, contentType, stremioId, addonNames?.getOrNull(i)) } }.flatMap { it.await() }
             }
-            if (fetched.isNotEmpty()) { cache[stremioId] = StreamCacheEntry(fetched, System.currentTimeMillis()); saveCache() }
+            if (fetched.isNotEmpty()) {
+                FileLogger.i(TAG, "  Fetched ${fetched.size} total streams from ${addonBaseUrls.size} addons")
+                cache[stremioId] = StreamCacheEntry(fetched, System.currentTimeMillis()); saveCache()
+            }
             fetched
         }
 
@@ -217,27 +227,115 @@ object StremioClient {
     suspend fun resolveStreams(addonBaseUrls: List<String>, addonNames: List<String>? = null, imdbId: String, season: Int, episode: Int, qualityPref: String? = null, hint: String? = null, prefUrl: String? = null): List<ScoredStremioStream> =
         resolveStreamsByContentId(addonBaseUrls, addonNames, imdbId, "series", season, episode, qualityPref, hint, prefUrl)
 
-    suspend fun resolveEpisode(addonBaseUrls: List<String>, imdbId: String, season: Int, episode: Int, qualityPref: String? = null, hint: String? = null, prefUrl: String? = null): ResolvedStremioStream? = withContext(Dispatchers.IO) {
+    suspend fun resolveEpisode(
+        addonBaseUrls: List<String>,
+        addonNames: List<String>? = null,
+        imdbId: String,
+        season: Int,
+        episode: Int,
+        qualityPref: String? = null,
+        hint: String? = null,
+        prefUrl: String? = null,
+        prefName: String? = null
+    ): ResolvedStremioStream? = withContext(Dispatchers.IO) {
         val stremioId = "$imdbId:$season:$episode"
-        val streams = getFromCache(stremioId) ?: coroutineScope { addonBaseUrls.map { async { fetchFromAddon(it, "series", stremioId) } }.flatMap { it.await() }.also { if (it.isNotEmpty()) { cache[stremioId] = StreamCacheEntry(it, System.currentTimeMillis()); saveCache() } } }
-        pickBest(streams, qualityPref, hint)
+        FileLogger.i(TAG, "Resolving episode: $stremioId (hint: $hint, quality: $qualityPref, prefAddon: $prefName)")
+
+        val cached = getFromCache(stremioId)
+        val streams = if (cached != null) {
+            FileLogger.i(TAG, "  Found ${cached.size} streams in cache for $stremioId")
+            cached
+        } else {
+            FileLogger.i(TAG, "  Cache miss for $stremioId, fetching from ${addonBaseUrls.size} addons")
+            val fetched = coroutineScope {
+                addonBaseUrls.mapIndexed { i, url ->
+                    async { fetchFromAddon(url, "series", stremioId, addonNames?.getOrNull(i)) }
+                }.flatMap { it.await() }
+            }
+            if (fetched.isNotEmpty()) {
+                FileLogger.i(TAG, "  Fetched ${fetched.size} total streams for $stremioId")
+                cache[stremioId] = StreamCacheEntry(fetched, System.currentTimeMillis()); saveCache()
+            } else {
+                FileLogger.w(TAG, "  No streams found for $stremioId from any addon")
+            }
+            fetched
+        }
+
+        pickBest(streams, qualityPref, hint, season, episode, prefUrl, prefName)
     }
 
     private fun fetchFromAddon(baseUrl: String, type: String, id: String, displayName: String? = null): List<StremioStreamItem> {
         val url = "${baseUrl.trimEnd('/')}/stream/$type/$id.json"
         return try {
             val response = client.newCall(Request.Builder().url(url).build()).execute()
-            if (!response.isSuccessful) emptyList()
-            else json.decodeFromString<StremioStreamsResponse>(response.body?.string() ?: "").streams?.filter { it.isDirectUrl }?.map { it.copy(addonName = displayName) } ?: emptyList()
-        } catch (_: Exception) { emptyList() }
+            if (!response.isSuccessful) {
+                FileLogger.w(TAG, "  Addon [${displayName ?: baseUrl}] fetch failed with code ${response.code}")
+                emptyList()
+            }
+            else {
+                val streams = json.decodeFromString<StremioStreamsResponse>(response.body?.string() ?: "").streams?.filter { it.isDirectUrl }?.map { it.copy(addonName = displayName) } ?: emptyList()
+                FileLogger.i(TAG, "  Addon [${displayName ?: baseUrl}] returned ${streams.size} streams")
+                streams
+            }
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "  Addon [${displayName ?: baseUrl}] fetch error: ${e.message}")
+            emptyList()
+        }
     }
 
-    private fun pickBest(streams: List<StremioStreamItem>, qualityPref: String?, hint: String?): ResolvedStremioStream? {
+    private fun pickBest(
+        streams: List<StremioStreamItem>,
+        qualityPref: String?,
+        hint: String?,
+        targetSeason: Int? = null,
+        targetEpisode: Int? = null,
+        prefUrl: String? = null,
+        prefName: String? = null
+    ): ResolvedStremioStream? {
         val targetRank = QualityRanker.targetRank(qualityPref)
-        fun score(s: StremioStreamItem) = QualityRanker.rankFromText("${s.name.orEmpty()} ${s.title.orEmpty()}") * 100 + (if (isSeasonPack(s)) 10 else 0) + sourceMatchScore(s, hint)
+
+        fun score(s: StremioStreamItem): Int {
+            val text = "${s.name.orEmpty()} ${s.title.orEmpty()}".lowercase()
+            var score = QualityRanker.rankFromText(text) * 100
+
+            // Season/Episode verification (penalize wrong season/episode)
+            if (targetSeason != null && targetEpisode != null) {
+                val sRegex = Regex("""s(\d{1,2})""", RegexOption.IGNORE_CASE)
+                val eRegex = Regex("""e(\d{1,3})""", RegexOption.IGNORE_CASE)
+
+                val foundSeasons = sRegex.findAll(text).map { it.groupValues[1].toInt() }.toList()
+                if (foundSeasons.isNotEmpty() && !foundSeasons.contains(targetSeason)) {
+                    score -= 5000 // Wrong season
+                }
+
+                val foundEpisodes = eRegex.findAll(text).map { it.groupValues[1].toInt() }.toList()
+                if (foundEpisodes.isNotEmpty() && !foundEpisodes.contains(targetEpisode)) {
+                    score -= 5000 // Wrong episode
+                }
+            }
+
+            if (isSeasonPack(s)) score += 10
+            score += sourceMatchScore(s, hint)
+
+            // Preferred Addon scoring (mirror resolveStreamsInternal logic)
+            if (prefName != null && s.addonName == prefName) score += 400
+            else if (prefUrl != null && s.url?.startsWith(prefUrl.trimEnd('/')) == true) score += 400
+
+            return score
+        }
+
         val main = streams.filter { !isExtrasContent(it) }.ifEmpty { streams }
         val tierMatched = if (targetRank > 0) main.filter { QualityRanker.rankFromText("${it.name.orEmpty()} ${it.title.orEmpty()}") == targetRank } else main
         val pool = if (tierMatched.isNotEmpty()) tierMatched else if (targetRank > 0) main.filter { QualityRanker.rankFromText("${it.name.orEmpty()} ${it.title.orEmpty()}") > targetRank }.ifEmpty { main } else main
-        return pool.maxByOrNull { score(it) }?.let { ResolvedStremioStream(it.url!!, it.name, it.title) }
+
+        val picked = pool.maxByOrNull { score(it) }
+        if (picked != null) {
+            val sizeInfo = picked.behaviorHints?.videoSize?.let { " size: ${it / (1024 * 1024)}MB" } ?: ""
+            FileLogger.i(TAG, "  Best stream picked: ${picked.name ?: picked.title}$sizeInfo (targetRank: $targetRank, qualityPref: $qualityPref, hint: $hint, score: ${score(picked)})")
+        } else if (streams.isNotEmpty()) {
+            FileLogger.w(TAG, "  No stream picked despite having ${streams.size} candidates (pool size: ${pool.size})")
+        }
+
+        return picked?.let { ResolvedStremioStream(it.url!!, it.name, it.title) }
     }
 }

@@ -1158,9 +1158,11 @@ class ExoPlayerActivity : PlayerActivity() {
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
+                        FileLogger.i(TAG, "Successfully resolved PREVIOUS: ${stream.name ?: stream.title}")
                         // Early-return guard: avoid flicker if a cancelled coroutine slips through
                         val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
                         if (stream.url == currentUrl) {
+                            FileLogger.i(TAG, "Resolved URL is same as current, skipping redundant play")
                             controlsManager.hideBuffering()
                             return@launch
                         }
@@ -1171,6 +1173,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
                         controlsManager.setTitle(mainTitle)
 
+                        FileLogger.i(TAG, "Updating intent with PREVIOUS episode info: $seasonInfo, title: $mainTitle")
                         // Update intent
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
@@ -1297,10 +1300,12 @@ class ExoPlayerActivity : PlayerActivity() {
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
+                        FileLogger.i(TAG, "Successfully resolved NEXT: ${stream.name ?: stream.title}")
                         // Early-return guard: a cancelled coroutine that slipped through
                         // the mutex might resolve the same URL we are already playing.
                         val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
                         if (stream.url == currentUrl) {
+                            FileLogger.i(TAG, "Resolved URL is same as current, skipping redundant play")
                             controlsManager.hideBuffering()
                             return@launch
                         }
@@ -1311,6 +1316,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
                         controlsManager.setTitle(mainTitle)
 
+                        FileLogger.i(TAG, "Updating intent with NEXT episode info: $seasonInfo, title: $mainTitle")
                         // Update intent so that history saving and re-init works with the new stream
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
@@ -1610,10 +1616,12 @@ class ExoPlayerActivity : PlayerActivity() {
             controlsManager.showBuffering()
             val stream = nav.resolveAndAdvanceToIndex(index)
             if (stream != null) {
+                FileLogger.i(TAG, "Successfully resolved JUMP episode: ${stream.name ?: stream.title}")
                 // Early-return guard: a cancelled coroutine that slipped through the mutex
                 // might resolve the same URL we are already playing — skip to avoid flicker.
                 val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
                 if (stream.url == currentUrl) {
+                    FileLogger.i(TAG, "Resolved URL is same as current, skipping redundant play")
                     controlsManager.hideBuffering()
                     return@launch
                 }
@@ -1626,6 +1634,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
                 controlsManager.setTitle(mainTitle)
 
+                FileLogger.i(TAG, "Updating intent with JUMP episode info: $seasonInfo, title: $mainTitle")
                 // Update intent
                 intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                 intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
