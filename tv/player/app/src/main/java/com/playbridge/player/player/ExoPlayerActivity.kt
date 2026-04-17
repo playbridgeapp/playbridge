@@ -1377,6 +1377,8 @@ class ExoPlayerActivity : PlayerActivity() {
                     StreamSelectionDialog(
                         streams = streams,
                         currentUrl = currentUrl,
+                        preferredQuality = nav.qualityPreference,
+                        preferredAddonName = nav.context.preferredAddonName,
                         onStreamSelected = { stream ->
                             dialog.dismiss()
                             val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
@@ -1390,9 +1392,10 @@ class ExoPlayerActivity : PlayerActivity() {
                         },
                         onRefresh = {
                             com.playbridge.player.stremio.StremioClient.clearCache(
-                                nav.context.imdbId,
-                                nav.currentSeason,
-                                nav.currentEpisode
+                                contentId = nav.context.imdbId,
+                                type = "series",
+                                season = nav.currentSeason,
+                                episode = nav.currentEpisode
                             )
                             isLoading = true
                             scope.launch {

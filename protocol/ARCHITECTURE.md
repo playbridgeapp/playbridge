@@ -49,6 +49,9 @@ sequenceDiagram
 // Play video (with optional headers, content type, and external subtitles)
 {"type": "command", "action": "play", "payload": {"url": "...", "title": "...", "headers": {...}, "contentType": "...", "subtitles": ["..."], "playerMode": "vlc", "preferredAudioLanguage": "en"}}
 
+// Play content metadata (TV resolves streams itself via pre-play screen)
+{"type": "command", "action": "play_content", "payload": {"contentId": "tt0944947", "contentType": "series", "title": "Game of Thrones", "season": 1, "episode": 1, "addonBaseUrls": ["https://..."], "addonNames": ["Torrentio"], "backdropUrl": "...", "overview": "...", "genres": ["Drama", "Fantasy"]}}
+
 // Send a multi-item playlist (e.g., entire TV season)
 {"type": "command", "action": "playlist", "payload": {"items": [{"url": "...", "title": "E01"}, {"url": "...", "title": "E02"}], "startIndex": 0}}
 

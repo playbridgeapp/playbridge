@@ -36,18 +36,18 @@ class WebSocketServer(
 ) {
     private var server: EmbeddedServer<*, *>? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
+
     // Connected clients
     private val clients = ConcurrentHashMap<String, WebSocketSession>()
-    
+
     // Connection state
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Stopped)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
-    
+
     // Connected client count
     private val _connectedClientCount = MutableStateFlow(0)
     val connectedClientCount: StateFlow<Int> = _connectedClientCount.asStateFlow()
-    
+
     // Command flow for UI to observe
     private val _commands = MutableSharedFlow<Command>(replay = 0)
     val commands = _commands.asSharedFlow()
@@ -56,7 +56,7 @@ class WebSocketServer(
     // ServerService observes this to auto-open the PairingScreen when the app is backgrounded.
     private val _connectionAttemptFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val connectionAttemptFlow = _connectionAttemptFlow.asSharedFlow()
-    
+
     sealed class ConnectionState {
         data object Stopped : ConnectionState()
         data object Starting : ConnectionState()
@@ -64,21 +64,21 @@ class WebSocketServer(
         data class Connected(val clientId: String) : ConnectionState()
         data class Error(val message: String) : ConnectionState()
     }
-    
+
     fun start() {
         if (server != null) {
             FileLogger.w(TAG, "Server already running")
             return
         }
-        
+
         _connectionState.value = ConnectionState.Starting
-        
+
         scope.launch {
             try {
                 // Ensure previous instance is stopped if it was somehow left valid but not running
                 server?.stop(1000, 2000)
                 server = null
-                
+
                 server = embeddedServer(CIO, port = port) {
                     install(WebSockets) {
                         pingPeriod = 15.seconds
@@ -86,7 +86,7 @@ class WebSocketServer(
                         maxFrameSize = Long.MAX_VALUE
                         masking = false
                     }
-                    
+
                     routing {
                         // HTTP endpoint: download log files
                         get("/logs") {
@@ -135,10 +135,10 @@ class WebSocketServer(
                         }
                     }
                 }.start(wait = false)
-                
+
                 _connectionState.value = ConnectionState.Running(port)
                 FileLogger.i(TAG, "WebSocket server started on port $port")
-                
+
             } catch (e: java.net.BindException) {
                 FileLogger.w(TAG, "Port $port already in use. Assuming server from previous instance is still active.")
                 // If the port is in use, it's likely our own service from a previous run that hasn't fully released yet,
@@ -163,7 +163,7 @@ class WebSocketServer(
                     }
                 }
                 clients.clear()
-                
+
                 server?.stop(500, 1000)
                 server = null
                 FileLogger.i(TAG, "Server stopped")
@@ -173,7 +173,7 @@ class WebSocketServer(
             FileLogger.e(TAG, "Error stopping server", e)
         }
     }
-    
+
     private suspend fun handleConnection(session: WebSocketServerSession) {
         val clientId = java.util.UUID.randomUUID().toString()
         FileLogger.i(TAG, "New connection attempt: $clientId")
@@ -198,7 +198,7 @@ class WebSocketServer(
                 val frame = session.incoming.receive()
                 if (frame is Frame.Text) {
                     val text = frame.readText()
-                    
+
                     if (text.contains("\"type\":\"ping\"") || text.contains("\"type\": \"ping\"")) {
                         FileLogger.d(TAG, "Received ping during auth, sending pong")
                         session.send(Frame.Text(createPongJson()))
@@ -216,7 +216,7 @@ class WebSocketServer(
                     try {
                         // Robust JSON parsing
                         val authMessage = com.playbridge.protocol.protocolJson.decodeFromString<com.playbridge.protocol.AuthMessage>(text)
-                        
+
                         if (authMessage.type == "auth") {
                             if (authMessage.token == authToken) {
                                 // Re-connection with valid token
@@ -251,7 +251,7 @@ class WebSocketServer(
                     }
                 }
             }
-            
+
             // Authentication successful, register client
             clients[clientId] = session
             _connectedClientCount.value = clients.size
@@ -263,18 +263,23 @@ class WebSocketServer(
                     is Frame.Text -> {
                         val text = frame.readText()
                         val command = parseCommand(text)
-                        
+
                         // Only log non-mouse commands to avoid spam
                         if (command !is Command.Mouse) {
                             Log.d(TAG, "Parsed command: ${command.javaClass.simpleName}")
                         }
-                        
+
                         when (command) {
                             is Command.Ping -> {
                                 session.send(Frame.Text(createPongJson()))
                             }
                             is Command.Play -> {
                                 FileLogger.i(TAG, "Play command parsed - URL: ${command.url}, Title: ${command.title}")
+                                FileLogger.i(TAG, "Raw JSON body: $text")
+                                _commands.emit(command)
+                            }
+                            is Command.PlayContent -> {
+                                FileLogger.i(TAG, "PlayContent command parsed - ContentId: ${command.payload.contentId}, Title: ${command.payload.title}")
                                 FileLogger.i(TAG, "Raw JSON body: $text")
                                 _commands.emit(command)
                             }
@@ -302,7 +307,7 @@ class WebSocketServer(
             FileLogger.i(TAG, "Client disconnected: $clientId (remaining: ${clients.size})")
         }
     }
-    
+
     /**
      * Broadcast status update to all connected clients
      */
@@ -315,6 +320,6 @@ class WebSocketServer(
             }
         }
     }
-    
+
     fun getPort(): Int = port
 }

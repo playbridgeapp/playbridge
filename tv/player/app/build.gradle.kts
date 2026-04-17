@@ -78,30 +78,31 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation("androidx.compose.material3:material3")
     implementation(libs.androidx.tv.foundation)
     implementation(libs.androidx.tv.material)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
-    
+
     // Ktor WebSocket Server
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.websockets)
     implementation(libs.ktor.serialization.json)
-    
+
     // QR Code Generation
     implementation(libs.zxing.core)
-    
+
     // DataStore
     implementation(libs.androidx.datastore)
-    
+
     // Kotlin Serialization
     implementation(libs.kotlinx.serialization.json)
-    
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
-    
+
     // Media3 ExoPlayer - Full Suite
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)           // HLS streaming (.m3u8)
@@ -115,7 +116,7 @@ dependencies {
     implementation(libs.media3.common)                  // Common utilities
     implementation(libs.media3.session)                 // Media session support
     implementation(libs.media3.effect)                  // Media effects support
-    
+
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
@@ -123,7 +124,7 @@ dependencies {
     // Utils
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
-    
+
     implementation(project(":protocol"))
 
     // LibVLC

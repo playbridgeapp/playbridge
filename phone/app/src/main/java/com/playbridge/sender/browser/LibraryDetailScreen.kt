@@ -81,7 +81,8 @@ fun LibraryDetailScreen(
     id: String,
     type: String,
     addonRepository: AddonRepository,
-    onPlayStream: (url: String, title: String, subtitles: List<String>?, seriesContext: com.playbridge.protocol.SeriesContext?, streamQuality: String?, streamMaxMbps: Double?) -> Unit = { _, _, _, _, _, _ -> },
+    onPlayStream: (url: String, title: String) -> Unit = { _, _ -> },
+    onPlayContent: (com.playbridge.protocol.ContentPlayPayload) -> Unit = {},
     onPlayTrailer: ((String) -> Unit)? = null,
     onPlayPlaylist: (items: List<com.playbridge.protocol.PlayPayload>) -> Unit = {},
     onQueueAdd: (com.playbridge.protocol.PlayPayload) -> Unit = {},
@@ -371,9 +372,46 @@ fun LibraryDetailScreen(
     val startResolution: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = start@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
         if (!canResolveStreams) return@start
 
+        if (!forPhone) {
+            // TV target: skip phone resolution, send content metadata instead
+            scope.launch {
+                val payload = buildContentPayload(
+                    isSeries = isSeries,
+                    rawId = id,
+                    resolvedImdbId = resolvedImdbId,
+                    resolvedTmdbId = resolvedTmdbId,
+                    displayTitle = displayTitle,
+                    displayYear = displayYear,
+                    displayRating = displayRating,
+                    displayRuntime = displayRuntime,
+                    displayOverview = displayOverview,
+                    displayGenres = displayGenres,
+                    displayCast = displayCast,
+                    displayDirector = displayDirector,
+                    displayBackdrop = displayBackdrop,
+                    displayPoster = addonMeta?.poster ?: tvDetails?.posterUrl ?: movieDetails?.posterUrl,
+                    displayLogo = displayLogo,
+                    selectedSeason = selectedSeason,
+                    currentEpisodeSelection = episode,
+                    addonMeta = addonMeta,
+                    addonRepository = addonRepository,
+                    forcePicker = forcePicker,
+                    autoQuality = autoQualityKey,
+                    autoMaxMbps = autoMaxMbps,
+                    preferredAddonName = autoAddonKey
+                )
+                if (payload != null) {
+                    onPlayContent(payload)
+                } else {
+                    Toast.makeText(context, "No stream-capable addons found", Toast.LENGTH_SHORT).show()
+                }
+            }
+            return@start
+        }
+
         resolutionState = ResolutionState(
             isResolving = true,
-            target = if (forPhone) ResolutionTarget.PHONE else ResolutionTarget.TV,
+            target = ResolutionTarget.PHONE,
             episodeId = episode?.episode
         )
         forceManualInPicker = forcePicker
@@ -410,18 +448,9 @@ fun LibraryDetailScreen(
                         if (forPhone) {
                             openInExternalPlayer(context, streamUrl, null, null)
                         } else {
-                            val seriesCtx = buildSeriesContext(
-                                isSeries, resolvedImdbId, selectedSeason,
-                                currentEpisodeSelection, displayTitle, addonMeta?.videos,
-                                addonRepository,
-                                preferredAddonName = autoAddonKey.takeIf { it.isNotEmpty() }
-                            )
-                            onPlayStream(
-                                streamUrl, resTitle, null, seriesCtx,
-                                autoQualityKey.takeIf { it.isNotEmpty() }, // configured quality tier, not stream's qualityTier (title can contaminate)
-                                autoMaxMbps                                 // configured max bitrate cap
-                            )
-                            Toast.makeText(context, "Auto-selected: ${finalSelection.stream.name}", Toast.LENGTH_SHORT).show()
+                            // This branch is technically unreachable now because !forPhone is handled at the start
+                            // of startResolution, but we keep it simplified to match the new signature.
+                            onPlayStream(streamUrl, resTitle)
                         }
                     }
                 } else {
@@ -481,18 +510,41 @@ fun LibraryDetailScreen(
                             emptyList()
                         }
 
-                        val seriesCtx = buildSeriesContext(
-                            isSeries, resolvedImdbId, selectedSeason,
-                            currentEpisodeSelection, displayTitle, addonMeta?.videos,
-                            addonRepository,
+                        val estimatedMbps = StreamSelector.estimatedMbps(resolved, if (!isSeries) movieDetails?.runtime else null)
+
+                        val payload = buildContentPayload(
+                            isSeries = isSeries,
+                            rawId = id,
+                            resolvedImdbId = resolvedImdbId,
+                            resolvedTmdbId = resolvedTmdbId,
+                            displayTitle = displayTitle,
+                            displayYear = displayYear,
+                            displayRating = displayRating,
+                            displayRuntime = displayRuntime,
+                            displayOverview = displayOverview,
+                            displayGenres = displayGenres,
+                            displayCast = displayCast,
+                            displayDirector = displayDirector,
+                            displayBackdrop = displayBackdrop,
+                            displayPoster = addonMeta?.poster ?: tvDetails?.posterUrl ?: movieDetails?.posterUrl,
+                            displayLogo = displayLogo,
+                            selectedSeason = selectedSeason,
+                            currentEpisodeSelection = currentEpisodeSelection,
+                            addonMeta = addonMeta,
+                            addonRepository = addonRepository,
+                            forcePicker = false, // already in picker
+                            autoQuality = resolved.stream.qualityTier,
+                            autoMaxMbps = estimatedMbps,
                             preferredAddonName = resolved.addonName
                         )
-                        val estimatedMbps = StreamSelector.estimatedMbps(resolved, if (!isSeries) movieDetails?.runtime else null)
-                        onPlayStream(
-                            streamUrl, streamPickerTitle, subtitles.ifEmpty { null }, seriesCtx,
-                            resolved.stream.qualityTier,   // quality from stream name (name-first, reliable)
-                            estimatedMbps                  // actual stream bitrate; null if no size metadata
-                        )
+
+                        if (payload != null) {
+                            onPlayContent(payload)
+                        } else {
+                            // Fallback if payload build fails (rare)
+                            onPlayStream(streamUrl, streamPickerTitle)
+                        }
+
                         resolutionState = ResolutionState()
                         if (isSeries && currentEpisodeSelection != null) {
                             onNowPlayingStarted(resolvedTmdbId ?: 0, selectedSeason, currentEpisodeSelection!!.episode ?: 1)
@@ -1972,6 +2024,103 @@ private suspend fun buildSeriesContext(
         allEpisodes  = allEpisodes,
         preferredAddonBaseUrl = preferredAddonBaseUrl,
         preferredAddonName = preferredAddonName
+    )
+}
+
+/**
+ * Builds a [ContentPlayPayload] to send metadata to the TV for it to resolve streams independently.
+ * Normalises Kitsu/MAL/IMDb/TMDB/TVDB IDs to a stream-capable ID.
+ */
+private suspend fun buildContentPayload(
+    isSeries: Boolean,
+    rawId: String,
+    resolvedImdbId: String?,
+    resolvedTmdbId: Int?,
+    displayTitle: String,
+    displayYear: String?,
+    displayRating: String?,
+    displayRuntime: String?,
+    displayOverview: String?,
+    displayGenres: List<String>,
+    displayCast: List<String>,
+    displayDirector: String?,
+    displayBackdrop: String?,
+    displayPoster: String?,
+    displayLogo: String?,
+    selectedSeason: Int,
+    currentEpisodeSelection: StremioVideo?,
+    addonMeta: StremioMetaDetail?,
+    addonRepository: AddonRepository,
+    forcePicker: Boolean = false,
+    autoQuality: String? = null,
+    autoMaxMbps: Double? = null,
+    preferredAddonName: String? = null
+): com.playbridge.protocol.ContentPlayPayload? {
+    // 1. Resolve canonical stream-capable ID
+    var contentId = resolvedImdbId ?: rawId
+
+    // Special handling for MAL -> Kitsu mapping
+    if (contentId.startsWith("mal:")) {
+        val malId = contentId.removePrefix("mal:")
+        val kitsuId = addonRepository.lookupKitsuFromMal(malId)
+        if (kitsuId != null) contentId = "kitsu:$kitsuId"
+    }
+
+    // Convert numeric TMDB ID to tmdb: prefix if it's the only ID we have
+    if (contentId.toIntOrNull() != null && resolvedTmdbId != null) {
+        contentId = "tmdb:$resolvedTmdbId"
+    }
+
+    val installedStreamAddons = addonRepository.getInstalledAddons()
+        .filter { it.isEnabled && (it.resources.isBlank() || it.supportsResource("stream")) }
+    val addonBaseUrls = installedStreamAddons.map { it.baseUrl }
+    val addonNames = installedStreamAddons.map { it.name }
+    if (addonBaseUrls.isEmpty()) return null
+
+    // Resolve name -> base URL for the preferred addon (null if not set or not found)
+    val preferredAddonBaseUrl = preferredAddonName?.takeIf { it.isNotEmpty() }?.let { name ->
+        installedStreamAddons.firstOrNull { it.name == name }?.baseUrl
+    }
+
+    val allEpisodes = if (isSeries) {
+        addonMeta?.videos
+            ?.filter { it.season != null && it.episode != null && it.season > 0 }
+            ?.distinctBy { Pair(it.season, it.episode) }
+            ?.map { vid ->
+                com.playbridge.protocol.SeriesEpisodeRef(
+                    season = vid.season!!,
+                    episode = vid.episode!!,
+                    title = vid.title.ifBlank { null }
+                )
+            }
+            ?.sortedWith(compareBy({ it.season }, { it.episode }))
+    } else null
+
+    return com.playbridge.protocol.ContentPlayPayload(
+        contentId = contentId,
+        contentType = if (isSeries) "series" else "movie",
+        title = displayTitle,
+        year = displayYear,
+        rating = displayRating,
+        runtime = displayRuntime,
+        overview = displayOverview,
+        genres = displayGenres,
+        cast = displayCast,
+        director = displayDirector,
+        backdropUrl = displayBackdrop,
+        posterUrl = displayPoster,
+        logoUrl = displayLogo,
+        season = if (isSeries) selectedSeason else null,
+        episode = if (isSeries) currentEpisodeSelection?.episode ?: 1 else null,
+        episodeTitle = if (isSeries) currentEpisodeSelection?.title else null,
+        allEpisodes = allEpisodes,
+        addonBaseUrls = addonBaseUrls,
+        addonNames = addonNames,
+        preferredAddonBaseUrl = preferredAddonBaseUrl,
+        preferredAddonName = preferredAddonName,
+        defaultVideoQuality = autoQuality?.takeIf { it.isNotEmpty() },
+        maxBitrateCapMbps = autoMaxMbps,
+        forcePicker = forcePicker
     )
 }
 

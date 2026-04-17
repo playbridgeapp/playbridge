@@ -53,6 +53,7 @@ class AddonRepository(
     private val catalogCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<StremioMetaPreview>>>()
     // Triple: (timestampMs, meta, addonName)
     private val metaCache = java.util.concurrent.ConcurrentHashMap<String, Triple<Long, StremioMetaDetail, String>>()
+    private val kitsuCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val ioScope = CoroutineScope(Dispatchers.IO)
     private val diskJson = Json { ignoreUnknownKeys = true }
 
@@ -177,7 +178,7 @@ class AddonRepository(
      */
     suspend fun removeAddon(addon: InstalledAddonEntity) {
         addonDao.delete(addon)
-        
+
         // Evict orphaned cache entries to free memory and prevent stale results if reinstalled
         val prefix = "${addon.baseUrl}:"
         streamCache.keys.filter { it.startsWith(prefix) }.forEach {
@@ -980,6 +981,47 @@ class AddonRepository(
         }
     }
 
+    /**
+     * Maps a MAL id to a Kitsu id via Kitsu's public mappings API. Cached in memory.
+     * Kitsu addon and Torrentio (Anime) prefer kitsu:ID format for anime streams.
+     */
+    suspend fun lookupKitsuFromMal(malId: String): String? {
+        kitsuCache[malId]?.let { return it }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                // Kitsu API for external site mappings
+                val url = "https://kitsu.io/api/edge/mappings?filter[externalSite]=myanimelist/anime&filter[externalId]=$malId&include=item"
+                Log.d(TAG, "Fetching Kitsu mapping for MAL:$malId: $url")
+
+                val request = Request.Builder().url(url).get().build()
+                val response = client.newCall(request).execute()
+
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Kitsu mapping fetch failed: ${response.code}")
+                    return@withContext null
+                }
+
+                val body = response.body?.string() ?: return@withContext null
+                val mapping = json.decodeFromString<KitsuMappingResponse>(body)
+
+                // The 'include=item' includes the Kitsu anime record in 'included' array
+                val kitsuId = mapping.included?.firstOrNull { it.type == "anime" }?.id
+                if (kitsuId != null) {
+                    Log.d(TAG, "Resolved MAL:$malId -> Kitsu:$kitsuId")
+                    kitsuCache[malId] = kitsuId
+                    kitsuId
+                } else {
+                    Log.w(TAG, "No Kitsu anime found in mapping for MAL:$malId")
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error looking up Kitsu from MAL:$malId", e)
+                null
+            }
+        }
+    }
+
     // ==================== Helpers ====================
 
     /**
@@ -1031,6 +1073,18 @@ data class ResolvedStream(
     val addonName: String,
     val stream: StremioStream
 )
+
+@Serializable
+private data class KitsuMappingResponse(
+    val data: List<KitsuMappingData> = emptyList(),
+    val included: List<KitsuMappingIncluded>? = null
+)
+
+@Serializable
+private data class KitsuMappingData(val id: String, val type: String)
+
+@Serializable
+private data class KitsuMappingIncluded(val id: String, val type: String)
 
 /**
  * A resolved stream for a specific episode in a season.

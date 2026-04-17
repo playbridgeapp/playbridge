@@ -1,5 +1,6 @@
 package com.playbridge.player.player
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,11 +20,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import com.playbridge.player.stremio.QualityRanker
 import com.playbridge.player.stremio.ScoredStremioStream
 
 /**
@@ -35,16 +38,28 @@ import com.playbridge.player.stremio.ScoredStremioStream
 fun StreamSelectionDialog(
     streams: List<ScoredStremioStream>,
     currentUrl: String?,
+    preferredQuality: String? = null,
+    preferredAddonName: String? = null,
     onStreamSelected: (stream: ScoredStremioStream) -> Unit,
     onRefresh: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val listState = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
 
-    // State for filtering
-    var selectedRank by remember { mutableStateOf<Int?>(null) } // null = All
-    var selectedAddon by remember { mutableStateOf<String?>(null) } // null = All
+    // State for filtering - auto-selected based on passed preferences or browser_prefs
+    var selectedRank by remember {
+        val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        val prefQuality = preferredQuality ?: prefs.getString("auto_stream_quality", null)
+        val rank = if (!prefQuality.isNullOrBlank()) QualityRanker.targetRank(prefQuality) else 0
+        mutableStateOf<Int?>(rank.takeIf { it > 0 })
+    }
+    var selectedAddon by remember {
+        val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        val prefAddonName = preferredAddonName ?: prefs.getString("auto_stream_addon_name", null)
+        mutableStateOf<String?>(prefAddonName?.takeIf { it.isNotBlank() })
+    }
 
     val addons = remember(streams) {
         streams.mapNotNull { it.addonName }.distinct().sorted()
@@ -323,8 +338,9 @@ private fun StreamFilterChip(
         isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
         else -> Color(0xFF1E1E38)
     }
+    val themeColor = Color(0xFF00D9FF)
     val borderColor = when {
-        selected -> Color(0xFF00D9FF).copy(alpha = 0.5f)
+        selected -> themeColor.copy(alpha = 0.5f)
         isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
         else -> Color.Transparent
     }
@@ -343,7 +359,7 @@ private fun StreamFilterChip(
     ) {
         Text(
             text = if (selected) "✓ $label" else label,
-            color = if (selected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
+            color = if (selected) themeColor else MaterialTheme.colorScheme.onSurface,
             fontSize = 12.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
         )

@@ -60,6 +60,9 @@ com.playbridge.player/
 ├── stremio
 │   ├── SeriesNavigator.kt
 │   └── StremioClient.kt
+├── preplay
+│   ├── PrePlayActivity.kt
+│   └── PrePlayScreen.kt
 └── ui
     ├── HomeScreen.kt
     ├── LibraryScreen.kt
@@ -78,6 +81,7 @@ com.playbridge.player/
 | WebSocket Server | WebSocketServer.kt | Ktor Netty server on port 8765 with auth |
 | Bluetooth Server | BluetoothServer.kt | Bluetooth RFCOMM socket server fallback |
 | Server Service | ServerService.kt | Foreground service managing server lifecycle, command routing, external player intents, NSD registration, context broadcasting |
+| Pre-Play Screen | PrePlayActivity.kt | UI shown while resolving streams on the TV; displays content metadata, backdrop, and a selection list once resolved |
 | Video Player Base | PlayerActivity.kt | Abstract base class for players, playlist queue, auto-advance |
 | ExoPlayer | ExoPlayerActivity.kt | ExoPlayer implementation with HLS/DASH/RTSP support |
 | LibVLC Player | VlcPlayerActivity.kt | LibVLC implementation for unsupported ExoPlayer formats (AVI, SWF, etc.) |

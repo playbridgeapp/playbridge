@@ -108,6 +108,13 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
 
+        <activity
+            android:name=".preplay.PrePlayActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:theme="@style/Theme.PlayBridgeTV" />
+
         <service
             android:name=".server.ServerService"
             android:exported="false"

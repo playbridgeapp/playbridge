@@ -16,6 +16,7 @@ import com.playbridge.player.MainActivity
 import com.playbridge.player.R
 import com.playbridge.protocol.Command
 import com.playbridge.protocol.createContextJson
+import com.playbridge.protocol.protocolJson
 import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.model.PairedDevice
 import kotlinx.coroutines.*
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.encodeToString
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import okhttp3.Request
@@ -456,6 +458,29 @@ class ServerService : Service() {
                     launchActivityFromBackground(playerIntent, "Playing media")
                 }
             }
+            is Command.PlayContent -> {
+                FileLogger.i(TAG, "=== PLAY_CONTENT COMMAND === id: ${command.payload.contentId}")
+
+                // Stop any running player before starting new resolution
+                sendBroadcast(Intent(ACTION_CONTROL).apply {
+                    putExtra(EXTRA_COMMAND, "stop")
+                    setPackage(packageName)
+                })
+
+                com.playbridge.player.player.PlaylistStore.currentPlaylist = null
+                activeContext = "preplay"
+                broadcastContext()
+
+                val json = com.playbridge.protocol.protocolJson.encodeToString(
+                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                    command.payload
+                )
+                val intent = Intent(this, com.playbridge.player.preplay.PrePlayActivity::class.java).apply {
+                    putExtra(EXTRA_CONTENT_PAYLOAD, json)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+                launchActivityFromBackground(intent, "Opening pre-play")
+            }
             is Command.Browser -> {
                 FileLogger.i(TAG, "Browser command: ${command.url}")
                 activeContext = "browser"
@@ -877,6 +902,7 @@ class ServerService : Service() {
         const val EXTRA_QUEUE_ITEM_CONTENT_TYPE = "queue_item_content_type"
         const val EXTRA_QUEUE_ITEM_DETECTED_BY = "queue_item_detected_by"
         const val EXTRA_PLAYLIST_JUMP_INDEX = "playlist_jump_index"
+        const val EXTRA_CONTENT_PAYLOAD = "content_payload"
 
         // Static flow for UI to observe connection state
         private val _connectionState = MutableStateFlow<WebSocketServer.ConnectionState>(WebSocketServer.ConnectionState.Stopped)

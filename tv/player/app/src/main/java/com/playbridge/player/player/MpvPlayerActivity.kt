@@ -800,6 +800,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     StreamSelectionDialog(
                         streams = streams,
                         currentUrl = currentUrl,
+                        preferredQuality = nav.qualityPreference,
+                        preferredAddonName = nav.context.preferredAddonName,
                         onStreamSelected = { stream ->
                             dialog.dismiss()
 
@@ -812,9 +814,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         },
                         onRefresh = {
                             com.playbridge.player.stremio.StremioClient.clearCache(
-                                nav.context.imdbId,
-                                nav.currentSeason,
-                                nav.currentEpisode
+                                contentId = nav.context.imdbId,
+                                type = "series",
+                                season = nav.currentSeason,
+                                episode = nav.currentEpisode
                             )
                             isLoading = true
                             scope.launch {

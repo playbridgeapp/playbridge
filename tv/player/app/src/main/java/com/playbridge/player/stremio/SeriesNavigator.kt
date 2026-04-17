@@ -25,7 +25,7 @@ private const val TAG = "SeriesNavigator"
 class SeriesNavigator(
     val context: SeriesContext,
     /** Mirrors PlayPayload.defaultVideoQuality — "2160p", "1080p", "720p", or null for best. */
-    private val qualityPreference: String? = null
+    val qualityPreference: String? = null
 ) {
 
     // ── State ──────────────────────────────────────────────────────────────────
@@ -159,9 +159,9 @@ class SeriesNavigator(
             imdbId                 = context.imdbId,
             season                 = currentSeason,
             episode                = currentEpisode,
-            qualityPreference      = qualityPreference,
-            sourceHint             = currentSourceHint,
-            preferredAddonBaseUrl  = context.preferredAddonBaseUrl
+            qualityPref            = qualityPreference,
+            hint                   = currentSourceHint,
+            prefUrl                = context.preferredAddonBaseUrl
         )
     }
 
@@ -186,9 +186,9 @@ class SeriesNavigator(
             imdbId                 = context.imdbId,
             season                 = nextRef.season,
             episode                = nextRef.episode,
-            qualityPreference      = qualityPreference,
-            sourceHint             = currentSourceHint,
-            preferredAddonBaseUrl  = context.preferredAddonBaseUrl
+            qualityPref            = qualityPreference,
+            hint                   = currentSourceHint,
+            prefUrl                = context.preferredAddonBaseUrl
         )
 
         return if (stream != null) {
@@ -220,9 +220,9 @@ class SeriesNavigator(
             imdbId                 = context.imdbId,
             season                 = prevRef.season,
             episode                = prevRef.episode,
-            qualityPreference      = qualityPreference,
-            sourceHint             = currentSourceHint,
-            preferredAddonBaseUrl  = context.preferredAddonBaseUrl
+            qualityPref            = qualityPreference,
+            hint                   = currentSourceHint,
+            prefUrl                = context.preferredAddonBaseUrl
         )
 
         return if (stream != null) {
@@ -250,9 +250,9 @@ class SeriesNavigator(
             imdbId                 = context.imdbId,
             season                 = targetRef.season,
             episode                = targetRef.episode,
-            qualityPreference      = qualityPreference,
-            sourceHint             = currentSourceHint,
-            preferredAddonBaseUrl  = context.preferredAddonBaseUrl
+            qualityPref            = qualityPreference,
+            hint                   = currentSourceHint,
+            prefUrl                = context.preferredAddonBaseUrl
         )
 
         return if (stream != null) {

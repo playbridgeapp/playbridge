@@ -692,6 +692,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     StreamSelectionDialog(
                         streams = streams,
                         currentUrl = currentUrl,
+                        preferredQuality = nav.qualityPreference,
+                        preferredAddonName = nav.context.preferredAddonName,
                         onStreamSelected = { stream ->
                             dialog.dismiss()
 
@@ -703,9 +705,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         },
                         onRefresh = {
                             com.playbridge.player.stremio.StremioClient.clearCache(
-                                nav.context.imdbId,
-                                nav.currentSeason,
-                                nav.currentEpisode
+                                contentId = nav.context.imdbId,
+                                type = "series",
+                                season = nav.currentSeason,
+                                episode = nav.currentEpisode
                             )
                             isLoading = true
                             scope.launch {

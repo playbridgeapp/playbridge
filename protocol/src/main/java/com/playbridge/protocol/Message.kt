@@ -114,6 +114,49 @@ data class PlaylistJumpPayload(
     val index: Int
 )
 
+@Serializable
+data class ContentPlayPayload(
+    // ── Identity ─────────────────────────────────────────────
+    /** Canonical stream-capable ID, already normalised by the phone. */
+    val contentId: String,          // "tt0944947" | "kitsu:41982" | "mal:40748" | "tvdb:404367"
+    val contentType: String,        // "movie" | "series"
+
+    // ── Display metadata for the pre-play screen ─────────────
+    val title: String,
+    val year: String? = null,
+    val rating: String? = null,     // IMDb/TMDB string, as already shown on phone
+    val runtime: String? = null,    // formatted e.g. "1h 42m" or "3 Seasons"
+    val overview: String? = null,
+    val genres: List<String> = emptyList(),
+    val cast: List<String> = emptyList(),
+    val director: String? = null,   // null for series
+
+    val backdropUrl: String? = null,
+    val posterUrl: String? = null,
+    val logoUrl: String? = null,
+
+    // ── Episode selection (series only) ──────────────────────
+    val season: Int? = null,
+    val episode: Int? = null,
+    val episodeTitle: String? = null,
+
+    // ── Navigator payload (reuses SeriesContext fields) ──────
+    /** Flat list across all seasons; null => optimistic +1 navigation. */
+    val allEpisodes: List<SeriesEpisodeRef>? = null,
+    val addonBaseUrls: List<String>,
+    val addonNames: List<String>? = null,
+    val preferredAddonBaseUrl: String? = null,
+    val preferredAddonName: String? = null,
+
+    // ── Playback preferences (carry-through) ─────────────────
+    val playerMode: String? = null,
+    val preferredAudioLanguage: String? = null,
+    val preferredSubtitleLanguage: String? = null,
+    val defaultVideoQuality: String? = null,
+    val maxBitrateCapMbps: Double? = null,   // max bitrate cap for ExoPlayer ABR (Mbps); null = no cap
+    val forcePicker: Boolean = false        // long-press on phone = "always show picker on TV"
+)
+
 /**
  * Open browser command payload
  */
@@ -168,6 +211,16 @@ data class PlayCommand(
     val type: String = "command",
     val action: String = "play",
     val payload: PlayPayload
+)
+
+/**
+ * Play content metadata command (TV resolves streams itself)
+ */
+@Serializable
+data class PlayContentCommand(
+    val type: String = "command",
+    val action: String = "play_content",
+    val payload: ContentPlayPayload
 )
 
 /**
@@ -343,6 +396,7 @@ sealed class Command {
         val maxBitrateCapMbps: Double? = null,
         val seriesContext: SeriesContext? = null
     ) : Command()
+    data class PlayContent(val payload: ContentPlayPayload) : Command()
     data class Browser(val url: String, val browserMode: String?, val desktopMode: Boolean? = null) : Command()
     data class Control(val command: String) : Command()
     data class Remote(val key: String) : Command()
@@ -391,6 +445,16 @@ fun parseCommand(jsonString: String): Command {
                             maxBitrateCapMbps = payload?.maxBitrateCapMbps,
                             seriesContext = payload?.seriesContext
                         )
+                    }
+                    "play_content" -> {
+                        val payload = envelope.payload?.let {
+                            protocolJson.decodeFromJsonElement<ContentPlayPayload>(it)
+                        }
+                        if (payload != null) {
+                            Command.PlayContent(payload)
+                        } else {
+                            Command.Unknown("missing_content_payload")
+                        }
                     }
                     "browser" -> {
                         val payload = envelope.payload?.let {
@@ -498,6 +562,13 @@ fun createPlayCommandJson(
             maxBitrateCapMbps = maxBitrateCapMbps,
             seriesContext = seriesContext
         ))
+    )
+}
+
+fun createPlayContentCommandJson(payload: ContentPlayPayload): String {
+    return protocolJson.encodeToString(
+        PlayContentCommand.serializer(),
+        PlayContentCommand(payload = payload)
     )
 }
 
