@@ -58,6 +58,7 @@ com.playbridge.player/
 │   ├── ServerService.kt
 │   └── WebSocketServer.kt
 ├── stremio
+│   ├── QualityRanker.kt
 │   ├── SeriesNavigator.kt
 │   └── StremioClient.kt
 ├── preplay
@@ -133,11 +134,6 @@ com.playbridge.player/
 
 ### 🔴 Critical Issues (Likely to Cause Rejection)
 
-#### 2. Cleartext Traffic Globally Enabled (`network_security_config.xml`)
-- **Problem**: `<base-config cleartextTrafficPermitted="true">` allows HTTP on ALL domains (comment says "Remove this in production builds")
-- **Impact**: Security review flag
-- **Fix**: Remove the `<base-config>` block; keep only `<domain-config>` for local network addresses
-
 #### 3. `SYSTEM_ALERT_WINDOW` Permission
 - **Problem**: Used by `OverlayWindowHelper.kt` to work around Android 14+ Background Activity Launch restrictions
 - **Impact**: Triggers **manual review** — must provide justification in Play Console
@@ -160,6 +156,7 @@ com.playbridge.player/
 | **ABI splits exclude x86** | `armeabi-v7a` and `arm64-v8a` only — Intel-based Android TV devices unsupported |
 
 ### ✅ Already Good
+- **Network security config scoped to local network only** (`network_security_config.xml`)
 - **Unsafe SSL in ContentSniffer (TV App)**
 
 ### ✅ Play Store Publishing Checklist
