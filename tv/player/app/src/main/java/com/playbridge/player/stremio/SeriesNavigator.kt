@@ -25,14 +25,16 @@ private const val TAG = "SeriesNavigator"
 class SeriesNavigator(
     val context: SeriesContext,
     /** Mirrors PlayPayload.defaultVideoQuality — "2160p", "1080p", "720p", or null for best. */
-    val qualityPreference: String? = null
+    val qualityPreference: String? = null,
+    val contentType: String = "series" // "movie" or "series"
 ) {
 
     // ── State ──────────────────────────────────────────────────────────────────
 
     /** Flat episode list sorted by (season, episode), or null when not provided. */
     val episodeList: List<SeriesEpisodeRef>? =
-        context.allEpisodes?.sortedWith(compareBy({ it.season }, { it.episode }))
+        if (contentType == "series") context.allEpisodes?.sortedWith(compareBy({ it.season }, { it.episode }))
+        else null
 
     /** Series title for display. */
     val seriesTitle: String?
@@ -148,20 +150,22 @@ class SeriesNavigator(
     // ── Resolution ────────────────────────────────────────────────────────────
 
     /**
-     * Resolve all available streams for the current episode.
+     * Resolve all available streams for the current content.
      * Useful for showing a "Stream Selection" dialog to the user.
      */
     suspend fun resolveCurrentStreams(): List<ScoredStremioStream> {
-        Log.d(TAG, "resolveCurrentStreams: resolving S${currentSeason}E${currentEpisode}")
-        return StremioClient.resolveStreams(
+        Log.d(TAG, "resolveCurrentStreams: resolving $contentType ${context.imdbId}")
+        return StremioClient.resolveStreamsByContentId(
             addonBaseUrls          = context.addonBaseUrls,
             addonNames             = context.addonNames,
-            imdbId                 = context.imdbId,
-            season                 = currentSeason,
-            episode                = currentEpisode,
-            qualityPref            = qualityPreference,
-            hint                   = currentSourceHint,
-            prefUrl                = context.preferredAddonBaseUrl
+            contentId              = context.imdbId,
+            contentType            = contentType,
+            season                 = if (contentType == "series") currentSeason else null,
+            episode                = if (contentType == "series") currentEpisode else null,
+            qualityPreference      = qualityPreference,
+            sourceHint             = currentSourceHint,
+            preferredAddonBaseUrl  = context.preferredAddonBaseUrl,
+            preferredAddonName     = context.preferredAddonName
         )
     }
 

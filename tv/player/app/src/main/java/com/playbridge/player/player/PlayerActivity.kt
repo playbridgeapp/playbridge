@@ -36,23 +36,55 @@ abstract class PlayerActivity : ComponentActivity() {
         else null
 
         val seriesContextJson = intent?.getStringExtra(ServerService.EXTRA_SERIES_CONTEXT)
-        seriesNavigator = if (seriesContextJson != null) {
-            try {
-                val ctx = com.playbridge.protocol.protocolJson.decodeFromString(
-                    com.playbridge.protocol.SeriesContext.serializer(),
-                    seriesContextJson
-                )
-                com.playbridge.player.stremio.SeriesNavigator(ctx, defaultVideoQuality).also { nav ->
-                    nav.updateSourceHint(url = intent.getStringExtra(ServerService.EXTRA_URL))
-                    FileLogger.i("PlayerActivity", "SeriesNavigator created: ${ctx.seriesTitle} " +
-                        "S${ctx.season}E${ctx.episode} addons=${ctx.addonBaseUrls.size} " +
-                        "sourceHint=${nav.currentSourceHint}")
+        val contentPayloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
+
+        seriesNavigator = when {
+            seriesContextJson != null -> {
+                try {
+                    val ctx = com.playbridge.protocol.protocolJson.decodeFromString(
+                        com.playbridge.protocol.SeriesContext.serializer(),
+                        seriesContextJson
+                    )
+                    com.playbridge.player.stremio.SeriesNavigator(ctx, defaultVideoQuality).also { nav ->
+                        nav.updateSourceHint(url = intent.getStringExtra(ServerService.EXTRA_URL))
+                    }
+                } catch (e: Exception) {
+                    FileLogger.e("PlayerActivity", "Failed to deserialize SeriesContext: ${e.message}")
+                    null
                 }
-            } catch (e: Exception) {
-                FileLogger.e("PlayerActivity", "Failed to deserialize SeriesContext: ${e.message}")
-                null
             }
-        } else null
+            contentPayloadJson != null -> {
+                try {
+                    val p = com.playbridge.protocol.protocolJson.decodeFromString(
+                        com.playbridge.protocol.ContentPlayPayload.serializer(),
+                        contentPayloadJson
+                    )
+                    val ctx = com.playbridge.protocol.SeriesContext(
+                        imdbId = p.contentId,
+                        season = p.season ?: 1,
+                        episode = p.episode ?: 1,
+                        seriesTitle = p.title,
+                        episodeTitle = p.episodeTitle,
+                        addonBaseUrls = p.addonBaseUrls,
+                        addonNames = p.addonNames,
+                        allEpisodes = p.allEpisodes,
+                        preferredAddonBaseUrl = p.preferredAddonBaseUrl,
+                        preferredAddonName = p.preferredAddonName
+                    )
+                    com.playbridge.player.stremio.SeriesNavigator(
+                        ctx,
+                        defaultVideoQuality ?: p.defaultVideoQuality,
+                        contentType = p.contentType
+                    ).also { nav ->
+                        nav.updateSourceHint(url = intent.getStringExtra(ServerService.EXTRA_URL))
+                    }
+                } catch (e: Exception) {
+                    FileLogger.e("PlayerActivity", "Failed to deserialize ContentPlayPayload in setupSeriesNavigator: ${e.message}")
+                    null
+                }
+            }
+            else -> null
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

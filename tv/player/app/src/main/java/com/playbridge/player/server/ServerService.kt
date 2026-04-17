@@ -461,26 +461,53 @@ class ServerService : Service() {
             is Command.PlayContent -> {
                 FileLogger.i(TAG, "=== PLAY_CONTENT COMMAND === id: ${command.payload.contentId}")
 
-                // Stop any running player before starting new resolution
-                sendBroadcast(Intent(ACTION_CONTROL).apply {
-                    putExtra(EXTRA_COMMAND, "stop")
-                    setPackage(packageName)
-                })
-
                 com.playbridge.player.player.PlaylistStore.currentPlaylist = null
-                activeContext = "preplay"
-                broadcastContext()
 
+                // Determine target activity based on player mode
+                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                val tvPref = if (prefs.contains("player_mode")) {
+                    prefs.getString("player_mode", "phone") ?: "phone"
+                } else {
+                    if (prefs.getBoolean("use_external_player", false)) "external" else "phone"
+                }
+                val finalMode = if (tvPref == "phone") {
+                    command.payload.playerMode ?: "internal"
+                } else {
+                    tvPref
+                }
+
+                val useExoPlayer = finalMode == "internal"
+                val targetActivity = if (useExoPlayer) {
+                    com.playbridge.player.player.ExoPlayerActivity::class.java
+                } else {
+                    com.playbridge.player.preplay.PrePlayActivity::class.java
+                }
+
+                // Stop any running player if we are NOT reusing the active ExoPlayer instance.
+                // Reusing the instance is handled by onNewIntent in ExoPlayerActivity.
+                if (activeContext != "player" || !useExoPlayer) {
+                    FileLogger.i(TAG, "Broadcasting stop command before launching new activity")
+                    sendBroadcast(Intent(ACTION_CONTROL).apply {
+                        putExtra(EXTRA_COMMAND, "stop")
+                        setPackage(packageName)
+                    })
+                } else {
+                    FileLogger.i(TAG, "Reusing active ExoPlayer instance, skipping stop broadcast")
+                }
+
+                activeContext = if (useExoPlayer) "player" else "preplay"
+                broadcastContext()
                 val json = com.playbridge.protocol.protocolJson.encodeToString(
                     com.playbridge.protocol.ContentPlayPayload.serializer(),
                     command.payload
                 )
-                val intent = Intent(this, com.playbridge.player.preplay.PrePlayActivity::class.java).apply {
+                val intent = Intent(this, targetActivity).apply {
                     putExtra(EXTRA_CONTENT_PAYLOAD, json)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
-                launchActivityFromBackground(intent, "Opening pre-play")
+                launchActivityFromBackground(intent, "Opening ${targetActivity.simpleName}")
             }
+
             is Command.Browser -> {
                 FileLogger.i(TAG, "Browser command: ${command.url}")
                 activeContext = "browser"

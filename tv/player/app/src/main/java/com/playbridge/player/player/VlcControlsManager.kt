@@ -103,6 +103,17 @@ class VlcControlsManager(
         streamsButton.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
+    /**
+     * Show or hide prev/next navigation buttons for series navigation.
+     * Unlike [setPlaylistVisible], this does NOT touch the playlist button —
+     * series navigation doesn't use a playlist queue.
+     */
+    fun setNavigationVisible(visible: Boolean) {
+        val vis = if (visible) View.VISIBLE else View.GONE
+        prevButton.visibility = vis
+        nextButton.visibility = vis
+    }
+
     init {
         // Default visibility for non-playlist buttons
         tracksButton.visibility = View.VISIBLE

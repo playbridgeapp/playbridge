@@ -28,6 +28,7 @@ import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.player.player.TrackSelectionDialog
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -87,6 +88,15 @@ class ExoPlayerActivity : PlayerActivity() {
 
     // Loop state
     private var isLooping = false
+
+    // Pre-play (metadata resolution & pre-buffering)
+    private var prePlayPayload by mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null)
+    private var isPrePlayLaunching by mutableStateOf(false)
+    private var prePlayCountdown by mutableIntStateOf(0)
+    private var isPreBuffering = false
+    private lateinit var composeView: androidx.compose.ui.platform.ComposeView
+    private var resolutionJob: kotlinx.coroutines.Job? = null
+    private var launchJob: kotlinx.coroutines.Job? = null
 
     // Managers
     private val contentSniffer = ContentSniffer()
@@ -178,6 +188,30 @@ class ExoPlayerActivity : PlayerActivity() {
 
         // Initialize View Bindings
         setContentView(com.playbridge.player.R.layout.activity_player)
+
+        composeView = findViewById(com.playbridge.player.R.id.preplay_compose_view)
+        composeView.setContent {
+            val p = prePlayPayload
+            if (p != null) {
+                com.playbridge.player.preplay.PrePlayScreen(
+                    payload = p,
+                    isLaunching = isPrePlayLaunching,
+                    launchCountdown = prePlayCountdown,
+                    onStreamSelected = { stream ->
+                        // Manually selecting a stream during pre-play
+                        resolutionJob?.cancel()
+                        playVideoAfterResolution(stream.url, p)
+                    },
+                    onBack = {
+                        resolutionJob?.cancel()
+                        prePlayPayload = null
+                        composeView.visibility = android.view.View.GONE
+                        ServerService.notifyContextIdle()
+                        finish()
+                    }
+                )
+            }
+        }
 
         val historyStore = HistoryStore(applicationContext)
 
@@ -302,11 +336,41 @@ class ExoPlayerActivity : PlayerActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        FileLogger.i(TAG, "onNewIntent received")
+
+        // Cancel any pending resolution or countdown from a previous intent
+        resolutionJob?.cancel()
+        launchJob?.cancel()
+        isPrePlayLaunching = false
+        isPreBuffering = false
+
         stopPlayback()
         handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent?) {
+        setupSeriesNavigator(intent)
+
+        val payloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
+        if (payloadJson != null) {
+            try {
+                val p = com.playbridge.protocol.protocolJson.decodeFromString(
+                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                    payloadJson
+                )
+                prePlayPayload = p
+                composeView.visibility = android.view.View.VISIBLE
+                resolveStreamsAndPreBuffer(p)
+                return // resolveStreamsAndPreBuffer handles the rest
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to parse ContentPlayPayload", e)
+            }
+        }
+
+        // Standard direct URL path
+        composeView.visibility = android.view.View.GONE
+        prePlayPayload = null
+
         val url = intent?.getStringExtra(ServerService.EXTRA_URL)
         val title = intent?.getStringExtra(ServerService.EXTRA_TITLE)
         val contentType = intent?.getStringExtra(ServerService.EXTRA_CONTENT_TYPE)
@@ -319,8 +383,6 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
-
-        setupSeriesNavigator(intent)
 
         // Read playlist if present
         val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
@@ -379,19 +441,28 @@ class ExoPlayerActivity : PlayerActivity() {
             playVideo(url, displayTitle, contentType, detectedBy, headers, subtitles)
         }
 
+        val hasPlaylist = playlistItems.isNotEmpty()
+        val hasEpisodeList = seriesNavigator?.episodeList?.isNotEmpty() == true
+        val isSeries = seriesNavigator?.contentType == "series"
+
         // Show playlist button when a playlist is active OR series navigator has list mode
-        controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
+        controlsManager.setPlaylistVisible(hasPlaylist || hasEpisodeList)
 
         // Show streams button when series navigator is active
         controlsManager.setStreamsVisible(seriesNavigator != null)
 
         seriesNavigator?.let { nav ->
-            val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-            controlsManager.setSeasonInfo(seasonInfo)
+            if (nav.contentType == "series") {
+                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                controlsManager.setSeasonInfo(seasonInfo)
+            } else {
+                controlsManager.setSeasonInfo(null)
+            }
         }
 
-        // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
-        if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
+        // Ensure prev/next buttons are visible for ANY series (including optimistic mode)
+        // or if a playlist is active. Movies with no playlist will have them hidden by setPlaylistVisible(false).
+        if (isSeries || hasPlaylist) {
             controlsManager.setNavigationVisible(true)
         }
     }
@@ -686,7 +757,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 videoFilterManager.setPlayer(exoPlayer)
 
                 exoPlayer.setSeekParameters(androidx.media3.exoplayer.SeekParameters.DEFAULT)
-                exoPlayer.playWhenReady = true
+                exoPlayer.playWhenReady = !isPreBuffering
                 exoPlayer.addListener(createPlayerListener())
             }
 
@@ -1808,8 +1879,94 @@ class ExoPlayerActivity : PlayerActivity() {
         }
     }
 
-    private class CustomLoadErrorHandlingPolicy : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
-        override fun getRetryDelayMsFor(loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+    private fun resolveStreamsAndPreBuffer(p: com.playbridge.protocol.ContentPlayPayload) {
+        resolutionJob?.cancel()
+        isPrePlayLaunching = false
+        prePlayCountdown = 0
+
+        resolutionJob = lifecycleScope.launch {
+            try {
+                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                val autoQuality = p.defaultVideoQuality ?: prefs.getString("auto_stream_quality", "") ?: ""
+                val preferredAddon = p.preferredAddonBaseUrl ?: prefs.getString("auto_stream_addon", "") ?: ""
+                val preferredAddonName = p.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
+
+                FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
+
+                val streams = com.playbridge.player.stremio.StremioClient.resolveStreamsByContentId(
+                    addonBaseUrls = p.addonBaseUrls,
+                    addonNames = p.addonNames,
+                    contentId = p.contentId,
+                    contentType = p.contentType,
+                    season = p.season,
+                    episode = p.episode,
+                    qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
+                    preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
+                    preferredAddonName = preferredAddonName
+                )
+
+                if (streams.isEmpty()) {
+                    FileLogger.w(TAG, "No streams resolved for ${p.contentId}")
+                    // UI will show error in PrePlayScreen
+                    return@launch
+                }
+
+                // Auto-pick the best stream (sorted by score)
+                val best = streams.firstOrNull()
+                if (best != null && !p.forcePicker && autoQuality.isNotEmpty()) {
+                    FileLogger.i(TAG, "Auto-picked stream for pre-buffering: ${best.name}")
+                    playVideoAfterResolution(best.url, p)
+                } else {
+                    FileLogger.i(TAG, "Manual picker required, waiting for user selection")
+                }
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Pre-play resolution failed", e)
+            }
+        }
+    }
+
+    private fun playVideoAfterResolution(url: String, p: com.playbridge.protocol.ContentPlayPayload) {
+        isPrePlayLaunching = true
+        isPreBuffering = true
+
+        // Start buffering in the background immediately
+        FileLogger.i(TAG, "Starting background pre-buffer for: $url")
+        val nav = seriesNavigator // setupSeriesNavigator called in handleIntent
+        val baseTitle = if (nav != null && nav.seriesTitle != null) {
+            nav.seriesTitle
+        } else {
+            p.title
+        }
+
+        val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
+        val displayTitle = if (playlistItems.isNotEmpty() && baseTitle?.contains(suffix) != true) {
+            "$baseTitle $suffix"
+        } else {
+            baseTitle
+        }
+
+        // Initialize player and start buffering but KEEP composeView visible
+        playVideo(url, displayTitle, p.contentType, "library", null, null)
+
+        // Start countdown
+        launchJob?.cancel()
+        launchJob = lifecycleScope.launch {
+            for (i in 5 downTo 1) {
+                prePlayCountdown = i
+                kotlinx.coroutines.delay(1000)
+            }
+
+            // Countdown finished, hide overlay and start playback
+            FileLogger.i(TAG, "Pre-buffer countdown finished, revealing player")
+            isPreBuffering = false
+            prePlayPayload = null
+            composeView.visibility = android.view.View.GONE
+            player?.play() // Ensure it starts playing
+        }
+    }
+
+            private class CustomLoadErrorHandlingPolicy : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+            override fun getRetryDelayMsFor(loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
             val exception = loadErrorInfo.exception
 
             FileLogger.w(TAG, "Load error occurred: ${exception.message}, count: ${loadErrorInfo.errorCount}")
@@ -1846,6 +2003,6 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             return super.getRetryDelayMsFor(loadErrorInfo)
-        }
-    }
-}
+            }
+            }
+            }

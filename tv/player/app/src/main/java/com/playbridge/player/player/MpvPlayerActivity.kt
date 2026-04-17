@@ -487,6 +487,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun handleIntent(intent: Intent?) {
+        setupSeriesNavigator(intent)
         val url = intent?.getStringExtra(ServerService.EXTRA_URL) ?: return
         val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getSerializableExtra(ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
@@ -511,18 +512,29 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Apply title immediately if known
         title?.let { controlsManager.setTitle(it) }
 
-        // Setup series navigator
-        setupSeriesNavigator(intent)
+        val hasPlaylist = playlistItems.isNotEmpty()
+        val hasEpisodeList = seriesNavigator?.episodeList?.isNotEmpty() == true
+        val isSeries = seriesNavigator?.contentType == "series"
 
         // Show playlist button when a playlist is active OR series navigator has list mode
-        controlsManager.setPlaylistVisible(playlistItems.isNotEmpty() || (seriesNavigator?.episodeList?.isNotEmpty() ?: false))
+        controlsManager.setPlaylistVisible(hasPlaylist || hasEpisodeList)
 
         // Show streams button when series navigator is active
         controlsManager.setStreamsVisible(seriesNavigator != null)
 
         seriesNavigator?.let { nav ->
-            val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-            controlsManager.setSeasonInfo(seasonInfo)
+            if (nav.contentType == "series") {
+                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                controlsManager.setSeasonInfo(seasonInfo)
+            } else {
+                controlsManager.setSeasonInfo(null)
+            }
+        }
+
+        // Ensure prev/next buttons are visible for ANY series (including optimistic mode)
+        // or if a playlist is active. Movies with no playlist will have them hidden by setPlaylistVisible(false).
+        if (isSeries || hasPlaylist) {
+            controlsManager.setNavigationVisible(true)
         }
 
         val displayTitle = if (seriesNavigator != null && seriesNavigator?.seriesTitle != null) {
