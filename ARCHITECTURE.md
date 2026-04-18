@@ -291,9 +291,19 @@ PlayBridge/
 │   │       │   │   │   ├── TabDao.kt
 │   │       │   │   │   └── TabEntity.kt
 │   │       │   │   └── library/
+│   │       │   │       ├── AddonDao.kt
+│   │       │   │       ├── AddonModels.kt
+│   │       │   │       ├── AddonRepository.kt
 │   │       │   │       ├── OmdbModels.kt
 │   │       │   │       ├── OmdbRepository.kt
 │   │       │   │       ├── StremioSubtitleService.kt (Stremio subtitle fetching integration)
+│   │       │   │       ├── TmdbModels.kt
+│   │       │   │       ├── TmdbRepository.kt
+│   │       │   │       ├── TvdbModels.kt
+│   │       │   │       ├── TvdbRepository.kt
+│   │       │   │       ├── WatchlistDao.kt
+│   │       │   │       ├── WatchlistEntity.kt
+│   │       │   │       └── WatchlistStatus.kt
 │   │       │   ├── model/
 │   │       │   └── ui/
 │   │       └── assets/extensions/video_detector/  # Embedded legacy phone extension
