@@ -43,13 +43,23 @@ protocol PlaybackEngine: AnyObject {
     /// Change playback rate
     func setRate(_ rate: Float)
 
-    /// Change audio track
+    /// Return available audio tracks as (id, displayName) pairs.
+    /// Returns an empty array if the engine or current media has none.
+    func audioTracks() async -> [(id: String, name: String)]
+
+    /// Return available subtitle tracks as (id, displayName) pairs.
+    /// Returns an empty array if the engine or current media has none.
+    func subtitleTracks() async -> [(id: String, name: String)]
+
+    /// Select an embedded audio track by id (as returned by audioTracks()).
+    /// Pass nil to reset to the default track.
     func setAudioTrack(_ id: String?)
 
-    /// Change subtitle track
+    /// Select an embedded subtitle track by id (as returned by subtitleTracks()).
+    /// Pass nil to disable embedded subtitles.
     func setSubtitleTrack(_ id: String?)
 
-    /// Attach an external subtitle file
+    /// Attach an external subtitle file (used by VLC via addPlaybackSlave).
     func attachExternalSubtitle(url: URL) async throws
 
     /// Set color filters

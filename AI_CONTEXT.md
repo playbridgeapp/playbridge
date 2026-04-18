@@ -22,7 +22,12 @@ PlayBridge is a system to cast web video from an Android phone (sender) to an An
 - `cd protocol && ./gradlew build`
 
 ## Cross-cutting Gotchas
-WARNING: **Protocol ripple:** Any change to `protocol/src/main/java/com/playbridge/protocol/Message.kt` (e.g. `PlayPayload`, `SeriesContext`, or `ContentPlayPayload`) must be reflected in BOTH `tv/player/app/src/main/java/com/playbridge/player/server/ServerService.kt` AND `phone/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`, and potentially `extension/src/background.js`.
+WARNING: **Protocol ripple:** Any change to `protocol/src/main/java/com/playbridge/protocol/Message.kt` (e.g. `PlayPayload`, `SeriesContext`, or `ContentPlayPayload`) must be reflected in ALL FOUR of:
+1. `tv/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
+2. `phone/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
+3. `tv/apple-tv/PlayBridgeProtocol/Sources/PlayBridgeProtocol/Messages.swift` (or `Payloads.swift`)
+4. `tv/apple-tv/PlayBridge TV/PlayBridge TV/ServerCoordinator.swift` (and/or `WebSocketServer.swift`)
+…and potentially `extension/src/background.js`.
 WARNING: **GeckoView version must stay in sync:** Phone and TV both depend on GeckoView. If the version is bumped in one module's `gradle/libs.versions.toml`, it must be bumped in the other or runtime behavior diverges.
 
 ## Current State

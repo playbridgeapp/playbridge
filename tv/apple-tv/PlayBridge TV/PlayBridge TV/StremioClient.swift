@@ -107,7 +107,9 @@ class StremioClient {
         if cacheDurationHours > 0, let entry = cache[stremioId] {
             if Date().timeIntervalSince(entry.timestamp) < Double(cacheDurationHours) * 3600 {
                 return scoreStreams(
-                    entry.streams, qualityPreference: qualityPreference,
+                    entry.streams,
+                    qualityPreference: qualityPreference,
+                    season: season,
                     preferredAddonBaseUrl: preferredAddonBaseUrl,
                     preferredAddonName: preferredAddonName)
             }
@@ -141,8 +143,11 @@ class StremioClient {
 
         // 4. Score and Sort
         return scoreStreams(
-            allStreams, qualityPreference: qualityPreference,
-            preferredAddonBaseUrl: preferredAddonBaseUrl, preferredAddonName: preferredAddonName)
+            allStreams,
+            qualityPreference: qualityPreference,
+            season: season,
+            preferredAddonBaseUrl: preferredAddonBaseUrl,
+            preferredAddonName: preferredAddonName)
     }
 
     private func fetchFromAddon(baseUrl: String, type: String, id: String, displayName: String?)
@@ -171,6 +176,7 @@ class StremioClient {
     private func scoreStreams(
         _ streams: [StremioStreamItem],
         qualityPreference: String?,
+        season: Int? = nil,
         preferredAddonBaseUrl: String?,
         preferredAddonName: String?
     ) -> [ScoredStremioStream] {
@@ -194,8 +200,7 @@ class StremioClient {
             if let prefName = preferredAddonName, item.addonName == prefName {
                 score += 400
             } else if let prefUrl = preferredAddonBaseUrl,
-                item.url?.hasPrefix(prefUrl.trimmingCharacters(in: .init(charactersIn: "/")))
-                    == true
+                item.url?.hasPrefix(prefUrl.trimmingCharacters(in: .init(charactersIn: "/"))) == true
             {
                 score += 400
             }
@@ -203,7 +208,7 @@ class StremioClient {
             let extras = isExtrasContent(text)
             if extras { score -= 2000 }
 
-            let seasonPack = isSeasonPack(text)
+            let seasonPack = isSeasonPack(text, season: season)
             if seasonPack { score += 50 }
 
             return ScoredStremioStream(
@@ -220,10 +225,40 @@ class StremioClient {
         }.sorted { $0.score > $1.score }
     }
 
-    private func isSeasonPack(_ text: String) -> Bool {
+    /// Detect season packs using the same logic as Android's StremioClient.
+    /// Primary signal: `s{N}` pattern at a word boundary with no matching `e{N}` (episode).
+    /// Secondary: explicit keywords like "season pack", "complete series", "batch".
+    private func isSeasonPack(_ text: String, season: Int? = nil) -> Bool {
         let lower = text.lowercased()
-        // Simple heuristic for now
-        return lower.contains("season") || lower.contains("complete") || lower.contains("batch")
+
+        // Keyword signals
+        if lower.contains("season pack") || lower.contains("complete series")
+            || lower.contains("batch")
+        {
+            return true
+        }
+
+        if let s = season {
+            // Match "s01" or "s1" at word boundary for the specific season (no episode suffix)
+            let paddedPattern = "\\bs\(String(format: "%02d", s))\\b"
+            let shortPattern  = "\\bs\(s)\\b"
+            for pattern in [paddedPattern, shortPattern] {
+                if lower.range(of: pattern, options: .regularExpression) != nil
+                    && lower.range(of: "\\be\\d{1,2}\\b", options: .regularExpression) == nil
+                {
+                    return true
+                }
+            }
+        } else {
+            // No season context: generic s{N}-without-episode detection
+            if lower.range(of: "\\bs\\d{1,2}\\b", options: .regularExpression) != nil
+                && lower.range(of: "\\be\\d{1,2}\\b", options: .regularExpression) == nil
+            {
+                return true
+            }
+        }
+
+        return false
     }
 
     private func isExtrasContent(_ text: String) -> Bool {

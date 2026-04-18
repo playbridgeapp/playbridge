@@ -12,24 +12,21 @@ class PlayerViewModel {
     var duration: TimeInterval = 0
     var currentTitle: String?
 
+    // Exposed so PlayerOverlayView can show series context
+    private(set) var currentPayload: PlayPayload?
+
     // Settings
     var playbackRate: Float = 1.0 {
-        didSet {
-            engine?.setRate(playbackRate)
-        }
+        didSet { engine?.setRate(playbackRate) }
     }
 
     var filterPreset: FilterPreset = .none {
-        didSet {
-            applyFilterPreset()
-        }
+        didSet { applyFilterPreset() }
     }
 
     var customFilterSettings: ColorFilterSettings = .default {
         didSet {
-            if filterPreset == .custom {
-                engine?.setFilter(customFilterSettings)
-            }
+            if filterPreset == .custom { engine?.setFilter(customFilterSettings) }
         }
     }
 
@@ -41,7 +38,30 @@ class PlayerViewModel {
     var subtitleManager = SubtitleManager()
 
     private var cancellables = Set<AnyCancellable>()
-    private var currentPayload: PlayPayload?
+
+    // MARK: - Series / Next-up
+
+    /// Series context for the currently playing item.
+    var currentSeriesContext: SeriesContext? { currentPayload?.seriesContext }
+
+    /// Returns the next episode reference when within 60 s of the end of a series episode.
+    var nextEpisodeInfo: SeriesEpisodeRef? {
+        guard let sc = currentPayload?.seriesContext,
+            let allEpisodes = sc.allEpisodes, !allEpisodes.isEmpty,
+            duration > 0, duration - position < 60
+        else { return nil }
+
+        guard
+            let currentIdx = allEpisodes.firstIndex(where: {
+                $0.season == sc.season && $0.episode == sc.episode
+            }),
+            currentIdx + 1 < allEpisodes.count
+        else { return nil }
+
+        return allEpisodes[currentIdx + 1]
+    }
+
+    // MARK: - Filter
 
     private func applyFilterPreset() {
         switch filterPreset {
@@ -56,8 +76,10 @@ class PlayerViewModel {
         }
     }
 
+    // MARK: - Load
+
     func load(_ payload: PlayPayload, items: [PlayPayload] = [], index: Int = 0) {
-        // Save current progress before switching if we were playing something
+        // Persist progress for the previous item before switching
         if let current = currentPayload {
             ResumeStore.shared.save(
                 url: current.url,
@@ -65,11 +87,9 @@ class PlayerViewModel {
                 duration: Int64(duration * 1000),
                 rate: playbackRate,
                 filterPreset: filterPreset,
-                filterSettings: customFilterSettings
-            )
+                filterSettings: customFilterSettings)
         }
 
-        // Stop current engine if exists
         engine?.stop()
         cancellables.removeAll()
         subtitleManager.clear()
@@ -79,132 +99,118 @@ class PlayerViewModel {
             self.playlistItems = items
             self.currentIndex = index
         } else if playlistItems.isEmpty {
-            // Single play, create a dummy playlist of 1
             self.playlistItems = [payload]
             self.currentIndex = 0
         } else {
-            // We are likely in an existing playlist, just update index
             self.currentIndex = index
         }
 
         self.currentPayload = payload
-
-        // Pick engine
-        let engine: any PlaybackEngine
-        if payload.playerMode == "internal_vlc" {
-            engine = VLCPlayerEngine()
-        } else {
-            engine = AVPlayerEngine()
-        }
-
-        self.engine = engine
         self.currentTitle = payload.title
 
-        // Bind state and position
-        engine.state
+        // Pick engine — TV-side AppSettings override takes precedence over the phone's payload
+        let modeOverride = AppSettings.shared.playerModeOverride
+        let effectiveMode =
+            modeOverride != "auto" ? modeOverride : (payload.playerMode ?? "internal")
+        let newEngine: any PlaybackEngine =
+            effectiveMode == "internal_vlc" ? VLCPlayerEngine() : AVPlayerEngine()
+        self.engine = newEngine
+
+        // Bind state
+        newEngine.state
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newState in
                 self?.state = newState
-
-                // Auto-advance if finished
-                if newState == .ended {
-                    self?.advanceToNext()
-                }
+                if newState == .ended { self?.advanceToNext() }
             }
             .store(in: &cancellables)
 
-        // Setup specialized end-of-media detection
-        setupEndOfMediaDetection(engine)
+        setupEndOfMediaDetection(newEngine)
 
-        engine.position
+        // Bind position
+        newEngine.position
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newPos in
-                self?.position = newPos
-                self?.duration = self?.engine?.duration ?? 0
-                self?.subtitleManager.update(currentTime: newPos)
+                guard let self = self else { return }
+                self.position = newPos
+                self.duration = self.engine?.duration ?? 0
+                self.subtitleManager.update(currentTime: newPos)
 
-                // Periodically save progress (every 5 seconds)
-                if Int(newPos) % 5 == 0 && newPos > 0 {
-                    if let current = self?.currentPayload {
-                        ResumeStore.shared.save(
-                            url: current.url,
-                            position: Int64(newPos * 1000),
-                            duration: Int64((self?.duration ?? 0) * 1000),
-                            rate: self?.playbackRate,
-                            filterPreset: self?.filterPreset,
-                            filterSettings: self?.customFilterSettings
-                        )
-                    }
+                // Periodic progress save every 5 s
+                if Int(newPos) % 5 == 0, newPos > 0, let current = self.currentPayload {
+                    ResumeStore.shared.save(
+                        url: current.url,
+                        position: Int64(newPos * 1000),
+                        duration: Int64(self.duration * 1000),
+                        rate: self.playbackRate,
+                        filterPreset: self.filterPreset,
+                        filterSettings: self.customFilterSettings)
                 }
             }
             .store(in: &cancellables)
 
-        // Load payload and handle subtitles
         Task {
             do {
-                try await engine.load(payload)
+                try await newEngine.load(payload)
 
                 // Restore resume position and settings
                 if let info = ResumeStore.shared.getResumeInfo(for: payload.url) {
-                    // Restore position
-                    let positionSec = Double(info.positionMs) / 1000.0
-                    let durationSec = Double(info.durationMs) / 1000.0
-                    if positionSec > 5 && positionSec < (durationSec - 5) {
-                        print("Resuming at \(info.positionMs)ms")
-                        await engine.seek(to: positionSec)
+                    let posSec = Double(info.positionMs) / 1000.0
+                    let durSec = Double(info.durationMs) / 1000.0
+                    if posSec > 5, posSec < durSec - 5 {
+                        await newEngine.seek(to: posSec)
                     }
-
-                    // Restore settings
-                    if let rate = info.playbackRate {
-                        self.playbackRate = rate
-                    }
-                    if let preset = info.filterPreset {
-                        self.filterPreset = preset
-                    }
-                    if let settings = info.filterSettings {
-                        self.customFilterSettings = settings
-                    }
-
+                    if let rate = info.playbackRate    { self.playbackRate = rate }
+                    if let preset = info.filterPreset  { self.filterPreset = preset }
+                    if let settings = info.filterSettings { self.customFilterSettings = settings }
                     applyFilterPreset()
                 }
 
-                // Handle external subtitles if any
+                // Load external subtitles
                 if let subUrls = payload.subtitles {
-                    for subUrlString in subUrls {
-                        if let url = URL(string: subUrlString) {
-                            if let vlc = engine as? VLCPlayerEngine {
-                                try? await vlc.attachExternalSubtitle(url: url)
+                    for (i, subUrlString) in subUrls.enumerated() {
+                        guard let subURL = URL(string: subUrlString) else { continue }
+                        do {
+                            let result = try await subtitleManager.downloadSubtitle(
+                                url: subURL, headers: payload.headers, index: i)
+
+                            // For VLC: attach via local HTTP endpoint so addPlaybackSlave gets a URL
+                            if let vlc = newEngine as? VLCPlayerEngine {
+                                let localFilename = result.localURL.lastPathComponent
+                                let httpURL = SubtitleHTTPServer.shared.localURL(for: localFilename)
+                                try? await vlc.attachExternalSubtitle(url: httpURL)
                             }
-                            if let cues = try? await subtitleManager.downloadSubtitle(
-                                url: url, headers: payload.headers)
-                            {
-                                subtitleManager.loadCues(cues)
-                            }
+
+                            // AVPlayer: overlay rendered by SubtitleManager cues
+                            subtitleManager.loadCues(result.cues)
+                        } catch {
+                            print("[PlayerViewModel] Subtitle load error: \(error)")
                         }
                     }
                 }
             } catch {
-                print("Failed to load engine: \(error)")
+                print("[PlayerViewModel] Engine load error: \(error)")
                 self.state = .error
             }
         }
     }
 
+    // MARK: - End-of-media Detection
+
     private func setupEndOfMediaDetection(_ engine: any PlaybackEngine) {
         if let avEngine = engine as? AVPlayerEngine {
             NotificationCenter.default.publisher(
-                for: .AVPlayerItemDidPlayToEndTime, object: avEngine.player.currentItem
+                for: .AVPlayerItemDidPlayToEndTime,
+                object: avEngine.player.currentItem
             )
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.advanceToNext()
-            }
+            .sink { [weak self] _ in self?.advanceToNext() }
             .store(in: &cancellables)
-        } else if engine is VLCPlayerEngine {
-            // VLC handles .ended in VLCPlayerEngine through its delegate callbacks,
-            // which updates the state subject observed in the sink above.
         }
+        // VLC: .ended state propagated through the state sink above
     }
+
+    // MARK: - Playlist
 
     func advanceToNext() {
         let nextIndex = currentIndex + 1
@@ -215,16 +221,18 @@ class PlayerViewModel {
         }
     }
 
-    func queueAdd(_ item: PlayPayload) {
-        playlistItems.append(item)
-    }
+    func queueAdd(_ item: PlayPayload) { playlistItems.append(item) }
 
     func jumpTo(index: Int) {
-        guard index >= 0 && index < playlistItems.count else { return }
+        guard index >= 0, index < playlistItems.count else { return }
         load(playlistItems[index], items: playlistItems, index: index)
     }
-    func play() { engine?.play() }
+
+    // MARK: - Controls
+
+    func play()  { engine?.play() }
     func pause() { engine?.pause() }
+
     func stop() {
         engine?.stop()
         engine = nil
@@ -232,22 +240,14 @@ class PlayerViewModel {
         position = 0
         duration = 0
         currentTitle = nil
+        currentPayload = nil
         cancellables.removeAll()
     }
 
     func seek(to: TimeInterval) {
-        Task {
-            await engine?.seek(to: to)
-        }
+        Task { await engine?.seek(to: to) }
     }
 
-    func skipForward() {
-        let newPos = min(position + 10, duration)
-        seek(to: newPos)
-    }
-
-    func skipBackward() {
-        let newPos = max(position - 10, 0)
-        seek(to: newPos)
-    }
+    func skipForward()  { seek(to: min(position + 10, duration)) }
+    func skipBackward() { seek(to: max(position - 10, 0)) }
 }

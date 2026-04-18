@@ -2,8 +2,6 @@
 //  WebSocketServer.swift
 //  PlayBridge TV
 //
-//  Created by Atul Mehla on 2026-04-18.
-//
 
 import Combine
 import Foundation
@@ -14,8 +12,16 @@ class WebSocketServer: ObservableObject {
     private var listener: NWListener?
     private var connections: [String: NWConnection] = [:]
     private let port: UInt16
-    private var authToken: String
     private var statusTimer: AnyCancellable?
+
+    // Pairing — backed by Keychain via PairingStore
+    private let authToken: String
+    @Published private(set) var pairingPin: String = ""
+
+    // NSD retry
+    private var retryCount = 0
+    private let maxRetries = 4
+    private let retryDelays: [TimeInterval] = [3, 6, 9, 12]
 
     // Coordination
     weak var coordinator: ServerCoordinator?
@@ -24,10 +30,9 @@ class WebSocketServer: ObservableObject {
     @Published var connectionCount = 0
     @Published var lastMessage: String = ""
     @Published var localIP: String = "Unknown"
-    @Published var pairingPin: String = ""
     @Published var connectionState: ConnectionState = .stopped
 
-    // Abstraction layer
+    // Player abstraction layer
     @Published var playerViewModel = PlayerViewModel()
 
     enum ConnectionState {
@@ -50,54 +55,67 @@ class WebSocketServer: ObservableObject {
 
     init(port: UInt16 = 8765) {
         self.port = port
-        self.authToken = UserDefaults.standard.string(forKey: "auth_token") ?? ""
-        if self.authToken.isEmpty {
-            self.authToken = UUID().uuidString
-            UserDefaults.standard.set(self.authToken, forKey: "auth_token")
-        }
+        // Auth token is now Keychain-backed via PairingStore (migrates UserDefaults automatically)
+        self.authToken = PairingStore.shared.authToken
         self.pairingPin = String(self.authToken.prefix(4)).uppercased()
         self.localIP = getIPAddress() ?? "Unknown"
 
+        // Start the subtitle HTTP server so VLC can slave cached subtitle files
+        SubtitleHTTPServer.shared.start()
+
         setupStatusTimer()
     }
+
+    // MARK: - Status Timer
 
     private func setupStatusTimer() {
         statusTimer = Timer.publish(every: 1.0, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
+                // Gate broadcasts to player context — avoids spamming the phone when idle
+                guard self?.coordinator?.route == .player else { return }
                 self?.broadcastStatus()
             }
     }
 
+    // MARK: - Start / Stop
+
     func start() {
+        retryCount = 0
+        startListener()
+    }
+
+    private func startListener() {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            self.connectionState = .error(message: "Invalid port")
+            connectionState = .error(message: "Invalid port \(port)")
             return
         }
-
-        self.connectionState = .starting
+        connectionState = .starting
 
         let parameters = NWParameters(tls: nil, tcp: .init())
-        let options = NWProtocolWebSocket.Options()
-        parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
+        let wsOptions = NWProtocolWebSocket.Options()
+        parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
         do {
             listener = try NWListener(using: parameters, on: nwPort)
 
             listener?.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async {
+                    guard let self = self else { return }
                     switch state {
                     case .ready:
-                        self?.isRunning = true
-                        self?.connectionState = .running(port: self?.port ?? 0)
-                        self?.localIP = self?.getIPAddress() ?? "Unknown"
+                        self.retryCount = 0
+                        self.isRunning = true
+                        self.connectionState = .running(port: self.port)
+                        self.localIP = getIPAddress() ?? "Unknown"
                     case .failed(let error):
-                        self?.isRunning = false
-                        self?.connectionState = .error(message: error.localizedDescription)
-                        self?.stop()
+                        self.isRunning = false
+                        self.connectionState = .error(message: error.localizedDescription)
+                        self.stop()
+                        self.scheduleRetry()
                     case .cancelled:
-                        self?.isRunning = false
-                        self?.connectionState = .stopped
+                        self.isRunning = false
+                        self.connectionState = .stopped
                     default:
                         break
                     }
@@ -108,15 +126,39 @@ class WebSocketServer: ObservableObject {
                 self?.setupConnection(connection)
             }
 
-            listener?.service = NWListener.Service(type: "_playbridge._tcp")
+            // NSD registration with TXT records so the phone can distinguish TVs by UUID
+            var txtRecord = NWTXTRecord()
+            txtRecord.setEntry(NWTXTRecord.Entry(Data(PairingStore.shared.deviceUUID.utf8)), for: "uuid")
+            if localIP != "Unknown" {
+                txtRecord.setEntry(NWTXTRecord.Entry(Data(localIP.utf8)), for: "custom_ip")
+            }
+            listener?.service = NWListener.Service(
+                name: nil, type: "_playbridge._tcp", domain: nil, txtRecord: txtRecord)
+
             listener?.start(queue: .main)
         } catch {
-            self.connectionState = .error(message: error.localizedDescription)
+            connectionState = .error(message: error.localizedDescription)
+            scheduleRetry()
+        }
+    }
+
+    /// Retry with backoff (3 / 6 / 9 / 12 s) to survive mDNS races after server restart.
+    private func scheduleRetry() {
+        guard retryCount < maxRetries else {
+            print("[WebSocketServer] Max retries reached. Give up.")
+            return
+        }
+        let delay = retryDelays[min(retryCount, retryDelays.count - 1)]
+        retryCount += 1
+        print("[WebSocketServer] Retry \(retryCount)/\(maxRetries) in \(delay)s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.startListener()
         }
     }
 
     func stop() {
         listener?.cancel()
+        listener = nil
         connections.values.forEach { $0.cancel() }
         connections.removeAll()
         isRunning = false
@@ -124,9 +166,10 @@ class WebSocketServer: ObservableObject {
         connectionState = .stopped
     }
 
+    // MARK: - Connection Lifecycle
+
     private func setupConnection(_ connection: NWConnection) {
         let clientId = UUID().uuidString
-
         connection.stateUpdateHandler = { [weak self] state in
             DispatchQueue.main.async {
                 switch state {
@@ -143,22 +186,18 @@ class WebSocketServer: ObservableObject {
     }
 
     private func handleAuthentication(_ connection: NWConnection, clientId: String) {
-        connection.receiveMessage { [weak self] (content, context, isComplete, error) in
+        connection.receiveMessage { [weak self] (content, _, _, error) in
             guard let self = self else { return }
+            if error != nil { connection.cancel(); return }
 
-            if error != nil {
-                connection.cancel()
-                return
-            }
-
-            guard let content = content, let messageString = String(data: content, encoding: .utf8)
+            guard let content = content,
+                let messageString = String(data: content, encoding: .utf8)
             else {
                 self.handleAuthentication(connection, clientId: clientId)
                 return
             }
 
             let message = PlayBridgeProtocol.decode(messageString)
-
             switch message {
             case .ping:
                 self.sendPong(to: connection)
@@ -169,15 +208,15 @@ class WebSocketServer: ObservableObject {
                 self.handleAuthentication(connection, clientId: clientId)
 
             case .auth(let auth):
-                if let token = auth.token, token == self.authToken {
-                    self.completeAuth(
-                        connection, clientId: clientId, success: true, provideToken: false)
+                // Loopback short-circuit: local tooling connecting from 127.0.0.1/::1 auto-passes
+                if self.isLoopbackConnection(connection) {
+                    self.completeAuth(connection, clientId: clientId, success: true, provideToken: false)
+                } else if let token = auth.token, token == self.authToken {
+                    self.completeAuth(connection, clientId: clientId, success: true, provideToken: false)
                 } else if let pin = auth.pin, pin.uppercased() == self.pairingPin {
-                    self.completeAuth(
-                        connection, clientId: clientId, success: true, provideToken: true)
+                    self.completeAuth(connection, clientId: clientId, success: true, provideToken: true)
                 } else {
-                    self.completeAuth(
-                        connection, clientId: clientId, success: false, provideToken: false)
+                    self.completeAuth(connection, clientId: clientId, success: false, provideToken: false)
                 }
 
             default:
@@ -186,26 +225,29 @@ class WebSocketServer: ObservableObject {
         }
     }
 
+    private func isLoopbackConnection(_ connection: NWConnection) -> Bool {
+        if case .hostPort(let host, _) = connection.endpoint {
+            let h = "\(host)"
+            return h == "127.0.0.1" || h == "::1" || h == "localhost"
+        }
+        return false
+    }
+
     private func completeAuth(
         _ connection: NWConnection, clientId: String, success: Bool, provideToken: Bool
     ) {
-        let response = AuthResponse(success: success, token: provideToken ? self.authToken : nil)
-
+        let response = AuthResponse(success: success, token: provideToken ? authToken : nil)
         if let data = try? JSONEncoder().encode(response),
             let jsonString = String(data: data, encoding: .utf8)
         {
             send(message: jsonString, to: connection)
         }
-
         if success {
             DispatchQueue.main.async {
                 self.connections[clientId] = connection
                 self.connectionCount = self.connections.count
                 self.connectionState = .connected(clientId: clientId)
-
-                // Send initial status immediately
                 self.sendStatus(to: connection)
-
                 self.receive(on: connection, clientId: clientId)
             }
         } else {
@@ -221,14 +263,12 @@ class WebSocketServer: ObservableObject {
         }
     }
 
-    private func receive(on connection: NWConnection, clientId: String) {
-        connection.receiveMessage { [weak self] (content, context, isComplete, error) in
-            guard let self = self else { return }
+    // MARK: - Message Receive Loop
 
-            if error != nil {
-                self.removeConnection(clientId)
-                return
-            }
+    private func receive(on connection: NWConnection, clientId: String) {
+        connection.receiveMessage { [weak self] (content, _, _, error) in
+            guard let self = self else { return }
+            if error != nil { self.removeConnection(clientId); return }
 
             if let content = content, let messageString = String(data: content, encoding: .utf8) {
                 DispatchQueue.main.async {
@@ -236,12 +276,13 @@ class WebSocketServer: ObservableObject {
                     self.handleIncomingMessage(messageString, from: connection, clientId: clientId)
                 }
             }
-
             if error == nil {
                 self.receive(on: connection, clientId: clientId)
             }
         }
     }
+
+    // MARK: - Command Dispatch
 
     private func handleIncomingMessage(
         _ jsonString: String, from connection: NWConnection, clientId: String
@@ -251,28 +292,48 @@ class WebSocketServer: ObservableObject {
         switch message {
         case .ping:
             sendPong(to: connection)
+
         case .play(let payload):
             playVideo(payload: payload)
+
         case .playContent(let payload):
             handlePlayContent(payload: payload)
+
         case .playlist(let payload):
             playPlaylist(payload: payload)
+
         case .queueAdd(let payload):
             queueAdd(payload: payload)
+
         case .playlistJump(let payload):
             playlistJump(payload: payload)
+
         case .control(let payload, let position):
             handleControl(command: payload.command, position: position)
-        case .remote(let payload):
-            print("Remote key: \(payload.key)")
-        case .mouse(let payload):
-            print("Mouse event: \(payload.event) dx=\(payload.dx) dy=\(payload.dy)")
+
         case .contextQuery:
             sendContext(to: connection)
+
+        // Browser, remote and mouse commands are not supported on tvOS.
+        // Reply with a typed error so the phone can grey out the relevant UI affordance.
+        case .browser:
+            sendUnsupported(command: "browser", to: connection)
+
+        case .browserControl:
+            sendUnsupported(command: "browser_control", to: connection)
+
+        case .remote:
+            sendUnsupported(command: "remote", to: connection)
+
+        case .mouse:
+            sendUnsupported(command: "mouse", to: connection)
+
         default:
-            print("Unhandled message: \(message)")
+            print("[WebSocketServer] Unhandled message: \(message)")
         }
     }
+
+    // MARK: - Playback Commands
 
     func playVideo(payload: PlayPayload) {
         DispatchQueue.main.async {
@@ -283,14 +344,15 @@ class WebSocketServer: ObservableObject {
     }
 
     func handlePlayContent(payload: ContentPlayPayload) {
-        self.coordinator?.handlePlayContent(payload)
+        coordinator?.handlePlayContent(payload)
     }
 
     func playPlaylist(payload: PlaylistPayload) {
         DispatchQueue.main.async {
             if payload.startIndex < payload.items.count {
                 self.playerViewModel.load(
-                    payload.items[payload.startIndex], items: payload.items,
+                    payload.items[payload.startIndex],
+                    items: payload.items,
                     index: payload.startIndex)
                 self.coordinator?.route = .player
                 self.broadcastPlaylistStatus()
@@ -315,49 +377,42 @@ class WebSocketServer: ObservableObject {
     private func handleControl(command: String, position: Int64?) {
         DispatchQueue.main.async {
             switch command {
-            case "play": self.playerViewModel.play()
+            case "play":  self.playerViewModel.play()
             case "pause": self.playerViewModel.pause()
-            case "stop":
-                self.coordinator?.route = .home
+            case "stop":  self.coordinator?.route = .home
             case "seek":
                 if let posMs = position {
                     self.playerViewModel.seek(to: TimeInterval(posMs) / 1000.0)
                 }
             default: break
             }
-            // Broadast status after control mutation
             self.broadcastStatus()
         }
     }
+
+    // MARK: - Outbound Broadcast
 
     private func broadcastStatus() {
         guard !connections.isEmpty else { return }
         for connection in connections.values {
             sendStatus(to: connection)
         }
-        // Also broadcast playlist status periodically or on mutation
         broadcastPlaylistStatus()
     }
 
     private func broadcastPlaylistStatus() {
         guard !connections.isEmpty else { return }
-
-        let playlistItems = playerViewModel.playlistItems.enumerated().map { (index, payload) in
-            PlaylistItemInfo(index: index, title: payload.title ?? "Item \(index + 1)")
+        let items = playerViewModel.playlistItems.enumerated().map { (i, p) in
+            PlaylistItemInfo(index: i, title: p.title ?? "Item \(i + 1)")
         }
-
         let status = PlaylistStatusMessage(
-            items: playlistItems,
+            items: items,
             currentIndex: playerViewModel.currentIndex,
-            totalCount: playerViewModel.playlistItems.count
-        )
-
+            totalCount: playerViewModel.playlistItems.count)
         if let data = try? JSONEncoder().encode(status),
             let jsonString = String(data: data, encoding: .utf8)
         {
-            for connection in connections.values {
-                send(message: jsonString, to: connection)
-            }
+            connections.values.forEach { send(message: jsonString, to: $0) }
         }
     }
 
@@ -366,9 +421,7 @@ class WebSocketServer: ObservableObject {
             state: playerViewModel.state.rawValue,
             position: Int64(playerViewModel.position * 1000),
             duration: Int64(playerViewModel.duration * 1000),
-            title: playerViewModel.currentTitle
-        )
-
+            title: playerViewModel.currentTitle)
         if let data = try? JSONEncoder().encode(status),
             let jsonString = String(data: data, encoding: .utf8)
         {
@@ -390,16 +443,28 @@ class WebSocketServer: ObservableObject {
         }
     }
 
+    /// Reply to unsupported commands (browser, browserControl, remote, mouse) so the phone
+    /// can degrade its UI when paired with a tvOS receiver.
+    private func sendUnsupported(command: String, to connection: NWConnection) {
+        send(
+            json: [
+                "type": "command_unsupported",
+                "command": command,
+                "reason": "tvos_receiver",
+            ], to: connection)
+    }
+
+    // MARK: - Send Helpers
+
     func send(message: String, to connection: NWConnection) {
         let data = message.data(using: .utf8)
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
-
         connection.send(
             content: data, contentContext: context, isComplete: true,
             completion: .contentProcessed { error in
                 if let error = error {
-                    print("Send error: \(error)")
+                    print("[WebSocketServer] Send error: \(error)")
                 }
             })
     }
@@ -411,29 +476,28 @@ class WebSocketServer: ObservableObject {
             send(message: string, to: connection)
         }
     }
+}
 
-    private func getIPAddress() -> String? {
-        var address: String?
-        var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        if getifaddrs(&ifaddr) == 0 {
-            var ptr = ifaddr
-            while ptr != nil {
-                defer { ptr = ptr?.pointee.ifa_next }
-                let interface = ptr?.pointee
-                let addrFamily = interface?.ifa_addr.pointee.sa_family
-                if addrFamily == UInt8(AF_INET) {
-                    let name = String(cString: (interface?.ifa_name)!)
-                    if name == "en0" || name == "en1" {
-                        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                        getnameinfo(
-                            interface?.ifa_addr, socklen_t((interface?.ifa_addr.pointee.sa_len)!),
-                            &hostname, socklen_t(hostname.count), nil, socklen_t(0), NI_NUMERICHOST)
-                        address = String(cString: hostname)
-                    }
-                }
-            }
-            freeifaddrs(ifaddr)
-        }
-        return address
+// MARK: - IP Helper
+
+private func getIPAddress() -> String? {
+    var address: String?
+    var ifaddr: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&ifaddr) == 0 else { return nil }
+    defer { freeifaddrs(ifaddr) }
+
+    var ptr = ifaddr
+    while let current = ptr {
+        defer { ptr = current.pointee.ifa_next }
+        let interface = current.pointee
+        guard interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+        let name = String(cString: interface.ifa_name)
+        guard name == "en0" || name == "en1" else { continue }
+        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        getnameinfo(
+            interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+            &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+        address = String(cString: hostname)
     }
+    return address
 }

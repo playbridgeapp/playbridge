@@ -32,13 +32,9 @@ struct PlayerScreen: View {
                     }
             }
 
-            // Subtitles (always visible if present)
-            VStack {
-                Spacer()
-                SubtitleOverlay(cues: viewModel.subtitleManager.activeCues)
-            }
-            .padding(.bottom, showOverlay ? 250 : 60)
-            .animation(.easeInOut, value: showOverlay)
+            // Subtitles — always on top, positioning managed internally by SubtitleOverlay
+            SubtitleOverlay(cues: viewModel.subtitleManager.activeCues)
+                .ignoresSafeArea()
 
             // Loading/Buffering
             if viewModel.state == .buffering || viewModel.state == .loading {
@@ -114,16 +110,24 @@ struct SubtitleOverlay: View {
     let cues: [SubtitleCue]
 
     var body: some View {
-        VStack {
-            ForEach(cues, id: \.startTime) { cue in
-                Text(cue.text)
-                    .font(.system(size: 44, weight: .medium))
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                    .shadow(color: .black, radius: 4, x: 0, y: 2)
-                    .padding(.horizontal, 40)
-                    .padding(.bottom, 60)
+        // Styling parity with Android SubtitleManager spec:
+        //   - ~1.2× tvOS system body (body ≈ 38 pt → target ≈ 46 pt)
+        //   - Drop shadow for legibility on any background
+        //   - 12% bottom padding relative to screen height
+        GeometryReader { geo in
+            VStack(spacing: 4) {
+                Spacer()
+                ForEach(cues, id: \.startTime) { cue in
+                    Text(cue.text)
+                        .font(.system(size: 46, weight: .medium))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .shadow(color: .black.opacity(0.85), radius: 3, x: 1, y: 1)
+                        .padding(.horizontal, 60)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, geo.size.height * 0.12)
         }
     }
 }

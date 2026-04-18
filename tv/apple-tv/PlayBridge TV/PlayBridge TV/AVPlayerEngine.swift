@@ -7,6 +7,8 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
     let player: AVPlayer
     private var timeObserver: Any?
     private var cancellables = Set<AnyCancellable>()
+    /// Retained reference — AVAssetResourceLoader holds a weak reference to the delegate.
+    private var resourceLoaderDelegate: PlayBridgeResourceLoaderDelegate?
 
     private let stateSubject = CurrentValueSubject<PlaybackState, Never>(.idle)
     private let positionSubject = CurrentValueSubject<TimeInterval, Never>(0)
@@ -27,7 +29,6 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
     }
 
     private func setupObservers() {
-        // Observe status of current item
         player.publisher(for: \.currentItem?.status)
             .sink { [weak self] status in
                 guard let self = self, let status = status else { return }
@@ -44,7 +45,6 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
             }
             .store(in: &cancellables)
 
-        // Observe timeControlStatus
         player.publisher(for: \.timeControlStatus)
             .sink { [weak self] status in
                 guard let self = self else { return }
@@ -63,7 +63,6 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
             }
             .store(in: &cancellables)
 
-        // Periodic time observer
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
@@ -75,53 +74,129 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
         guard let url = URL(string: payload.url) else {
             throw NSError(
                 domain: "AVPlayerEngine", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+                userInfo: [NSLocalizedDescriptionKey: "Invalid URL: \(payload.url)"])
         }
 
         stateSubject.send(.loading)
+        resourceLoaderDelegate = nil  // release previous delegate
 
-        // TODO: Switch to AVAssetResourceLoaderDelegate for custom headers in Phase 2/3
-        let options: [String: Any] =
-            payload.headers.map { ["AVURLAssetHTTPHeaderFieldsKey": $0] } ?? [:]
-        let asset = AVURLAsset(url: url, options: options)
+        let asset: AVURLAsset
+
+        if let headers = payload.headers, !headers.isEmpty {
+            // Rewrite URL to custom scheme so AVAssetResourceLoader intercepts every request,
+            // including those made after HTTP redirects — fixing Debrid link 401s.
+            guard let proxyURL = PlayBridgeScheme.rewrite(url) else {
+                throw NSError(
+                    domain: "AVPlayerEngine", code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Cannot rewrite URL scheme: \(url.scheme ?? "nil")"])
+            }
+            let loader = PlayBridgeResourceLoaderDelegate(headers: headers)
+            asset = AVURLAsset(url: proxyURL)
+            // Must set delegate before the asset starts loading
+            asset.resourceLoader.setDelegate(loader, queue: .global(qos: .userInitiated))
+            resourceLoaderDelegate = loader  // retain
+        } else {
+            asset = AVURLAsset(url: url)
+        }
+
         let item = AVPlayerItem(asset: asset)
-
         player.replaceCurrentItem(with: item)
         player.play()
     }
 
-    func play() {
-        player.play()
-    }
-
-    func pause() {
-        player.pause()
-    }
+    func play() { player.play() }
+    func pause() { player.pause() }
 
     func stop() {
         player.pause()
         player.replaceCurrentItem(with: nil)
+        resourceLoaderDelegate = nil
         stateSubject.send(.stopped)
     }
 
     func seek(to: TimeInterval) async {
-        await player.seek(to: CMTime(seconds: to, preferredTimescale: 600))
+        await player.seek(
+            to: CMTime(seconds: to, preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
     }
 
-    func setRate(_ rate: Float) {
-        player.rate = rate
+    func setRate(_ rate: Float) { player.rate = rate }
+
+    // MARK: - Track Selection
+
+    func audioTracks() async -> [(id: String, name: String)] {
+        guard let item = player.currentItem else { return [] }
+        if #available(tvOS 15.0, *) {
+            guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else {
+                return []
+            }
+            return group.options.enumerated().map { (i, opt) in (id: "\(i)", name: opt.displayName) }
+        } else {
+            guard let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible) else {
+                return []
+            }
+            return group.options.enumerated().map { (i, opt) in (id: "\(i)", name: opt.displayName) }
+        }
+    }
+
+    func subtitleTracks() async -> [(id: String, name: String)] {
+        guard let item = player.currentItem else { return [] }
+        if #available(tvOS 15.0, *) {
+            guard let group = try? await item.asset.loadMediaSelectionGroup(for: .legible) else {
+                return []
+            }
+            return group.options.enumerated().map { (i, opt) in (id: "\(i)", name: opt.displayName) }
+        } else {
+            guard let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) else {
+                return []
+            }
+            return group.options.enumerated().map { (i, opt) in (id: "\(i)", name: opt.displayName) }
+        }
     }
 
     func setAudioTrack(_ id: String?) {
-        // Stubs for future track selection phase
+        guard let item = player.currentItem else { return }
+        if #available(tvOS 15.0, *) {
+            Task {
+                guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
+                if let id = id, let index = Int(id), index < group.options.count {
+                    item.select(group.options[index], in: group)
+                }
+            }
+        } else {
+            guard let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible) else { return }
+            if let id = id, let index = Int(id), index < group.options.count {
+                item.select(group.options[index], in: group)
+            }
+        }
     }
 
     func setSubtitleTrack(_ id: String?) {
-        // Future Phase
+        guard let item = player.currentItem else { return }
+        if #available(tvOS 15.0, *) {
+            Task {
+                guard let group = try? await item.asset.loadMediaSelectionGroup(for: .legible) else { return }
+                if let id = id, let index = Int(id), index < group.options.count {
+                    item.select(group.options[index], in: group)
+                } else {
+                    item.select(nil, in: group)  // disable embedded subtitles
+                }
+            }
+        } else {
+            guard let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) else { return }
+            if let id = id, let index = Int(id), index < group.options.count {
+                item.select(group.options[index], in: group)
+            } else {
+                item.select(nil, in: group)  // disable embedded subtitles
+            }
+        }
     }
 
     func attachExternalSubtitle(url: URL) async throws {
-        // AVPlayer needs a bit more work for external side-loaded subs
+        // AVPlayer external subs are rendered by SubtitleOverlay using SubtitleManager cues.
+        // Nothing needed here — PlayerViewModel loads cues into SubtitleManager separately.
     }
 
     func setFilter(_ settings: ColorFilterSettings) {
@@ -131,14 +206,11 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
             with: item.asset,
             applyingCIFiltersWithHandler: { request in
                 let source = request.sourceImage.clampedToExtent()
-
-                // 1. Brightness, Contrast, Saturation
                 let filter = CIFilter(name: "CIColorControls")
                 filter?.setValue(source, forKey: kCIInputImageKey)
                 filter?.setValue(settings.brightness, forKey: kCIInputBrightnessKey)
                 filter?.setValue(settings.contrast, forKey: kCIInputContrastKey)
                 filter?.setValue(settings.saturation, forKey: kCIInputSaturationKey)
-
                 if let output = filter?.outputImage {
                     request.finish(
                         with: output.cropped(to: request.sourceImage.extent), context: nil)
@@ -148,14 +220,13 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
             },
             completionHandler: { composition, error in
                 if let composition = composition {
-                    DispatchQueue.main.async {
-                        item.videoComposition = composition
-                    }
+                    DispatchQueue.main.async { item.videoComposition = composition }
                 } else if let error = error {
-                    print("Failed to create video composition: \(error)")
+                    print("[AVPlayerEngine] Filter error: \(error)")
                 }
             })
     }
+
     deinit {
         if let timeObserver = timeObserver {
             player.removeTimeObserver(timeObserver)
