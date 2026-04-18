@@ -46,5 +46,13 @@ extension/dist
 protocol/bin
 
 .kotlin
-\n# CocoaPods\n**/Pods/\n**/Podfile.lock\n\n# Swift Package Manager\n**/.build/\n\n# Xcode User State\nxcuserdata/
-**/xcuserdata/**
+
+# CocoaPods
+**/Pods/
+**/Podfile.lock
+
+# Swift Package Manager
+**/.build/
+
+# Xcode User State
+**/xcuserdata/
