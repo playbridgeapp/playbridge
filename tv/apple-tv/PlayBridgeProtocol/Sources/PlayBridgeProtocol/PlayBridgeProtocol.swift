@@ -6,7 +6,7 @@ public enum InboundMessage {
     case play(PlayPayload)
     case playContent(ContentPlayPayload)
     case browser(BrowserPayload)
-    case control(ControlPayload)
+    case control(ControlPayload, position: Int64?)
     case remote(RemotePayload)
     case mouse(MousePayload)
     case browserControl(BrowserControlPayload)
@@ -59,7 +59,7 @@ public struct PlayBridgeProtocol {
                     return .browser(payload)
                 case "control":
                     let payload = try decodePayload(ControlPayload.self, from: envelope.payload)
-                    return .control(payload)
+                    return .control(payload, position: envelope.position)
                 case "remote":
                     let payload = try decodePayload(RemotePayload.self, from: envelope.payload)
                     return .remote(payload)

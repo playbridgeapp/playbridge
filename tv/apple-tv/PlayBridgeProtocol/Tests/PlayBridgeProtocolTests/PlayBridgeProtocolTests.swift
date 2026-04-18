@@ -33,19 +33,20 @@ final class PlayBridgeProtocolTests: XCTestCase {
             {
                 "type": "command",
                 "action": "control",
+                "position": 5000,
                 "payload": {
-                    "command": "pause"
+                    "command": "seek"
                 }
             }
             """
         let result = PlayBridgeProtocol.decode(json)
-        if case .control(let payload) = result {
-            XCTAssertEqual(payload.command, "pause")
+        if case .control(let payload, let position) = result {
+            XCTAssertEqual(payload.command, "seek")
+            XCTAssertEqual(position, 5000)
         } else {
             XCTFail("Expected .control, got \(result)")
         }
     }
-
     func testDecodePing() {
         let json = """
             {

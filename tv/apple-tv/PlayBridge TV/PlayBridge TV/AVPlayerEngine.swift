@@ -117,13 +117,45 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
     }
 
     func setSubtitleTrack(_ id: String?) {
-        // Stubs for future track selection phase
+        // Future Phase
     }
 
     func attachExternalSubtitle(url: URL) async throws {
         // AVPlayer needs a bit more work for external side-loaded subs
     }
 
+    func setFilter(_ settings: ColorFilterSettings) {
+        guard let item = player.currentItem else { return }
+
+        AVVideoComposition.videoComposition(
+            with: item.asset,
+            applyingCIFiltersWithHandler: { request in
+                let source = request.sourceImage.clampedToExtent()
+
+                // 1. Brightness, Contrast, Saturation
+                let filter = CIFilter(name: "CIColorControls")
+                filter?.setValue(source, forKey: kCIInputImageKey)
+                filter?.setValue(settings.brightness, forKey: kCIInputBrightnessKey)
+                filter?.setValue(settings.contrast, forKey: kCIInputContrastKey)
+                filter?.setValue(settings.saturation, forKey: kCIInputSaturationKey)
+
+                if let output = filter?.outputImage {
+                    request.finish(
+                        with: output.cropped(to: request.sourceImage.extent), context: nil)
+                } else {
+                    request.finish(with: request.sourceImage, context: nil)
+                }
+            },
+            completionHandler: { composition, error in
+                if let composition = composition {
+                    DispatchQueue.main.async {
+                        item.videoComposition = composition
+                    }
+                } else if let error = error {
+                    print("Failed to create video composition: \(error)")
+                }
+            })
+    }
     deinit {
         if let timeObserver = timeObserver {
             player.removeTimeObserver(timeObserver)

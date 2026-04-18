@@ -333,7 +333,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads = YES;
+				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
+				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsForMedia = YES;
 				INFOPLIST_KEY_NSBonjourServices = _playbridge._tcp;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "PlayBridge TV needs local network access to connect with the phone app.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -365,7 +366,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads = YES;
+				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
+				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsForMedia = YES;
 				INFOPLIST_KEY_NSBonjourServices = _playbridge._tcp;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "PlayBridge TV needs local network access to connect with the phone app.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

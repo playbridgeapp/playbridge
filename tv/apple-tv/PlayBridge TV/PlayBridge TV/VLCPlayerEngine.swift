@@ -87,14 +87,27 @@ class VLCPlayerEngine: NSObject, PlaybackEngine, VLCMediaPlayerDelegate {
     }
 
     func setSubtitleTrack(_ id: String?) {
-        // Future Phase
+        // Future Phase: VLC uses track indexes
     }
 
     func attachExternalSubtitle(url: URL) async throws {
         mediaPlayer.addPlaybackSlave(url, type: .subtitle, enforce: true)
     }
 
-    // MARK: - VLCMediaPlayerDelegate
+    func setFilter(_ settings: ColorFilterSettings) {
+        let filter = mediaPlayer.adjustFilter
+        filter.isEnabled = true
+
+        // VLC uses 0-4 for contrast (1.0 default)
+        // VLC uses 0-2 for saturation (1.0 default)
+        // VLC uses 0-2 for brightness (1.0 default)
+
+        filter.contrast.value = settings.contrast
+        filter.saturation.value = settings.saturation
+
+        // Map 0 centered (-1.0 to 1.0) to 1.0 centered (0 to 2.0)
+        filter.brightness.value = settings.brightness + 1.0
+    }  // MARK: - VLCMediaPlayerDelegate
 
     func mediaPlayerStateChanged(_ aNotification: Notification) {
         DispatchQueue.main.async {
@@ -103,6 +116,7 @@ class VLCPlayerEngine: NSObject, PlaybackEngine, VLCMediaPlayerDelegate {
             case .paused: self.stateSubject.send(.paused)
             case .buffering: self.stateSubject.send(.buffering)
             case .error: self.stateSubject.send(.error)
+            case .ended: self.stateSubject.send(.ended)
             case .stopped: self.stateSubject.send(.stopped)
             default: break
             }

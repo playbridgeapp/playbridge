@@ -10,6 +10,7 @@ public enum PlaybackState: String {
     case paused
     case buffering
     case stopped
+    case ended
     case error
 }
 
@@ -50,4 +51,7 @@ protocol PlaybackEngine: AnyObject {
 
     /// Attach an external subtitle file
     func attachExternalSubtitle(url: URL) async throws
+
+    /// Set color filters
+    func setFilter(_ settings: ColorFilterSettings)
 }

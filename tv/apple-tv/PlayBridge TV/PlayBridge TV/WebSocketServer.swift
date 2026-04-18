@@ -17,6 +17,9 @@ class WebSocketServer: ObservableObject {
     private var authToken: String
     private var statusTimer: AnyCancellable?
 
+    // Coordination
+    weak var coordinator: ServerCoordinator?
+
     @Published var isRunning = false
     @Published var connectionCount = 0
     @Published var lastMessage: String = ""
@@ -26,13 +29,6 @@ class WebSocketServer: ObservableObject {
 
     // Abstraction layer
     @Published var playerViewModel = PlayerViewModel()
-    @Published var showPlayer: Bool = false {
-        didSet {
-            if !showPlayer {
-                playerViewModel.stop()
-            }
-        }
-    }
 
     enum ConnectionState {
         case stopped
@@ -206,6 +202,10 @@ class WebSocketServer: ObservableObject {
                 self.connections[clientId] = connection
                 self.connectionCount = self.connections.count
                 self.connectionState = .connected(clientId: clientId)
+
+                // Send initial status immediately
+                self.sendStatus(to: connection)
+
                 self.receive(on: connection, clientId: clientId)
             }
         } else {
@@ -253,8 +253,16 @@ class WebSocketServer: ObservableObject {
             sendPong(to: connection)
         case .play(let payload):
             playVideo(payload: payload)
-        case .control(let payload):
-            handleControl(command: payload.command)
+        case .playContent(let payload):
+            handlePlayContent(payload: payload)
+        case .playlist(let payload):
+            playPlaylist(payload: payload)
+        case .queueAdd(let payload):
+            queueAdd(payload: payload)
+        case .playlistJump(let payload):
+            playlistJump(payload: payload)
+        case .control(let payload, let position):
+            handleControl(command: payload.command, position: position)
         case .remote(let payload):
             print("Remote key: \(payload.key)")
         case .mouse(let payload):
@@ -269,30 +277,79 @@ class WebSocketServer: ObservableObject {
     func playVideo(payload: PlayPayload) {
         DispatchQueue.main.async {
             self.playerViewModel.load(payload)
-            self.showPlayer = true
+            self.coordinator?.route = .player
+            self.broadcastPlaylistStatus()
         }
     }
 
-    private func handleControl(command: String) {
+    func handlePlayContent(payload: ContentPlayPayload) {
+        self.coordinator?.handlePlayContent(payload)
+    }
+
+    func playPlaylist(payload: PlaylistPayload) {
+        DispatchQueue.main.async {
+            if payload.startIndex < payload.items.count {
+                self.playerViewModel.load(
+                    payload.items[payload.startIndex], items: payload.items,
+                    index: payload.startIndex)
+                self.coordinator?.route = .player
+                self.broadcastPlaylistStatus()
+            }
+        }
+    }
+
+    func queueAdd(payload: QueueAddPayload) {
+        DispatchQueue.main.async {
+            self.playerViewModel.queueAdd(payload.item)
+            self.broadcastPlaylistStatus()
+        }
+    }
+
+    func playlistJump(payload: PlaylistJumpPayload) {
+        DispatchQueue.main.async {
+            self.playerViewModel.jumpTo(index: payload.index)
+            self.broadcastPlaylistStatus()
+        }
+    }
+
+    private func handleControl(command: String, position: Int64?) {
         DispatchQueue.main.async {
             switch command {
             case "play": self.playerViewModel.play()
             case "pause": self.playerViewModel.pause()
-            case "stop": self.showPlayer = false
-            case "seek": break  // TODO
+            case "stop":
+                self.coordinator?.route = .home
+            case "seek":
+                if let posMs = position {
+                    self.playerViewModel.seek(to: TimeInterval(posMs) / 1000.0)
+                }
             default: break
             }
+            // Broadast status after control mutation
+            self.broadcastStatus()
         }
     }
 
     private func broadcastStatus() {
         guard !connections.isEmpty else { return }
+        for connection in connections.values {
+            sendStatus(to: connection)
+        }
+        // Also broadcast playlist status periodically or on mutation
+        broadcastPlaylistStatus()
+    }
 
-        let status = StatusMessage(
-            state: playerViewModel.state.rawValue,
-            position: Int64(playerViewModel.position * 1000),
-            duration: Int64(playerViewModel.duration * 1000),
-            title: playerViewModel.currentTitle
+    private func broadcastPlaylistStatus() {
+        guard !connections.isEmpty else { return }
+
+        let playlistItems = playerViewModel.playlistItems.enumerated().map { (index, payload) in
+            PlaylistItemInfo(index: index, title: payload.title ?? "Item \(index + 1)")
+        }
+
+        let status = PlaylistStatusMessage(
+            items: playlistItems,
+            currentIndex: playerViewModel.currentIndex,
+            totalCount: playerViewModel.playlistItems.count
         )
 
         if let data = try? JSONEncoder().encode(status),
@@ -304,12 +361,27 @@ class WebSocketServer: ObservableObject {
         }
     }
 
+    private func sendStatus(to connection: NWConnection) {
+        let status = StatusMessage(
+            state: playerViewModel.state.rawValue,
+            position: Int64(playerViewModel.position * 1000),
+            duration: Int64(playerViewModel.duration * 1000),
+            title: playerViewModel.currentTitle
+        )
+
+        if let data = try? JSONEncoder().encode(status),
+            let jsonString = String(data: data, encoding: .utf8)
+        {
+            send(message: jsonString, to: connection)
+        }
+    }
+
     private func sendPong(to connection: NWConnection) {
         send(message: "{\"type\":\"pong\"}", to: connection)
     }
 
     private func sendContext(to connection: NWConnection) {
-        let active = showPlayer ? "player" : "idle"
+        let active = coordinator?.route == .player ? "player" : "idle"
         let context = ContextMessage(active: active)
         if let data = try? JSONEncoder().encode(context),
             let jsonString = String(data: data, encoding: .utf8)

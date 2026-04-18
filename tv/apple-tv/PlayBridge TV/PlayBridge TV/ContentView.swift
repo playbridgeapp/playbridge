@@ -10,6 +10,38 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var server: WebSocketServer
+    @State private var coordinator: ServerCoordinator?
+
+    var body: some View {
+        Group {
+            if let coordinator = coordinator {
+                switch coordinator.route {
+                case .home:
+                    HomeView(server: server)
+                case .prePlay(let payload):
+                    PrePlayScreen(payload: payload) { stream in
+                        coordinator.selectStream(stream, from: payload)
+                    }
+                case .player:
+                    PlayerScreen(viewModel: server.playerViewModel)
+                        .onExitCommand {
+                            coordinator.exitPlayer()
+                        }
+                }
+            } else {
+                ProgressView("Initializing...")
+            }
+        }
+        .onAppear {
+            if coordinator == nil {
+                coordinator = ServerCoordinator(server: server)
+            }
+        }
+    }
+}
+
+struct HomeView: View {
+    @ObservedObject var server: WebSocketServer
 
     var body: some View {
         VStack(spacing: 20) {
@@ -80,9 +112,6 @@ struct ContentView: View {
             }
         }
         .padding()
-        .fullScreenCover(isPresented: $server.showPlayer) {
-            PlayerScreen(viewModel: server.playerViewModel)
-        }
     }
 }
 
