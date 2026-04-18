@@ -17,6 +17,7 @@ The `tv/` module provides a Leanback UI for the Android TV application, acting a
 
 ## Inter-module Contracts
 - Calls into: `protocol/` module for structured `Message` data classes.
+- **Protocol ripple now includes `tv/apple-tv/PlayBridgeProtocol/Sources/PlayBridgeProtocol/`.**
 - Called by: none (top-level app module).
 - Communication mechanism: Hosts a Ktor WebSocket server to receive JSON commands from Phone app.
 

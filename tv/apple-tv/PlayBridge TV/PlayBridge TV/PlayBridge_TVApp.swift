@@ -9,9 +9,15 @@ import SwiftUI
 
 @main
 struct PlayBridge_TVApp: App {
+    @StateObject private var server = WebSocketServer()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(server)
+                .onAppear {
+                    server.start()
+                }
         }
     }
 }

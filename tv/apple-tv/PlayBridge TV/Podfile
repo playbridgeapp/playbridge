@@ -1,0 +1,18 @@
+platform :tvos, '14.0'
+
+target 'PlayBridge TV' do
+  use_frameworks!
+
+  pod 'TVVLCKit', '~> 3.6.0'
+  pod 'PlayBridgeProtocol', :path => '../PlayBridgeProtocol'
+
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['TVOS_DEPLOYMENT_TARGET'] = '14.0'
+      config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+    end
+  end
+end
