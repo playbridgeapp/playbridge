@@ -1,3 +1,8 @@
+//
+//  PlayerOverlayView.swift
+//  PlayBridge TV
+//
+
 import PlayBridgeProtocol
 import SwiftUI
 
@@ -6,134 +11,143 @@ struct PlayerOverlayView: View {
     let onSettingsToggle: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            // ── Top Bar ──────────────────────────────────────────────────────
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    // Title
-                    Text(viewModel.currentTitle ?? "Unknown Title")
-                        .font(.system(size: 40, weight: .bold))
-                        .foregroundColor(.white)
+        ZStack(alignment: .bottom) {
+            // Top gradient — keeps title readable over bright video
+            VStack {
+                LinearGradient(
+                    colors: [.black.opacity(0.75), .clear],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: 260)
+                .ignoresSafeArea()
+                Spacer()
+            }
 
-                    // Season / episode label (when playing series content)
-                    if let sc = viewModel.currentSeriesContext {
-                        let epLabel = episodeLabel(sc)
-                        Text(epLabel)
-                            .font(.headline)
-                            .foregroundColor(.secondary)
-                    }
+            // Bottom gradient — backs the transport controls
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.85)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 320)
+            .ignoresSafeArea()
 
-                    // Engine badge + duration
-                    if let engine = viewModel.engine {
-                        HStack(spacing: 12) {
-                            Text(engine is AVPlayerEngine ? "AVPlayer" : "VLC")
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(Color.blue.opacity(0.3))
-                                .cornerRadius(4)
+            // Content
+            VStack(spacing: 0) {
+                // ── Top Bar ──────────────────────────────────────────────────
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(viewModel.currentTitle ?? "Unknown Title")
+                            .font(.system(size: 40, weight: .bold))
+                            .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.6), radius: 4)
 
-                            if viewModel.duration > 0 {
-                                Text(formatTime(viewModel.duration))
+                        if let sc = viewModel.currentSeriesContext {
+                            Text(episodeLabel(sc))
+                                .font(.title3)
+                                .foregroundColor(.secondary)
+                        }
+
+                        if let engine = viewModel.engine {
+                            HStack(spacing: 12) {
+                                Text(engine is AVPlayerEngine ? "AVPlayer" : "VLC")
                                     .font(.caption)
-                                    .foregroundColor(.gray)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(Color.blue.opacity(0.4))
+                                    .cornerRadius(6)
+
+                                if viewModel.duration > 0 {
+                                    Text(formatTime(viewModel.duration))
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
                             }
                         }
                     }
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 12) {
+                        if viewModel.playlistItems.count > 1 {
+                            Text("\(viewModel.currentIndex + 1) / \(viewModel.playlistItems.count)")
+                                .font(.headline)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(Color.black.opacity(0.5))
+                                .cornerRadius(10)
+                        }
+
+                        if let next = viewModel.nextEpisodeInfo {
+                            NextUpTile(episode: next)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                    }
                 }
+                .padding(.top, 60)
+                .padding(.horizontal, 90)
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 12) {
-                    // Playlist index badge
-                    if viewModel.playlistItems.count > 1 {
-                        Text("\(viewModel.currentIndex + 1) / \(viewModel.playlistItems.count)")
-                            .font(.headline)
-                            .padding()
-                            .background(Color.black.opacity(0.4))
-                            .cornerRadius(10)
-                    }
+                // ── Bottom Bar ───────────────────────────────────────────────
+                VStack(spacing: 16) {
+                    // Scrub bar
+                    if viewModel.duration > 0 {
+                        VStack(spacing: 8) {
+                            // Track bar — overlay avoids GeometryReader zero-width flash
+                            Capsule()
+                                .fill(Color.white.opacity(0.25))
+                                .frame(height: 8)
+                                .overlay(
+                                    GeometryReader { geo in
+                                        Capsule()
+                                            .fill(Color.blue)
+                                            .frame(
+                                                width: max(
+                                                    0,
+                                                    geo.size.width
+                                                        * CGFloat(
+                                                            viewModel.position / viewModel.duration
+                                                        )),
+                                                height: 8)
+                                    },
+                                    alignment: .leading
+                                )
 
-                    // "Next up" tile — appears 60 s before end for series content
-                    if let next = viewModel.nextEpisodeInfo {
-                        NextUpTile(episode: next)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                }
-            }
-            .padding(.top, 60)
-            .padding(.horizontal, 80)
-
-            Spacer()
-
-            // ── Bottom Bar ───────────────────────────────────────────────────
-            VStack(spacing: 20) {
-                // Scrub bar
-                if viewModel.duration > 0 {
-                    VStack(spacing: 8) {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(Color.white.opacity(0.2))
-                                    .frame(height: 10)
-                                Capsule()
-                                    .fill(Color.blue)
-                                    .frame(
-                                        width: geo.size.width
-                                            * CGFloat(viewModel.position / viewModel.duration),
-                                        height: 10)
+                            HStack {
+                                Text(formatTime(viewModel.position))
+                                Spacer()
+                                Text("-" + formatTime(viewModel.duration - viewModel.position))
                             }
+                            .font(.system(.callout, design: .monospaced))
+                            .foregroundColor(.gray)
                         }
-                        .frame(height: 10)
+                    }
 
-                        HStack {
-                            Text(formatTime(viewModel.position))
-                            Spacer()
-                            Text("-" + formatTime(viewModel.duration - viewModel.position))
+                    // Transport buttons
+                    HStack(spacing: 50) {
+                        PlayerButton(systemName: "gobackward.10", size: 28) {
+                            viewModel.skipBackward()
                         }
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundColor(.gray)
+
+                        PlayerButton(
+                            systemName: viewModel.state == .playing ? "pause.fill" : "play.fill",
+                            size: 48
+                        ) {
+                            viewModel.state == .playing ? viewModel.pause() : viewModel.play()
+                        }
+
+                        PlayerButton(systemName: "goforward.10", size: 28) {
+                            viewModel.skipForward()
+                        }
+
+                        PlayerButton(systemName: "slider.horizontal.3", size: 26) {
+                            onSettingsToggle()
+                        }
                     }
                 }
-
-                // Transport buttons
-                HStack(spacing: 40) {
-                    Button(action: { viewModel.skipBackward() }) {
-                        Image(systemName: "gobackward.10").font(.title)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: {
-                        viewModel.state == .playing ? viewModel.pause() : viewModel.play()
-                    }) {
-                        Image(
-                            systemName: viewModel.state == .playing ? "pause.fill" : "play.fill"
-                        )
-                        .font(.system(size: 50))
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: { viewModel.skipForward() }) {
-                        Image(systemName: "goforward.10").font(.title)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: onSettingsToggle) {
-                        Image(systemName: "slider.horizontal.3").font(.title)
-                    }
-                    .buttonStyle(.plain)
-                }
+                .padding(.bottom, 80)
+                .padding(.horizontal, 90)
             }
-            .padding(.bottom, 80)
-            .padding(.horizontal, 80)
-            .background(
-                LinearGradient(
-                    gradient: Gradient(colors: [.clear, .black.opacity(0.8)]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-            )
         }
     }
 
@@ -157,6 +171,38 @@ struct PlayerOverlayView: View {
     }
 }
 
+// MARK: - Player Button (focus-aware)
+
+struct PlayerButton: View {
+    let systemName: String
+    let size: CGFloat
+    let action: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    init(systemName: String, size: CGFloat, action: @escaping () -> Void) {
+        self.systemName = systemName
+        self.size = size
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size, weight: .medium))
+                .foregroundColor(.white)
+                .frame(width: size * 2.4, height: size * 2.4)
+                .background(
+                    Circle()
+                        .fill(isFocused ? Color.white.opacity(0.25) : Color.clear)
+                        .animation(.easeOut(duration: 0.15), value: isFocused)
+                )
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
+    }
+}
+
 // MARK: - Next Up Tile
 
 private struct NextUpTile: View {
@@ -165,16 +211,13 @@ private struct NextUpTile: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             Text("UP NEXT")
-                .font(.caption2)
-                .fontWeight(.semibold)
+                .font(.caption2.weight(.semibold))
                 .foregroundColor(.gray)
                 .textCase(.uppercase)
 
-            Text(
-                "S\(String(format: "%02d", episode.season)) E\(String(format: "%02d", episode.episode))"
-            )
-            .font(.headline)
-            .foregroundColor(.white)
+            Text("S\(String(format: "%02d", episode.season)) E\(String(format: "%02d", episode.episode))")
+                .font(.headline)
+                .foregroundColor(.white)
 
             if let title = episode.title, !title.isEmpty {
                 Text(title)

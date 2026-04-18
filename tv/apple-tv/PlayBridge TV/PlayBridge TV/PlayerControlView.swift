@@ -1,3 +1,8 @@
+//
+//  PlayerControlView.swift
+//  PlayBridge TV
+//
+
 import SwiftUI
 
 struct PlayerControlView: View {
@@ -8,59 +13,73 @@ struct PlayerControlView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 40) {
-                ControlTabButton(title: "Tracks", isSelected: selectedTab == .tracks) {
-                    selectedTab = .tracks
-                }
-                ControlTabButton(title: "Playback Speed", isSelected: selectedTab == .speed) {
-                    selectedTab = .speed
-                }
-                ControlTabButton(title: "Filters", isSelected: selectedTab == .filters) {
-                    selectedTab = .filters
-                }
+            // Tab bar
+            HStack(spacing: 8) {
+                ControlTabButton(title: "Tracks",        tab: .tracks,  selected: $selectedTab)
+                ControlTabButton(title: "Speed",         tab: .speed,   selected: $selectedTab)
+                ControlTabButton(title: "Filters",       tab: .filters, selected: $selectedTab)
             }
-            .padding(.top, 40)
-            .padding(.bottom, 20)
+            .padding(.horizontal, 24)
+            .padding(.top, 32)
+            .padding(.bottom, 16)
 
-            Divider().background(Color.white.opacity(0.3))
+            Divider().background(Color.white.opacity(0.2))
 
             ScrollView {
-                switch selectedTab {
-                case .tracks:  TrackSelectionView(viewModel: viewModel)
-                case .speed:   SpeedSelectionView(viewModel: viewModel)
-                case .filters: FilterSettingsView(viewModel: viewModel)
+                Group {
+                    switch selectedTab {
+                    case .tracks:  TrackSelectionView(viewModel: viewModel)
+                    case .speed:   SpeedSelectionView(viewModel: viewModel)
+                    case .filters: FilterSettingsView(viewModel: viewModel)
+                    }
                 }
+                .padding(24)
             }
-            .padding()
         }
-        .frame(maxWidth: 800)
-        .background(Color.black.opacity(0.8))
-        .cornerRadius(20)
+        .frame(maxWidth: 860)
+        .frame(minHeight: 460)
+        .background(
+            RoundedRectangle(cornerRadius: 24)
+                .fill(Color(white: 0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24)
+                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
         .padding(60)
     }
 }
 
 // MARK: - Tab Button
 
-struct ControlTabButton: View {
+private struct ControlTabButton: View {
     let title: String
-    let isSelected: Bool
-    let action: () -> Void
+    let tab: PlayerControlView.ControlTab
+    @Binding var selected: PlayerControlView.ControlTab
+
+    @FocusState private var isFocused: Bool
+
+    private var isSelected: Bool { selected == tab }
 
     var body: some View {
-        Button(action: action) {
+        Button { selected = tab } label: {
             Text(title)
                 .font(.headline)
-                .foregroundColor(isSelected ? .white : .gray)
-                .padding(.bottom, 8)
-                .overlay(
-                    Rectangle()
-                        .frame(height: 2)
-                        .foregroundColor(isSelected ? .white : .clear),
-                    alignment: .bottom
+                .foregroundColor(isSelected || isFocused ? .white : .gray)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(
+                            isSelected
+                                ? Color.blue.opacity(0.35)
+                                : isFocused ? Color.white.opacity(0.12) : Color.clear
+                        )
                 )
         }
         .buttonStyle(.plain)
+        .focused($isFocused)
+        .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 }
 
@@ -75,54 +94,34 @@ struct TrackSelectionView: View {
     @State private var isLoading = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 20) {
             if isLoading {
-                HStack {
-                    Spacer()
-                    ProgressView().tint(.white)
-                    Spacer()
-                }
-                .padding(.vertical, 20)
+                HStack { Spacer(); ProgressView().tint(.white); Spacer() }
+                    .padding(.vertical, 20)
             } else if audioTracks.isEmpty && subtitleTracks.isEmpty {
                 Text("No embedded tracks available")
                     .foregroundColor(.gray)
                     .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity, alignment: .center)
             } else {
-                // Audio tracks
                 if !audioTracks.isEmpty {
-                    Text("Audio")
-                        .font(.headline)
-                        .foregroundColor(.white)
-
+                    SectionLabel("Audio")
                     ForEach(audioTracks, id: \.id) { track in
-                        TrackRow(
-                            name: track.name,
-                            isSelected: selectedAudio == track.id
-                        ) {
+                        TrackRow(name: track.name, isSelected: selectedAudio == track.id) {
                             selectedAudio = track.id
                             viewModel.engine?.setAudioTrack(track.id)
                         }
                     }
                 }
 
-                // Subtitle tracks
                 if !subtitleTracks.isEmpty {
-                    Text("Subtitles")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.top, audioTracks.isEmpty ? 0 : 12)
-
-                    // Off option
+                    SectionLabel("Subtitles").padding(.top, audioTracks.isEmpty ? 0 : 8)
                     TrackRow(name: "Off", isSelected: selectedSubtitle == nil) {
                         selectedSubtitle = nil
                         viewModel.engine?.setSubtitleTrack(nil)
                     }
-
                     ForEach(subtitleTracks, id: \.id) { track in
-                        TrackRow(
-                            name: track.name,
-                            isSelected: selectedSubtitle == track.id
-                        ) {
+                        TrackRow(name: track.name, isSelected: selectedSubtitle == track.id) {
                             selectedSubtitle = track.id
                             viewModel.engine?.setSubtitleTrack(track.id)
                         }
@@ -133,35 +132,11 @@ struct TrackSelectionView: View {
         .task {
             isLoading = true
             async let audio = viewModel.engine?.audioTracks() ?? []
-            async let subs = viewModel.engine?.subtitleTracks() ?? []
-            audioTracks = await audio
+            async let subs  = viewModel.engine?.subtitleTracks() ?? []
+            audioTracks    = await audio
             subtitleTracks = await subs
             isLoading = false
         }
-    }
-}
-
-private struct TrackRow: View {
-    let name: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Text(name)
-                    .foregroundColor(.white)
-                Spacer()
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .foregroundColor(.blue)
-                }
-            }
-            .padding()
-            .background(isSelected ? Color.blue.opacity(0.3) : Color.white.opacity(0.1))
-            .cornerRadius(10)
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -174,24 +149,12 @@ struct SpeedSelectionView: View {
     var body: some View {
         VStack(spacing: 10) {
             ForEach(speeds, id: \.self) { speed in
-                Button(action: { viewModel.playbackRate = speed }) {
-                    HStack {
-                        Text(String(format: "%.2fx", speed))
-                            .foregroundColor(.white)
-                        Spacer()
-                        if viewModel.playbackRate == speed {
-                            Image(systemName: "checkmark").foregroundColor(.blue)
-                        }
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        viewModel.playbackRate == speed
-                            ? Color.blue.opacity(0.3) : Color.white.opacity(0.1)
-                    )
-                    .cornerRadius(10)
+                PickerRow(
+                    label: String(format: "%.2f×", speed),
+                    isSelected: viewModel.playbackRate == speed
+                ) {
+                    viewModel.playbackRate = speed
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -203,44 +166,137 @@ struct FilterSettingsView: View {
     @Bindable var viewModel: PlayerViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 30) {
-            Text("Presets").font(.headline).foregroundColor(.white)
-            HStack(spacing: 20) {
+        VStack(alignment: .leading, spacing: 24) {
+            SectionLabel("Presets")
+
+            HStack(spacing: 12) {
                 ForEach(FilterPreset.allCases, id: \.self) { preset in
-                    Button(action: { viewModel.filterPreset = preset }) {
-                        Text(preset.displayName)
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(
-                                viewModel.filterPreset == preset
-                                    ? Color.blue : Color.white.opacity(0.1)
-                            )
-                            .cornerRadius(10)
+                    PresetButton(
+                        title: preset.displayName,
+                        isSelected: viewModel.filterPreset == preset
+                    ) {
+                        viewModel.filterPreset = preset
                     }
-                    .buttonStyle(.plain)
                 }
             }
 
             if viewModel.filterPreset == .custom {
-                Divider().background(Color.white.opacity(0.3))
+                Divider().background(Color.white.opacity(0.2)).padding(.vertical, 4)
                 VStack(spacing: 20) {
-                    FilterSlider(
-                        label: "Brightness",
-                        value: $viewModel.customFilterSettings.brightness,
-                        range: -1.0...1.0)
-                    FilterSlider(
-                        label: "Contrast",
-                        value: $viewModel.customFilterSettings.contrast,
-                        range: 0.0...4.0)
-                    FilterSlider(
-                        label: "Saturation",
-                        value: $viewModel.customFilterSettings.saturation,
-                        range: 0.0...2.0)
+                    FilterSlider(label: "Brightness",
+                                 value: $viewModel.customFilterSettings.brightness,
+                                 range: -1.0...1.0)
+                    FilterSlider(label: "Contrast",
+                                 value: $viewModel.customFilterSettings.contrast,
+                                 range: 0.0...4.0)
+                    FilterSlider(label: "Saturation",
+                                 value: $viewModel.customFilterSettings.saturation,
+                                 range: 0.0...2.0)
                 }
             }
         }
     }
 }
+
+// MARK: - Reusable row components
+
+private struct SectionLabel: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text)
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.secondary)
+            .textCase(.uppercase)
+            .tracking(1)
+    }
+}
+
+private struct TrackRow: View {
+    let name: String
+    let isSelected: Bool
+    let action: () -> Void
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(name).foregroundColor(.white)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(.blue)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(rowBackground(selected: isSelected, focused: isFocused))
+            )
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
+        .animation(.easeOut(duration: 0.12), value: isFocused)
+    }
+}
+
+private struct PickerRow: View {
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(label).foregroundColor(.white)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(.blue)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(rowBackground(selected: isSelected, focused: isFocused))
+            )
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
+        .animation(.easeOut(duration: 0.12), value: isFocused)
+    }
+}
+
+private struct PresetButton: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .foregroundColor(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(
+                            isSelected
+                                ? Color.blue.opacity(isFocused ? 0.7 : 0.5)
+                                : Color.white.opacity(isFocused ? 0.18 : 0.08)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
+        .animation(.easeOut(duration: 0.12), value: isFocused)
+    }
+}
+
+// MARK: - Filter Slider
 
 struct FilterSlider: View {
     let label: String
@@ -250,37 +306,69 @@ struct FilterSlider: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(label).font(.caption).foregroundColor(.gray)
-            HStack(spacing: 20) {
-                Button(action: { value = max(range.lowerBound, value - step) }) {
-                    Image(systemName: "minus.circle")
-                }.buttonStyle(.plain)
-
+            HStack {
+                Text(label).font(.callout).foregroundColor(.secondary)
+                Spacer()
                 Text(String(format: "%.2f", value))
-                    .font(.system(.body, design: .monospaced))
+                    .font(.system(.callout, design: .monospaced))
                     .foregroundColor(.white)
-                    .frame(width: 80)
+                    .frame(width: 56, alignment: .trailing)
+            }
 
-                Button(action: { value = min(range.upperBound, value + step) }) {
-                    Image(systemName: "plus.circle")
-                }.buttonStyle(.plain)
-
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.1)).frame(height: 4)
-                        Capsule()
-                            .fill(Color.blue)
-                            .frame(
-                                width: geo.size.width
-                                    * CGFloat(
-                                        (value - range.lowerBound)
-                                            / (range.upperBound - range.lowerBound)),
-                                height: 4)
-                    }
-                    .frame(maxHeight: .infinity)
+            HStack(spacing: 16) {
+                SliderStepButton(systemName: "minus.circle.fill") {
+                    value = max(range.lowerBound, value - step)
                 }
-                .frame(height: 4)
+
+                // Track — overlay keeps geo width stable inside ScrollView
+                Capsule()
+                    .fill(Color.white.opacity(0.15))
+                    .frame(height: 6)
+                    .overlay(
+                        GeometryReader { geo in
+                            Capsule()
+                                .fill(Color.blue)
+                                .frame(
+                                    width: max(
+                                        0,
+                                        geo.size.width
+                                            * CGFloat(
+                                                (value - range.lowerBound)
+                                                    / (range.upperBound - range.lowerBound))),
+                                    height: 6)
+                        },
+                        alignment: .leading
+                    )
+
+                SliderStepButton(systemName: "plus.circle.fill") {
+                    value = min(range.upperBound, value + step)
+                }
             }
         }
     }
+}
+
+private struct SliderStepButton: View {
+    let systemName: String
+    let action: () -> Void
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 28))
+                .foregroundColor(isFocused ? .white : .gray)
+                .scaleEffect(isFocused ? 1.15 : 1.0)
+                .animation(.easeOut(duration: 0.12), value: isFocused)
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
+    }
+}
+
+// MARK: - Shared helper
+
+private func rowBackground(selected: Bool, focused: Bool) -> Color {
+    if selected { return Color.blue.opacity(focused ? 0.45 : 0.25) }
+    return Color.white.opacity(focused ? 0.15 : 0.07)
 }

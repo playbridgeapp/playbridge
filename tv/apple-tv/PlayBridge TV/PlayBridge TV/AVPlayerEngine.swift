@@ -202,6 +202,27 @@ class AVPlayerEngine: NSObject, PlaybackEngine {
     func setFilter(_ settings: ColorFilterSettings) {
         guard let item = player.currentItem else { return }
 
+        // Identity / no-filter case — just remove any existing composition and return.
+        // This avoids unnecessarily invoking AVVideoComposition, which would try to load
+        // asset tracks via the standard HTTP stack, bypassing AVAssetResourceLoaderDelegate.
+        if settings == .default {
+            item.videoComposition = nil
+            return
+        }
+
+        // AVVideoComposition.videoComposition(with:applyingCIFiltersWithHandler:) loads
+        // asset tracks internally using the standard HTTP stack and cannot go through a
+        // custom AVAssetResourceLoaderDelegate. For assets with a custom scheme (pb-http /
+        // pb-https — used for header-authenticated streams) this always fails with
+        // "Cannot Open". Skip silently; the video plays correctly, just without the filter.
+        if let urlAsset = item.asset as? AVURLAsset {
+            let scheme = urlAsset.url.scheme ?? ""
+            if scheme == PlayBridgeScheme.http || scheme == PlayBridgeScheme.https {
+                print("[AVPlayerEngine] Skipping CIFilter — custom-scheme asset not supported by AVVideoComposition")
+                return
+            }
+        }
+
         AVVideoComposition.videoComposition(
             with: item.asset,
             applyingCIFiltersWithHandler: { request in

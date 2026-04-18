@@ -23,8 +23,7 @@ struct ContentView: View {
                         coordinator.selectStream(stream, from: payload)
                     }
                 case .player:
-                    PlayerScreen(viewModel: server.playerViewModel)
-                        .onExitCommand { coordinator.exitPlayer() }
+                    PlayerScreen(viewModel: server.playerViewModel, onExit: { coordinator.exitPlayer() })
                 }
             } else {
                 ProgressView("Initializing…")
