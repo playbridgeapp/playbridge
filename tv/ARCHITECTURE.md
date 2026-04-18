@@ -44,7 +44,9 @@ com.playbridge.player/
 │   ├── PlaylistPickerDialog.kt
 │   ├── PlaylistStore.kt
 │   ├── ProgressManager.kt
+│   ├── StreamSelectionDialog.kt
 │   ├── SubtitleManager.kt
+│   ├── SwitchPlayerDialog.kt
 │   ├── TrackSelectionDialog.kt
 │   ├── VideoFilter.kt
 │   ├── VideoFilterDialog.kt
