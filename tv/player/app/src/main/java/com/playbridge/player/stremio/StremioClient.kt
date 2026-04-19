@@ -166,10 +166,16 @@ object StremioClient {
         qualityPreference: String? = null,
         sourceHint: String? = null,
         preferredAddonBaseUrl: String? = null,
-        preferredAddonName: String? = null
+        preferredAddonName: String? = null,
+        preferredSourceTypes: List<String>? = null,
+        runtimeMinutes: Int? = null,
+        maxBitrateMbps: Double? = null
     ): List<ScoredStremioStream> {
         val stremioId = if (contentType == "series" && season != null && episode != null) "$contentId:$season:$episode" else contentId
-        return resolveStreamsInternal(addonBaseUrls, addonNames, stremioId, contentType, qualityPreference, sourceHint, preferredAddonBaseUrl, preferredAddonName)
+        return resolveStreamsInternal(
+            addonBaseUrls, addonNames, stremioId, contentType, qualityPreference, sourceHint,
+            preferredAddonBaseUrl, preferredAddonName, preferredSourceTypes, runtimeMinutes, maxBitrateMbps
+        )
     }
 
     private suspend fun resolveStreamsInternal(
@@ -180,11 +186,15 @@ object StremioClient {
         qualityPreference: String? = null,
         sourceHint: String? = null,
         preferredAddonBaseUrl: String? = null,
-        preferredAddonName: String? = null
+        preferredAddonName: String? = null,
+        preferredSourceTypes: List<String>? = null,
+        runtimeMinutes: Int? = null,
+        maxBitrateMbps: Double? = null
     ): List<ScoredStremioStream> = withContext(Dispatchers.IO) {
         if (addonBaseUrls.isEmpty()) return@withContext emptyList()
         FileLogger.i(TAG, "Resolving streams for $contentType $stremioId")
         FileLogger.i(TAG, "  Preferences: quality=$qualityPreference, hint=$sourceHint, prefAddonName=$preferredAddonName")
+        FileLogger.i(TAG, "  Source-type prefs: ${preferredSourceTypes?.joinToString(",") ?: "(none)"}, runtime=${runtimeMinutes}min, maxMbps=$maxBitrateMbps")
 
         val cached = getFromCache(stremioId)
         val allStreams = if (cached != null) {
@@ -202,6 +212,8 @@ object StremioClient {
         }
 
         val targetRank = QualityRanker.targetRank(qualityPreference)
+        val sourceKeys = preferredSourceTypes.orEmpty()
+
         fun score(s: StremioStreamItem): Int {
             val rank = QualityRanker.rankFromText("${s.name.orEmpty()} ${s.title.orEmpty()}")
             var score = rank * 100
@@ -215,6 +227,14 @@ object StremioClient {
             if (isExtrasContent(s)) score -= 2000
             if (isSeasonPack(s)) score += 50
             score += sourceMatchScore(s, sourceHint)
+            if (sourceKeys.isNotEmpty() && SourceTypeRanker.matches(s.name, s.title, null, sourceKeys)) {
+                score += 300
+            }
+            // Bitrate: penalize streams whose estimated Mbps exceeds the cap.
+            val mbps = estimateMbps(s, runtimeMinutes)
+            if (maxBitrateMbps != null && mbps != null && mbps > maxBitrateMbps) {
+                score -= 4000
+            }
             return score
         }
 
@@ -236,10 +256,13 @@ object StremioClient {
         qualityPref: String? = null,
         hint: String? = null,
         prefUrl: String? = null,
-        prefName: String? = null
+        prefName: String? = null,
+        preferredSourceTypes: List<String>? = null,
+        runtimeMinutes: Int? = null,
+        maxBitrateMbps: Double? = null
     ): ResolvedStremioStream? = withContext(Dispatchers.IO) {
         val stremioId = "$imdbId:$season:$episode"
-        FileLogger.i(TAG, "Resolving episode: $stremioId (hint: $hint, quality: $qualityPref, prefAddon: $prefName)")
+        FileLogger.i(TAG, "Resolving episode: $stremioId (hint: $hint, quality: $qualityPref, prefAddon: $prefName, sourceTypes: ${preferredSourceTypes?.joinToString(",") ?: "(none)"}, runtime=${runtimeMinutes}min, maxMbps=$maxBitrateMbps)")
 
         val cached = getFromCache(stremioId)
         val streams = if (cached != null) {
@@ -261,7 +284,7 @@ object StremioClient {
             fetched
         }
 
-        pickBest(streams, qualityPref, hint, season, episode, prefUrl, prefName)
+        pickBest(streams, qualityPref, hint, season, episode, prefUrl, prefName, preferredSourceTypes, runtimeMinutes, maxBitrateMbps)
     }
 
     private fun fetchFromAddon(baseUrl: String, type: String, id: String, displayName: String? = null): List<StremioStreamItem> {
@@ -290,9 +313,13 @@ object StremioClient {
         targetSeason: Int? = null,
         targetEpisode: Int? = null,
         prefUrl: String? = null,
-        prefName: String? = null
+        prefName: String? = null,
+        preferredSourceTypes: List<String>? = null,
+        runtimeMinutes: Int? = null,
+        maxBitrateMbps: Double? = null
     ): ResolvedStremioStream? {
         val targetRank = QualityRanker.targetRank(qualityPref)
+        val sourceKeys = preferredSourceTypes.orEmpty()
 
         fun score(s: StremioStreamItem): Int {
             val text = "${s.name.orEmpty()} ${s.title.orEmpty()}".lowercase()
@@ -321,21 +348,63 @@ object StremioClient {
             if (prefName != null && s.addonName == prefName) score += 400
             else if (prefUrl != null && s.url?.startsWith(prefUrl.trimEnd('/')) == true) score += 400
 
+            // Source-type preference (bluray, web-dl, etc.)
+            if (sourceKeys.isNotEmpty() && SourceTypeRanker.matches(s.name, s.title, null, sourceKeys)) {
+                score += 300
+            }
+
+            // Bitrate: penalize streams whose estimated Mbps exceeds the cap.
+            val mbps = estimateMbps(s, runtimeMinutes)
+            if (maxBitrateMbps != null && mbps != null && mbps > maxBitrateMbps) {
+                score -= 4000
+            }
+
             return score
         }
 
         val main = streams.filter { !isExtrasContent(it) }.ifEmpty { streams }
         val tierMatched = if (targetRank > 0) main.filter { QualityRanker.rankFromText("${it.name.orEmpty()} ${it.title.orEmpty()}") == targetRank } else main
-        val pool = if (tierMatched.isNotEmpty()) tierMatched else if (targetRank > 0) main.filter { QualityRanker.rankFromText("${it.name.orEmpty()} ${it.title.orEmpty()}") > targetRank }.ifEmpty { main } else main
+        val qualityPool = if (tierMatched.isNotEmpty()) tierMatched else if (targetRank > 0) main.filter { QualityRanker.rankFromText("${it.name.orEmpty()} ${it.title.orEmpty()}") > targetRank }.ifEmpty { main } else main
+
+        // Soft filter by source type (fallback to full quality pool if nothing matches).
+        val sourcePool = if (sourceKeys.isNotEmpty()) {
+            qualityPool.filter { SourceTypeRanker.matches(it.name, it.title, null, sourceKeys) }.ifEmpty { qualityPool }
+        } else {
+            qualityPool
+        }
+
+        // Soft filter by bitrate cap when we have runtime data (fallback if nothing fits).
+        val pool = if (maxBitrateMbps != null && runtimeMinutes != null) {
+            sourcePool.filter {
+                val mbps = estimateMbps(it, runtimeMinutes)
+                mbps == null || mbps <= maxBitrateMbps
+            }.ifEmpty { sourcePool }
+        } else {
+            sourcePool
+        }
 
         val picked = pool.maxByOrNull { score(it) }
         if (picked != null) {
             val sizeInfo = picked.behaviorHints?.videoSize?.let { " size: ${it / (1024 * 1024)}MB" } ?: ""
-            FileLogger.i(TAG, "  Best stream picked: ${picked.name ?: picked.title}$sizeInfo (targetRank: $targetRank, qualityPref: $qualityPref, hint: $hint, score: ${score(picked)})")
+            val mbpsInfo = estimateMbps(picked, runtimeMinutes)?.let { " est: %.1f Mbps".format(it) } ?: ""
+            FileLogger.i(TAG, "  Best stream picked: ${picked.name ?: picked.title}$sizeInfo$mbpsInfo (targetRank: $targetRank, qualityPref: $qualityPref, hint: $hint, score: ${score(picked)})")
         } else if (streams.isNotEmpty()) {
             FileLogger.w(TAG, "  No stream picked despite having ${streams.size} candidates (pool size: ${pool.size})")
         }
 
         return picked?.let { ResolvedStremioStream(it.url!!, it.name, it.title) }
+    }
+
+    /**
+     * Estimate a stream's bitrate in Mbps from its `behaviorHints.videoSize` and
+     * the content's runtime. Returns null when either piece of information is
+     * missing or non-positive.
+     */
+    private fun estimateMbps(s: StremioStreamItem, runtimeMinutes: Int?): Double? {
+        val bytes = s.behaviorHints?.videoSize ?: return null
+        if (bytes <= 0) return null
+        val runtime = runtimeMinutes ?: return null
+        if (runtime <= 0) return null
+        return (bytes * 8.0) / (runtime * 60.0 * 1_000_000.0)
     }
 }

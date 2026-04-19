@@ -101,6 +101,11 @@ class PrePlayActivity : ComponentActivity() {
                 FileLogger.i(TAG, "  Preferences: quality=$autoQuality, maxMbps=$autoMaxMbps, preferredAddon=$preferredAddon")
                 FileLogger.i(TAG, "  Force Picker: ${p.forcePicker}")
 
+                // Source-type preferences: payload wins if present, else fall back to TV prefs.
+                val prefSourceTypesCsv = prefs.getString("auto_stream_source_types", "") ?: ""
+                val sourceTypes: List<String>? = (p.preferredSourceTypes?.takeIf { it.isNotEmpty() }
+                    ?: prefSourceTypesCsv.split(',').map { it.trim() }.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() })
+
                 val streams = StremioClient.resolveStreamsByContentId(
                     addonBaseUrls = p.addonBaseUrls,
                     addonNames = p.addonNames,
@@ -110,7 +115,10 @@ class PrePlayActivity : ComponentActivity() {
                     episode = p.episode,
                     qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
                     preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
-                    preferredAddonName = p.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
+                    preferredAddonName = p.preferredAddonName ?: prefs.getString("auto_stream_addon_name", ""),
+                    preferredSourceTypes = sourceTypes,
+                    runtimeMinutes = p.episodeRuntimeMinutes,
+                    maxBitrateMbps = autoMaxMbps
                 )
 
                 if (streams.isEmpty()) {

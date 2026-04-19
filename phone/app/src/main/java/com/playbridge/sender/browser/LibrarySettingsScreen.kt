@@ -2,6 +2,8 @@ package com.playbridge.sender.browser
 
 import android.content.Context
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
@@ -75,6 +77,11 @@ fun LibrarySettingsScreen(
         mutableStateOf(browserPrefs.getString("auto_stream_addon", "") ?: "")
     }
     var addonExpanded by remember { mutableStateOf(false) }
+
+    // Preferred source types (multi-select, stored as CSV — e.g. "bluray,web-dl").
+    var autoSourceTypes by remember {
+        mutableStateOf(SourceTypeFilter.parseCsv(browserPrefs.getString("auto_stream_source_types", "")))
+    }
 
     Scaffold(
         topBar = {
@@ -348,6 +355,41 @@ fun LibrarySettingsScreen(
                             }
                         }
                     }
+                }
+            }
+
+            // Preferred source types — multi-select chips. Applies to both phone
+            // auto-pick and is sent to TV so the same preference is respected there.
+            Text(
+                "Preferred Source Types",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Text(
+                "When set, streams whose name/title mentions one of these release types are preferred. Leave empty for no preference.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                items(SourceTypeFilter.ORDERED) { type ->
+                    FilterChip(
+                        selected = type in autoSourceTypes,
+                        onClick = {
+                            autoSourceTypes = if (type in autoSourceTypes) {
+                                autoSourceTypes - type
+                            } else {
+                                autoSourceTypes + type
+                            }
+                            browserPrefs.edit()
+                                .putString("auto_stream_source_types", SourceTypeFilter.toCsv(autoSourceTypes))
+                                .apply()
+                        },
+                        label = { Text(type.label) }
+                    )
                 }
             }
 

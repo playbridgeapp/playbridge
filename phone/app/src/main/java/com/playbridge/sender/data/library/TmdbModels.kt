@@ -208,6 +208,9 @@ data class TmdbTvDetails(
     @SerialName("vote_average") val voteAverage: Double = 0.0,
     @SerialName("number_of_seasons") val numberOfSeasons: Int = 0,
     @SerialName("number_of_episodes") val numberOfEpisodes: Int = 0,
+    // TMDB returns an array of typical episode runtimes in minutes (often 1 element).
+    // Useful for bitrate estimation when picking Stremio streams for series.
+    @SerialName("episode_run_time") val episodeRunTime: List<Int> = emptyList(),
     val genres: List<TmdbGenre> = emptyList(),
     val seasons: List<TmdbSeason> = emptyList(),
     @SerialName("external_ids") val externalIds: TmdbExternalIds? = null,
@@ -216,6 +219,8 @@ data class TmdbTvDetails(
     val images: TmdbImages? = null,
     val content_ratings: TmdbTvContentRatings? = null
 ) {
+    /** Typical episode runtime in minutes, or null if TMDB didn't report one. */
+    val typicalEpisodeRuntimeMinutes: Int? get() = episodeRunTime.firstOrNull { it > 0 }
     val year: String get() = firstAirDate.take(4)
     val posterUrl: String? get() = posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
     val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }

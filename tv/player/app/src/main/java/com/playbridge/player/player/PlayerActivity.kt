@@ -48,7 +48,13 @@ abstract class PlayerActivity : ComponentActivity() {
                         com.playbridge.protocol.SeriesContext.serializer(),
                         seriesContextJson
                     )
-                    com.playbridge.player.stremio.SeriesNavigator(ctx, defaultVideoQuality).also { nav ->
+                    com.playbridge.player.stremio.SeriesNavigator(
+                        context             = ctx,
+                        qualityPreference   = defaultVideoQuality,
+                        preferredSourceTypes= ctx.preferredSourceTypes,
+                        runtimeMinutes      = ctx.episodeRuntimeMinutes,
+                        maxBitrateMbps      = ctx.maxBitrateCapMbps ?: maxBitrateCapMbps
+                    ).also { nav ->
                         nav.updateSourceHint(url = intent.getStringExtra(ServerService.EXTRA_URL))
                     }
                 } catch (e: Exception) {
@@ -72,12 +78,18 @@ abstract class PlayerActivity : ComponentActivity() {
                         addonNames = p.addonNames,
                         allEpisodes = p.allEpisodes,
                         preferredAddonBaseUrl = p.preferredAddonBaseUrl,
-                        preferredAddonName = p.preferredAddonName
+                        preferredAddonName = p.preferredAddonName,
+                        preferredSourceTypes = p.preferredSourceTypes,
+                        episodeRuntimeMinutes = p.episodeRuntimeMinutes,
+                        maxBitrateCapMbps = p.maxBitrateCapMbps
                     )
                     com.playbridge.player.stremio.SeriesNavigator(
-                        ctx,
-                        defaultVideoQuality ?: p.defaultVideoQuality,
-                        contentType = p.contentType
+                        context             = ctx,
+                        qualityPreference   = defaultVideoQuality ?: p.defaultVideoQuality,
+                        contentType         = p.contentType,
+                        preferredSourceTypes= p.preferredSourceTypes,
+                        runtimeMinutes      = p.episodeRuntimeMinutes,
+                        maxBitrateMbps      = p.maxBitrateCapMbps ?: maxBitrateCapMbps
                     ).also { nav ->
                         nav.updateSourceHint(url = intent.getStringExtra(ServerService.EXTRA_URL))
                     }

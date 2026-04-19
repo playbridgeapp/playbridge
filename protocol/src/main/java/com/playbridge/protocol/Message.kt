@@ -67,7 +67,12 @@ data class SeriesContext(
     val addonNames: List<String>? = null,      // NEW — Display names for the above URLs
     val allEpisodes: List<SeriesEpisodeRef>? = null,
     val preferredAddonBaseUrl: String? = null,
-    val preferredAddonName: String? = null      // NEW — Name of the preferred addon
+    val preferredAddonName: String? = null,     // NEW — Name of the preferred addon
+    // Stream-picker preferences — preserved across prev/next episode resolutions and
+    // across player switches (since the navigator is re-created from this payload).
+    val preferredSourceTypes: List<String>? = null,
+    val episodeRuntimeMinutes: Int? = null,
+    val maxBitrateCapMbps: Double? = null
 )
 
 /**
@@ -86,6 +91,12 @@ data class PlayPayload(
     val preferredSubtitleLanguage: String? = null,
     val defaultVideoQuality: String? = null,
     val maxBitrateCapMbps: Double? = null,   // max bitrate cap for ExoPlayer ABR (Mbps); null = no cap
+    // Preferred stream source types (e.g. ["bluray","web-dl","remux","webrip"]).
+    // Null / empty = no preference. Used by TV best-stream selection for Stremio addons.
+    val preferredSourceTypes: List<String>? = null,
+    // Runtime (minutes) for the currently-playing title/episode — used for bitrate estimation
+    // (videoSize ÷ runtime) when the addon doesn't report bitrate directly.
+    val episodeRuntimeMinutes: Int? = null,
     val seriesContext: SeriesContext? = null  // non-null only for Stremio series episodes
 )
 
@@ -154,6 +165,12 @@ data class ContentPlayPayload(
     val preferredSubtitleLanguage: String? = null,
     val defaultVideoQuality: String? = null,
     val maxBitrateCapMbps: Double? = null,   // max bitrate cap for ExoPlayer ABR (Mbps); null = no cap
+    // Preferred stream source types (e.g. ["bluray","web-dl","remux","webrip"]).
+    // Null / empty = no preference. Used by TV best-stream selection.
+    val preferredSourceTypes: List<String>? = null,
+    // Runtime (minutes) for the currently-selected title/episode — used on TV for
+    // bitrate estimation (videoSize ÷ runtime) when the addon doesn't report bitrate.
+    val episodeRuntimeMinutes: Int? = null,
     val forcePicker: Boolean = false        // long-press on phone = "always show picker on TV"
 )
 
@@ -394,6 +411,8 @@ sealed class Command {
         val preferredSubtitleLanguage: String? = null,
         val defaultVideoQuality: String? = null,
         val maxBitrateCapMbps: Double? = null,
+        val preferredSourceTypes: List<String>? = null,
+        val episodeRuntimeMinutes: Int? = null,
         val seriesContext: SeriesContext? = null
     ) : Command()
     data class PlayContent(val payload: ContentPlayPayload) : Command()
@@ -443,6 +462,8 @@ fun parseCommand(jsonString: String): Command {
                             preferredSubtitleLanguage = payload?.preferredSubtitleLanguage,
                             defaultVideoQuality = payload?.defaultVideoQuality,
                             maxBitrateCapMbps = payload?.maxBitrateCapMbps,
+                            preferredSourceTypes = payload?.preferredSourceTypes,
+                            episodeRuntimeMinutes = payload?.episodeRuntimeMinutes,
                             seriesContext = payload?.seriesContext
                         )
                     }
@@ -544,6 +565,8 @@ fun createPlayCommandJson(
     preferredSubtitleLanguage: String? = null,
     defaultVideoQuality: String? = null,
     maxBitrateCapMbps: Double? = null,
+    preferredSourceTypes: List<String>? = null,
+    episodeRuntimeMinutes: Int? = null,
     seriesContext: SeriesContext? = null
 ): String {
     return protocolJson.encodeToString(
@@ -560,6 +583,8 @@ fun createPlayCommandJson(
             preferredSubtitleLanguage = preferredSubtitleLanguage,
             defaultVideoQuality = defaultVideoQuality,
             maxBitrateCapMbps = maxBitrateCapMbps,
+            preferredSourceTypes = preferredSourceTypes,
+            episodeRuntimeMinutes = episodeRuntimeMinutes,
             seriesContext = seriesContext
         ))
     )

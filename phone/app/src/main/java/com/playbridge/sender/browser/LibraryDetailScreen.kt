@@ -366,6 +366,11 @@ fun LibraryDetailScreen(
     val autoQualityKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_quality", "") ?: "" }
     val autoMaxMbps = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_max_mbps", "")?.toDoubleOrNull() }
     val autoAddonKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_addon", "") ?: "" }
+    val autoSourceTypes = remember {
+        SourceTypeFilter.parseCsv(
+            context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_source_types", "")
+        )
+    }
     val episodesInSeason = addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList()
 
     // Unified stream resolution function
@@ -375,6 +380,8 @@ fun LibraryDetailScreen(
         if (!forPhone) {
             // TV target: skip phone resolution, send content metadata instead
             scope.launch {
+                val runtimeMinutes = if (isSeries) tvDetails?.typicalEpisodeRuntimeMinutes
+                                     else movieDetails?.runtime
                 val payload = buildContentPayload(
                     isSeries = isSeries,
                     rawId = id,
@@ -398,7 +405,9 @@ fun LibraryDetailScreen(
                     forcePicker = forcePicker,
                     autoQuality = autoQualityKey,
                     autoMaxMbps = autoMaxMbps,
-                    preferredAddonName = autoAddonKey
+                    preferredAddonName = autoAddonKey,
+                    preferredSourceTypeKeys = autoSourceTypes.map { it.key },
+                    episodeRuntimeMinutes = runtimeMinutes
                 )
                 if (payload != null) {
                     onPlayContent(payload)
@@ -434,12 +443,15 @@ fun LibraryDetailScreen(
 
             // Auto-pick logic
             if (!showStreamPicker && !forcePicker && autoQualityKey.isNotEmpty()) {
+                val runtimeForBitrate = if (isSeries) tvDetails?.typicalEpisodeRuntimeMinutes
+                                        else movieDetails?.runtime
                 val best = StreamSelector.selectBest(
                     streams = resolvedStreams,
                     preferredQuality = QualityFilter.fromKey(autoQualityKey),
                     maxMbps = autoMaxMbps,
-                    runtimeMinutes = if (!isSeries) movieDetails?.runtime else null,
-                    preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() }
+                    runtimeMinutes = runtimeForBitrate,
+                    preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() },
+                    preferredSourceTypes = autoSourceTypes
                 )
                 val finalSelection = best ?: resolvedStreams.firstOrNull()
                 if (finalSelection != null) {
@@ -466,7 +478,8 @@ fun LibraryDetailScreen(
             streams = resolvedStreams,
             isLoading = resolutionState.isResolving,
             title = streamPickerTitle,
-            episodeRuntimeMinutes = if (!isSeries) movieDetails?.runtime else null,
+            episodeRuntimeMinutes = if (isSeries) tvDetails?.typicalEpisodeRuntimeMinutes
+                                    else movieDetails?.runtime,
             forceManual = forceManualInPicker,
             onStreamSelected = { resolved ->
                 val forPhone = resolutionState.target == ResolutionTarget.PHONE
@@ -510,7 +523,9 @@ fun LibraryDetailScreen(
                             emptyList()
                         }
 
-                        val estimatedMbps = StreamSelector.estimatedMbps(resolved, if (!isSeries) movieDetails?.runtime else null)
+                        val effectiveRuntime = if (isSeries) tvDetails?.typicalEpisodeRuntimeMinutes
+                                               else movieDetails?.runtime
+                        val estimatedMbps = StreamSelector.estimatedMbps(resolved, effectiveRuntime)
 
                         val payload = buildContentPayload(
                             isSeries = isSeries,
@@ -535,7 +550,9 @@ fun LibraryDetailScreen(
                             forcePicker = false, // already in picker
                             autoQuality = resolved.stream.qualityTier,
                             autoMaxMbps = estimatedMbps,
-                            preferredAddonName = resolved.addonName
+                            preferredAddonName = resolved.addonName,
+                            preferredSourceTypeKeys = autoSourceTypes.map { it.key },
+                            episodeRuntimeMinutes = effectiveRuntime
                         )
 
                         if (payload != null) {
@@ -2054,7 +2071,9 @@ private suspend fun buildContentPayload(
     forcePicker: Boolean = false,
     autoQuality: String? = null,
     autoMaxMbps: Double? = null,
-    preferredAddonName: String? = null
+    preferredAddonName: String? = null,
+    preferredSourceTypeKeys: List<String> = emptyList(),
+    episodeRuntimeMinutes: Int? = null
 ): com.playbridge.protocol.ContentPlayPayload? {
     // 1. Resolve canonical stream-capable ID
     var contentId = resolvedImdbId ?: rawId
@@ -2120,6 +2139,8 @@ private suspend fun buildContentPayload(
         preferredAddonName = preferredAddonName,
         defaultVideoQuality = autoQuality?.takeIf { it.isNotEmpty() },
         maxBitrateCapMbps = autoMaxMbps,
+        preferredSourceTypes = preferredSourceTypeKeys.takeIf { it.isNotEmpty() },
+        episodeRuntimeMinutes = episodeRuntimeMinutes?.takeIf { it > 0 },
         forcePicker = forcePicker
     )
 }

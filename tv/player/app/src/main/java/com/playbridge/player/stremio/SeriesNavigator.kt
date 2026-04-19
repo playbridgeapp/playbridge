@@ -29,7 +29,13 @@ class SeriesNavigator(
     val context: SeriesContext,
     /** Mirrors PlayPayload.defaultVideoQuality — "2160p", "1080p", "720p", or null for best. */
     val qualityPreference: String? = null,
-    val contentType: String = "series" // "movie" or "series"
+    val contentType: String = "series", // "movie" or "series"
+    /** Preferred release-type keys (bluray, web-dl, remux, webrip, hdtv, dvd, cam). */
+    val preferredSourceTypes: List<String>? = null,
+    /** Typical episode runtime in minutes — used together with [maxBitrateMbps] to estimate stream bitrate. */
+    val runtimeMinutes: Int? = null,
+    /** Soft cap on estimated Mbps; streams above this are deprioritized. */
+    val maxBitrateMbps: Double? = null
 ) {
 
     // ── Concurrency guard ─────────────────────────────────────────────────────
@@ -178,7 +184,10 @@ class SeriesNavigator(
             qualityPreference      = qualityPreference,
             sourceHint             = currentSourceHint,
             preferredAddonBaseUrl  = context.preferredAddonBaseUrl,
-            preferredAddonName     = context.preferredAddonName
+            preferredAddonName     = context.preferredAddonName,
+            preferredSourceTypes   = preferredSourceTypes,
+            runtimeMinutes         = runtimeMinutes,
+            maxBitrateMbps         = maxBitrateMbps
         )
     }
 
@@ -207,7 +216,10 @@ class SeriesNavigator(
             qualityPref            = qualityPreference,
             hint                   = currentSourceHint,
             prefUrl                = context.preferredAddonBaseUrl,
-            prefName               = context.preferredAddonName
+            prefName               = context.preferredAddonName,
+            preferredSourceTypes   = preferredSourceTypes,
+            runtimeMinutes         = runtimeMinutes,
+            maxBitrateMbps         = maxBitrateMbps
         )
 
         if (stream != null) {
@@ -243,7 +255,10 @@ class SeriesNavigator(
             qualityPref            = qualityPreference,
             hint                   = currentSourceHint,
             prefUrl                = context.preferredAddonBaseUrl,
-            prefName               = context.preferredAddonName
+            prefName               = context.preferredAddonName,
+            preferredSourceTypes   = preferredSourceTypes,
+            runtimeMinutes         = runtimeMinutes,
+            maxBitrateMbps         = maxBitrateMbps
         )
 
         if (stream != null) {
@@ -275,7 +290,10 @@ class SeriesNavigator(
             qualityPref            = qualityPreference,
             hint                   = currentSourceHint,
             prefUrl                = context.preferredAddonBaseUrl,
-            prefName               = context.preferredAddonName
+            prefName               = context.preferredAddonName,
+            preferredSourceTypes   = preferredSourceTypes,
+            runtimeMinutes         = runtimeMinutes,
+            maxBitrateMbps         = maxBitrateMbps
         )
 
         if (stream != null) {

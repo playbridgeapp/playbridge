@@ -50,6 +50,10 @@ fun StreamPickerSheet(
         raw.toDoubleOrNull()
     }
     val autoAddonKey = remember { prefs.getString("auto_stream_addon", "") ?: "" }
+    // Preferred source types (multi-select, persisted as CSV, e.g. "bluray,web-dl,remux").
+    val autoSourceTypes = remember {
+        SourceTypeFilter.parseCsv(prefs.getString("auto_stream_source_types", ""))
+    }
     // Resolve the QualityFilter enum matching the pref key (e.g. "2160p" → UHD)
     val autoFilter = remember(autoQualityKey) { QualityFilter.fromKey(autoQualityKey) }
 
@@ -68,14 +72,15 @@ fun StreamPickerSheet(
 
     // When the sheet was forced open manually (hold gesture) and auto-prefs are set,
     // compute which stream would have been auto-selected so we can badge it.
-    val autoMatchStream = remember(streams, autoFilter, autoMaxMbps, episodeRuntimeMinutes, autoAddonKey) {
+    val autoMatchStream = remember(streams, autoFilter, autoMaxMbps, episodeRuntimeMinutes, autoAddonKey, autoSourceTypes) {
         if (forceManual && autoFilter != null && streams.isNotEmpty()) {
             val best = StreamSelector.selectBest(
                 streams = streams,
                 preferredQuality = autoFilter,
                 maxMbps = autoMaxMbps,
                 runtimeMinutes = episodeRuntimeMinutes,
-                preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() }
+                preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() },
+                preferredSourceTypes = autoSourceTypes
             )
             best ?: streams.firstOrNull()
         } else null
@@ -87,13 +92,14 @@ fun StreamPickerSheet(
             autoPickFired = true
             autoPickTriggered = true
 
-            // 1. Filter to the desired quality tier + apply max-bitrate cap
+            // 1. Filter to the desired quality tier + source types + apply max-bitrate cap
             val best = StreamSelector.selectBest(
                 streams = streams,
                 preferredQuality = autoFilter,
                 maxMbps = autoMaxMbps,
                 runtimeMinutes = episodeRuntimeMinutes,
-                preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() }
+                preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() },
+                preferredSourceTypes = autoSourceTypes
             )
 
             // 2. Fallback: if no candidates in the tier, use the first stream
@@ -105,15 +111,19 @@ fun StreamPickerSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedFilter by remember { mutableStateOf(QualityFilter.ALL) }
     var selectedProvider by remember { mutableStateOf<String?>(null) }
+    // In-sheet source-type multi-select — seeded from saved preference so the
+    // user's default choices are pre-applied when the sheet opens.
+    var selectedSourceTypes by remember { mutableStateOf(autoSourceTypes) }
 
     val providers = remember(streams) {
         streams.map { it.addonName }.distinct().sorted()
     }
 
-    val filteredStreams = remember(streams, selectedFilter, selectedProvider) {
+    val filteredStreams = remember(streams, selectedFilter, selectedProvider, selectedSourceTypes) {
         streams.filter { stream ->
             StreamSelector.matchesFilter(stream, selectedFilter) &&
-            (selectedProvider == null || stream.addonName == selectedProvider)
+            (selectedProvider == null || stream.addonName == selectedProvider) &&
+            StreamSelector.matchesSourceTypes(stream, selectedSourceTypes)
         }
     }
 
@@ -121,6 +131,12 @@ fun StreamPickerSheet(
         QualityFilter.entries.associateWith { filter ->
             if (filter == QualityFilter.ALL) streams.size
             else streams.count { StreamSelector.matchesFilter(it, filter) }
+        }
+    }
+
+    val sourceTypeCounts = remember(streams) {
+        SourceTypeFilter.ORDERED.associateWith { type ->
+            streams.count { StreamSelector.matchesSourceTypes(it, setOf(type)) }
         }
     }
 
@@ -213,6 +229,31 @@ fun StreamPickerSheet(
                 }
             }
 
+            // Source-type filter chips — multi-select (BluRay / WEB-DL / Remux / WEBRip / …).
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                items(SourceTypeFilter.ORDERED) { type ->
+                    val count = sourceTypeCounts[type] ?: 0
+                    FilterChip(
+                        selected = type in selectedSourceTypes,
+                        onClick = {
+                            selectedSourceTypes = if (type in selectedSourceTypes) {
+                                selectedSourceTypes - type
+                            } else {
+                                selectedSourceTypes + type
+                            }
+                        },
+                        label = {
+                            Text(if (count > 0) "${type.label} ($count)" else type.label)
+                        },
+                        enabled = count > 0 || isLoading
+                    )
+                }
+            }
+
             // Stream count + loading / auto-pick indicator
             Row(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
@@ -298,15 +339,18 @@ fun StreamPickerSheet(
                     }
                 }
             } else if (filteredStreams.isEmpty()) {
-                // Streams exist but none match the filter
+                // Streams exist but none match the active filter combination
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(120.dp),
                     contentAlignment = Alignment.Center
                 ) {
+                    val sourceLabel = if (selectedSourceTypes.isNotEmpty())
+                        " / ${selectedSourceTypes.joinToString(" + ") { it.label }}"
+                    else ""
                     Text(
-                        "No ${selectedFilter.label} streams found",
+                        "No ${selectedFilter.label}$sourceLabel streams found",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

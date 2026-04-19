@@ -1282,8 +1282,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             try {
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val autoQuality = p.defaultVideoQuality ?: prefs.getString("auto_stream_quality", "") ?: ""
+                val autoMaxMbps = p.maxBitrateCapMbps ?: prefs.getString("auto_stream_max_mbps", "")?.toDoubleOrNull()
                 val preferredAddon = p.preferredAddonBaseUrl ?: prefs.getString("auto_stream_addon", "") ?: ""
                 val preferredAddonName = p.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
+                val prefSourceTypesCsv = prefs.getString("auto_stream_source_types", "") ?: ""
+                val sourceTypes: List<String>? = (p.preferredSourceTypes?.takeIf { it.isNotEmpty() }
+                    ?: prefSourceTypesCsv.split(',').map { it.trim() }.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() })
 
                 FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
 
@@ -1296,7 +1300,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     episode = p.episode,
                     qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
                     preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
-                    preferredAddonName = preferredAddonName
+                    preferredAddonName = preferredAddonName,
+                    preferredSourceTypes = sourceTypes,
+                    runtimeMinutes = p.episodeRuntimeMinutes,
+                    maxBitrateMbps = autoMaxMbps
                 )
 
                 if (streams.isEmpty()) {

@@ -59,7 +59,11 @@ fun PrePlayScreen(
         try {
             val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
             val autoQuality = payload.defaultVideoQuality ?: prefs.getString("auto_stream_quality", "") ?: ""
+            val autoMaxMbps = payload.maxBitrateCapMbps ?: prefs.getString("auto_stream_max_mbps", "")?.toDoubleOrNull()
             val preferredAddon = payload.preferredAddonBaseUrl ?: prefs.getString("auto_stream_addon", "") ?: ""
+            val prefSourceTypesCsv = prefs.getString("auto_stream_source_types", "") ?: ""
+            val sourceTypes: List<String>? = (payload.preferredSourceTypes?.takeIf { it.isNotEmpty() }
+                ?: prefSourceTypesCsv.split(',').map { it.trim() }.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() })
 
             streams = StremioClient.resolveStreamsByContentId(
                 addonBaseUrls = payload.addonBaseUrls,
@@ -70,7 +74,10 @@ fun PrePlayScreen(
                 episode = payload.episode,
                 qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
                 preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
-                preferredAddonName = payload.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
+                preferredAddonName = payload.preferredAddonName ?: prefs.getString("auto_stream_addon_name", ""),
+                preferredSourceTypes = sourceTypes,
+                runtimeMinutes = payload.episodeRuntimeMinutes,
+                maxBitrateMbps = autoMaxMbps
             )
             if (streams.isEmpty()) {
                 error = "No streams found for this title."

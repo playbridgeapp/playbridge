@@ -15,7 +15,9 @@ internal object QualityRanker {
 
     /** Returns 4, 3, 2, or 1 for UHD / FHD / HD / SD respectively based on name/title text. */
     fun rankFromText(text: String): Int {
-        val lower = text.lowercase()
+        // Strip zero-width / format / bidi obfuscation the same way SourceTypeRanker does,
+        // so titles like "1‍0‍8‍0‍p" still classify correctly.
+        val lower = SourceTypeRanker.normalizeForMatching(text)
         return when {
             UHD_PATTERNS.any { lower.contains(it) } -> 4
             FHD_PATTERNS.any { lower.contains(it) } -> 3
