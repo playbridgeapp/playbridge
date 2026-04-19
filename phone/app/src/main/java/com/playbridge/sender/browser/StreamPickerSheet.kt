@@ -110,14 +110,33 @@ fun StreamPickerSheet(
     }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var selectedFilter by remember { mutableStateOf(QualityFilter.ALL) }
-    var selectedProvider by remember { mutableStateOf<String?>(null) }
-    // In-sheet source-type multi-select — seeded from saved preference so the
-    // user's default choices are pre-applied when the sheet opens.
+    // All three dropdowns seed from saved preferences so the user's defaults are
+    // pre-applied when the sheet opens. A LaunchedEffect below auto-clears any
+    // preselection that matches zero streams once all addons have responded, so
+    // the sheet never shows "0 streams" just because a preferred provider/quality
+    // happened to return nothing for this title.
+    var selectedFilter by remember { mutableStateOf(autoFilter ?: QualityFilter.ALL) }
+    var selectedProvider by remember { mutableStateOf(autoAddonKey.takeIf { it.isNotEmpty() }) }
     var selectedSourceTypes by remember { mutableStateOf(autoSourceTypes) }
 
     val providers = remember(streams) {
         streams.map { it.addonName }.distinct().sorted()
+    }
+
+    // Once loading finishes, clear any preselected filter that yielded zero matches.
+    LaunchedEffect(isLoading, streams.size) {
+        if (isLoading || streams.isEmpty()) return@LaunchedEffect
+        if (selectedFilter != QualityFilter.ALL &&
+            streams.none { StreamSelector.matchesFilter(it, selectedFilter) }) {
+            selectedFilter = QualityFilter.ALL
+        }
+        if (selectedProvider != null && selectedProvider !in providers) {
+            selectedProvider = null
+        }
+        if (selectedSourceTypes.isNotEmpty() &&
+            streams.none { StreamSelector.matchesSourceTypes(it, selectedSourceTypes) }) {
+            selectedSourceTypes = emptySet()
+        }
     }
 
     val filteredStreams = remember(streams, selectedFilter, selectedProvider, selectedSourceTypes) {
