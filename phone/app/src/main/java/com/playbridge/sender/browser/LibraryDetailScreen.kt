@@ -1588,9 +1588,14 @@ private fun SplitPlayButton(
                         }
                     }
                 },
-                onLongClick = if (watchOnTv && availableTvDevices.isNotEmpty()) {
-                    { showDeviceMenu = true }
-                } else null,
+                toggleAction = {
+                    val togglingToTv = !watchOnTv
+                    onWatchOnTvChange(togglingToTv)
+                    // If switching to TV and not connected, try to connect to the selected device
+                    if (togglingToTv && !isTvConnected && selectedTvDevice != null) {
+                        onTvDeviceSelect?.invoke(selectedTvDevice)
+                    }
+                },
                 chipLabelColor = if (watchOnTv && isTvConnected) connectedGreen else Color.Unspecified,
                 themeColor = themeColor,
                 leadingIcon = {
@@ -1599,6 +1604,14 @@ private fun SplitPlayButton(
                         contentDescription = null,
                         modifier = Modifier.size(13.dp),
                         tint = if (watchOnTv && isTvConnected) connectedGreen else Color.White.copy(alpha = 0.7f)
+                    )
+                },
+                trailingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.SwapHoriz,
+                        contentDescription = "Switch destination",
+                        modifier = Modifier.size(13.dp),
+                        tint = Color.White.copy(alpha = 0.45f)
                     )
                 }
             )

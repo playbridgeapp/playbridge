@@ -74,7 +74,9 @@ internal fun ChipDropdown(
     chipLabelColor: Color = Color.Unspecified,
     themeColor: Color = Color.Unspecified,
     leadingIcon: (@Composable () -> Unit)? = null,
-    onLongClick: (() -> Unit)? = null
+    trailingIcon: (@Composable () -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+    toggleAction: (() -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -90,11 +92,19 @@ internal fun ChipDropdown(
     Box(modifier = modifier) {
         Surface(
             modifier = Modifier.combinedClickable(
-                onClick = { expanded = true },
-                onLongClick = onLongClick?.let {
-                    {
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                        it()
+                onClick = {
+                    if (toggleAction != null) {
+                        toggleAction()
+                    } else {
+                        expanded = true
+                    }
+                },
+                onLongClick = {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    if (toggleAction != null) {
+                        expanded = true
+                    } else {
+                        onLongClick?.invoke()
                     }
                 }
             ),
@@ -129,12 +139,16 @@ internal fun ChipDropdown(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Icon(
-                    imageVector = Icons.Default.ArrowDropDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(13.dp),
-                    tint = resolvedLabelColor.copy(alpha = 0.6f)
-                )
+                if (trailingIcon != null) {
+                    trailingIcon()
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                        tint = resolvedLabelColor.copy(alpha = 0.6f)
+                    )
+                }
             }
         }
         DropdownMenu(
