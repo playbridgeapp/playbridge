@@ -7,7 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -25,13 +24,24 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.*
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
+import androidx.tv.material3.SurfaceDefaults
+import androidx.tv.material3.Text
 import com.playbridge.player.stremio.QualityRanker
 import com.playbridge.player.stremio.ScoredStremioStream
+import com.playbridge.player.stremio.SourceTypeRanker
 
 /**
  * Side-panel stream selection dialog.
  * Lists all available Stremio streams for the current episode, ranked by score.
+ *
+ * Filter UI is a single row of three dropdown chips — Quality, Addon, Source — to mirror
+ * the phone's StreamPickerSheet. D-pad friendly: each chip and menu item is an
+ * individually focusable Box.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -40,6 +50,7 @@ fun StreamSelectionDialog(
     currentUrl: String?,
     preferredQuality: String? = null,
     preferredAddonName: String? = null,
+    preferredSourceTypeKeys: List<String>? = null,
     onStreamSelected: (stream: ScoredStremioStream) -> Unit,
     onRefresh: () -> Unit,
     onDismiss: () -> Unit
@@ -48,7 +59,8 @@ fun StreamSelectionDialog(
     val listState = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
 
-    // State for filtering - auto-selected based on passed preferences or browser_prefs
+    // ── Filter state ──
+    // Seeded from nav/payload preferences, with fallback to stored browser_prefs.
     var selectedRank by remember {
         val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
         val prefQuality = preferredQuality ?: prefs.getString("auto_stream_quality", null)
@@ -60,15 +72,26 @@ fun StreamSelectionDialog(
         val prefAddonName = preferredAddonName ?: prefs.getString("auto_stream_addon_name", null)
         mutableStateOf<String?>(prefAddonName?.takeIf { it.isNotBlank() })
     }
+    var selectedSourceTypes by remember {
+        mutableStateOf(
+            (preferredSourceTypeKeys ?: emptyList())
+                .map { it.trim().lowercase() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+        )
+    }
 
     val addons = remember(streams) {
         streams.mapNotNull { it.addonName }.distinct().sorted()
     }
 
-    val filteredStreams = remember(streams, selectedRank, selectedAddon) {
+    val filteredStreams = remember(streams, selectedRank, selectedAddon, selectedSourceTypes) {
         streams.filter { stream ->
-            (selectedRank == null || stream.rank == selectedRank) &&
-            (selectedAddon == null || stream.addonName == selectedAddon)
+            val rankOk = selectedRank == null || stream.rank == selectedRank
+            val addonOk = selectedAddon == null || stream.addonName == selectedAddon
+            val sourceOk = selectedSourceTypes.isEmpty() ||
+                SourceTypeRanker.matches(stream.name, stream.title, null, selectedSourceTypes)
+            rankOk && addonOk && sourceOk
         }
     }
 
@@ -77,7 +100,7 @@ fun StreamSelectionDialog(
         filteredStreams.indexOfFirst { it.url == currentUrl }.coerceAtLeast(0)
     }
 
-    LaunchedEffect(currentIndex, selectedRank, selectedAddon) {
+    LaunchedEffect(currentIndex, selectedRank, selectedAddon, selectedSourceTypes) {
         if (currentIndex >= 0 && filteredStreams.isNotEmpty()) {
             listState.scrollToItem(maxOf(0, currentIndex - 2))
         }
@@ -145,19 +168,14 @@ fun StreamSelectionDialog(
                 }
             }
 
-            // ── Quality Chips ──
-            Text(
-                text = "Quality",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.Gray,
-                modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
-            )
+            // ── Single row of 3 dropdown chips ──
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // Quality (single-select)
                 val qualities = listOf(
                     null to "All",
                     4 to "4K",
@@ -165,44 +183,82 @@ fun StreamSelectionDialog(
                     2 to "720p",
                     1 to "SD"
                 )
-                qualities.forEach { (rank, label) ->
-                    val isSelected = selectedRank == rank
-                    StreamFilterChip(
-                        selected = isSelected,
-                        onClick = { selectedRank = rank },
-                        label = label
-                    )
-                }
-            }
-
-            // ── Addon Chips ──
-            if (addons.isNotEmpty()) {
-                Text(
-                    text = "Addons",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray,
-                    modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
-                )
-                // LazyRow for many addons to avoid overflow
-                androidx.compose.foundation.lazy.LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp)
-                ) {
-                    item {
-                        StreamFilterChip(
-                            selected = selectedAddon == null,
-                            onClick = { selectedAddon = null },
-                            label = "All"
+                val qualityValueLabel = qualities.firstOrNull { it.first == selectedRank }?.second ?: "All"
+                DropdownChip(
+                    label = "Quality",
+                    valueText = qualityValueLabel,
+                    isCustom = selectedRank != null,
+                    modifier = Modifier.weight(1f)
+                ) { dismiss ->
+                    qualities.forEach { (rank, label) ->
+                        DropdownItem(
+                            label = label,
+                            selected = selectedRank == rank,
+                            onClick = {
+                                selectedRank = rank
+                                dismiss()
+                            }
                         )
                     }
-                    items(addons) { addon ->
-                        StreamFilterChip(
+                }
+
+                // Addon (single-select). Disabled visually when none available.
+                val addonValueLabel = selectedAddon ?: "All"
+                DropdownChip(
+                    label = "Addon",
+                    valueText = addonValueLabel,
+                    isCustom = selectedAddon != null,
+                    enabled = addons.isNotEmpty(),
+                    modifier = Modifier.weight(1f)
+                ) { dismiss ->
+                    DropdownItem(
+                        label = "All Addons",
+                        selected = selectedAddon == null,
+                        onClick = {
+                            selectedAddon = null
+                            dismiss()
+                        }
+                    )
+                    addons.forEach { addon ->
+                        DropdownItem(
+                            label = addon,
                             selected = selectedAddon == addon,
-                            onClick = { selectedAddon = addon },
-                            label = addon
+                            onClick = {
+                                selectedAddon = addon
+                                dismiss()
+                            }
+                        )
+                    }
+                }
+
+                // Source type (multi-select). Menu stays open between toggles.
+                val sourceValueText = when (selectedSourceTypes.size) {
+                    0 -> "Any"
+                    1 -> SourceTypeRanker.labelOf(selectedSourceTypes.first())
+                    else -> "${SourceTypeRanker.labelOf(selectedSourceTypes.first())} +${selectedSourceTypes.size - 1}"
+                }
+                DropdownChip(
+                    label = "Source",
+                    valueText = sourceValueText,
+                    isCustom = selectedSourceTypes.isNotEmpty(),
+                    modifier = Modifier.weight(1f)
+                ) { _ ->
+                    if (selectedSourceTypes.isNotEmpty()) {
+                        DropdownItem(
+                            label = "Clear selection",
+                            selected = false,
+                            onClick = { selectedSourceTypes = emptySet() }
+                        )
+                    }
+                    SourceTypeRanker.ORDERED_LABELS.forEach { (key, label) ->
+                        val isSelected = key in selectedSourceTypes
+                        DropdownItem(
+                            label = label,
+                            selected = isSelected,
+                            onClick = {
+                                selectedSourceTypes = if (isSelected) selectedSourceTypes - key
+                                else selectedSourceTypes + key
+                            }
                         )
                     }
                 }
@@ -325,43 +381,131 @@ fun StreamSelectionDialog(
     androidx.activity.compose.BackHandler { onDismiss() }
 }
 
+/**
+ * Focusable chip that anchors a D-pad-friendly [Popup] menu below itself. Clicking
+ * (or pressing center on D-pad) toggles the menu. The menu is dismissed when the
+ * user presses back or clicks outside. Menu item focus is handled by [DropdownItem].
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun StreamFilterChip(
-    selected: Boolean,
-    onClick: () -> Unit,
-    label: String
+private fun DropdownChip(
+    label: String,
+    valueText: String,
+    isCustom: Boolean,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable (dismiss: () -> Unit) -> Unit
 ) {
+    var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
 
+    val themeColor = Color(0xFF00D9FF)
     val bgColor = when {
-        selected -> Color(0xFF00D9FF).copy(alpha = 0.15f)
+        !enabled -> Color(0xFF1E1E38).copy(alpha = 0.4f)
+        isCustom -> themeColor.copy(alpha = 0.15f)
         isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
         else -> Color(0xFF1E1E38)
     }
-    val themeColor = Color(0xFF00D9FF)
     val borderColor = when {
-        selected -> themeColor.copy(alpha = 0.5f)
-        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+        isCustom -> themeColor.copy(alpha = 0.5f)
+        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
         else -> Color.Transparent
     }
+    val textColor = when {
+        !enabled -> Color.Gray
+        isCustom -> themeColor
+        else -> MaterialTheme.colorScheme.onSurface
+    }
 
-    Box(
+    Box(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(38.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(bgColor)
+                .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+                .onFocusChanged { isFocused = it.isFocused }
+                .clickable(enabled = enabled) { expanded = !expanded }
+                .focusable(enabled = enabled)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "$label: $valueText",
+                color = textColor,
+                fontSize = 12.sp,
+                fontWeight = if (isCustom) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "▾",
+                color = textColor,
+                fontSize = 11.sp
+            )
+        }
+
+        if (expanded) {
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 42.dp.roundToPx() }),
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnBackPress = true,
+                    dismissOnClickOutside = true
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(min = 160.dp)
+                        .background(Color(0xFF1E1E38), RoundedCornerShape(8.dp))
+                        .border(1.dp, Color(0xFF00D9FF).copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                        .padding(vertical = 4.dp)
+                ) {
+                    content { expanded = false }
+                }
+            }
+        }
+    }
+}
+
+/** Individual item in a [DropdownChip] menu — focusable via D-pad. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun DropdownItem(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val themeColor = Color(0xFF00D9FF)
+    val bgColor = when {
+        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+        else -> Color.Transparent
+    }
+    Row(
         modifier = Modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .fillMaxWidth()
+            .height(36.dp)
             .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
             .onFocusChanged { isFocused = it.isFocused }
             .clickable { onClick() }
             .focusable()
             .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = if (selected) "✓ $label" else label,
             color = if (selected) themeColor else MaterialTheme.colorScheme.onSurface,
-            fontSize = 12.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

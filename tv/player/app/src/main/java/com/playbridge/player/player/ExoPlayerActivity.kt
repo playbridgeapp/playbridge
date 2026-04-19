@@ -1498,6 +1498,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         currentUrl = currentUrl,
                         preferredQuality = nav.qualityPreference,
                         preferredAddonName = nav.context.preferredAddonName,
+                        preferredSourceTypeKeys = nav.preferredSourceTypes,
                         onStreamSelected = { stream ->
                             dialog.dismiss()
                             val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"

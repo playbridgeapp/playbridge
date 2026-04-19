@@ -928,6 +928,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         currentUrl = currentUrl,
                         preferredQuality = nav.qualityPreference,
                         preferredAddonName = nav.context.preferredAddonName,
+                        preferredSourceTypeKeys = nav.preferredSourceTypes,
                         onStreamSelected = { stream ->
                             dialog.dismiss()
 

@@ -2,10 +2,11 @@ package com.playbridge.sender.browser
 
 import android.content.Context
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -183,74 +184,114 @@ fun StreamPickerSheet(
                 }
             }
 
-            // Quality filter chips (always visible)
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(bottom = 8.dp)
+            // Single row of three dropdown chips: Quality / Provider / Source.
+            // Horizontal scroll lets small-screen devices reach all three without wrapping.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(QualityFilter.entries) { filter ->
-                    val count = filterCounts[filter] ?: 0
-                    FilterChip(
-                        selected = selectedFilter == filter,
-                        onClick = { selectedFilter = filter },
-                        label = {
-                            Text(
-                                if (count > 0) "${filter.label} ($count)"
-                                else filter.label
-                            )
-                        },
-                        enabled = count > 0 || isLoading
-                    )
-                }
-            }
-
-            // Provider filter chips (rendered below quality chips)
-            if (providers.size > 1) {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(bottom = 8.dp)
-                ) {
-                    item {
-                        FilterChip(
-                            selected = selectedProvider == null,
-                            onClick = { selectedProvider = null },
-                            label = { Text("All Providers") }
-                        )
-                    }
-                    items(providers) { provider ->
-                        FilterChip(
-                            selected = selectedProvider == provider,
-                            onClick = { selectedProvider = provider },
-                            label = { Text(provider) }
+                // Quality: single-select.
+                DropdownFilterChip(
+                    label = "Quality",
+                    valueText = if (selectedFilter == QualityFilter.ALL) "All" else selectedFilter.label,
+                    isCustom = selectedFilter != QualityFilter.ALL,
+                    enabled = streams.isNotEmpty() || isLoading
+                ) { dismiss ->
+                    QualityFilter.entries.forEach { filter ->
+                        val count = filterCounts[filter] ?: 0
+                        val optionLabel = if (count > 0 && filter != QualityFilter.ALL)
+                            "${filter.label} ($count)" else filter.label
+                        DropdownMenuItem(
+                            text = { Text(optionLabel) },
+                            onClick = { selectedFilter = filter; dismiss() },
+                            leadingIcon = {
+                                if (selectedFilter == filter) {
+                                    Icon(Icons.Default.Check, contentDescription = null)
+                                } else {
+                                    Spacer(Modifier.size(24.dp))
+                                }
+                            },
+                            enabled = count > 0 || filter == QualityFilter.ALL || isLoading
                         )
                     }
                 }
-            }
 
-            // Source-type filter chips — multi-select (BluRay / WEB-DL / Remux / WEBRip / …).
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(bottom = 8.dp)
-            ) {
-                items(SourceTypeFilter.ORDERED) { type ->
-                    val count = sourceTypeCounts[type] ?: 0
-                    FilterChip(
-                        selected = type in selectedSourceTypes,
-                        onClick = {
-                            selectedSourceTypes = if (type in selectedSourceTypes) {
-                                selectedSourceTypes - type
+                // Provider: single-select. Only meaningful when multiple addons returned streams.
+                val providerValue = selectedProvider ?: "All"
+                DropdownFilterChip(
+                    label = "Provider",
+                    valueText = providerValue,
+                    isCustom = selectedProvider != null,
+                    enabled = providers.isNotEmpty()
+                ) { dismiss ->
+                    DropdownMenuItem(
+                        text = { Text("All Providers") },
+                        onClick = { selectedProvider = null; dismiss() },
+                        leadingIcon = {
+                            if (selectedProvider == null) {
+                                Icon(Icons.Default.Check, contentDescription = null)
                             } else {
-                                selectedSourceTypes + type
+                                Spacer(Modifier.size(24.dp))
                             }
-                        },
-                        label = {
-                            Text(if (count > 0) "${type.label} ($count)" else type.label)
-                        },
-                        enabled = count > 0 || isLoading
+                        }
                     )
+                    providers.forEach { provider ->
+                        DropdownMenuItem(
+                            text = { Text(provider) },
+                            onClick = { selectedProvider = provider; dismiss() },
+                            leadingIcon = {
+                                if (selectedProvider == provider) {
+                                    Icon(Icons.Default.Check, contentDescription = null)
+                                } else {
+                                    Spacer(Modifier.size(24.dp))
+                                }
+                            }
+                        )
+                    }
+                }
+
+                // Source type: multi-select. Menu stays open so several can be toggled.
+                val sourceValueText = when (selectedSourceTypes.size) {
+                    0 -> "Any"
+                    1 -> selectedSourceTypes.first().label
+                    else -> "${selectedSourceTypes.first().label} +${selectedSourceTypes.size - 1}"
+                }
+                DropdownFilterChip(
+                    label = "Source",
+                    valueText = sourceValueText,
+                    isCustom = selectedSourceTypes.isNotEmpty(),
+                    enabled = streams.isNotEmpty() || isLoading
+                ) { _ ->
+                    if (selectedSourceTypes.isNotEmpty()) {
+                        DropdownMenuItem(
+                            text = { Text("Clear selection") },
+                            onClick = { selectedSourceTypes = emptySet() },
+                            leadingIcon = {
+                                Icon(Icons.Default.Close, contentDescription = null)
+                            }
+                        )
+                        HorizontalDivider()
+                    }
+                    SourceTypeFilter.ORDERED.forEach { type ->
+                        val count = sourceTypeCounts[type] ?: 0
+                        val isSelected = type in selectedSourceTypes
+                        val optionLabel = if (count > 0) "${type.label} ($count)" else type.label
+                        DropdownMenuItem(
+                            text = { Text(optionLabel) },
+                            onClick = {
+                                selectedSourceTypes = if (isSelected) selectedSourceTypes - type
+                                else selectedSourceTypes + type
+                            },
+                            leadingIcon = {
+                                if (isSelected) Icon(Icons.Default.Check, contentDescription = null)
+                                else Spacer(Modifier.size(24.dp))
+                            },
+                            enabled = count > 0 || isLoading
+                        )
+                    }
                 }
             }
 
@@ -371,6 +412,46 @@ fun StreamPickerSheet(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Filter chip that anchors a [DropdownMenu] directly below itself. The chip
+ * shows a "$label: $valueText" line plus a drop-down caret; clicking it opens
+ * the menu. `isCustom = true` highlights the chip as selected (i.e. the user
+ * has deviated from the default "All"/"Any" value). The [content] lambda is
+ * given a `dismiss` callback — call it from single-select items to close the
+ * menu after choosing; multi-select items can simply omit the call so the
+ * menu stays open between toggles.
+ */
+@Composable
+private fun DropdownFilterChip(
+    label: String,
+    valueText: String,
+    isCustom: Boolean,
+    enabled: Boolean = true,
+    content: @Composable (dismiss: () -> Unit) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        FilterChip(
+            selected = isCustom,
+            onClick = { expanded = true },
+            enabled = enabled,
+            label = { Text("$label: $valueText", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            trailingIcon = {
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = null
+                )
+            }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            content { expanded = false }
         }
     }
 }

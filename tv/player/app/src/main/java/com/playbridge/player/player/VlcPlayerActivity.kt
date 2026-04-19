@@ -795,6 +795,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         currentUrl = currentUrl,
                         preferredQuality = nav.qualityPreference,
                         preferredAddonName = nav.context.preferredAddonName,
+                        preferredSourceTypeKeys = nav.preferredSourceTypes,
                         onStreamSelected = { stream ->
                             dialog.dismiss()
 

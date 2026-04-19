@@ -26,6 +26,21 @@ internal object SourceTypeRanker {
         "cam"    to listOf("cam", "hdcam", "hdts", "telesync", "telecine", "tc")
     )
 
+    /** Ordered list of (key, human-readable label) pairs for UI pickers. Preference order. */
+    val ORDERED_LABELS: List<Pair<String, String>> = listOf(
+        "bluray" to "BluRay",
+        "remux"  to "Remux",
+        "web-dl" to "WEB-DL",
+        "webrip" to "WEBRip",
+        "hdtv"   to "HDTV",
+        "dvd"    to "DVD",
+        "cam"    to "CAM / TS"
+    )
+
+    /** Label for a given key, or the key itself as a fallback. */
+    fun labelOf(key: String): String =
+        ORDERED_LABELS.firstOrNull { it.first == key }?.second ?: key
+
     /**
      * True if the stream's combined name/title/description mentions ANY of the
      * requested source-type keys. Empty [preferredKeys] means "no preference" →
