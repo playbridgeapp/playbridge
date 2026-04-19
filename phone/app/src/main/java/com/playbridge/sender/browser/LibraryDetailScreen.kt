@@ -97,6 +97,13 @@ fun LibraryDetailScreen(
     availableTvDevices: List<TvDevice> = emptyList(),
     selectedTvDevice: TvDevice? = null,
     onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
+    /**
+     * Send a pre-resolved stream URL (e.g. after applying mediaflow-proxy rewrite
+     * on the phone) directly to the TV as a `play` command. Used when the proxy
+     * chip is non-OFF — the TV can't rewrite URLs itself, so phone must resolve
+     * + rewrite + dispatch.
+     */
+    onSendStreamToTv: (url: String, title: String, headers: Map<String, String>?, contentType: String?) -> Unit = { _, _, _, _ -> },
     onBack: () -> Unit,
     onShare: (title: String, imdbId: String?) -> Unit = { _, _ -> },
 ) {
@@ -143,6 +150,7 @@ fun LibraryDetailScreen(
     var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
     // Persist watch mode preference in browser_prefs
     val browserPrefs = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+    val browserSettings = remember { context.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
     var watchOnTv by remember {
         mutableStateOf(
             if (browserPrefs.contains("watch_on_tv")) {
@@ -151,6 +159,24 @@ fun LibraryDetailScreen(
                 tvName != null
             }
         )
+    }
+
+    // Player mode (mirrors CastSheet; persisted to browser_prefs/tv_player_mode)
+    var playerMode by remember { mutableStateOf(browserPrefs.getString("tv_player_mode", "tv") ?: "tv") }
+
+    // Mediaflow proxy config (read once — user reopens the screen to pick up changes)
+    val mediaflowProxyUrl by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_URL, "") ?: "") }
+    val mediaflowProxyPassword by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_PASSWORD, "") ?: "") }
+    val proxyAvailable = mediaflowProxyUrl.isNotBlank()
+    var proxyMode by remember { mutableStateOf(MediaflowProxy.Mode.OFF) }
+
+    // Auto-connect to TV when landing on this screen if we're in TV mode but not connected.
+    // Only attempt once per screen entry — subsequent reconnect attempts are triggered by
+    // the Watch click/long-click handlers.
+    LaunchedEffect(Unit) {
+        if (watchOnTv && !isTvConnected && selectedTvDevice != null) {
+            onTvDeviceSelect?.invoke(selectedTvDevice)
+        }
     }
 
     val episodeListState = rememberLazyListState()
@@ -472,6 +498,86 @@ fun LibraryDetailScreen(
         }
     }
 
+    /**
+     * Proxy path: resolve on the phone, pick the best stream, rewrite via
+     * mediaflow-proxy, then send as a direct `play` command to the TV.
+     *
+     * Used when [proxyMode] != OFF — ContentPlayPayload can't carry a pre-rewritten
+     * URL (the TV resolves streams itself), so we bypass that flow entirely.
+     */
+    val startProxiedResolution: (String, String, String, StremioVideo?) -> Unit = startProxy@{ streamId, streamType, resTitle, episode ->
+        if (!canResolveStreams) return@startProxy
+        resolutionState = ResolutionState(
+            isResolving = true,
+            target = ResolutionTarget.TV,
+            episodeId = episode?.episode
+        )
+        currentEpisodeSelection = episode
+        streamPickerTitle = resTitle
+        resolvedStreams = emptyList()
+        lastResolvedId = streamId
+        lastResolvedType = streamType
+
+        resolutionJob?.cancel()
+        resolutionJob = scope.launch {
+            addonRepository.resolveStreamsFlow(streamType, streamId).collect { latest ->
+                resolvedStreams = latest
+            }
+            resolutionState = resolutionState.copy(isResolving = false)
+
+            val runtimeForBitrate = if (isSeries) tvDetails?.typicalEpisodeRuntimeMinutes
+                                    else movieDetails?.runtime
+            val best = StreamSelector.selectBest(
+                streams = resolvedStreams,
+                preferredQuality = QualityFilter.fromKey(autoQualityKey),
+                maxMbps = autoMaxMbps,
+                runtimeMinutes = runtimeForBitrate,
+                preferredAddon = autoAddonKey.takeIf { it.isNotEmpty() },
+                preferredSourceTypes = autoSourceTypes
+            ) ?: resolvedStreams.firstOrNull()
+
+            val streamUrl = best?.stream?.url
+            if (streamUrl == null) {
+                Toast.makeText(context, "No streams resolved", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            // Resolved streams from addons don't carry request headers (the addon
+            // already signed / debrid-resolved them); pass null so the proxy encodes
+            // nothing extra into the rewritten URL.
+            val result = MediaflowProxy.rewrite(
+                mode = proxyMode,
+                proxyBase = mediaflowProxyUrl,
+                password = mediaflowProxyPassword,
+                sourceUrl = streamUrl,
+                headers = null
+            )
+            onSendStreamToTv(result.url, resTitle, null, result.contentType)
+            if (isSeries && episode != null) {
+                onNowPlayingStarted(resolvedTmdbId ?: 0, selectedSeason, episode.episode ?: 1)
+            }
+            Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Wrapper around [startResolution] that (a) attempts a fresh TV connection if
+     * we're in TV mode but not connected, and (b) routes through the proxy path
+     * when proxy mode is non-OFF.
+     */
+    val triggerWatch: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = triggerWatch@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
+        // Reconnect attempt before sending — covers the case where auto-connect
+        // failed or the socket dropped while the user was on this screen.
+        if (!forPhone && !isTvConnected && selectedTvDevice != null) {
+            onTvDeviceSelect?.invoke(selectedTvDevice)
+        }
+        if (!forPhone && proxyMode != MediaflowProxy.Mode.OFF && proxyAvailable) {
+            startProxiedResolution(streamId, streamType, resTitle, episode)
+        } else {
+            startResolution(streamId, streamType, resTitle, forPhone, forcePicker, episode)
+        }
+    }
+
     // Stream picker sheet
     if (showStreamPicker) {
         StreamPickerSheet(
@@ -656,21 +762,25 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, false, firstEpisodeForTv)
+                                        triggerWatch(streamId, streamType, title, false, false, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, false, false, null)
+                                        triggerWatch(streamId, addonType, displayTitle, false, false, null)
                                     }
                                 },
                                 onWatchOnTvLongClick = {
+                                    // Long-press: same "send directly to TV" path as click.
+                                    // (Previously forcePicker=true, which made BrowserActivity open
+                                    // the phone-side CastSheet.) Reconnect + proxy routing both
+                                    // handled inside triggerWatch.
                                     if (isSeries && firstEpisodeForTv != null) {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, true, firstEpisodeForTv)
+                                        triggerWatch(streamId, streamType, title, false, false, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, false, true, null)
+                                        triggerWatch(streamId, addonType, displayTitle, false, false, null)
                                     }
                                 },
                                 onWatchOnPhone = {
@@ -678,10 +788,10 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, true, false, firstEpisodeForTv)
+                                        triggerWatch(streamId, streamType, title, true, false, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, true, false, null)
+                                        triggerWatch(streamId, addonType, displayTitle, true, false, null)
                                     }
                                 },
                                 onWatchOnPhoneLongClick = {
@@ -689,12 +799,20 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, true, true, firstEpisodeForTv)
+                                        triggerWatch(streamId, streamType, title, true, true, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        startResolution(streamId, addonType, displayTitle, true, true, null)
+                                        triggerWatch(streamId, addonType, displayTitle, true, true, null)
                                     }
                                 },
+                                playerMode = playerMode,
+                                onPlayerModeChange = { mode ->
+                                    playerMode = mode
+                                    browserPrefs.edit().putString("tv_player_mode", mode).apply()
+                                },
+                                proxyAvailable = proxyAvailable,
+                                proxyMode = proxyMode,
+                                onProxyModeChange = { proxyMode = it },
                                 themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                             )
                         } else {
@@ -738,26 +856,38 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, false, nextUnwatchedEpisode)
+                                        triggerWatch(streamId, streamType, title, false, false, nextUnwatchedEpisode)
                                     },
                                     onWatchOnTvLongClick = {
+                                        // Long-press: same "send directly to TV" path as click.
+                                        // (Previously forcePicker=true, which made BrowserActivity open
+                                        // the phone-side CastSheet.) Reconnect + proxy routing both
+                                        // handled inside triggerWatch.
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, false, true, nextUnwatchedEpisode)
+                                        triggerWatch(streamId, streamType, title, false, false, nextUnwatchedEpisode)
                                     },
                                     onWatchOnPhone = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, true, false, nextUnwatchedEpisode)
+                                        triggerWatch(streamId, streamType, title, true, false, nextUnwatchedEpisode)
                                     },
                                     onWatchOnPhoneLongClick = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        startResolution(streamId, streamType, title, true, true, nextUnwatchedEpisode)
+                                        triggerWatch(streamId, streamType, title, true, true, nextUnwatchedEpisode)
                                     },
+                                    playerMode = playerMode,
+                                    onPlayerModeChange = { mode ->
+                                        playerMode = mode
+                                        browserPrefs.edit().putString("tv_player_mode", mode).apply()
+                                    },
+                                    proxyAvailable = proxyAvailable,
+                                    proxyMode = proxyMode,
+                                    onProxyModeChange = { proxyMode = it },
                                     themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                                 )
                             }
@@ -952,7 +1082,7 @@ fun LibraryDetailScreen(
                                             val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
                                             val streamType = if (resolvedImdbId != null) "series" else addonType
                                             val title = "$displayTitle S${selectedSeason}E${epNum}"
-                                            startResolution(streamId, streamType, title, !watchOnTv, false, episode)
+                                            triggerWatch(streamId, streamType, title, !watchOnTv, false, episode)
                                         }
                                     }
                                 },
@@ -961,7 +1091,7 @@ fun LibraryDetailScreen(
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${epNum}"
-                                        startResolution(streamId, streamType, title, !watchOnTv, true, episode)
+                                        triggerWatch(streamId, streamType, title, !watchOnTv, true, episode)
                                     }
                                 },
                                 onToggleWatched = {
@@ -1395,8 +1525,23 @@ private fun SplitPlayButton(
     onWatchOnTvLongClick: (() -> Unit)? = null,
     onWatchOnPhone: () -> Unit = {},
     onWatchOnPhoneLongClick: (() -> Unit)? = null,
+    playerMode: String = "tv",
+    onPlayerModeChange: (String) -> Unit = {},
+    proxyAvailable: Boolean = false,
+    proxyMode: MediaflowProxy.Mode = MediaflowProxy.Mode.OFF,
+    onProxyModeChange: (MediaflowProxy.Mode) -> Unit = {},
     themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
+    // Player-mode options mirror CastSheet's "play" mode list.
+    val playerOptions = listOf(
+        "tv"           to "TV Default",
+        "internal"     to "ExoPlayer",
+        "internal_vlc" to "LibVLC",
+        "internal_mpv" to "MPV",
+        "external"     to "External",
+        "external_mpv" to "Ext. MPV"
+    )
+    val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
     var showProvidersSheet by remember { mutableStateOf(false) }
     var showDeviceMenu by remember { mutableStateOf(false) }
 
@@ -1414,121 +1559,71 @@ private fun SplitPlayButton(
     ) {
         // ── Mode toggle chip ──────────────────────────────────────────────────
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Start,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "Watching on",
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.4f),
-                modifier = Modifier.padding(end = 8.dp)
+                color = Color.White.copy(alpha = 0.4f)
             )
             val connectedGreen = Color(0xFF4CAF50)
-            Box(
-                modifier = Modifier.combinedClickable(
-                    onClick = {
-                        val togglingToTv = !watchOnTv
-                        onWatchOnTvChange(togglingToTv)
-                        // If switching to TV and not connected, try to connect to the selected device
-                        if (togglingToTv && !isTvConnected && selectedTvDevice != null) {
-                            onTvDeviceSelect?.invoke(selectedTvDevice)
+
+            ChipDropdown(
+                selectedLabel = if (watchOnTv) {
+                    if (!tvName.isNullOrBlank()) "TV ($tvName)" else "TV"
+                } else "Phone",
+                options = listOf("phone" to "Phone") + availableTvDevices.map { (it.uuid.ifBlank { it.ip }) to (it.name.ifBlank { it.ip }) },
+                selectedValue = if (watchOnTv) (selectedTvDevice?.uuid ?: selectedTvDevice?.ip ?: "tv") else "phone",
+                onSelect = { value ->
+                    if (value == "phone") {
+                        onWatchOnTvChange(false)
+                    } else {
+                        onWatchOnTvChange(true)
+                        availableTvDevices.find { it.uuid == value || it.ip == value }?.let {
+                            onTvDeviceSelect?.invoke(it)
                         }
-                    },
-                    onLongClick = if (watchOnTv && availableTvDevices.isNotEmpty()) {
-                        {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            showDeviceMenu = true
-                        }
-                    } else null
-                )
-            ) {
-            Surface(
-                shape = RoundedCornerShape(50),
-                color = if (watchOnTv && isTvConnected)
-                    connectedGreen.copy(alpha = 0.15f)
-                else
-                    Color.White.copy(alpha = 0.08f),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (watchOnTv && isTvConnected)
-                        connectedGreen.copy(alpha = 0.5f)
-                    else
-                        Color.White.copy(alpha = 0.2f)
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                    }
+                },
+                onLongClick = if (watchOnTv && availableTvDevices.isNotEmpty()) {
+                    { showDeviceMenu = true }
+                } else null,
+                chipLabelColor = if (watchOnTv && isTvConnected) connectedGreen else Color.Unspecified,
+                themeColor = themeColor,
+                leadingIcon = {
                     Icon(
                         imageVector = if (watchOnTv) Icons.Default.Tv else Icons.Default.PhoneAndroid,
                         contentDescription = null,
                         modifier = Modifier.size(13.dp),
-                        tint = if (watchOnTv && isTvConnected)
-                            connectedGreen
-                        else
-                            Color.White.copy(alpha = 0.7f)
+                        tint = if (watchOnTv && isTvConnected) connectedGreen else Color.White.copy(alpha = 0.7f)
                     )
-                    Text(
-                        text = if (watchOnTv) {
-                            if (!tvName.isNullOrBlank()) "TV ($tvName)" else "TV"
-                        } else "Phone",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = if (watchOnTv && isTvConnected)
-                            connectedGreen
-                        else
-                            Color.White.copy(alpha = 0.75f)
-                    )
-                    Icon(
-                        imageVector = Icons.Default.SwapHoriz,
-                        contentDescription = "Switch destination",
-                        modifier = Modifier.size(13.dp),
-                        tint = Color.White.copy(alpha = 0.45f)
+                }
+            )
+
+            // Player-mode + proxy chips (only meaningful when casting to TV).
+            // Mirrors the CastSheet chips so users can tweak engine / proxy
+            // without having to open the bottom sheet.
+            if (watchOnTv) {
+                ChipDropdown(
+                    selectedLabel = selectedPlayerLabel,
+                    options = playerOptions,
+                    selectedValue = playerMode,
+                    onSelect = onPlayerModeChange,
+                    themeColor = themeColor
+                )
+                if (proxyAvailable) {
+                    ChipDropdown(
+                        selectedLabel = proxyMode.label,
+                        options = MediaflowProxy.Mode.entries.map { it.name to it.label },
+                        selectedValue = proxyMode.name,
+                        onSelect = { value -> onProxyModeChange(MediaflowProxy.Mode.valueOf(value)) },
+                        themeColor = themeColor
                     )
                 }
             }
-                DropdownMenu(
-                    expanded = showDeviceMenu,
-                    onDismissRequest = { showDeviceMenu = false }
-                ) {
-                    Text(
-                        text = "Choose device",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                    )
-                    availableTvDevices.forEach { device ->
-                        val isSelected = device.uuid.isNotEmpty() && device.uuid == selectedTvDevice?.uuid
-                            || device.uuid.isEmpty() && device.ip == selectedTvDevice?.ip
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = device.name.ifBlank { device.ip },
-                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Tv,
-                                    contentDescription = null,
-                                    tint = if (isSelected) MaterialTheme.colorScheme.primary
-                                           else LocalContentColor.current.copy(alpha = 0.7f)
-                                )
-                            },
-                            trailingIcon = if (isSelected) {
-                                { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
-                            } else null,
-                            onClick = {
-                                showDeviceMenu = false
-                                onTvDeviceSelect?.invoke(device)
-                            }
-                        )
-                    }
-                }
-            } // close Box
         }
 
         // ── Single Watch button ───────────────────────────────────────────────

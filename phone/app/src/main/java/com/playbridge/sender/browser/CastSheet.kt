@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.Image
 import coil.compose.AsyncImage
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +37,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -58,63 +63,124 @@ import com.playbridge.sender.model.TvDevice
  * The trigger renders as a [FilterChip]; the popup renders each option as a [FilterChip]
  * (selected option appears filled/highlighted).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChipDropdown(
+internal fun ChipDropdown(
     selectedLabel: String,
     options: List<Pair<String, String>>,
     selectedValue: String,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
-    chipLabelColor: Color = Color.Unspecified
+    chipLabelColor: Color = Color.Unspecified,
+    themeColor: Color = Color.Unspecified,
+    leadingIcon: (@Composable () -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val resolvedColor = if (chipLabelColor == Color.Unspecified)
-        MaterialTheme.colorScheme.onSurface else chipLabelColor
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
+    val isHighlighted = chipLabelColor != Color.Unspecified
+
+    val resolvedLabelColor = when {
+        isHighlighted -> chipLabelColor
+        themeColor != Color.Unspecified -> Color.White.copy(alpha = 0.9f)
+        else -> Color.White.copy(alpha = 0.75f)
+    }
+
     Box(modifier = modifier) {
-        FilterChip(
-            selected = false,
-            onClick = { expanded = true },
-            label = {
+        Surface(
+            modifier = Modifier.combinedClickable(
+                onClick = { expanded = true },
+                onLongClick = onLongClick?.let {
+                    {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        it()
+                    }
+                }
+            ),
+            shape = RoundedCornerShape(50),
+            color = when {
+                isHighlighted -> chipLabelColor.copy(alpha = 0.15f)
+                themeColor != Color.Unspecified -> themeColor.copy(alpha = 0.12f)
+                else -> Color.White.copy(alpha = 0.08f)
+            },
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                when {
+                    isHighlighted -> chipLabelColor.copy(alpha = 0.5f)
+                    themeColor != Color.Unspecified -> themeColor.copy(alpha = 0.4f)
+                    else -> Color.White.copy(alpha = 0.2f)
+                }
+            )
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (leadingIcon != null) {
+                    leadingIcon()
+                }
                 Text(
                     text = selectedLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = resolvedColor,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = resolvedLabelColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-            },
-            trailingIcon = {
                 Icon(
                     imageVector = Icons.Default.ArrowDropDown,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = resolvedColor
+                    modifier = Modifier.size(13.dp),
+                    tint = resolvedLabelColor.copy(alpha = 0.6f)
                 )
             }
-        )
+        }
         DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            containerColor = if (themeColor != Color.Unspecified)
+                lerp(themeColor, Color.Black, 0.8f).copy(alpha = 0.95f)
+            else
+                Color(0xFF202020),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.border(
+                1.dp,
+                if (themeColor != Color.Unspecified) themeColor.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                RoundedCornerShape(12.dp)
+            )
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                options.forEach { (value, label) ->
-                    FilterChip(
-                        selected = value == selectedValue,
-                        onClick = {
-                            onSelect(value)
-                            expanded = false
-                        },
-                        label = {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.bodySmall
+            options.forEach { (value, label) ->
+                val isSelected = value == selectedValue
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.7f)
+                        )
+                    },
+                    onClick = {
+                        onSelect(value)
+                        expanded = false
+                    },
+                    leadingIcon = if (isSelected) {
+                        {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (themeColor != Color.Unspecified) themeColor else Color(0xFF4CAF50)
                             )
                         }
+                    } else null,
+                    modifier = Modifier.background(
+                        if (isSelected) (if (themeColor != Color.Unspecified) themeColor else Color.White).copy(alpha = 0.12f)
+                        else Color.Transparent
                     )
-                }
+                )
             }
         }
     }

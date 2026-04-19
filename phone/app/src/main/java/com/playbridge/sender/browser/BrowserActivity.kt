@@ -1745,6 +1745,25 @@ class BrowserActivity : ComponentActivity() {
                                                         showVideoSheet = true
                                                     }
                                                 },
+                                                // Proxy path: the phone has already resolved a stream
+                                                // and rewritten the URL through mediaflow-proxy. Send it
+                                                // straight to the TV as a `play` command (bypassing
+                                                // content-payload resolution on the TV).
+                                                onSendStreamToTv = { url, title, headers, contentType ->
+                                                    val cmd = com.playbridge.protocol.createPlayCommandJson(
+                                                        url = url,
+                                                        title = title,
+                                                        headers = headers,
+                                                        contentType = contentType,
+                                                        detectedBy = "library",
+                                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                                        preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                        preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                                                        maxBitrateCapMbps = maxBitrateCapMbps
+                                                    )
+                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                },
                                                 onPlayPlaylist = { items ->
                                                     val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                     val itemsWithMode = items.map {
