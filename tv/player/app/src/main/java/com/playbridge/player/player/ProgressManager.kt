@@ -114,9 +114,6 @@ class ProgressManager(
             if (item != null && item.position > 5000 && item.position < (item.duration - 5000)) {
                 Log.i(TAG, "Resuming from history: ${item.position}ms")
                 playerActivity.seekTo(item.position)
-                withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "Resuming playback", android.widget.Toast.LENGTH_SHORT).show()
-                }
             }
             item
         } catch (e: Exception) {

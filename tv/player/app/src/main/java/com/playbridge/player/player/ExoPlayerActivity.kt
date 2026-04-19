@@ -550,7 +550,6 @@ class ExoPlayerActivity : PlayerActivity() {
             if (sniffedType != null) {
                 FileLogger.i(TAG, "Pre-flight sniff detected: $sniffedType")
                 finalContentType = sniffedType
-                android.widget.Toast.makeText(this@ExoPlayerActivity, "Detected: $finalContentType", android.widget.Toast.LENGTH_SHORT).show()
             } else {
                 FileLogger.d(TAG, "Pre-flight sniff returned null")
             }
