@@ -1707,29 +1707,25 @@ class BrowserActivity : ComponentActivity() {
                                                     showVideoSheet = true
                                                 },
                                                 onPlayContent = { payload ->
-                                                    if (payload.forcePicker) {
-                                                        scope.launch {
-                                                            pendingContentPayload = payload
-                                                            showVideoSheet = true
-                                                        }
-                                                    } else {
-                                                        val cmd = com.playbridge.protocol.createPlayContentCommandJson(
-                                                            payload.copy(
-                                                                playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
-                                                                preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                                                preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                                                defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                                                                maxBitrateCapMbps = maxBitrateCapMbps
-                                                            )
+                                                    // Always send direct to TV — the TV handles forcePicker
+                                                    // by showing its own stream picker, so we never open the
+                                                    // phone-side CastSheet from LibraryDetailScreen.
+                                                    val cmd = com.playbridge.protocol.createPlayContentCommandJson(
+                                                        payload.copy(
+                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                                                            maxBitrateCapMbps = maxBitrateCapMbps
                                                         )
-                                                        connectionViewModel.webSocketClient.send(cmd)
-                                                        if (payload.contentType == "series") {
-                                                            nowPlayingTvId = screenNumericId
-                                                            nowPlayingSeason = payload.season
-                                                            nowPlayingEpisodeStart = payload.episode ?: 1
-                                                        }
-                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                                                    )
+                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    if (payload.contentType == "series") {
+                                                        nowPlayingTvId = screenNumericId
+                                                        nowPlayingSeason = payload.season
+                                                        nowPlayingEpisodeStart = payload.episode ?: 1
                                                     }
+                                                    Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                 },
                                                 onPlayStream = { url, title ->
                                                     val mainVideo = DetectedVideo(

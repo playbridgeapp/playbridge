@@ -75,7 +75,7 @@ import com.playbridge.sender.model.TvDevice
  * - addonType = if (type == "tv") "series" else type
  * - metaId = resolvedImdbId ?: id
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun LibraryDetailScreen(
     id: String,
@@ -769,18 +769,17 @@ fun LibraryDetailScreen(
                                     }
                                 },
                                 onWatchOnTvLongClick = {
-                                    // Long-press: same "send directly to TV" path as click.
-                                    // (Previously forcePicker=true, which made BrowserActivity open
-                                    // the phone-side CastSheet.) Reconnect + proxy routing both
-                                    // handled inside triggerWatch.
+                                    // Long-press: send to TV with forcePicker=true so the TV shows
+                                    // its own stream picker. BrowserActivity no longer diverts this
+                                    // into the phone-side CastSheet.
                                     if (isSeries && firstEpisodeForTv != null) {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${firstEpisodeForTv.episode ?: 1}"
-                                        triggerWatch(streamId, streamType, title, false, false, firstEpisodeForTv)
+                                        triggerWatch(streamId, streamType, title, false, true, firstEpisodeForTv)
                                     } else {
                                         val streamId = resolvedImdbId ?: id
-                                        triggerWatch(streamId, addonType, displayTitle, false, false, null)
+                                        triggerWatch(streamId, addonType, displayTitle, false, true, null)
                                     }
                                 },
                                 onWatchOnPhone = {
@@ -859,14 +858,12 @@ fun LibraryDetailScreen(
                                         triggerWatch(streamId, streamType, title, false, false, nextUnwatchedEpisode)
                                     },
                                     onWatchOnTvLongClick = {
-                                        // Long-press: same "send directly to TV" path as click.
-                                        // (Previously forcePicker=true, which made BrowserActivity open
-                                        // the phone-side CastSheet.) Reconnect + proxy routing both
-                                        // handled inside triggerWatch.
+                                        // Long-press: send to TV with forcePicker=true so the TV shows
+                                        // its own stream picker.
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
-                                        triggerWatch(streamId, streamType, title, false, false, nextUnwatchedEpisode)
+                                        triggerWatch(streamId, streamType, title, false, true, nextUnwatchedEpisode)
                                     },
                                     onWatchOnPhone = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
@@ -1000,23 +997,24 @@ fun LibraryDetailScreen(
                                         val isSelected = selectedSeason == seasonNumber
                                         val themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                                         val contentColor = if (themeColor.luminance() > 0.5f) Color.Black else Color.White
-                                        ElevatedFilterChip(
-                                            selected = isSelected,
-                                            onClick = {
-                                                if (isSelected) return@ElevatedFilterChip
-                                                selectedSeason = seasonNumber
-                                            },
-                                            label = { Text("S$seasonNumber") },
-                                            colors = FilterChipDefaults.elevatedFilterChipColors(
-                                                containerColor = Color.White.copy(alpha = 0.1f),
-                                                selectedContainerColor = themeColor,
-                                                selectedLabelColor = contentColor,
-                                                labelColor = Color.White.copy(alpha = 0.7f),
-                                                selectedLeadingIconColor = contentColor,
-                                                selectedTrailingIconColor = contentColor
+                                        val haptic = LocalHapticFeedback.current
+                                        Surface(
+                                            modifier = Modifier.combinedClickable(
+                                                onClick = {
+                                                    if (isSelected) return@combinedClickable
+                                                    selectedSeason = seasonNumber
+                                                }
                                             ),
-                                            border = null
-                                        )
+                                            shape = RoundedCornerShape(20.dp),
+                                            color = if (isSelected) themeColor else Color.White.copy(alpha = 0.1f),
+                                        ) {
+                                            Text(
+                                                text = "S$seasonNumber",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = if (isSelected) contentColor else Color.White.copy(alpha = 0.7f),
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                            )
+                                        }
                                     }
                                 }
 
