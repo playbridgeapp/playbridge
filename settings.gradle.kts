@@ -16,9 +16,13 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://maven.mozilla.org/maven2/") }
+        maven("https://maven.mozilla.org/maven2/")
     }
 }
 
-rootProject.name = "PlayBridge Browser"
-include(":app")
+rootProject.name = "PlayBridge"
+include(":shared")
+include(":protocol")
+include(":phone:app")
+include(":tv:player:app")
+include(":tv:browser:app")

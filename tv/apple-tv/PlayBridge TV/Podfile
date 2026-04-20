@@ -4,7 +4,7 @@ target 'PlayBridge TV' do
   use_frameworks!
 
   pod 'TVVLCKit', '~> 3.6.0'
-  pod 'PlayBridgeProtocol', :path => '../PlayBridgeProtocol'
+  
 
 end
 
