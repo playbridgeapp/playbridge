@@ -47,7 +47,7 @@ data class DetectedVideo(
     var subtitlePreview: String? = null,
     var subtitlePreviewChecked: Boolean = false,
     var isPlayable: Boolean? = null,
-    val playlistPayload: List<com.playbridge.protocol.PlayPayload>? = null,
+    val playlistPayload: List<com.playbridge.shared.protocol.PlayPayload>? = null,
     val title: String? = null
 ) {
     val isSubtitle: Boolean
@@ -139,7 +139,7 @@ object VideoDetector {
 
     /** Must be called from the main thread after updating any video's sort-relevant fields. */
     private fun notifyVideoUpdated() { processingVersion++ }
-    
+
     /**
      * Get the observable video list for a specific tab.
      * Returns an empty list if no videos have been detected for the tab.
@@ -147,43 +147,43 @@ object VideoDetector {
     fun getVideosForTab(tabId: String): List<DetectedVideo> {
         return tabVideos[tabId] ?: emptyList()
     }
-    
+
     /**
      * Get the count of detected videos for a specific tab.
      */
     fun getVideoCountForTab(tabId: String): Int {
         return tabVideos[tabId]?.size ?: 0
     }
-    
+
     /**
      * Process a message received from the video detector extension,
      * associating it with the given Kotlin tab ID.
      */
     fun onMessageReceived(message: JsonObject, kotlinTabId: String) {
         Log.d(TAG, "Received message for tab $kotlinTabId: $message")
-        
+
         val type = message["type"]?.jsonPrimitive?.content
-        
+
         when (type) {
             "video_detected" -> {
                 val url = message["url"]?.jsonPrimitive?.content ?: return
-                
+
                 // Check if URL is in exact ignore list or starts with an ignored segment prefix
                 if (ignoredUrls.contains(url) || ignoredUrls.any { url.startsWith(it) }) {
                     Log.d(TAG, "Ignoring video URL (matched blocklist or segment prefix): $url")
                     return
                 }
-                
+
                 val headersJson = try { message["headers"]?.jsonObject } catch(e: Exception) { null }
                 val headers = headersJson?.mapValues { it.value.jsonPrimitive.content }
-                
+
                 // Get or create per-tab structures
                 val videos = tabVideos.getOrPut(kotlinTabId) { mutableStateListOf() }
                 val seenUrls = tabSeenUrls.getOrPut(kotlinTabId) { mutableSetOf() }
-                
+
                 // Check if already exists to update
                 val existingIndex = videos.indexOfFirst { it.url == url }
-                
+
                 if (existingIndex != -1) {
                     val existing = videos[existingIndex]
                     // If we have new headers, update them
@@ -198,7 +198,7 @@ object VideoDetector {
                     }
                     return
                 }
-                
+
                 val video = DetectedVideo(
                     url = url,
                     tabId = message["tabId"]?.jsonPrimitive?.content?.toIntOrNull() ?: -1,
@@ -209,11 +209,11 @@ object VideoDetector {
                     timestamp = message["timestamp"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
                     originalMessage = message.toString()
                 )
-                
+
                 Log.i(TAG, "VIDEO DETECTED in tab $kotlinTabId: ${video.url}")
                 Log.i(TAG, "  Type: ${video.contentType ?: "N/A"}")
                 Log.i(TAG, "  Header Count: ${video.headers?.size ?: 0}")
-                
+
                 seenUrls.add(url)
                 videos.add(video)
                 notifyVideoUpdated()
@@ -230,7 +230,7 @@ object VideoDetector {
     fun onMessageReceived(message: JsonObject) {
         onMessageReceived(message, "_unknown")
     }
-    
+
     /**
      * Fetch file size for a video URL using HEAD request
      */
@@ -238,7 +238,7 @@ object VideoDetector {
         if (video.fileSizeChecked) {
             return video.fileSize
         }
-        
+
         return withContext(Dispatchers.IO) {
             try {
                 val url = URL(video.url)
@@ -247,20 +247,20 @@ object VideoDetector {
                 connection.connectTimeout = 5000
                 connection.readTimeout = 5000
                 connection.instanceFollowRedirects = true
-                
+
                 connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
                 video.headers?.forEach { (key, value) ->
                     if (!key.equals("Range", ignoreCase = true)) {
                         connection.setRequestProperty(key, value)
                     }
                 }
-                
+
                 connection.connect()
-                
+
                 val contentLength = connection.contentLengthLong
                 val responseCode = connection.responseCode
                 connection.disconnect()
-                
+
                 if (responseCode in 200..299) {
                     video.isPlayable = true
                     video.fileSize = if (contentLength > 0) contentLength else null
@@ -282,7 +282,7 @@ object VideoDetector {
             }
         }
     }
-    
+
     /**
      * Fetch a small preview of a subtitle file to help identify language
      */
@@ -290,7 +290,7 @@ object VideoDetector {
         if (video.subtitlePreviewChecked) {
             return video.subtitlePreview
         }
-        
+
         return withContext(Dispatchers.IO) {
             try {
                 val url = URL(video.url)
@@ -299,30 +299,30 @@ object VideoDetector {
                 connection.connectTimeout = 5000
                 connection.readTimeout = 5000
                 connection.instanceFollowRedirects = true
-                
+
                 // Set Range header to fetch only first 4KB to ensure we get a few cues
                 connection.setRequestProperty("Range", "bytes=0-4096")
                 connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
-                
+
                 connection.connect()
-                
+
                 // Check if response is partial content (206) or OK (200)
                 if (connection.responseCode in 200..299) {
                     val content = connection.inputStream.bufferedReader().use { it.readText() }
-                    
+
                     if (content.isNotEmpty()) {
-                        val cues = if (video.url.endsWith(".vtt", ignoreCase = true) || 
+                        val cues = if (video.url.endsWith(".vtt", ignoreCase = true) ||
                                      video.contentType?.contains("vtt", ignoreCase = true) == true) {
                             parseVtt(content)
                         } else {
                             parseSrt(content)
                         }
-                        
+
                         // Extract first 3 cues
-                        val previewText = cues.take(3).joinToString(" • ") { 
-                            it.text.replace("\n", " ") 
+                        val previewText = cues.take(3).joinToString(" • ") {
+                            it.text.replace("\n", " ")
                         }
-                        
+
                         if (previewText.isNotEmpty()) {
                             video.subtitlePreview = previewText
                         } else {
@@ -335,7 +335,7 @@ object VideoDetector {
                             }.take(2).toList()
                             video.subtitlePreview = fallbackLines.joinToString(" • ")
                         }
-                        
+
                         video.subtitlePreviewChecked = true
                         Log.d(TAG, "Subtitle preview for ${video.url.take(30)}: ${video.subtitlePreview}")
                         video.subtitlePreview
@@ -355,15 +355,15 @@ object VideoDetector {
             }
         }
     }
-    
+
     // Subtitle parsing helpers copied from TV's SubtitleManager
-    
+
     private fun parseSrt(content: String): List<Cue> {
         val parsedCues = ArrayList<Cue>()
         var currentStart = -1L
         var currentEnd = -1L
         val currentText = StringBuilder()
-        
+
         // Use lineSequence() for O(1) memory parsing
         val iterator = content.lineSequence().iterator()
         while (iterator.hasNext()) {
@@ -407,7 +407,7 @@ object VideoDetector {
                 if (times.size == 2) {
                     val start = parseTimestamp(times[0].trim())
                     val end = parseTimestamp(times[1].trim())
-                    
+
                     val textBuilder = StringBuilder()
                     while (iterator.hasNext()) {
                         val textLine = iterator.next()
@@ -415,7 +415,7 @@ object VideoDetector {
                         textBuilder.append(textLine).append("\n")
                     }
                     val text = textBuilder.toString().trim()
-                    
+
                     if (start != -1L && end != -1L && text.isNotEmpty()) {
                         parsedCues.add(Cue(start, end, text))
                     }
@@ -431,7 +431,7 @@ object VideoDetector {
             var hours = 0L
             var minutes = 0L
             var seconds = 0.0
-            
+
             if (parts.size == 3) {
                 hours = parts[0].toLong()
                 minutes = parts[1].toLong()
@@ -442,13 +442,13 @@ object VideoDetector {
             } else {
                 return -1
             }
-            
+
             (hours * 3600000 + minutes * 60000 + (seconds * 1000)).toLong()
         } catch (e: Exception) {
             -1
         }
     }
-    
+
     /**
      * Fetch HLS variant qualities if the video is an m3u8 playlist.
      * Operates on a specific tab's video list for variant cleanup.
@@ -475,12 +475,12 @@ object VideoDetector {
                 // simple check if it looks like an m3u8 url
                 if (video.url.contains(".m3u8", ignoreCase = true) ||
                     video.contentType?.contains("mpegurl", ignoreCase = true) == true) {
-                    
+
                     val playlist = HlsParser.parsePlaylist(video.url, video.headers)
                     video.hlsPlaylist = playlist
                     video.qualities = playlist.videoQualities
                     video.qualitiesChecked = true
-                    
+
                     if (playlist.segmentPrefixes.isNotEmpty()) {
                         withContext(Dispatchers.Main) {
                             // Only add prefixes that don't accidentally match the master playlist
@@ -793,7 +793,7 @@ object VideoDetector {
         tabSeenUrls.clear()
         ignoredUrls.clear()
     }
-    
+
     /**
      * Get count of detected videos across all tabs (for debugging).
      */

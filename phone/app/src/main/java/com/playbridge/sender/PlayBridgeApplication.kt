@@ -11,7 +11,10 @@ class PlayBridgeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Log.d("PlayBridgeApplication", "Initializing application")
-        
+
+        com.playbridge.shared.SharedContext.init(this)
+        com.playbridge.shared.stremio.StremioClient.init(this)
+
         // Start backup trigger
         BackupTrigger(this, applicationScope).start()
     }

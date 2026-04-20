@@ -6,9 +6,9 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.Context
-import com.playbridge.protocol.BluetoothConstants
-import com.playbridge.protocol.Command
-import com.playbridge.protocol.parseCommand
+import com.playbridge.shared.protocol.BluetoothConstants
+import com.playbridge.shared.protocol.Command
+import com.playbridge.shared.protocol.parseCommand
 import com.playbridge.player.logging.FileLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

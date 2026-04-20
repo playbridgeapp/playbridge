@@ -5,7 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.playbridge.sender.model.TvDevice
-import com.playbridge.protocol.protocolJson
+import com.playbridge.shared.protocol.protocolJson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -16,12 +16,12 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
  * DataStore-backed storage for TV connection info
  */
 class ConnectionStore(private val context: Context) {
-    
+
     companion object {
         private val TV_DEVICE = stringPreferencesKey("tv_device")
                 private val DEVICE_HISTORY = stringPreferencesKey("device_history")
     }
-    
+
     /**
      * Get stored TV device
      */
@@ -47,7 +47,7 @@ class ConnectionStore(private val context: Context) {
             }
         } ?: emptyList()
     }
-    
+
     /**
      * Save TV device
      */
@@ -78,12 +78,12 @@ class ConnectionStore(private val context: Context) {
 
             // Remove existing entry for same IP/Port if exists
             val filtered = currentHistory.filterNot { it.ip == device.ip && it.port == device.port }
-            
+
             // Add to front
             val newHistory = (listOf(device) + filtered).take(10)
-            
+
             prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
-                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()), 
+                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
                 newHistory
             )
         }
@@ -102,14 +102,14 @@ class ConnectionStore(private val context: Context) {
             }
 
             val newHistory = currentHistory.filterNot { it.ip == device.ip && it.port == device.port }
-            
+
             prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
-                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()), 
+                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
                 newHistory
             )
         }
     }
-    
+
     /**
      * Clear stored TV device
      */
@@ -118,7 +118,7 @@ class ConnectionStore(private val context: Context) {
             prefs.remove(TV_DEVICE)
         }
     }
-    
+
     /**
      * Check if we have a stored TV device
      */

@@ -134,5 +134,5 @@ dependencies {
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.ui)
 
-    implementation(project(":protocol"))
+    implementation(project(":shared"))
 }

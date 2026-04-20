@@ -620,7 +620,7 @@ fun DebridLibraryScreen(
                                             Toast.makeText(context, "Resolving all links, please wait...", Toast.LENGTH_SHORT).show()
                                             val provider = repository.getActiveProvider() ?: return@launch
                                             val configName = repository.getConfiguredProviderName()
-                                            val playlistItems = mutableListOf<com.playbridge.protocol.PlayPayload>()
+                                            val playlistItems = mutableListOf<com.playbridge.shared.protocol.PlayPayload>()
                                             for (file in files) {
                                                 val link = when (configName) {
                                                     DebridRepository.PROVIDER_PREMIUMIZE -> file.id
@@ -628,7 +628,7 @@ fun DebridLibraryScreen(
                                                 }
                                                 val unrestricted = provider.unrestrictLink(link)
                                                 playlistItems.add(
-                                                    com.playbridge.protocol.PlayPayload(
+                                                    com.playbridge.shared.protocol.PlayPayload(
                                                         url = unrestricted.downloadUrl,
                                                         title = file.path.substringAfterLast('/')
                                                     )

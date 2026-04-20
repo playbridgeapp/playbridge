@@ -192,7 +192,7 @@ fun MainContent(
         Screen.Pairing -> {
             PairingScreen(
                 ip = serverIp ?: "unknown",
-                port = serverPort ?: com.playbridge.protocol.Config.DEFAULT_PORT,
+                port = serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT,
                 token = authToken,
                 deviceName = deviceName,
                 deviceId = deviceId,
@@ -226,8 +226,8 @@ fun MainContent(
                         // Restore playlist context if this item was part of a playlist
                         if (item.playlistJson != null) {
                             try {
-                                val decoded = com.playbridge.protocol.protocolJson.decodeFromString(
-                                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                                val decoded = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
                                     item.playlistJson
                                 )
                                 com.playbridge.player.player.PlaylistStore.currentPlaylist = decoded

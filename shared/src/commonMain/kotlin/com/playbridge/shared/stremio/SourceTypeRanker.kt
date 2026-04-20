@@ -1,4 +1,4 @@
-package com.playbridge.player.stremio
+package com.playbridge.shared.stremio
 
 /**
  * Source/release-type detection for Stremio streams. Mirrors the phone's
@@ -13,7 +13,7 @@ package com.playbridge.player.stremio
  * REMUX is ordered before BLURAY on purpose: a title like "BluRay Remux" classifies
  * as REMUX (more specific), not BLURAY. CAM/TS is last since it's the least desirable.
  */
-internal object SourceTypeRanker {
+object SourceTypeRanker {
 
     /** Ordered pairs of (key, patterns) — first match wins when detecting primary type. */
     private val TYPES: List<Pair<String, List<String>>> = listOf(

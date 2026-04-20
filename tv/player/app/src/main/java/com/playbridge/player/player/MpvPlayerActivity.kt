@@ -108,13 +108,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     // Playlist state
-    private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
+    private var playlistItems: MutableList<com.playbridge.shared.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
     private var activeDialog: android.app.Dialog? = null
 
     // Pre-play state
-    private var prePlayPayload by mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null)
+    private var prePlayPayload by mutableStateOf<com.playbridge.shared.protocol.ContentPlayPayload?>(null)
     private var isPrePlayLaunching by mutableStateOf(false)
     private var prePlayCountdown by androidx.compose.runtime.mutableIntStateOf(0)
     private var isPreBuffering = false
@@ -617,8 +617,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         val payloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
         if (payloadJson != null) {
             try {
-                val p = com.playbridge.protocol.protocolJson.decodeFromString(
-                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                    com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
                     payloadJson
                 )
                 prePlayPayload = p
@@ -942,7 +942,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         composeView.setContent {
             val scope = rememberCoroutineScope()
-            var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
+            var streams by remember { mutableStateOf<List<com.playbridge.shared.stremio.ScoredStremioStream>>(emptyList()) }
             var isLoading by remember { mutableStateOf(true) }
 
             LaunchedEffect(Unit) {
@@ -973,7 +973,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
                         },
                         onRefresh = {
-                            com.playbridge.player.stremio.StremioClient.clearCache(
+                            com.playbridge.shared.stremio.StremioClient.clearCache(
                                 contentId = nav.context.imdbId,
                                 type = "series",
                                 season = nav.currentSeason,
@@ -1004,7 +1004,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun showPlaylistPicker() {
-        val displayItems: List<com.playbridge.protocol.PlayPayload>
+        val displayItems: List<com.playbridge.shared.protocol.PlayPayload>
         val displayIndex: Int
         val isSeriesMode: Boolean
 
@@ -1017,7 +1017,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             displayItems = nav.episodeList!!.map { ep ->
                 val s = ep.season.toString().padStart(2, '0')
                 val e = ep.episode.toString().padStart(2, '0')
-                com.playbridge.protocol.PlayPayload(
+                com.playbridge.shared.protocol.PlayPayload(
                     url = "", // Not needed for UI
                     title = "S${s}E${e} - ${ep.title ?: "Episode ${ep.episode}"}"
                 )
@@ -1322,7 +1322,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         dialog.show()
     }
 
-    private fun resolveStreamsAndPreBuffer(p: com.playbridge.protocol.ContentPlayPayload) {
+    private fun resolveStreamsAndPreBuffer(p: com.playbridge.shared.protocol.ContentPlayPayload) {
         resolutionJob?.cancel()
         isPrePlayLaunching = false
         prePlayCountdown = 0
@@ -1340,7 +1340,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
                 FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
 
-                val streams = com.playbridge.player.stremio.StremioClient.resolveStreamsByContentId(
+                val streams = com.playbridge.shared.stremio.StremioClient.resolveStreamsByContentId(
                     addonBaseUrls = p.addonBaseUrls,
                     addonNames = p.addonNames,
                     contentId = p.contentId,
@@ -1375,7 +1375,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
     }
 
-    private fun playVideoAfterResolution(url: String, p: com.playbridge.protocol.ContentPlayPayload) {
+    private fun playVideoAfterResolution(url: String, p: com.playbridge.shared.protocol.ContentPlayPayload) {
         isPrePlayLaunching = true
         isPreBuffering = true
 

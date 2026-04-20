@@ -28,7 +28,7 @@ abstract class PlayerActivity : ComponentActivity() {
     protected open fun getPlayerProgressManager(): ProgressManager? = null
 
     // Shared playback configuration and series navigation state
-    var seriesNavigator: com.playbridge.player.stremio.SeriesNavigator? = null
+    var seriesNavigator: com.playbridge.shared.stremio.SeriesNavigator? = null
     var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p"
     var maxBitrateCapMbps: Double? = null         // explicit bitrate cap from phone settings (Mbps)
 
@@ -44,11 +44,11 @@ abstract class PlayerActivity : ComponentActivity() {
         seriesNavigator = when {
             seriesContextJson != null -> {
                 try {
-                    val ctx = com.playbridge.protocol.protocolJson.decodeFromString(
-                        com.playbridge.protocol.SeriesContext.serializer(),
+                    val ctx = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                        com.playbridge.shared.protocol.SeriesContext.serializer(),
                         seriesContextJson
                     )
-                    com.playbridge.player.stremio.SeriesNavigator(
+                    com.playbridge.shared.stremio.SeriesNavigator(
                         context             = ctx,
                         qualityPreference   = defaultVideoQuality,
                         preferredSourceTypes= ctx.preferredSourceTypes,
@@ -64,11 +64,11 @@ abstract class PlayerActivity : ComponentActivity() {
             }
             contentPayloadJson != null -> {
                 try {
-                    val p = com.playbridge.protocol.protocolJson.decodeFromString(
-                        com.playbridge.protocol.ContentPlayPayload.serializer(),
+                    val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                        com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
                         contentPayloadJson
                     )
-                    val ctx = com.playbridge.protocol.SeriesContext(
+                    val ctx = com.playbridge.shared.protocol.SeriesContext(
                         imdbId = p.contentId,
                         season = p.season ?: 1,
                         episode = p.episode ?: 1,
@@ -83,7 +83,7 @@ abstract class PlayerActivity : ComponentActivity() {
                         episodeRuntimeMinutes = p.episodeRuntimeMinutes,
                         maxBitrateCapMbps = p.maxBitrateCapMbps
                     )
-                    com.playbridge.player.stremio.SeriesNavigator(
+                    com.playbridge.shared.stremio.SeriesNavigator(
                         context             = ctx,
                         qualityPreference   = defaultVideoQuality ?: p.defaultVideoQuality,
                         contentType         = p.contentType,
@@ -273,8 +273,8 @@ abstract class PlayerActivity : ComponentActivity() {
         // Persist SeriesNavigator state into EXTRA_SERIES_CONTEXT
         seriesNavigator?.let { nav ->
             try {
-                val json = com.playbridge.protocol.protocolJson.encodeToString(
-                    com.playbridge.protocol.SeriesContext.serializer(),
+                val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
+                    com.playbridge.shared.protocol.SeriesContext.serializer(),
                     nav.context
                 )
                 newIntent.putExtra(ServerService.EXTRA_SERIES_CONTEXT, json)

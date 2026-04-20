@@ -124,7 +124,7 @@ dependencies {
     // Utils
     implementation(libs.coil3.compose)
 
-    implementation(project(":protocol"))
+    implementation(project(":shared"))
 
     // LibVLC
     implementation(libs.libvlc.all)

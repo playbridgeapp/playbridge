@@ -10,10 +10,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.util.Log
-import com.playbridge.protocol.BluetoothConstants
-import com.playbridge.protocol.createMouseCommandJson
-import com.playbridge.protocol.createPingJson
-import com.playbridge.protocol.createRemoteCommandJson
+import com.playbridge.shared.protocol.BluetoothConstants
+import com.playbridge.shared.protocol.createMouseCommandJson
+import com.playbridge.shared.protocol.createPingJson
+import com.playbridge.shared.protocol.createRemoteCommandJson
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow

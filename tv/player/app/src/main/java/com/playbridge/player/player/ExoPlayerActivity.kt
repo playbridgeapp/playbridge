@@ -1,5 +1,7 @@
 package com.playbridge.player.player
 
+import com.playbridge.shared.player.M3uParser
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -92,7 +94,7 @@ class ExoPlayerActivity : PlayerActivity() {
     private var isLooping = false
 
     // Pre-play (metadata resolution & pre-buffering)
-    private var prePlayPayload by mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null)
+    private var prePlayPayload by mutableStateOf<com.playbridge.shared.protocol.ContentPlayPayload?>(null)
     private var isPrePlayLaunching by mutableStateOf(false)
     private var prePlayCountdown by mutableIntStateOf(0)
     private var isPreBuffering = false
@@ -112,7 +114,7 @@ class ExoPlayerActivity : PlayerActivity() {
     private var subtitleUrls: List<String> = emptyList()
 
     // Playlist queue for auto-advancing through episodes
-    private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
+    private var playlistItems: MutableList<com.playbridge.shared.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
     private var activeDialog: android.app.Dialog? = null
@@ -397,8 +399,8 @@ class ExoPlayerActivity : PlayerActivity() {
         val payloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
         if (payloadJson != null) {
             try {
-                val p = com.playbridge.protocol.protocolJson.decodeFromString(
-                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                    com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
                     payloadJson
                 )
                 prePlayPayload = p
@@ -593,8 +595,8 @@ class ExoPlayerActivity : PlayerActivity() {
         // Build playlist JSON for history persistence
         val plistJson = if (playlistItems.isNotEmpty()) {
             try {
-                com.playbridge.protocol.protocolJson.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                com.playbridge.shared.protocol.protocolJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
                     playlistItems
                 )
             } catch (e: Exception) { null }
@@ -1479,7 +1481,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
         composeView.setContent {
             val scope = rememberCoroutineScope()
-            var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
+            var streams by remember { mutableStateOf<List<com.playbridge.shared.stremio.ScoredStremioStream>>(emptyList()) }
             var isLoading by remember { mutableStateOf(true) }
 
             LaunchedEffect(Unit) {
@@ -1511,7 +1513,7 @@ class ExoPlayerActivity : PlayerActivity() {
                             controlsManager.hideUI()
                         },
                         onRefresh = {
-                            com.playbridge.player.stremio.StremioClient.clearCache(
+                            com.playbridge.shared.stremio.StremioClient.clearCache(
                                 contentId = nav.context.imdbId,
                                 type = "series",
                                 season = nav.currentSeason,
@@ -1542,7 +1544,7 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun showPlaylistPicker() {
-        val displayItems: List<com.playbridge.protocol.PlayPayload>
+        val displayItems: List<com.playbridge.shared.protocol.PlayPayload>
         val displayIndex: Int
         val isSeriesMode: Boolean
 
@@ -1555,7 +1557,7 @@ class ExoPlayerActivity : PlayerActivity() {
             displayItems = nav.episodeList!!.map { ep ->
                 val s = ep.season.toString().padStart(2, '0')
                 val e = ep.episode.toString().padStart(2, '0')
-                com.playbridge.protocol.PlayPayload(
+                com.playbridge.shared.protocol.PlayPayload(
                     url = "", // Not needed for UI
                     title = "S${s}E${e} - ${ep.title ?: "Episode ${ep.episode}"}"
                 )
@@ -1941,7 +1943,7 @@ class ExoPlayerActivity : PlayerActivity() {
         }
     }
 
-    private fun resolveStreamsAndPreBuffer(p: com.playbridge.protocol.ContentPlayPayload) {
+    private fun resolveStreamsAndPreBuffer(p: com.playbridge.shared.protocol.ContentPlayPayload) {
         resolutionJob?.cancel()
         isPrePlayLaunching = false
         prePlayCountdown = 0
@@ -1959,7 +1961,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
                 FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
 
-                val streams = com.playbridge.player.stremio.StremioClient.resolveStreamsByContentId(
+                val streams = com.playbridge.shared.stremio.StremioClient.resolveStreamsByContentId(
                     addonBaseUrls = p.addonBaseUrls,
                     addonNames = p.addonNames,
                     contentId = p.contentId,
@@ -1994,7 +1996,7 @@ class ExoPlayerActivity : PlayerActivity() {
         }
     }
 
-    private fun playVideoAfterResolution(url: String, p: com.playbridge.protocol.ContentPlayPayload) {
+    private fun playVideoAfterResolution(url: String, p: com.playbridge.shared.protocol.ContentPlayPayload) {
         isPrePlayLaunching = true
         isPreBuffering = true
 

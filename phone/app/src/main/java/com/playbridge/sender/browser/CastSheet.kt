@@ -225,8 +225,8 @@ fun CastSheet(
     mediaflowProxyPassword: String = "",
     mediaflowAutoSelect: Boolean = true,
     subtitleService: StremioSubtitleService = StremioSubtitleService(),
-    contentPayload: com.playbridge.protocol.ContentPlayPayload? = null,
-    onContentClick: (com.playbridge.protocol.ContentPlayPayload) -> Unit = {}
+    contentPayload: com.playbridge.shared.protocol.ContentPlayPayload? = null,
+    onContentClick: (com.playbridge.shared.protocol.ContentPlayPayload) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current

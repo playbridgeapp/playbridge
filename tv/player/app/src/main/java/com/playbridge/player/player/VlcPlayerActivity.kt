@@ -1,5 +1,7 @@
 package com.playbridge.player.player
 
+import com.playbridge.shared.player.M3uParser
+
 import android.content.Intent
 import android.net.Uri
 import android.content.BroadcastReceiver
@@ -162,7 +164,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var currentHeaders: Map<String, String>? = null
 
     // Playlist state
-    private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
+    private var playlistItems: MutableList<com.playbridge.shared.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
     // Preferred language selections — persisted across stream switches and app restarts
@@ -177,7 +179,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var activeDialog: android.app.Dialog? = null
 
     // Pre-play state
-    private var prePlayPayload by mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null)
+    private var prePlayPayload by mutableStateOf<com.playbridge.shared.protocol.ContentPlayPayload?>(null)
     private var isPrePlayLaunching by mutableStateOf(false)
     private var prePlayCountdown by androidx.compose.runtime.mutableIntStateOf(0)
     private var isPreBuffering = false
@@ -505,8 +507,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val payloadJson = intent.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
         if (payloadJson != null) {
             try {
-                val p = com.playbridge.protocol.protocolJson.decodeFromString(
-                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                    com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
                     payloadJson
                 )
                 prePlayPayload = p
@@ -776,7 +778,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         composeView.setContent {
             val scope = rememberCoroutineScope()
-            var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
+            var streams by remember { mutableStateOf<List<com.playbridge.shared.stremio.ScoredStremioStream>>(emptyList()) }
             var isLoading by remember { mutableStateOf(true) }
 
             LaunchedEffect(Unit) {
@@ -806,7 +808,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                             controlsManager.hideControls()
                         },
                         onRefresh = {
-                            com.playbridge.player.stremio.StremioClient.clearCache(
+                            com.playbridge.shared.stremio.StremioClient.clearCache(
                                 contentId = nav.context.imdbId,
                                 type = "series",
                                 season = nav.currentSeason,
@@ -836,7 +838,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun showPlaylistPicker() {
-        val displayItems: List<com.playbridge.protocol.PlayPayload>
+        val displayItems: List<com.playbridge.shared.protocol.PlayPayload>
         val displayIndex: Int
         val isSeriesMode: Boolean
 
@@ -849,7 +851,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             displayItems = nav.episodeList!!.map { ep ->
                 val s = ep.season.toString().padStart(2, '0')
                 val e = ep.episode.toString().padStart(2, '0')
-                com.playbridge.protocol.PlayPayload(
+                com.playbridge.shared.protocol.PlayPayload(
                     url = "", // Not needed for UI
                     title = "S${s}E${e} - ${ep.title ?: "Episode ${ep.episode}"}"
                 )
@@ -946,7 +948,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun playPlaylistItem(item: com.playbridge.protocol.PlayPayload) {
+    private fun playPlaylistItem(item: com.playbridge.shared.protocol.PlayPayload) {
         isLoadingNewStream = true
         syncSelectionsToProgressManager()
         progressManager.saveProgress()
@@ -1156,8 +1158,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         if (playlistItems.isEmpty() && historyItem?.playlistJson != null) {
             try {
-                val decoded = com.playbridge.protocol.protocolJson.decodeFromString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                val decoded = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
                     historyItem.playlistJson!!
                 )
                 if (decoded.isNotEmpty()) {
@@ -1174,8 +1176,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Build playlist JSON for history persistence (computed after fallback restore)
         val plistJson = if (playlistItems.isNotEmpty()) {
             try {
-                com.playbridge.protocol.protocolJson.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                com.playbridge.shared.protocol.protocolJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
                     playlistItems
                 )
             } catch (e: Exception) {
@@ -1535,7 +1537,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
 
-    private fun resolveStreamsAndPreBuffer(p: com.playbridge.protocol.ContentPlayPayload) {
+    private fun resolveStreamsAndPreBuffer(p: com.playbridge.shared.protocol.ContentPlayPayload) {
         resolutionJob?.cancel()
         isPrePlayLaunching = false
         prePlayCountdown = 0
@@ -1553,7 +1555,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                 FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
 
-                val streams = com.playbridge.player.stremio.StremioClient.resolveStreamsByContentId(
+                val streams = com.playbridge.shared.stremio.StremioClient.resolveStreamsByContentId(
                     addonBaseUrls = p.addonBaseUrls,
                     addonNames = p.addonNames,
                     contentId = p.contentId,
@@ -1588,7 +1590,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun playVideoAfterResolution(url: String, p: com.playbridge.protocol.ContentPlayPayload) {
+    private fun playVideoAfterResolution(url: String, p: com.playbridge.shared.protocol.ContentPlayPayload) {
         isPrePlayLaunching = true
         isPreBuffering = true
 

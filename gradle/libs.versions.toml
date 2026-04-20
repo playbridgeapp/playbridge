@@ -69,6 +69,8 @@ okio                            = { module = "com.squareup.okio:okio", version.r
 multiplatform-settings          = { module = "com.russhwolf:multiplatform-settings", version.ref = "settings-mp" }
 multiplatform-settings-coroutines = { module = "com.russhwolf:multiplatform-settings-coroutines", version.ref = "settings-mp" }
 turbine                         = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
+ktor-client-mock                = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+okio-fakefilesystem             = { module = "com.squareup.okio:okio-fakefilesystem", version.ref = "okio" }
 
 # OkHttp
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }

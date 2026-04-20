@@ -247,13 +247,13 @@ fun SettingsScreen(
                     val h = hours.toInt()
                     cacheHours = h
                     prefs.edit().putInt("stream_cache_hours", h).apply()
-                    com.playbridge.player.stremio.StremioClient.updateCacheDuration(h)
+                    com.playbridge.shared.stremio.StremioClient.updateCacheDuration(h)
                 }
             )
 
             Button(
                 onClick = {
-                    com.playbridge.player.stremio.StremioClient.clearAllCache()
+                    com.playbridge.shared.stremio.StremioClient.clearAllCache()
                     Toast.makeText(context, "Stream cache cleared", Toast.LENGTH_SHORT).show()
                 }
             ) {

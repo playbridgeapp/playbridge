@@ -6,6 +6,8 @@ import com.playbridge.browser.logging.FileLogger
 class PlayBridgeBrowserApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        com.playbridge.shared.SharedContext.init(this)
+        com.playbridge.shared.stremio.StremioClient.init(this)
         FileLogger.init(this)
     }
 }

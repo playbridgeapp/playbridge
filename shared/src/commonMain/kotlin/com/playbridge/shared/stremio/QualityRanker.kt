@@ -1,4 +1,4 @@
-package com.playbridge.player.stremio
+package com.playbridge.shared.stremio
 
 /**
  * Quality tier rank — mirrors the phone's QualityFilter patterns so both sides
@@ -7,7 +7,7 @@ package com.playbridge.player.stremio
  * Key values match PlayPayload.defaultVideoQuality strings:
  *   "2160p", "1080p", "720p", or null / anything else → best available.
  */
-internal object QualityRanker {
+object QualityRanker {
 
     private val UHD_PATTERNS  = listOf("2160p", "4k", "uhd")
     private val FHD_PATTERNS  = listOf("1080p", "1080")

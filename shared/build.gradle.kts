@@ -56,6 +56,8 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.turbine)
+            implementation(libs.ktor.client.mock)
+            implementation(libs.okio.fakefilesystem)
         }
     }
 }

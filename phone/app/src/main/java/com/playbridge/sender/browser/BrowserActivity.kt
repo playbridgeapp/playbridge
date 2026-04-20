@@ -465,7 +465,7 @@ class BrowserActivity : ComponentActivity() {
             var forcedVideos by remember { mutableStateOf<List<DetectedVideo>?>(null) }
             var castSheetInitialMode by remember { mutableStateOf("play") }
             var castSheetBrowseOverride by remember { mutableStateOf<String?>(null) }
-            var pendingContentPayload by remember { mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null) }
+            var pendingContentPayload by remember { mutableStateOf<com.playbridge.shared.protocol.ContentPlayPayload?>(null) }
             val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
                 derivedStateOf {
                     // Read processingVersion so this re-derives whenever any video's
@@ -594,7 +594,7 @@ class BrowserActivity : ComponentActivity() {
                 url = contextMenuUrl,
                 isConnected = connectionState is WebSocketClient.ConnectionState.Connected,
                 onPlayOnTv = { linkUrl ->
-                    val cmd = com.playbridge.protocol.createPlayCommandJson(
+                    val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
                         url = linkUrl,
                         playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
                         preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
@@ -885,7 +885,7 @@ class BrowserActivity : ComponentActivity() {
                                             onTabsClick = { currentScreen = Screen.Tabs },
                                             onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                                 {
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                                     currentScreen = Screen.Remote
                                                 }
                                             } else null,
@@ -1518,7 +1518,7 @@ class BrowserActivity : ComponentActivity() {
                                                 onMenuClick = { scope.launch { drawerState.open() } },
                                                 onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                                     {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createContextQueryJson())
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                                         currentScreen = Screen.Remote
                                                     }
                                                 } else null
@@ -1608,49 +1608,49 @@ class BrowserActivity : ComponentActivity() {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendRemoteCommand(key)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createRemoteCommandJson(key))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createRemoteCommandJson(key))
                                                     }
                                                 },
                                                 onMouseMove = { dx, dy ->
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("move", dx, dy)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createMouseCommandJson("move", dx, dy))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("move", dx, dy))
                                                     }
                                                 },
                                                 onMouseClick = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("click", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createMouseCommandJson("click"))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("click"))
                                                     }
                                                 },
                                                 onMouseScroll = { dx, dy ->
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("scroll", dx, dy)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createMouseCommandJson("scroll", dx, dy))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("scroll", dx, dy))
                                                     }
                                                 },
                                                 onMouseDown = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("down", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createMouseCommandJson("down"))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("down"))
                                                     }
                                                 },
                                                 onMouseUp = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("up", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.protocol.createMouseCommandJson("up"))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("up"))
                                                     }
                                                 },
                                                 onBrowserControl = { action ->
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.protocol.createBrowserControlCommandJson(action))
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createBrowserControlCommandJson(action))
                                                 },
                                                 onPlayerControl = { command ->
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.protocol.createControlCommandJson(command))
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson(command))
                                                     if (command == "stop") { tvActiveContext = "idle" }
                                                 }
                                             )
@@ -1710,7 +1710,7 @@ class BrowserActivity : ComponentActivity() {
                                                     // Always send direct to TV — the TV handles forcePicker
                                                     // by showing its own stream picker, so we never open the
                                                     // phone-side CastSheet from LibraryDetailScreen.
-                                                    val cmd = com.playbridge.protocol.createPlayContentCommandJson(
+                                                    val cmd = com.playbridge.shared.protocol.createPlayContentCommandJson(
                                                         payload.copy(
                                                             playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
                                                             preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
@@ -1746,7 +1746,7 @@ class BrowserActivity : ComponentActivity() {
                                                 // straight to the TV as a `play` command (bypassing
                                                 // content-payload resolution on the TV).
                                                 onSendStreamToTv = { url, title, headers, contentType ->
-                                                    val cmd = com.playbridge.protocol.createPlayCommandJson(
+                                                    val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
                                                         url = url,
                                                         title = title,
                                                         headers = headers,
@@ -1771,7 +1771,7 @@ class BrowserActivity : ComponentActivity() {
                                                             maxBitrateCapMbps = maxBitrateCapMbps
                                                         )
                                                     }
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.protocol.createPlaylistCommandJson(items = itemsWithMode))
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(items = itemsWithMode))
                                                 },
                                                 onQueueAdd = { item ->
                                                     val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
@@ -1782,10 +1782,10 @@ class BrowserActivity : ComponentActivity() {
                                                         defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" },
                                                         maxBitrateCapMbps = maxBitrateCapMbps
                                                     )
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.protocol.createQueueAddCommandJson(itemWithPrefs))
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createQueueAddCommandJson(itemWithPrefs))
                                                 },
                                                 onPlaylistJump = { index ->
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.protocol.createPlaylistJumpCommandJson(index))
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistJumpCommandJson(index))
                                                 },
                                                 onNowPlayingStarted = { tmdbId, season, startEp ->
                                                     nowPlayingTvId = tmdbId
@@ -1849,7 +1849,7 @@ class BrowserActivity : ComponentActivity() {
                         videos = detectedVideos,
                         contentPayload = pendingContentPayload,
                         onContentClick = { payload ->
-                            val cmd = com.playbridge.protocol.createPlayContentCommandJson(
+                            val cmd = com.playbridge.shared.protocol.createPlayContentCommandJson(
                                 payload.copy(
                                     playerMode = sheetPlayerMode.takeIf { it != "tv" },
                                     preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
@@ -1890,7 +1890,7 @@ class BrowserActivity : ComponentActivity() {
                             when (val state = connectionState) {
                                 is WebSocketClient.ConnectionState.Connected -> {
                                     if (video.playlistPayload != null) {
-                                        val cmd = com.playbridge.protocol.createPlaylistCommandJson(items = video.playlistPayload)
+                                        val cmd = com.playbridge.shared.protocol.createPlaylistCommandJson(items = video.playlistPayload)
                                         if (connectionViewModel.webSocketClient.send(cmd)) {
                                             tvActiveContext = "player"
                                             Toast.makeText(this@BrowserActivity, "Playlist sent to ${state.serverName}", Toast.LENGTH_SHORT).show()
@@ -1901,7 +1901,7 @@ class BrowserActivity : ComponentActivity() {
                                             headers["Referer"] = video.originUrl
                                         }
                                         val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
-                                        val commandJson = com.playbridge.protocol.createPlayCommandJson(
+                                        val commandJson = com.playbridge.shared.protocol.createPlayCommandJson(
                                             url = video.url,
                                             title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
                                             headers = headers,
@@ -1939,7 +1939,7 @@ class BrowserActivity : ComponentActivity() {
                         mediaflowAutoSelect = mediaflowAutoSelect,
                         onBrowseClick = { selectedMode, desktopMode ->
                             val effectiveUrl = castSheetBrowseOverride ?: currentUrl
-                            val cmd = com.playbridge.protocol.createBrowserCommandJson(effectiveUrl, browserMode = selectedMode.takeIf { it != "tv" }, desktopMode = desktopMode.takeIf { it })
+                            val cmd = com.playbridge.shared.protocol.createBrowserCommandJson(effectiveUrl, browserMode = selectedMode.takeIf { it != "tv" }, desktopMode = desktopMode.takeIf { it })
                             connectionViewModel.sendCommandAndRecord(cmd, "browser", effectiveUrl, "Browser Page")
                             Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                             showVideoSheet = false
@@ -1999,7 +1999,7 @@ class BrowserActivity : ComponentActivity() {
                         if (download.cookie != null) headers["Cookie"] = download.cookie
                         when (val state = connectionState) {
                             is WebSocketClient.ConnectionState.Connected -> {
-                                val commandJson = com.playbridge.protocol.createPlayCommandJson(url = download.url, title = selectedTab?.content?.title ?: download.fileName ?: "Video from browser", headers = headers, contentType = download.contentType, subtitles = null, detectedBy = "download", playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }, preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() }, preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() }, defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }, maxBitrateCapMbps = maxBitrateCapMbps)
+                                val commandJson = com.playbridge.shared.protocol.createPlayCommandJson(url = download.url, title = selectedTab?.content?.title ?: download.fileName ?: "Video from browser", headers = headers, contentType = download.contentType, subtitles = null, detectedBy = "download", playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }, preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() }, preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() }, defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }, maxBitrateCapMbps = maxBitrateCapMbps)
                                 connectionViewModel.sendCommandAndRecord(commandJson, "play", download.url, selectedTab?.content?.title ?: download.fileName ?: "Video from browser")
                                 if (connectionViewModel.webSocketClient.send(commandJson)) {
                                     tvActiveContext = "player"
@@ -2018,7 +2018,7 @@ class BrowserActivity : ComponentActivity() {
                     val provider = debridRepository.getActiveProvider()
                     if (provider != null) {
                         MagnetParsingSheet(magnetUri = interceptedMagnet, torrentBytes = interceptedTorrentBytes, provider = provider, onDismiss = { interceptedMagnet = null; interceptedTorrentBytes = null }, onPlayLinks = { links ->
-                            val videos = links.map { link -> com.playbridge.protocol.PlayPayload(url = link.downloadUrl, title = link.filename, playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }, preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() }, preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() }, defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }, maxBitrateCapMbps = maxBitrateCapMbps) }
+                            val videos = links.map { link -> com.playbridge.shared.protocol.PlayPayload(url = link.downloadUrl, title = link.filename, playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }, preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() }, preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() }, defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }, maxBitrateCapMbps = maxBitrateCapMbps) }
                             val detectedVideo = DetectedVideo(url = if (links.size == 1) links.first().downloadUrl else "playlist://magnet", tabId = -1, timestamp = System.currentTimeMillis(), isPlayable = true, detectedBy = "magnet_playlist", playlistPayload = if (links.size > 1) videos else null)
                             scope.launch { forcePlaylistSheet = detectedVideo; showVideoSheet = true }
                             interceptedMagnet = null

@@ -77,6 +77,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore)
     implementation(libs.geckoview.omni)
+    implementation(project(":shared"))
 
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.compose.ui.tooling)

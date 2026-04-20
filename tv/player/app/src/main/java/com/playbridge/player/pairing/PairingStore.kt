@@ -5,7 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.playbridge.player.model.PairedDevice
-import com.playbridge.protocol.protocolJson
+import com.playbridge.shared.protocol.protocolJson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -25,7 +25,7 @@ class PairingStore(private val context: Context) {
         private val PAIRED_DEVICES = stringPreferencesKey("paired_devices")
         private val DEVICE_ID = stringPreferencesKey("device_id")
         
-        const val DEFAULT_PORT = com.playbridge.protocol.Config.DEFAULT_PORT
+        const val DEFAULT_PORT = com.playbridge.shared.protocol.Config.DEFAULT_PORT
     }
     
     /**

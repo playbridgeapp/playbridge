@@ -31,9 +31,9 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
-import com.playbridge.player.stremio.QualityRanker
-import com.playbridge.player.stremio.ScoredStremioStream
-import com.playbridge.player.stremio.SourceTypeRanker
+import com.playbridge.shared.stremio.QualityRanker
+import com.playbridge.shared.stremio.ScoredStremioStream
+import com.playbridge.shared.stremio.SourceTypeRanker
 
 /**
  * Side-panel stream selection dialog.

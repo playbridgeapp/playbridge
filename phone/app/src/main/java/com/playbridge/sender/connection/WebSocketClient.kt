@@ -1,7 +1,7 @@
 package com.playbridge.sender.connection
 
 import android.util.Log
-import com.playbridge.protocol.createPingJson
+import com.playbridge.shared.protocol.createPingJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -41,8 +41,8 @@ class WebSocketClient {
     val newToken = _newToken.asSharedFlow()
     
     private var retryCount = 0
-    private val MAX_RETRIES = com.playbridge.protocol.Config.MAX_RETRIES // 5 minutes
-    private val RETRY_DELAY_MS = com.playbridge.protocol.Config.RETRY_DELAY_MS
+    private val MAX_RETRIES = com.playbridge.shared.protocol.Config.MAX_RETRIES // 5 minutes
+    private val RETRY_DELAY_MS = com.playbridge.shared.protocol.Config.RETRY_DELAY_MS
     private var targetConnection: TvConnectionInfo? = null
     private var isUserDisconnect = false
 
@@ -95,7 +95,7 @@ class WebSocketClient {
                 // Send auth message immediately
                 scope.launch {
                     try {
-                        val authJson = com.playbridge.protocol.createAuthJson(targetConnection?.token ?: "")
+                        val authJson = com.playbridge.shared.protocol.createAuthJson(targetConnection?.token ?: "")
                         Log.d(TAG, "Sending auth: $authJson")
                         webSocket.send(authJson)
                     } catch (e: Exception) {

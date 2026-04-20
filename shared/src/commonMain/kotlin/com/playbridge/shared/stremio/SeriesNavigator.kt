@@ -1,10 +1,9 @@
-package com.playbridge.player.stremio
+package com.playbridge.shared.stremio
 
-import android.util.Log
-import com.playbridge.player.logging.FileLogger
-import com.playbridge.protocol.SeriesContext
-import com.playbridge.protocol.SeriesEpisodeRef
-import com.playbridge.player.stremio.ScoredStremioStream
+import com.playbridge.shared.logging.logger
+import com.playbridge.shared.protocol.SeriesContext
+import com.playbridge.shared.protocol.SeriesEpisodeRef
+import kotlin.comparisons.compareBy
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -12,18 +11,6 @@ private const val TAG = "SeriesNavigator"
 
 /**
  * Tracks series playback state and resolves fresh stream URLs for prev/next navigation.
- *
- * Constructed once per playback session from the [SeriesContext] delivered in the initial
- * PlayPayload. [qualityPreference] comes from PlayPayload.defaultVideoQuality and is passed
- * separately since SeriesContext doesn't carry it.
- *
- * Two navigation modes:
- *  - **List mode** (preferred): [SeriesContext.allEpisodes] is non-null — navigation is
- *    index-based over the flat episode list. Season boundaries are transparent; the list
- *    is assumed sorted by (season, episode).
- *  - **Optimistic mode**: [SeriesContext.allEpisodes] is null — episode number is simply
- *    incremented/decremented. [hasNext] always returns true in this mode; a null result
- *    from [resolveNext] signals the addon returned nothing (end of series).
  */
 class SeriesNavigator(
     val context: SeriesContext,
@@ -38,40 +25,23 @@ class SeriesNavigator(
     val maxBitrateMbps: Double? = null
 ) {
 
-    // ── Concurrency guard ─────────────────────────────────────────────────────
-
-    /**
-     * Serialises all resolution calls so that rapid Next/Prev taps or a user picker
-     * tap racing with auto-advance never run two network requests concurrently.
-     * Each suspend resolution function acquires this lock for its entire duration,
-     * so a second caller always observes the already-advanced [currentIndex].
-     */
     private val mutex = Mutex()
 
-    // ── State ──────────────────────────────────────────────────────────────────
-
     /** Flat episode list sorted by (season, episode), or null when not provided. */
-    val episodeList: List<SeriesEpisodeRef>? =
-        if (contentType == "series") context.allEpisodes?.sortedWith(compareBy({ it.season }, { it.episode }))
-        else null
+    val episodeList: List<SeriesEpisodeRef>? = if (contentType == "series") {
+        context.allEpisodes?.sortedWith(compareBy({ it.season }, { it.episode }))
+    } else null
 
     /** Series title for display. */
     val seriesTitle: String?
         get() = context.seriesTitle
 
-    /**
-     * Release-group / source hint for the currently playing stream.
-     * Seeded by [updateSourceHint] once the player starts, then updated automatically
-     * after each successful [resolveNext] / [resolvePrev] / [resolveAndAdvanceToIndex].
-     * Passed to [StremioClient] so it can prefer the same torrent source for subsequent
-     * episodes (season pack of same release group > other sources at same quality).
-     */
+    /** Release-group / source hint for the currently playing stream. */
     var currentSourceHint: String? = null
         private set
 
     /**
      * Current index within [episodeList] (list mode), or null (optimistic mode).
-     * Advanced/rewound by navigation calls.
      */
     var currentIndex: Int? = episodeList
         ?.indexOfFirst { it.season == context.season && it.episode == context.episode }
@@ -91,68 +61,40 @@ class SeriesNavigator(
         get() = episodeList?.getOrNull(currentIndex ?: -1)?.title ?: context.episodeTitle
 
     init {
-        Log.d(TAG, "SeriesNavigator created: ${context.seriesTitle} " +
+        logger.d(TAG, "SeriesNavigator created: ${context.seriesTitle} " +
             "S${context.season}E${context.episode} " +
             "mode=${if (episodeList != null) "list(${episodeList.size} eps)" else "optimistic"} " +
             "currentIndex=$currentIndex qualityPref=$qualityPreference " +
             "addons=${context.addonBaseUrls.size}")
     }
 
-    // ── Source hint ───────────────────────────────────────────────────────────
-
-    /**
-     * Seed or update the source hint from the stream that is currently playing.
-     * Call this from ExoPlayerActivity once the player starts (or after a new episode
-     * begins), passing the stream URL and stream name/title if known.
-     *
-     * The hint is also updated automatically after every successful [resolveNext],
-     * [resolvePrev], or [resolveAndAdvanceToIndex].
-     */
     fun updateSourceHint(url: String?, name: String? = null, title: String? = null) {
         val hint = extractSourceHint(url, name, title)
         if (hint != null && hint != currentSourceHint) {
-            Log.d(TAG, "Source hint updated: $currentSourceHint → $hint")
+            logger.d(TAG, "Source hint updated: $currentSourceHint → $hint")
             currentSourceHint = hint
         }
     }
 
-    // ── Navigation state queries ───────────────────────────────────────────────
-
-    /**
-     * True if there is a known next episode.
-     * Always true in optimistic mode (we try and see if the addon returns streams).
-     */
     fun hasNext(): Boolean {
         val idx = currentIndex ?: return true // optimistic: always try
         return idx < (episodeList?.lastIndex ?: 0)
     }
 
-    /**
-     * True if there is a known previous episode.
-     * In optimistic mode, false only if we're at S01E01.
-     */
     fun hasPrev(): Boolean {
         val idx = currentIndex ?: return currentSeason > 1 || currentEpisode > 1
         return idx > 0
     }
 
-    /**
-     * Metadata for the next episode without resolving a stream URL.
-     * Useful for showing "Up Next" UI before the user reaches end-of-episode.
-     */
     fun peekNext(): SeriesEpisodeRef? {
         val idx = currentIndex
         return if (idx != null) {
             episodeList?.getOrNull(idx + 1)
         } else {
-            // Optimistic: simple increment; assume <100 episodes per season
             SeriesEpisodeRef(season = currentSeason, episode = currentEpisode + 1)
         }
     }
 
-    /**
-     * Metadata for the previous episode without resolving a stream URL.
-     */
     fun peekPrev(): SeriesEpisodeRef? {
         val idx = currentIndex
         return if (idx != null) {
@@ -160,20 +102,14 @@ class SeriesNavigator(
         } else {
             when {
                 currentEpisode > 1 -> SeriesEpisodeRef(season = currentSeason, episode = currentEpisode - 1)
-                currentSeason > 1  -> null // We don't know the last episode of the previous season
-                else               -> null // S01E01 — nowhere to go
+                currentSeason > 1  -> null
+                else               -> null
             }
         }
     }
 
-    // ── Resolution ────────────────────────────────────────────────────────────
-
-    /**
-     * Resolve all available streams for the current content.
-     * Useful for showing a "Stream Selection" dialog to the user.
-     */
     suspend fun resolveCurrentStreams(): List<ScoredStremioStream> = mutex.withLock {
-        Log.d(TAG, "resolveCurrentStreams: resolving $contentType ${context.imdbId}")
+        logger.d(TAG, "resolveCurrentStreams: resolving $contentType ${context.imdbId}")
         StremioClient.resolveStreamsByContentId(
             addonBaseUrls          = context.addonBaseUrls,
             addonNames             = context.addonNames,
@@ -191,22 +127,14 @@ class SeriesNavigator(
         )
     }
 
-    /**
-     * Resolve a fresh stream URL for the next episode.
-     *
-     * On success, advances internal state so subsequent calls move one episode further.
-     * Returns null if:
-     *  - Already at the last episode (list mode)
-     *  - The addon returns no streams (optimistic mode — likely end of series)
-     */
     suspend fun resolveNext(): ResolvedStremioStream? = mutex.withLock {
         if (!hasNext()) {
-            FileLogger.i(TAG, "resolveNext: already at last known episode")
+            logger.i(TAG, "resolveNext: already at last known episode")
             return@withLock null
         }
         val nextRef = peekNext() ?: return@withLock null
 
-        FileLogger.i(TAG, "Navigating to NEXT episode: S${nextRef.season}E${nextRef.episode}")
+        logger.i(TAG, "Navigating to NEXT episode: S${nextRef.season}E${nextRef.episode}")
         val stream = StremioClient.resolveEpisode(
             addonBaseUrls          = context.addonBaseUrls,
             addonNames             = context.addonNames,
@@ -227,25 +155,19 @@ class SeriesNavigator(
             updateSourceHint(stream.url, stream.name, stream.title)
             stream
         } else {
-            FileLogger.w(TAG, "resolveNext: no streams for S${nextRef.season}E${nextRef.episode} — likely series end")
+            logger.w(TAG, "resolveNext: no streams for S${nextRef.season}E${nextRef.episode} — likely series end")
             null
         }
     }
 
-    /**
-     * Resolve a fresh stream URL for the previous episode.
-     *
-     * On success, rewinds internal state. Returns null if at the first episode or addon
-     * returns nothing.
-     */
     suspend fun resolvePrev(): ResolvedStremioStream? = mutex.withLock {
         if (!hasPrev()) {
-            FileLogger.i(TAG, "resolvePrev: already at first episode")
+            logger.i(TAG, "resolvePrev: already at first episode")
             return@withLock null
         }
         val prevRef = peekPrev() ?: return@withLock null
 
-        FileLogger.i(TAG, "Navigating to PREVIOUS episode: S${prevRef.season}E${prevRef.episode}")
+        logger.i(TAG, "Navigating to PREVIOUS episode: S${prevRef.season}E${prevRef.episode}")
         val stream = StremioClient.resolveEpisode(
             addonBaseUrls          = context.addonBaseUrls,
             addonNames             = context.addonNames,
@@ -266,21 +188,15 @@ class SeriesNavigator(
             updateSourceHint(stream.url, stream.name, stream.title)
             stream
         } else {
-            FileLogger.w(TAG, "resolvePrev: no streams for S${prevRef.season}E${prevRef.episode}")
+            logger.w(TAG, "resolvePrev: no streams for S${prevRef.season}E${prevRef.episode}")
             null
         }
     }
 
-    /**
-     * Resolve a fresh stream URL for a specific episode index (list mode only).
-     *
-     * On success, jumps the internal state to this index. Returns null if index is out of bounds
-     * or addon returns nothing.
-     */
     suspend fun resolveAndAdvanceToIndex(index: Int): ResolvedStremioStream? = mutex.withLock {
         val targetRef = episodeList?.getOrNull(index) ?: return@withLock null
 
-        FileLogger.i(TAG, "Jumping to episode index $index: S${targetRef.season}E${targetRef.episode}")
+        logger.i(TAG, "Jumping to episode index $index: S${targetRef.season}E${targetRef.episode}")
         val stream = StremioClient.resolveEpisode(
             addonBaseUrls          = context.addonBaseUrls,
             addonNames             = context.addonNames,
@@ -301,27 +217,17 @@ class SeriesNavigator(
             updateSourceHint(stream.url, stream.name, stream.title)
             stream
         } else {
-            FileLogger.w(TAG, "resolveAndAdvanceToIndex: no streams for S${targetRef.season}E${targetRef.episode}")
+            logger.w(TAG, "resolveAndAdvanceToIndex: no streams for S${targetRef.season}E${targetRef.episode}")
             null
         }
     }
 
-    // ── State mutation (private) ───────────────────────────────────────────────
-
-    /**
-     * Move internal state to the given episode ref.
-     *
-     * In list mode the new [currentIndex] is derived by looking up [ref] in [episodeList]
-     * rather than blindly doing ±1. This prevents index drift when concurrent calls are
-     * serialised by [mutex] — each call observes the already-updated state and calculates
-     * the correct position independently of call order.
-     */
     private fun jumpTo(ref: SeriesEpisodeRef) {
         currentSeason  = ref.season
         currentEpisode = ref.episode
         currentIndex   = episodeList?.indexOfFirst {
             it.season == ref.season && it.episode == ref.episode
         }?.takeIf { it >= 0 }
-        FileLogger.i(TAG, "Playlist item picked → S${currentSeason}E${currentEpisode} (index=$currentIndex)")
+        logger.i(TAG, "Playlist item picked → S${currentSeason}E${currentEpisode} (index=$currentIndex)")
     }
 }
