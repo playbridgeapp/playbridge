@@ -242,7 +242,9 @@ private fun MpvSubtitleList(
             }
             items(tracks) { track ->
                 MpvTrackItem(track.title, isSelected = track.isSelected && currentExternalUrl == null) {
-                    onExternalSelected(null)
+                    // Only fire one callback — onSubtitleTrackSelected clears external state
+                    // internally. Firing both races the dialog-dismiss listener and leaves mpv's
+                    // `sid` property stuck on the string "no" from the external-clear branch.
                     onTrackSelected(track.id)
                 }
             }

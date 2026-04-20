@@ -18,6 +18,7 @@ import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
+import `is`.xyz.mpv.Utils
 import com.playbridge.player.logging.FileLogger
 import androidx.annotation.OptIn
 import androidx.lifecycle.setViewTreeLifecycleOwner
@@ -222,8 +223,26 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             playerActivity = this
         )
 
+        // libmpv hardcodes its config dir as `$HOME/.mpv/` and libass looks for
+        // `subfont.ttf` there. The mpv-android JNI wrapper in this AAR does NOT set $HOME
+        // from the Android Context, so it falls through to whatever the OS provides —
+        // typically `/data` or unset — which is not writable. Every earlier attempt to
+        // stage subfont.ttf failed because libass was looking in a path we could never
+        // populate. Fix: force $HOME to filesDir via Os.setenv, then stage the font in
+        // `$HOME/.mpv/subfont.ttf`. This must happen BEFORE MPVLib.create() because the
+        // native code reads $HOME during mpv_create().
+        val existingHome = System.getenv("HOME")
+        try {
+            android.system.Os.setenv("HOME", filesDir.absolutePath, true)
+            FileLogger.i(TAG, "HOME was '$existingHome', now overridden to '${filesDir.absolutePath}' so libmpv sees writable `\$HOME/.mpv/` config dir")
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Failed to override HOME env var — subtitle fonts will not render", e)
+        }
+        ensureSubtitleFallbackFont()
+
         // Initialise MPV
         try {
+            Utils.copyAssets(this)
             MPVLib.create(this)
             mpvInitialized = true
         } catch (e: Exception) {
@@ -237,8 +256,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         MPVLib.setOptionString("vo", "gpu")
         MPVLib.setOptionString("gpu-context", "android")
 
-        // Hardware decoding via MediaCodec — zero-copy SurfaceTexture path, no CPU round-trip.
-        MPVLib.setOptionString("hwdec", "mediacodec")
+        // Hardware decoding via MediaCodec. Use `mediacodec-copy` (NOT plain `mediacodec`):
+        // plain `mediacodec` renders decoded frames straight to the Android surface and bypasses
+        // mpv's GPU VO entirely, which means libass/OSD never gets composited on top — subs and
+        // controls are invisible. `mediacodec-copy` keeps the HW decode but copies frames into
+        // mpv's buffer so the GPU VO can draw subs/OSD over them. The extra per-frame copy is
+        // the documented cost of subtitle support on Android.
+        MPVLib.setOptionString("hwdec", "mediacodec-copy")
         MPVLib.setOptionString("hwdec-codecs", "h264,hevc,vp8,vp9,av1")
 
         // Use bilinear scaling — faster than the default lanczos/spline on large frames.
@@ -267,6 +291,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Disable the ytdl hook — yt-dlp is not installed, so the fallback just wastes ~1s
         // spawning subprocesses on every open failure.
         MPVLib.setOptionString("ytdl", "no")
+
+        // Subtitles: libass has no font provider on Android (fontconfig isn't compiled in),
+        // so it can only use our staged subfont.ttf.
+        // Set sub-fonts-dir so libass can scan it for ASS requested fonts
+        MPVLib.setOptionString("sub-fonts-dir", java.io.File(filesDir, "fonts").absolutePath)
+        // Use the family name 'Roboto' which is inside our staged Roboto-Regular.ttf
+        MPVLib.setOptionString("sub-font", "Roboto")
+        MPVLib.setOptionString("sub-visibility", "yes")
+        MPVLib.setOptionString("embeddedfonts", "yes")
 
         MPVLib.init()
 
@@ -1242,8 +1275,23 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         dialog.dismiss()
                     },
                     onSubtitleTrackSelected = { id ->
-                        if (id != null) MPVLib.setPropertyInt("sid", id)
-                        else MPVLib.command("set", "sid", "no")
+                        // Clear any external sub reference so the next file load does not
+                        // re-apply it via `sub-add ... select` and override the embedded pick.
+                        currentSubtitleUrl = null
+                        if (id != null) {
+                            // Use `command("set", "sid", ...)` — the canonical form every other
+                            // sid-touch site in this file uses. setPropertyString/Int go through
+                            // mpv-android's JNI bridge differently and don't re-apply cleanly
+                            // after a prior `set sid no`, leaving the cplayer-level track ○
+                            // (not selected) even though the demuxer did "select track N".
+                            MPVLib.command("set", "sid", id.toString())
+                            // Guarantee the track is actually rendered in case sub-visibility
+                            // was flipped off earlier in the session.
+                            MPVLib.command("set", "sub-visibility", "yes")
+                            FileLogger.i(TAG, "Subtitle selection: sid=$id, sub-visibility=yes, current sid now=${MPVLib.getPropertyString("sid")}")
+                        } else {
+                            MPVLib.command("set", "sid", "no")
+                        }
                         dialog.dismiss()
                     },
                     onExternalSubtitleSelected = { url ->
@@ -1386,5 +1434,54 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 )
             }
         } catch (e: Exception) { emptyList() }
+    }
+
+    /**
+     * Stage a system TTF as libass's fallback font at `$HOME/.mpv/subfont.ttf` — the path
+     * libmpv actually reads. This relies on [onCreate] having already overridden $HOME to
+     * [filesDir] via Os.setenv; otherwise mpv's config dir resolves to a path the app
+     * can't write to and this is a no-op.
+     *
+     * Overwrites on every launch (cheap, ~150KB) so a prior build that staged the file at
+     * a wrong path doesn't leave a stale empty marker behind. If no readable system font
+     * is found, we log and continue — playback still works, only subtitle rendering suffers.
+     */
+    private fun ensureSubtitleFallbackFont() {
+        // Android TV / Android Q+ ship Roboto; older stock ROMs fall back to DroidSans.
+        // Noto is included as a last-resort wide-glyph option (covers most scripts).
+        val candidates = listOf(
+            "/system/fonts/Roboto-Regular.ttf",
+            "/system/fonts/DroidSans.ttf",
+            "/system/fonts/NotoSans-Regular.ttf",
+            "/system/fonts/NotoSansCJK-Regular.ttc"
+        )
+        val src = candidates
+            .map { java.io.File(it) }
+            .firstOrNull { it.exists() && it.canRead() && it.length() > 0L }
+
+        if (src == null) {
+            FileLogger.w(TAG, "No readable /system/fonts candidate — libass will have no fallback and subtitles will not render")
+            return
+        }
+
+        // libmpv looks for `$HOME/.mpv/subfont.ttf`.
+        // Also stage it in the scannable 'fonts/' directory with its original name
+        // so libass can resolve the family name (e.g. "Roboto").
+        val destinations = listOf(
+            java.io.File(filesDir, ".mpv/subfont.ttf"),
+            java.io.File(filesDir, "fonts/${src.name}")
+        )
+        for (dest in destinations) {
+            try {
+                dest.parentFile?.mkdirs()
+                src.inputStream().use { input ->
+                    dest.outputStream().use { output -> input.copyTo(output) }
+                }
+                FileLogger.i(TAG, "Staged libass fallback font: ${src.name} -> ${dest.absolutePath} (${dest.length()} bytes)")
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to stage subtitle fallback font at ${dest.absolutePath}", e)
+                if (dest.exists() && dest.length() == 0L) dest.delete()
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
 package com.playbridge.sender.browser
 
 import android.content.Context
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -14,6 +15,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,12 +40,20 @@ fun StreamPickerSheet(
     title: String,
     episodeRuntimeMinutes: Int? = null,
     forceManual: Boolean = false,
+    themeColor: Color? = null,
     onStreamSelected: (ResolvedStream) -> Unit,
     onRefresh: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
+    val isDynamic = themeColor != null
+    val containerColor = if (isDynamic) themeColor!! else MaterialTheme.colorScheme.surface
+    val contentColor = if (isDynamic) {
+        if (themeColor!!.luminance() > 0.5f) Color.Black else Color.White
+    } else MaterialTheme.colorScheme.onSurface
+    val accentColor = if (isDynamic) contentColor else MaterialTheme.colorScheme.primary
+    val subTextColor = if (isDynamic) contentColor.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant
 
     // Auto-select preferences
     val autoQualityKey = remember { prefs.getString("auto_stream_quality", "") ?: "" }
@@ -163,7 +174,14 @@ fun StreamPickerSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        containerColor = containerColor,
+        contentColor = contentColor,
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(
+                color = contentColor.copy(alpha = 0.3f)
+            )
+        }
     ) {
         Column(
             modifier = Modifier
@@ -184,20 +202,21 @@ fun StreamPickerSheet(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    color = contentColor
                 )
                 if (isLoading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(24.dp).padding(4.dp),
                         strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary
+                        color = accentColor
                     )
                 } else {
                     IconButton(onClick = onRefresh) {
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = "Refresh streams",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = accentColor
                         )
                     }
                 }
@@ -217,7 +236,9 @@ fun StreamPickerSheet(
                     label = "Quality",
                     valueText = if (selectedFilter == QualityFilter.ALL) "All" else selectedFilter.label,
                     isCustom = selectedFilter != QualityFilter.ALL,
-                    enabled = streams.isNotEmpty() || isLoading
+                    enabled = streams.isNotEmpty() || isLoading,
+                    themeColor = themeColor,
+                    contentColor = contentColor
                 ) { dismiss ->
                     QualityFilter.entries.forEach { filter ->
                         val count = filterCounts[filter] ?: 0
@@ -244,7 +265,9 @@ fun StreamPickerSheet(
                     label = "Provider",
                     valueText = providerValue,
                     isCustom = selectedProvider != null,
-                    enabled = providers.isNotEmpty()
+                    enabled = providers.isNotEmpty(),
+                    themeColor = themeColor,
+                    contentColor = contentColor
                 ) { dismiss ->
                     DropdownMenuItem(
                         text = { Text("All Providers") },
@@ -282,17 +305,19 @@ fun StreamPickerSheet(
                     label = "Source",
                     valueText = sourceValueText,
                     isCustom = selectedSourceTypes.isNotEmpty(),
-                    enabled = streams.isNotEmpty() || isLoading
+                    enabled = streams.isNotEmpty() || isLoading,
+                    themeColor = themeColor,
+                    contentColor = contentColor
                 ) { _ ->
                     if (selectedSourceTypes.isNotEmpty()) {
                         DropdownMenuItem(
                             text = { Text("Clear selection") },
                             onClick = { selectedSourceTypes = emptySet() },
                             leadingIcon = {
-                                Icon(Icons.Default.Close, contentDescription = null)
+                                Icon(Icons.Default.Close, contentDescription = null, tint = contentColor)
                             }
                         )
-                        HorizontalDivider()
+                        HorizontalDivider(color = contentColor.copy(alpha = 0.1f))
                     }
                     SourceTypeFilter.ORDERED.forEach { type ->
                         val count = sourceTypeCounts[type] ?: 0
@@ -305,7 +330,7 @@ fun StreamPickerSheet(
                                 else selectedSourceTypes + type
                             },
                             leadingIcon = {
-                                if (isSelected) Icon(Icons.Default.Check, contentDescription = null)
+                                if (isSelected) Icon(Icons.Default.Check, contentDescription = null, tint = contentColor)
                                 else Spacer(Modifier.size(24.dp))
                             },
                             enabled = count > 0 || isLoading
@@ -324,28 +349,30 @@ fun StreamPickerSheet(
                     Text(
                         text = "${filteredStreams.size} stream${if (filteredStreams.size != 1) "s" else ""}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = accentColor
                     )
                 }
                 if (autoPickTriggered) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp
+                        strokeWidth = 2.dp,
+                        color = accentColor
                     )
                     Text(
                         text = "Auto-picking…",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = accentColor
                     )
                 } else if (isLoading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp
+                        strokeWidth = 2.dp,
+                        color = accentColor
                     )
                     Text(
                         text = "Resolving…",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = subTextColor
                     )
                 }
             }
@@ -360,12 +387,12 @@ fun StreamPickerSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator()
+                        CircularProgressIndicator(color = accentColor)
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             "Resolving streams from addons…",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = subTextColor
                         )
                     }
                 }
@@ -381,19 +408,19 @@ fun StreamPickerSheet(
                         Icon(
                             Icons.Default.SearchOff,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = subTextColor,
                             modifier = Modifier.size(48.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             "No streams found",
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = contentColor
                         )
                         Text(
                             "Make sure you have addons installed with Real-Debrid configured",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = subTextColor,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
                     }
@@ -412,7 +439,7 @@ fun StreamPickerSheet(
                     Text(
                         "No ${selectedFilter.label}$sourceLabel streams found",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = subTextColor
                     )
                 }
             } else {
@@ -426,6 +453,7 @@ fun StreamPickerSheet(
                             resolvedStream = resolved,
                             episodeRuntimeMinutes = episodeRuntimeMinutes,
                             isAutoMatch = autoMatchStream == resolved,
+                            themeColor = themeColor,
                             onClick = { onStreamSelected(resolved) }
                         )
                     }
@@ -450,9 +478,12 @@ private fun DropdownFilterChip(
     valueText: String,
     isCustom: Boolean,
     enabled: Boolean = true,
+    themeColor: Color? = null,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
     content: @Composable (dismiss: () -> Unit) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val isDynamic = themeColor != null
     Box {
         FilterChip(
             selected = isCustom,
@@ -464,11 +495,28 @@ private fun DropdownFilterChip(
                     Icons.Default.ArrowDropDown,
                     contentDescription = null
                 )
-            }
+            },
+            colors = FilterChipDefaults.filterChipColors(
+                containerColor = if (isDynamic) contentColor.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface,
+                labelColor = if (isDynamic) contentColor.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                selectedContainerColor = if (isDynamic) contentColor.copy(alpha = 0.2f) else MaterialTheme.colorScheme.secondaryContainer,
+                selectedLabelColor = contentColor,
+                selectedTrailingIconColor = contentColor,
+                iconColor = if (isDynamic) contentColor.copy(alpha = 0.6f) else MaterialTheme.colorScheme.primary,
+                disabledContainerColor = if (isDynamic) contentColor.copy(alpha = 0.04f) else MaterialTheme.colorScheme.surface,
+                disabledLabelColor = if (isDynamic) contentColor.copy(alpha = 0.3f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            ),
+            border = null
         )
         DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            containerColor = if (isDynamic) themeColor!! else MaterialTheme.colorScheme.surface,
+            modifier = if (isDynamic) Modifier.border(
+                1.dp,
+                contentColor.copy(alpha = 0.2f),
+                RoundedCornerShape(12.dp)
+            ) else Modifier
         ) {
             content { expanded = false }
         }
@@ -480,15 +528,23 @@ private fun StreamItem(
     resolvedStream: ResolvedStream,
     episodeRuntimeMinutes: Int? = null,
     isAutoMatch: Boolean = false,
+    themeColor: Color? = null,
     onClick: () -> Unit
 ) {
     val stream = resolvedStream.stream
+    val isDynamic = themeColor != null
+    val contentColor = if (isDynamic) {
+        if (themeColor!!.luminance() > 0.5f) Color.Black else Color.White
+    } else MaterialTheme.colorScheme.onSurface
+    val subTextColor = if (isDynamic) contentColor.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant
+    val accentColor = if (isDynamic) contentColor else MaterialTheme.colorScheme.primary
 
-    Card(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp)
+        shape = RoundedCornerShape(20.dp),
+        color = if (isDynamic) contentColor.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     ) {
         Row(
             modifier = Modifier
@@ -500,7 +556,7 @@ private fun StreamItem(
             Icon(
                 Icons.Default.PlayCircle,
                 contentDescription = "Play",
-                tint = MaterialTheme.colorScheme.primary,
+                tint = accentColor,
                 modifier = Modifier.size(32.dp)
             )
 
@@ -511,7 +567,8 @@ private fun StreamItem(
                 Text(
                     text = stream.displayName,
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    color = contentColor
                 )
 
                 // Quality info from title field (often contains codec, resolution, size)
@@ -519,7 +576,7 @@ private fun StreamItem(
                     Text(
                         text = stream.qualityInfo,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = subTextColor
                     )
                 }
 
@@ -528,20 +585,22 @@ private fun StreamItem(
                     Text(
                         text = stream.description,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = subTextColor
                     )
                 }
 
                 // File size and addon name row
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.horizontalScroll(rememberScrollState())
                 ) {
                     // Auto-match badge (only visible when sheet was force-opened)
                     if (isAutoMatch) {
                         Surface(
                             shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.tertiaryContainer
+                            color = if (isDynamic) contentColor.copy(alpha = 0.2f) else MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = if (isDynamic) contentColor else MaterialTheme.colorScheme.onTertiaryContainer
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -551,13 +610,13 @@ private fun StreamItem(
                                     Icons.Default.AutoAwesome,
                                     contentDescription = null,
                                     modifier = Modifier.size(10.dp),
-                                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                                    tint = if (isDynamic) contentColor else MaterialTheme.colorScheme.onTertiaryContainer
                                 )
                                 Spacer(modifier = Modifier.width(3.dp))
                                 Text(
                                     text = "Would auto-pick",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    color = if (isDynamic) contentColor else MaterialTheme.colorScheme.onTertiaryContainer
                                 )
                             }
                         }
@@ -567,12 +626,14 @@ private fun StreamItem(
                     stream.fileSizeFormatted?.let { size ->
                         Surface(
                             shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer
+                            color = if (isDynamic) contentColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSecondaryContainer
                         ) {
                             Text(
                                 text = size,
                                 style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                color = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSecondaryContainer
                             )
                         }
                     }
@@ -581,12 +642,14 @@ private fun StreamItem(
                     stream.estimateMbps(episodeRuntimeMinutes)?.let { mbps ->
                         Surface(
                             shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerHighest
+                            color = if (isDynamic) contentColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHighest,
+                            contentColor = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSurfaceVariant
                         ) {
                             Text(
                                 text = mbps,
                                 style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                color = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -595,7 +658,7 @@ private fun StreamItem(
                     Text(
                         text = "via ${resolvedStream.addonName}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = subTextColor
                     )
                 }
             }

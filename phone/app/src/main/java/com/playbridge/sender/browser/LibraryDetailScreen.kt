@@ -587,6 +587,7 @@ fun LibraryDetailScreen(
             episodeRuntimeMinutes = if (isSeries) tvDetails?.typicalEpisodeRuntimeMinutes
                                     else movieDetails?.runtime,
             forceManual = forceManualInPicker,
+            themeColor = dominantColor,
             onStreamSelected = { resolved ->
                 val forPhone = resolutionState.target == ResolutionTarget.PHONE
                 showStreamPicker = false
