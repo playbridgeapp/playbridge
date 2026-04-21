@@ -123,6 +123,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     // Utils
     implementation(libs.coil3.compose)
+    implementation(libs.coil3.network.okhttp)
 
     implementation(project(":shared"))
 

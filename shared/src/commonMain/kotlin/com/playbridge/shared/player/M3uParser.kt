@@ -84,6 +84,8 @@ object M3uParser {
             }
 
             return@withContext if (isMasterPlaylist && variants.isNotEmpty()) variants else null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.e(TAG, "Error parsing master playlist", e)
             return@withContext null
@@ -148,6 +150,8 @@ object M3uParser {
             }
 
             return@withContext if (isIptvPlaylist && items.isNotEmpty()) items else null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.e(TAG, "Error parsing M3U", e)
             return@withContext null

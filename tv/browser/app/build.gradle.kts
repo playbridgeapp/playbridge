@@ -52,6 +52,9 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/INDEX.LIST"
         }
+        jniLibs {
+            pickFirsts.add("lib/**/libc++_shared.so")
+        }
     }
 
     splits {

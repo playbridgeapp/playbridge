@@ -1,5 +1,7 @@
 package com.playbridge.player.player
 
+import com.playbridge.shared.player.VideoFilter
+import com.playbridge.shared.player.VideoFilterAndroid
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -54,7 +56,7 @@ fun VideoFilterDialog(
         modifier = Modifier
             .fillMaxSize()
             .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown && 
+                if (event.type == KeyEventType.KeyDown &&
                    (event.key == Key.DirectionCenter || event.key == Key.Enter)) {
                     // Global intercept of Center/Enter key to dismiss the dialog
                     onDismiss()
@@ -66,14 +68,14 @@ fun VideoFilterDialog(
         // Paused preview frame with instantaneous filter application
         if (previewFrame != null) {
             val composeColorMatrix = androidx.compose.ui.graphics.ColorMatrix(
-                VideoFilter.customMatrix(brightness, contrast, saturation).array
+                VideoFilterAndroid.customMatrix(brightness, contrast, saturation).array
             )
             if (selectedFilter != VideoFilter.CUSTOM) {
                 composeColorMatrix.values.indices.forEach { i ->
-                    composeColorMatrix.values[i] = VideoFilter.matrixFor(selectedFilter).array[i]
+                    composeColorMatrix.values[i] = VideoFilterAndroid.matrixFor(selectedFilter).array[i]
                 }
             }
-            
+
             androidx.compose.foundation.Image(
                 bitmap = previewFrame.asImageBitmap(),
                 contentDescription = "Filter Preview Overlay",

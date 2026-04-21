@@ -1,5 +1,11 @@
 package com.playbridge.player.player
 
+import com.playbridge.shared.player.PlaybackEngine
+import com.playbridge.shared.player.PlaybackState
+import com.playbridge.shared.player.ExoPlayerEngine
+import com.playbridge.shared.player.VideoFilter
+import com.playbridge.shared.player.VideoFilterAndroid
+import com.playbridge.shared.player.VideoFilterManager
 import com.playbridge.shared.player.M3uParser
 
 import android.content.BroadcastReceiver
@@ -61,16 +67,18 @@ private const val TAG = "ExoPlayerActivity"
  */
 class ExoPlayerActivity : PlayerActivity() {
 
-    private var player: ExoPlayer? = null
+    private var engine: ExoPlayerEngine? = null
+    private lateinit var viewModel: com.playbridge.shared.player.PlayerViewModel
+    private lateinit var resumeStore: com.playbridge.player.data.HistoryResumeStore
 
     private lateinit var playerView: PlayerView
 
-    override fun play() { player?.play() }
-    override fun pause() { player?.pause() }
-    override fun isPlaying(): Boolean = player?.isPlaying == true
-    override fun getMediaDuration(): Long = player?.duration ?: 0L
-    override fun getCurrentPosition(): Long = player?.currentPosition ?: 0L
-    override fun seekTo(position: Long) { player?.seekTo(position) }
+    override fun play() { engine?.play() }
+    override fun pause() { engine?.pause() }
+    override fun isPlaying(): Boolean = engine?.getExoPlayer()?.isPlaying == true
+    override fun getMediaDuration(): Long = engine?.getExoPlayer()?.duration ?: 0L
+    override fun getCurrentPosition(): Long = engine?.getExoPlayer()?.currentPosition ?: 0L
+    override fun seekTo(position: Long) { engine?.getExoPlayer()?.seekTo(position) }
     override fun getVideoSurfaceView(): android.view.SurfaceView? = playerView.videoSurfaceView as? android.view.SurfaceView
 
     override fun stopPlayback() {
@@ -92,6 +100,9 @@ class ExoPlayerActivity : PlayerActivity() {
 
     // Loop state
     private var isLooping = false
+
+    // VM wiring (Step 5a proxy layer)
+    private var vmUiJob: kotlinx.coroutines.Job? = null
 
     // Pre-play (metadata resolution & pre-buffering)
     private var prePlayPayload by mutableStateOf<com.playbridge.shared.protocol.ContentPlayPayload?>(null)
@@ -193,6 +204,7 @@ class ExoPlayerActivity : PlayerActivity() {
         // Initialize View Bindings
         setContentView(com.playbridge.player.R.layout.activity_player)
 
+        playerView = findViewById(com.playbridge.player.R.id.player_view)
         composeView = findViewById(com.playbridge.player.R.id.preplay_compose_view)
         composeView.setContent {
             val p = prePlayPayload
@@ -218,8 +230,7 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         val historyStore = HistoryStore(applicationContext)
-
-        playerView = findViewById(com.playbridge.player.R.id.player_view)
+        resumeStore = com.playbridge.player.data.HistoryResumeStore(historyStore)
 
         // Force default styling for ExoPlayer's SubtitleView (ignores embedded MKV/SSA styles)
         playerView.subtitleView?.apply {
@@ -258,10 +269,10 @@ class ExoPlayerActivity : PlayerActivity() {
         // Initialize SubtitleManager
         val subtitleTextView = findViewById<android.widget.TextView>(com.playbridge.player.R.id.subtitle_view)
         subtitleManager = SubtitleManager(subtitleTextView, lifecycleScope)
-        subtitleManager.setPlayer { player?.currentPosition ?: 0L }
+        subtitleManager.setPlayer { engine?.getExoPlayer()?.currentPosition ?: 0L }
 
         // Initialize VideoFilterManager
-        videoFilterManager = VideoFilterManager(playerView)
+        videoFilterManager = VideoFilterManager()
 
         val loopButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_loop)
         val switchPlayerButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_switch_player)
@@ -286,7 +297,7 @@ class ExoPlayerActivity : PlayerActivity() {
             remainingText = remainingText,
             titleText = titleText,
             bufferingSpinner = bufferingSpinner,
-            playerProvider = { player },
+            playerProvider = { engine?.getExoPlayer() },
             onShowTrackSelection = { showTrackSelectionDialog() },
             onShowPlaylist = { showPlaylistPicker() },
             onShowStreams = { showStreamSelectionDialog() },
@@ -308,7 +319,7 @@ class ExoPlayerActivity : PlayerActivity() {
         inputHandler = InputHandler(
             activity = this,
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
-            playerProvider = { player },
+            playerProvider = { engine?.getExoPlayer() },
             controls = controlsManager,
             isExternalOverlayVisible = { prePlayPayload != null || activeDialog != null }
         )
@@ -478,42 +489,26 @@ class ExoPlayerActivity : PlayerActivity() {
     private fun initializePlayer() {
         releasePlayer()
 
-        val bufCfg = computeBufferConfig()
-        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 1000, 2500)
-            .setTargetBufferBytes(bufCfg.targetBytes)
-            .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
-            .setBackBuffer(0, false)
-            .build()
-
-        val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
-            override fun buildTextRenderers(
-                context: android.content.Context,
-                output: androidx.media3.exoplayer.text.TextOutput,
-                outputLooper: android.os.Looper,
-                extensionRendererMode: Int,
-                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
-            ) {
-                super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, out)
-                out.forEach {
-                    if (it is androidx.media3.exoplayer.text.TextRenderer) {
-                        it.experimentalSetLegacyDecodingEnabled(true)
-                    }
-                }
-            }
+        engine = ExoPlayerEngine(this).also {
+            playerView.player = it.getExoPlayer()
+            // In Step 4, we keep some activity-local listeners/logic for now
+            it.getExoPlayer()?.addListener(createPlayerListener())
+        }
+        viewModel = com.playbridge.shared.player.PlayerViewModel(
+            engine = engine!!,
+            resumeStore = resumeStore,
+            scope = lifecycleScope,
+        )
+        vmUiJob?.cancel()
+        vmUiJob = lifecycleScope.launch {
+            viewModel.ui.collect { state -> handleVmUiState(state) }
         }
 
-        player = ExoPlayer.Builder(this)
-            .setRenderersFactory(renderersFactory)
-            .setLoadControl(loadControl)
-            .build()
-            .also { exoPlayer ->
-                playerView.player = exoPlayer
-                videoFilterManager.setPlayer(exoPlayer)
-
-                exoPlayer.playWhenReady = true
-                exoPlayer.addListener(createPlayerListener())
-            }
+        // 5a proxy: sync Activity-owned state into the VM so it stays consistent.
+        if (playlistItems.isNotEmpty()) {
+            viewModel.setPlaylist(playlistItems, playlistIndex)
+        }
+        seriesNavigator?.let { viewModel.setSeriesNavigator(it) }
     }
 
     private var playJob: kotlinx.coroutines.Job? = null
@@ -566,6 +561,9 @@ class ExoPlayerActivity : PlayerActivity() {
                     playlistItems = parsedPlaylist.toMutableList()
                     playlistIndex = 0
                     controlsManager.setPlaylistVisible(true)
+                    if (::viewModel.isInitialized) {
+                        viewModel.setPlaylist(playlistItems, playlistIndex)
+                    }
 
                     val firstItem = parsedPlaylist[0]
                     val displayTitle = if (firstItem.title != null) {
@@ -590,7 +588,15 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun startPlayback(url: String, title: String?, contentType: String?, detectedBy: String?, intentHeaders: Map<String, String>?, subtitles: ArrayList<String>?) {
+        FileLogger.i(TAG, "startPlayback() called with url: $url")
         FileLogger.i(TAG, "Starting playback with Final Content Type: $contentType")
+
+        if (engine == null) {
+            FileLogger.i(TAG, "engine is null, calling initializePlayer()")
+            initializePlayer()
+        } else {
+            FileLogger.i(TAG, "engine is NOT null")
+        }
 
         // Build playlist JSON for history persistence
         val plistJson = if (playlistItems.isNotEmpty()) {
@@ -602,260 +608,60 @@ class ExoPlayerActivity : PlayerActivity() {
             } catch (e: Exception) { null }
         } else null
 
-        // Always carry the current session speed and scale into the new player instance.
-        // The per-URL restoreProgress() below overrides these if the new episode has a
-        // saved value in history — session value is the correct fallback, not hardcoded
-        // defaults. (Previously this block reset to defaults only when plistJson==null,
-        // which meant Stremio series users lost their speed/aspect setting every episode.)
         applyPlaybackSpeed(currentPlaybackSpeed)
         applyVideoScalingMode(currentVideoScalingMode)
 
         progressManager.setCurrentMedia(url, title, contentType, intentHeaders, plistJson, playlistIndex)
         controlsManager.setTitle(title)
 
-        // 1. Prepare Headers
-        val requestProperties = HashMap<String, String>()
-        intentHeaders?.forEach { (key, value) ->
-            // Filter out headers that interfere with ExoPlayer's own chunking and buffering
-            if (!key.equals("Range", ignoreCase = true) && !key.equals("Accept-Encoding", ignoreCase = true)) {
-                requestProperties[key] = value
-            } else {
-                FileLogger.i(TAG, "Stripping header to prevent ExoPlayer buffering issues: $key: $value")
-            }
-        }
+        val payload = com.playbridge.shared.protocol.PlayPayload(
+            url = url,
+            title = title,
+            headers = intentHeaders,
+            contentType = contentType,
+            detectedBy = detectedBy,
+            subtitles = subtitles,
+            preferredAudioLanguage = preferredAudioLanguage,
+            preferredSubtitleLanguage = preferredSubtitleLanguage,
+            defaultVideoQuality = defaultVideoQuality,
+            maxBitrateCapMbps = maxBitrateCapMbps
+        )
 
-        if (!requestProperties.containsKey("Referer")) {
-            try {
-                val uri = android.net.Uri.parse(url)
-                val scheme = uri.scheme ?: "https"
-                val host = uri.host
-                if (host != null) {
-                    val referer = "$scheme://$host/"
-                    requestProperties["Referer"] = referer
-                    FileLogger.i(TAG, "Added fallback Referer: $referer")
-
-                    if (!requestProperties.containsKey("Origin")) {
-                        requestProperties["Origin"] = "$scheme://$host"
-                    }
-                }
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Error parsing URL for Referer fallback", e)
-            }
-        }
-
-        val userAgent = intentHeaders?.get("User-Agent")
-            ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        requestProperties["User-Agent"] = userAgent
-
-        FileLogger.i(TAG, "Final Request Headers: $requestProperties")
-
-        // Print cURL command for debugging
-        val curlBuilder = StringBuilder("curl -v '$url'")
-        requestProperties.forEach { (key, value) ->
-            // Escape single quotes in the value to avoid breaking the shell command
-            val escapedValue = value.replace("'", "'\\''")
-            curlBuilder.append(" -H '$key: $escapedValue'")
-        }
-        FileLogger.i(TAG, "CURL COMMAND: $curlBuilder")
-
-        val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
-            .setUserAgent(userAgent)
-            .setDefaultRequestProperties(requestProperties)
-            .setAllowCrossProtocolRedirects(true)
-            // Debrid redirect chains can take >8s on first open — raise both timeouts
-            // to avoid spurious connection failures before playback even starts.
-            .setConnectTimeoutMs(20_000)
-            .setReadTimeoutMs(20_000)
-
-        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
-
-        // 3. Configure Load Control — caps scale with available device RAM (see PlayerActivity.computeBufferConfig)
-        val bufCfg = computeBufferConfig()
-        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 1000, 2500)
-            .setTargetBufferBytes(bufCfg.targetBytes)
-            .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
-            .setBackBuffer(0, false)
-            .build()
-
-        val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(this).apply {
-            val params = buildUponParameters()
-                .setExceedVideoConstraintsIfNecessary(true)
-                .setExceedRendererCapabilitiesIfNecessary(true)
-
-            // Reapply saved language preferences for both playlist and Stremio series
-            // continuity. The previous gate on playlistItems.isNotEmpty() accidentally
-            // prevented language preferences from being honoured in Stremio series mode
-            // (where playlistItems is always empty).
-            preferredAudioLanguage?.let {
-                FileLogger.i(TAG, "Reapplying preferred audio language: $it")
-                params.setPreferredAudioLanguage(it)
-            }
-            preferredSubtitleLanguage?.let {
-                FileLogger.i(TAG, "Reapplying preferred subtitle language: $it")
-                params.setPreferredTextLanguage(it)
-                params.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
-            }
-
-            // Apply video quality preference from phone as a max-size constraint.
-            // setExceedVideoConstraintsIfNecessary(true) means ExoPlayer falls back gracefully
-            // when the stream only has higher-quality tracks (e.g. phone wants 1080p, stream
-            // only has 4K — ExoPlayer picks 4K rather than refusing to play).
-            defaultVideoQuality?.let { quality ->
-                val (maxW, maxH) = when (quality.lowercase()) {
-                    "720p"        -> Pair(1280, 720)
-                    "1080p"       -> Pair(1920, 1080)
-                    "2160p", "4k" -> Pair(3840, 2160)
-                    else          -> null
-                } ?: run { null to null }
-                if (maxW != null && maxH != null) {
-                    FileLogger.i(TAG, "Applying video quality preference: $quality → maxSize=${maxW}x${maxH}")
-                    params.setMaxVideoSize(maxW, maxH)
-                }
-            }
-
-            // Apply explicit bitrate cap if provided (takes precedence over quality size alone
-            // for streams that report per-variant bitrates, e.g. HLS EXT-X-STREAM-INF:BANDWIDTH).
-            maxBitrateCapMbps?.let { cap ->
-                val capBps = (cap * 1_000_000).toInt()
-                FileLogger.i(TAG, "Applying max bitrate cap: ${cap} Mbps → ${capBps} bps")
-                params.setMaxVideoBitrate(capBps)
-            }
-
-            setParameters(params)
-        }
-
-        val isHls = (detectedBy == "body_content_m3u8") ||
-                    (detectedBy == "url_pattern_m3u8") ||
-                    (contentType == "application/vnd.apple.mpegurl") ||
-                    (contentType == "application/x-mpegurl") ||
-                    (contentType == androidx.media3.common.MimeTypes.APPLICATION_M3U8) ||
-                    (contentType.isNullOrEmpty() && (url.contains(".m3u8") || url.contains(".jpg")))
-
-        // 4. Build Player
-        val mediaSourceFactory = if (isHls) {
-            FileLogger.i(TAG, "Using HlsMediaSource.Factory")
-            androidx.media3.exoplayer.hls.HlsMediaSource.Factory(httpDataSourceFactory)
-                .setAllowChunklessPreparation(true)
-                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
-        } else {
-            FileLogger.i(TAG, "Using DefaultMediaSourceFactory")
-            val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
-                .setConstantBitrateSeekingEnabled(true)
-            androidx.media3.exoplayer.source.DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
-                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
-        }
-
-        val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
-            override fun buildTextRenderers(
-                context: android.content.Context,
-                output: androidx.media3.exoplayer.text.TextOutput,
-                outputLooper: android.os.Looper,
-                extensionRendererMode: Int,
-                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
-            ) {
-                super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, out)
-                out.forEach {
-                    if (it is androidx.media3.exoplayer.text.TextRenderer) {
-                        it.experimentalSetLegacyDecodingEnabled(true)
-                    }
-                }
-            }
-        }
-
-        player = ExoPlayer.Builder(this)
-            .setRenderersFactory(renderersFactory)
-            .setLoadControl(loadControl)
-            .setTrackSelector(trackSelector)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .setSeekForwardIncrementMs(10_000)
-            .build()
-            .also { exoPlayer ->
-                playerView.player = exoPlayer
-                videoFilterManager.setPlayer(exoPlayer)
-
-                exoPlayer.setSeekParameters(androidx.media3.exoplayer.SeekParameters.DEFAULT)
-                exoPlayer.playWhenReady = !isPreBuffering
-                exoPlayer.addListener(createPlayerListener())
-            }
-
-        // 5. Create Media Item
-        val builder = MediaItem.Builder()
-            .setUri(url)
-            .apply { title?.let { setMediaId(it) } }
-
-        this.subtitleUrls = subtitles ?: emptyList()
-        if (subtitleUrls.isNotEmpty()) {
-             FileLogger.i(TAG, "Subtitles available for manual selection: ${subtitleUrls.size}")
-
-             // Auto-select if there is exactly one subtitle available
-             if (subtitleUrls.size == 1) {
-                 val url = subtitleUrls[0]
-                 FileLogger.i(TAG, "Auto-selecting the single available subtitle: $url")
-                 currentSubtitleUrl = url
-                 subtitleManager.loadSubtitle(url)
-
-                 // Disable internal text tracks since we are showing an external one
-                 val parametersBuilder = trackSelector.parameters.buildUpon()
-                 parametersBuilder.setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true)
-                 trackSelector.parameters = parametersBuilder.build()
-             } else {
-                 currentSubtitleUrl = null
-                 subtitleManager.disable()
-             }
-        } else {
-            currentSubtitleUrl = null
-            subtitleManager.disable()
-        }
-
-        if (isHls) {
-             builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
-        } else if (!contentType.isNullOrEmpty()) {
-             builder.setMimeType(contentType)
-        }
-
-        val mediaItem = builder.build()
-        val mediaSource = mediaSourceFactory.createMediaSource(mediaItem)
-
-        player?.setMediaSource(mediaSource)
-        player?.prepare()
-
-        // Restore progress from history
         lifecycleScope.launch {
-            val historyItem = progressManager.restoreProgress(url)
-            if (historyItem != null) {
-                if (historyItem.playbackSpeed != null) {
-                    applyPlaybackSpeed(historyItem.playbackSpeed)
-                }
-                if (historyItem.videoScalingMode != null) {
-                    applyVideoScalingMode(historyItem.videoScalingMode)
-                }
+            engine?.load(payload)
+
+            // Re-apply activity-specific player settings after engine creates the player
+            engine?.getExoPlayer()?.let { exoPlayer ->
+                playerView.player = exoPlayer
+                exoPlayer.addListener(createPlayerListener())
+                exoPlayer.prepare()
+                exoPlayer.playWhenReady = !isPreBuffering
             }
 
-            val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
-            if (startPos > 0L) {
-                player?.seekTo(startPos)
+            // Handle manual subtitles
+            this@ExoPlayerActivity.subtitleUrls = subtitles ?: emptyList()
+            if (subtitleUrls.size == 1) {
+                val subUrl = subtitleUrls[0]
+                currentSubtitleUrl = subUrl
+                subtitleManager.loadSubtitle(subUrl)
+                engine?.setSubtitleTrack(null) // Disable internal
+            } else {
+                currentSubtitleUrl = null
+                subtitleManager.disable()
             }
         }
+        }
 
-        player?.play()
-
-        audioDiscontinuityRetryCount = 0
-        videoDecoderRetryCount = 0
-        malformedContentRetryCount = 0
-        stuckBufferRetryCount = 0
-        networkErrorRetryCount = 0
-        stuckBufferHandler.removeCallbacksAndMessages(null)
-    }
-
-    private fun createPlayerListener() = object : androidx.media3.common.Player.Listener {
+        private fun createPlayerListener() = object : androidx.media3.common.Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
+            val player = engine?.getExoPlayer() ?: return
             when (playbackState) {
                 androidx.media3.common.Player.STATE_BUFFERING -> {
                     FileLogger.d(TAG, "Buffering...")
-                    if (player?.playWhenReady == true) {
+                    if (player.playWhenReady == true) {
                         controlsManager.showBuffering()
-                        val lastBuffered = player?.bufferedPosition ?: 0L
+                        val lastBuffered = engine?.getExoPlayer()?.bufferedPosition ?: 0L
+
                         scheduleStuckBufferCheck(lastBuffered)
                     }
                 }
@@ -884,12 +690,13 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
+            val player = engine?.getExoPlayer() ?: return
             // Live stream fell behind the available DVR window — seek back to the live edge and resume.
             // Without this, the error falls through to the playlist-skip logic and drops the channel.
             if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                 FileLogger.w(TAG, "Behind live window, seeking to live edge")
-                player?.seekToDefaultPosition()
-                player?.prepare()
+                player.seekToDefaultPosition()
+                player.prepare()
                 return
             }
 
@@ -900,10 +707,10 @@ class ExoPlayerActivity : PlayerActivity() {
                 if (audioDiscontinuityRetryCount < 3) {
                     audioDiscontinuityRetryCount++
                     FileLogger.w(TAG, "Audio discontinuity detected. Attempting recovery (attempt $audioDiscontinuityRetryCount)...")
-                    val currentPos = player?.currentPosition ?: 0L
-                    player?.seekTo(currentPos)
-                    player?.prepare()
-                    player?.play()
+                    val currentPos = player.currentPosition
+                    player.seekTo(currentPos)
+                    player.prepare()
+                    player.play()
                     return
                 } else {
                     FileLogger.e(TAG, "Audio discontinuity persisted after $audioDiscontinuityRetryCount attempts. Giving up.")
@@ -917,18 +724,16 @@ class ExoPlayerActivity : PlayerActivity() {
                 runOnUiThread {
                     android.widget.Toast.makeText(this@ExoPlayerActivity, "Audio track not supported, reverting", android.widget.Toast.LENGTH_SHORT).show()
                 }
-                player?.let { p ->
-                    val currentPos = p.currentPosition
-                    val playWhenReady = p.playWhenReady
-                    val params = p.trackSelectionParameters.buildUpon()
-                        .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
-                        .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
-                        .build()
-                    p.trackSelectionParameters = params
-                    p.seekTo(currentPos)
-                    p.prepare()
-                    p.playWhenReady = playWhenReady
-                }
+                val currentPos = player.currentPosition
+                val playWhenReady = player.playWhenReady
+                val params = player.trackSelectionParameters.buildUpon()
+                    .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
+                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
+                    .build()
+                player.trackSelectionParameters = params
+                player.seekTo(currentPos)
+                player.prepare()
+                player.playWhenReady = playWhenReady
                 return
             }
 
@@ -937,13 +742,11 @@ class ExoPlayerActivity : PlayerActivity() {
             if (isVideoDecoderCrash && videoDecoderRetryCount < 1) {
                 videoDecoderRetryCount++
                 FileLogger.w(TAG, "Video decoder crash detected. Attempting recovery (attempt $videoDecoderRetryCount)...")
-                player?.let { p ->
-                    val pos = p.currentPosition
-                    val play = p.playWhenReady
-                    p.seekTo(pos)
-                    p.prepare()
-                    p.playWhenReady = play
-                }
+                val pos = player.currentPosition
+                val play = player.playWhenReady
+                player.seekTo(pos)
+                player.prepare()
+                player.playWhenReady = play
                 return
             }
 
@@ -952,11 +755,11 @@ class ExoPlayerActivity : PlayerActivity() {
                                        (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
             if (isUnrecognizedFormat) {
                 FileLogger.e(TAG, "Unrecognized format detected, automatically transitioning to VlcPlayerActivity")
-                val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString() ?: ""
-                val currentTitle = player?.currentMediaItem?.mediaMetadata?.title?.toString()
+                val currentUrl = player.currentMediaItem?.localConfiguration?.uri?.toString() ?: ""
+                val currentTitle = player.currentMediaItem?.mediaMetadata?.title?.toString()
 
                 // Pause player just in case, though it's likely already stopped due to the error
-                player?.pause()
+                player.pause()
 
                 runOnUiThread {
                     android.widget.Toast.makeText(this@ExoPlayerActivity, "Format not supported by ExoPlayer, trying VLC...", android.widget.Toast.LENGTH_SHORT).show()
@@ -1006,14 +809,12 @@ class ExoPlayerActivity : PlayerActivity() {
             if (isMalformedContent && malformedContentRetryCount < 10) {
                 malformedContentRetryCount++
                 val skipAheadMs = 1000L * malformedContentRetryCount
-                val currentPos = player?.currentPosition ?: 0L
+                val currentPos = player.currentPosition
                 FileLogger.w(TAG, "Malformed content at ${currentPos}ms. Seeking forward ${skipAheadMs}ms (attempt $malformedContentRetryCount)...")
-                player?.let { p ->
-                    val duration = p.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
-                    p.seekTo((currentPos + skipAheadMs).coerceAtMost(duration))
-                    p.prepare()
-                    p.play()
-                }
+                val duration = player.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                player.seekTo((currentPos + skipAheadMs).coerceAtMost(duration))
+                player.prepare()
+                player.play()
                 return
             }
 
@@ -1034,14 +835,16 @@ class ExoPlayerActivity : PlayerActivity() {
                 networkErrorRetryCount++
                 val delayMs = 3000L * networkErrorRetryCount // 3s, 6s, 9s
                 FileLogger.w(TAG, "Network error on single stream, retrying in ${delayMs}ms (attempt $networkErrorRetryCount/3)")
+
                 lifecycleScope.launch(Dispatchers.Main) {
                     kotlinx.coroutines.delay(delayMs)
-                    val p = player ?: return@launch
+                    val p = engine?.getExoPlayer() ?: return@launch
                     val pos = p.currentPosition
                     p.stop()
-                    p.seekTo(pos)
                     p.prepare()
+                    p.seekTo(pos)
                     p.play()
+
                 }
                 return
             }
@@ -1096,7 +899,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (player == null) {
+        if (engine?.getExoPlayer() == null) {
             initializePlayer()
         }
     }
@@ -1133,15 +936,45 @@ class ExoPlayerActivity : PlayerActivity() {
 
     private fun releasePlayer() {
         stuckBufferHandler.removeCallbacksAndMessages(null)
+        vmUiJob?.cancel()
+        if (::viewModel.isInitialized) {
+            viewModel.dispose()
+        }
         try {
-            player?.clearVideoSurface()
-            videoFilterManager.setPlayer(null)
-            player?.release()
+            engine?.getExoPlayer()?.clearVideoSurface()
+            engine?.release()
         } catch (e: Exception) {
             FileLogger.e(TAG, "Error releasing player: ${e.message}", e)
         }
-        player = null
+        engine = null
     }
+
+    /**
+     * React to [PlayerViewModel] UI state changes (Step 5a).
+     *
+     * The Activity keeps its own UI state for now; this collector runs in
+     * parallel and handles VM-driven transitions (auto-advance, error
+     * mapping, pre-play) so the VM becomes load-bearing gradually.
+     */
+    private fun handleVmUiState(state: com.playbridge.shared.player.PlayerUiState) {
+        // Step 5a: Activity still owns all UI updates.  The VM collector runs in
+        // parallel purely for logging and future load-bearing migration.
+        when (state) {
+            is com.playbridge.shared.player.PlayerUiState.Idle ->
+                FileLogger.d(TAG, "VM state: Idle")
+            is com.playbridge.shared.player.PlayerUiState.PrePlay ->
+                FileLogger.d(TAG, "VM state: PrePlay resolving=${state.isResolving}")
+            is com.playbridge.shared.player.PlayerUiState.Loading ->
+                FileLogger.d(TAG, "VM state: Loading ${state.payload.url}")
+            is com.playbridge.shared.player.PlayerUiState.Playing ->
+                FileLogger.d(TAG, "VM state: Playing")
+            is com.playbridge.shared.player.PlayerUiState.Error ->
+                FileLogger.d(TAG, "VM state: Error ${state.code}: ${state.message}")
+            is com.playbridge.shared.player.PlayerUiState.Ended ->
+                FileLogger.d(TAG, "VM state: Ended")
+        }
+    }
+
     /**
      * Play the previous item in the playlist queue.
      */
@@ -1161,7 +994,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     if (stream != null) {
                         FileLogger.i(TAG, "Successfully resolved PREVIOUS: ${stream.name ?: stream.title}")
                         // Early-return guard: avoid flicker if a cancelled coroutine slips through
-                        val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
+                        val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
                         if (stream.url == currentUrl) {
                             FileLogger.i(TAG, "Resolved URL is same as current, skipping redundant play")
                             controlsManager.hideBuffering()
@@ -1206,9 +1039,9 @@ class ExoPlayerActivity : PlayerActivity() {
 
         lifecycleScope.launch {
             // Only capture screenshot and save progress if playback was actually ready/started
-            val state = player?.playbackState
-            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
-            if (hasPlayed && player?.playerError == null) {
+            val state = engine?.getExoPlayer()?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (engine?.getExoPlayer()?.currentPosition ?: 0) > 0L
+            if (hasPlayed && engine?.getExoPlayer()?.playerError == null) {
                 syncSelectionsToProgressManager()
                 try {
                     val bitmap = progressManager.captureBitmapSuspend()
@@ -1219,6 +1052,9 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             playlistIndex--
+            if (::viewModel.isInitialized) {
+                viewModel.setPlaylist(playlistItems, playlistIndex)
+            }
             val prevItem = playlistItems[playlistIndex]
             val title = if (prevItem.title != null) {
                 "${prevItem.title} (${playlistIndex + 1}/${playlistItems.size})"
@@ -1251,7 +1087,7 @@ class ExoPlayerActivity : PlayerActivity() {
     private fun scheduleStuckBufferCheck(lastBuffered: Long) {
         stuckBufferHandler.removeCallbacksAndMessages(null)
         stuckBufferHandler.postDelayed({
-            val p = player ?: return@postDelayed
+            val p = engine?.getExoPlayer() ?: return@postDelayed
             if (p.playbackState != androidx.media3.common.Player.STATE_BUFFERING) return@postDelayed
             val currentBuffered = p.bufferedPosition
             if (currentBuffered > lastBuffered) {
@@ -1278,9 +1114,9 @@ class ExoPlayerActivity : PlayerActivity() {
         navigationJob = lifecycleScope.launch {
             // Save progress for the current episode before advancing,
             // but only if playback was actually ready (to avoid crashes on failed streams)
-            val state = player?.playbackState
-            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
-            if (hasPlayed && player?.playerError == null) {
+            val state = engine?.getExoPlayer()?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (engine?.getExoPlayer()?.currentPosition ?: 0) > 0L
+            if (hasPlayed && engine?.getExoPlayer()?.playerError == null) {
                 syncSelectionsToProgressManager()
                 try {
                     val bitmap = progressManager.captureBitmapSuspend()
@@ -1304,7 +1140,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         FileLogger.i(TAG, "Successfully resolved NEXT: ${stream.name ?: stream.title}")
                         // Early-return guard: a cancelled coroutine that slipped through
                         // the mutex might resolve the same URL we are already playing.
-                        val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
+                        val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
                         if (stream.url == currentUrl) {
                             FileLogger.i(TAG, "Resolved URL is same as current, skipping redundant play")
                             controlsManager.hideBuffering()
@@ -1345,6 +1181,9 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             playlistIndex++
+            if (::viewModel.isInitialized) {
+                viewModel.setPlaylist(playlistItems, playlistIndex)
+            }
             if (playlistIndex >= playlistItems.size) {
                 FileLogger.i(TAG, "Playlist complete ($playlistIndex/${playlistItems.size}) — finishing")
                 finish()
@@ -1383,9 +1222,9 @@ class ExoPlayerActivity : PlayerActivity() {
 
         lifecycleScope.launch {
             // Save progress for the current episode before jumping, if it was playing
-            val state = player?.playbackState
-            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (player?.currentPosition ?: 0) > 0L
-            if (hasPlayed && player?.playerError == null) {
+            val state = engine?.getExoPlayer()?.playbackState
+            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (engine?.getExoPlayer()?.currentPosition ?: 0) > 0L
+            if (hasPlayed && engine?.getExoPlayer()?.playerError == null) {
                 syncSelectionsToProgressManager()
                 try {
                     val bitmap = progressManager.captureBitmapSuspend()
@@ -1396,6 +1235,9 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             playlistIndex = index
+            if (::viewModel.isInitialized) {
+                viewModel.setPlaylist(playlistItems, playlistIndex)
+            }
             val item = playlistItems[index]
             val title = if (item.title != null) {
                 "${item.title} (${index + 1}/${playlistItems.size})"
@@ -1453,9 +1295,12 @@ class ExoPlayerActivity : PlayerActivity() {
      */
     private fun setLooping(enabled: Boolean) {
         isLooping = enabled
-        player?.repeatMode = if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        engine?.getExoPlayer()?.repeatMode = if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         controlsManager.updateLoopIcon(enabled)
         FileLogger.i(TAG, "Loop mode: $enabled")
+        if (::viewModel.isInitialized) {
+            viewModel.setLooping(enabled)
+        }
     }
 
     /**
@@ -1467,10 +1312,10 @@ class ExoPlayerActivity : PlayerActivity() {
     @OptIn(ExperimentalTvMaterial3Api::class)
     private fun showStreamSelectionDialog() {
         val nav = seriesNavigator ?: return
-        val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
+        val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
 
-        val wasPlaying = player?.isPlaying == true
-        if (wasPlaying) player?.pause()
+        val wasPlaying = engine?.getExoPlayer()?.isPlaying == true
+        if (wasPlaying) engine?.getExoPlayer()?.pause()
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
         activeDialog = dialog
@@ -1537,7 +1382,7 @@ class ExoPlayerActivity : PlayerActivity() {
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener {
             activeDialog = null
-            if (wasPlaying) player?.play()
+            if (wasPlaying) engine?.getExoPlayer()?.play()
             controlsManager.showControlsUI()
         }
         dialog.show()
@@ -1568,8 +1413,8 @@ class ExoPlayerActivity : PlayerActivity() {
             return
         }
 
-        val wasPlaying = player?.isPlaying == true
-        if (wasPlaying) player?.pause()
+        val wasPlaying = engine?.getExoPlayer()?.isPlaying == true
+        if (wasPlaying) engine?.getExoPlayer()?.pause()
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
         activeDialog = dialog
@@ -1602,7 +1447,7 @@ class ExoPlayerActivity : PlayerActivity() {
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener {
             activeDialog = null
-            if (wasPlaying) player?.play()
+            if (wasPlaying) engine?.getExoPlayer()?.play()
             controlsManager.showControlsUI()
         }
         dialog.show()
@@ -1621,7 +1466,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 FileLogger.i(TAG, "Successfully resolved JUMP episode: ${stream.name ?: stream.title}")
                 // Early-return guard: a cancelled coroutine that slipped through the mutex
                 // might resolve the same URL we are already playing — skip to avoid flicker.
-                val currentUrl = player?.currentMediaItem?.localConfiguration?.uri?.toString()
+                val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
                 if (stream.url == currentUrl) {
                     FileLogger.i(TAG, "Resolved URL is same as current, skipping redundant play")
                     controlsManager.hideBuffering()
@@ -1682,7 +1527,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
     private fun applyPlaybackSpeed(speed: Float) {
         currentPlaybackSpeed = speed
-        player?.playbackParameters = androidx.media3.common.PlaybackParameters(speed)
+        engine?.getExoPlayer()?.playbackParameters = androidx.media3.common.PlaybackParameters(speed)
     }
 
     private fun applyVideoScalingMode(mode: Int) {
@@ -1691,7 +1536,7 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun showVideoFilterDialog() {
-        val p = player
+        val p = engine?.getExoPlayer()
         val wasPlaying = p?.playWhenReady == true
         val surfaceView = playerView.videoSurfaceView as? android.view.SurfaceView
 
@@ -1701,7 +1546,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 val origVol = p.volume
 
                 // 1. Temporarily clear ExoPlayer GPU filter to grab a "clean" frame
-                videoFilterManager.colorMatrixEffect.setMatrix(VideoFilter.matrixFor(VideoFilter.NONE))
+                videoFilterManager.colorMatrixEffect.setMatrix(VideoFilterAndroid.matrixFor(VideoFilter.NONE))
 
                 // 2. Mute and seek forward slightly to flush out the clean frame
                 p.volume = 0f
@@ -1765,7 +1610,7 @@ class ExoPlayerActivity : PlayerActivity() {
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener {
             activeDialog = null
-            if (wasPlaying) player?.play()
+            if (wasPlaying) engine?.getExoPlayer()?.play()
             controlsManager.hideUI()
         }
 
@@ -1773,7 +1618,7 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun showTrackSelectionDialog() {
-        val player = this.player ?: return
+        val player = engine?.getExoPlayer() ?: return
 
         val wasPlaying = player.isPlaying
         if (wasPlaying) player.pause()
@@ -1876,7 +1721,7 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun applyTrackSelection(trackType: Int, format: androidx.media3.common.Format?) {
-        val player = this.player ?: return
+        val player = engine?.getExoPlayer() ?: return
 
         val parametersBuilder = player.trackSelectionParameters.buildUpon()
 
@@ -2032,7 +1877,7 @@ class ExoPlayerActivity : PlayerActivity() {
             isPreBuffering = false
             prePlayPayload = null
             composeView.visibility = android.view.View.GONE
-            player?.play() // Ensure it starts playing
+            engine?.getExoPlayer()?.play() // Ensure it starts playing
         }
     }
 

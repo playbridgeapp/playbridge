@@ -15,15 +15,6 @@ kotlin {
     }
 
     listOf(
-        iosArm64(),
-        iosSimulatorArm64()
-    ).forEach {
-        it.binaries.framework {
-            baseName = "Shared"
-            isStatic = true
-        }
-    }
-    listOf(
         tvosArm64(),
         tvosSimulatorArm64(),
         tvosX64()
@@ -32,6 +23,16 @@ kotlin {
             baseName = "Shared"
             isStatic = true
         }
+        /*
+        it.compilations.getByName("main") {
+            val TVVLCKit by cinterops.creating {
+                definitionFile.set(project.file("src/nativeInterop/cinterop/TVVLCKit.def"))
+                packageName("com.playbridge.shared.vlc")
+                // Framework is expected to be in tv/apple-tv/Frameworks/
+                compilerOpts("-framework", "TVVLCKit", "-F${project.rootDir}/tv/apple-tv/Frameworks")
+            }
+        }
+        */
     }
 
     applyDefaultHierarchyTemplate()   // gives us commonMain, appleMain, iosMain, tvosMain
@@ -49,6 +50,25 @@ kotlin {
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
+
+            // Media3 ExoPlayer
+            implementation(libs.androidx.media3.exoplayer)
+            implementation(libs.androidx.media3.exoplayer.hls)
+            implementation(libs.androidx.media3.exoplayer.dash)
+            implementation(libs.androidx.media3.exoplayer.smoothstreaming)
+            implementation(libs.androidx.media3.exoplayer.rtsp)
+            implementation(libs.androidx.media3.datasource.okhttp)
+            implementation(libs.androidx.media3.common)
+            implementation(libs.androidx.media3.session)
+            implementation(libs.androidx.media3.effect)
+            implementation(libs.okhttp)
+            implementation(libs.okhttp.urlconnection)
+
+            // LibVLC
+            implementation(libs.libvlc.all)
+
+            // MPV
+            implementation(project(":libs:mpv-android"))
         }
         appleMain.dependencies {
             implementation(libs.ktor.client.darwin)

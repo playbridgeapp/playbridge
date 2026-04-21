@@ -13,6 +13,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.playbridge.shared.io.platformFileSystem
 import okio.FileSystem
 import okio.Path
 
@@ -110,7 +111,7 @@ private fun sourceMatchScore(stream: StremioStreamItem, hint: String?): Int {
 
 class StremioClient(
     private val http: HttpClient = SharedHttpClient.client,
-    private val fs: FileSystem = FileSystem.SYSTEM,
+    private val fs: FileSystem = platformFileSystem,
     private val cacheFile: Path = Paths.cacheDir / "stremio_streams_cache.json",
     private val json: Json = SharedHttpClient.json
 ) {

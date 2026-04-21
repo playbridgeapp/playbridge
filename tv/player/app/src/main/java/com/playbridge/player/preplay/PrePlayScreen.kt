@@ -304,15 +304,14 @@ fun PrePlayScreen(
                             }
                         }
 
-                        if (payload.forcePicker) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(bottom = 12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                // Resolution
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(bottom = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Resolution
                                 TvDropdownFilterChip(
                                     label = "Resolution",
                                     valueText = resolutionRankLabel(resolutionRank),
@@ -426,7 +425,6 @@ fun PrePlayScreen(
                                     }
                                 }
                             }
-                        }
 
                         if (filteredStreams.isEmpty()) {
                             Text(
