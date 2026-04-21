@@ -315,10 +315,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
         resolutionJob?.cancel()
         launchJob?.cancel()
+        playJob?.cancel()
         isLoadingNewStream = true
-        engine?.let { e ->
-            e.getMediaPlayer()?.vlcVout?.detachViews()
-            e.stop()
+        synchronized(playerLock) {
+            engine?.let { e ->
+                e.getMediaPlayer()?.vlcVout?.detachViews()
+                e.stop()
+            }
         }
         runOnUiThread {
             if (::surfaceView.isInitialized) {
@@ -457,8 +460,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             onToggleLoop = { setLooping(!isLooping) }
         )
 
-        setupMediaPlayer()
-
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
             addAction(ServerService.ACTION_CONTROL)
@@ -488,8 +489,19 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
+    private var lastOnNewIntentUrl: String? = null
+    private var lastOnNewIntentTime = 0L
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        val url = intent.getStringExtra(ServerService.EXTRA_URL)
+        val now = System.currentTimeMillis()
+        if (url != null && url == lastOnNewIntentUrl && (now - lastOnNewIntentTime) < 2000) {
+            FileLogger.i(TAG, "Debounced duplicate onNewIntent for $url")
+            return
+        }
+        lastOnNewIntentUrl = url
+        lastOnNewIntentTime = now
         FileLogger.i(TAG, "onNewIntent received")
 
         // Cancel any pending resolution or countdown from a previous intent
@@ -588,7 +600,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         displayTitle?.let {
-            Toast.makeText(this, it, Toast.LENGTH_SHORT).show()
             controlsManager.setTitle(it)
         }
 
@@ -603,47 +614,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             return
         }
 
-        if (title != null) {
-            Toast.makeText(this, title, Toast.LENGTH_SHORT).show()
-            controlsManager.setTitle(title)
-        }
-
         originalM3u8Url = url
         currentHeaders = headers
 
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-            val urlWithoutQuery = url.substringBefore("?")
-            if (urlWithoutQuery.endsWith(".m3u")) {
-                try {
-                    val parsedPlaylist = M3uParser.fetchAndParseM3u(url, headers)
-                    if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
-                        playlistItems = parsedPlaylist.toMutableList()
-                        PlaylistStore.currentPlaylist = parsedPlaylist
-                        playlistIndex = 0
-                        controlsManager.setPlaylistVisible(true)
-                        if (::viewModel.isInitialized) {
-                            viewModel.setPlaylist(playlistItems, playlistIndex)
-                        }
-
-                        val firstItem = parsedPlaylist[0]
-                        controlsManager.setTitle(firstItem.title ?: title)
-                        originalM3u8Url = firstItem.url
-                        currentHeaders = firstItem.headers
-                        subtitleUrls = firstItem.subtitles ?: emptyList()
-                        currentSubtitleUrl = null
-
-                        if (firstItem.url.contains(".m3u8", ignoreCase = true)) {
-                            M3uParser.parseMasterPlaylist(firstItem.url, firstItem.headers)
-                        }
-                        playVideo(firstItem.url, firstItem.headers)
-                        return@launch
-                    }
-                } catch (e: Exception) {
-                    FileLogger.e(TAG, "Error parsing M3U", e)
-                }
-            }
-            playVideo(url, headers)
-        }
+        playVideo(url, headers)
     }
 
     private fun playNextInPlaylist() {
