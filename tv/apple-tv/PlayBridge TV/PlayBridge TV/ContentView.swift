@@ -563,7 +563,6 @@ struct ContentView: View {
     @StateObject private var historyStore = HistoryStore()
     @StateObject private var server: WebSocketServer
     @State private var currentScreen: AppScreen = .pairing
-    @State private var showClearConfirm = false
     @State private var time = 0.0
     let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -598,9 +597,6 @@ struct ContentView: View {
                         screen: .settings)
 
                     Spacer()
-
-                    DangerButton(title: "Clear All", icon: "trash") { showClearConfirm = true }
-                        .padding(.bottom, 40)
                 }
                 .padding(.horizontal, 40)
                 .frame(width: 400)
@@ -639,10 +635,6 @@ struct ContentView: View {
             }
         }
         .onAppear { server.start() }
-        .alert("Clear Data", isPresented: $showClearConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Erase All", role: .destructive) { historyStore.clearHistory() }
-        }
     }
 }
 
@@ -759,21 +751,51 @@ struct LibraryListView: View {
     @ObservedObject var historyStore: HistoryStore
     @ObservedObject var server: WebSocketServer
     let columns = [GridItem(.adaptive(minimum: 400), spacing: 40)]
+    @State private var showClearConfirm = false
 
     var body: some View {
         VStack(alignment: .leading) {
-            Text(title).font(.system(size: 50, weight: .black)).padding([.leading, .top], 60)
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 40) {
-                    ForEach(items) { item in
-                        HistoryCard(item: item, historyStore: historyStore) {
-                            server.currentPlayRequest = PlayRequest(
-                                url: item.url, headers: item.headers)
+            HStack(alignment: .center, spacing: 30) {
+                Text(title).font(.system(size: 50, weight: .black))
+                if title == "History" && !items.isEmpty {
+                    DangerButton(title: "Clear All", icon: "trash") { showClearConfirm = true }
+                        .frame(width: 250)
+                }
+                Spacer()
+            }
+            .padding([.leading, .trailing, .top], 60)
+            if items.isEmpty {
+                Spacer()
+                HStack {
+                    Spacer()
+                    VStack(spacing: 20) {
+                        Image(systemName: title == "History" ? "clock.badge.exclamationmark" : "star.slash")
+                            .font(.system(size: 100))
+                            .foregroundColor(Theme.secondaryText.opacity(0.5))
+                        Text("Nothing to see here yet.")
+                            .font(.system(size: 36, weight: .semibold))
+                            .foregroundColor(Theme.secondaryText)
+                    }
+                    Spacer()
+                }
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 40) {
+                        ForEach(items) { item in
+                            HistoryCard(item: item, historyStore: historyStore) {
+                                server.currentPlayRequest = PlayRequest(
+                                    url: item.url, headers: item.headers)
+                            }
                         }
                     }
+                    .padding(60)
                 }
-                .padding(60)
             }
+        }
+        .alert("Clear Data", isPresented: $showClearConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Erase All", role: .destructive) { historyStore.clearHistory() }
         }
     }
 }
@@ -837,9 +859,11 @@ struct DangerButton: View {
     @FocusState var isFocused: Bool
     var body: some View {
         Button(action: action) {
-            HStack {
+            HStack(spacing: 12) {
                 Image(systemName: icon)
                 Text(title)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .font(.headline)
             .foregroundColor(isFocused ? .white : .red.opacity(0.6))
@@ -883,6 +907,7 @@ struct AuroraBackgroundView: View {
 struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
+    let onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
@@ -898,6 +923,12 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
         let asset = AVURLAsset(url: url, options: options)
         let playerItem = AVPlayerItem(asset: asset)
+
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main
+        ) { _ in
+            onDismiss()
+        }
 
         // Native AVPlayer
         let player = AVPlayer(playerItem: playerItem)
@@ -916,11 +947,13 @@ struct NativePlayerView: UIViewControllerRepresentable {
 struct VLCPlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
+    let onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> VLCViewController {
         let controller = VLCViewController()
         controller.url = url
         controller.headers = headers
+        controller.onDismiss = onDismiss
         return controller
     }
 
@@ -930,6 +963,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         var mediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
         var url: URL?
         var headers: [String: String]?
+        var onDismiss: (() -> Void)?
 
         // Custom focusable view to capture remote events
         class FocusableView: UIView {
@@ -938,11 +972,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
 
         // UI State
         private let videoView = FocusableView()
-        private var controlsContainer = UIView()
         private var hostingController: UIHostingController<VLCControlsOverlay>?
-
-        private var rightSwipe: UISwipeGestureRecognizer?
-        private var leftSwipe: UISwipeGestureRecognizer?
 
         override var preferredFocusEnvironments: [UIFocusEnvironment] {
             // Only route focus to the SwiftUI buttons when user explicitly paused
@@ -972,10 +1002,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             // 2. Setup HUD Overlay (SwiftUI)
             setupHUD()
 
-            // 3. Setup Gestures
-            setupGestures()
-
-            // 4. Initialize Player
+            // 3. Initialize Player
             setupPlayer()
 
             // Show UI initially
@@ -1100,6 +1127,14 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                     self.updateSubtitleTracks()
                     self.updateAudioTracks()
                 }
+                if self.mediaPlayer.state == .ended {
+                    if self.playbackState.isLooping {
+                        self.mediaPlayer.stop()
+                        self.mediaPlayer.play()
+                    } else {
+                        self.onDismiss?()
+                    }
+                }
                 if self.mediaPlayer.state == .error {
                     print("VLC Error: Playback failed")
                 }
@@ -1125,18 +1160,6 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         }
 
         // MARK: - Interactions
-        private func setupGestures() {
-            // Swipe seeking (still useful for touchpad)
-            let rightSwipe = UISwipeGestureRecognizer(target: self, action: #selector(skipForward))
-            rightSwipe.direction = .right
-            view.addGestureRecognizer(rightSwipe)
-            self.rightSwipe = rightSwipe
-
-            let leftSwipe = UISwipeGestureRecognizer(target: self, action: #selector(skipBackward))
-            leftSwipe.direction = .left
-            view.addGestureRecognizer(leftSwipe)
-            self.leftSwipe = leftSwipe
-        }
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             guard let type = presses.first?.type else {
@@ -1159,8 +1182,9 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                     togglePlayPause()
                     return
                 }
-                // Otherwise let it propagate to exit the player
-                super.pressesBegan(presses, with: event)
+                
+                // If nothing else caught it, exit the video entirely
+                onDismiss?()
                 return
             }
 
@@ -1198,11 +1222,13 @@ struct VLCPlayerView: UIViewControllerRepresentable {
 
         override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             stopContinuousSeek()
+            if presses.first?.type == .menu { return }
             super.pressesEnded(presses, with: event)
         }
 
         override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             stopContinuousSeek()
+            if presses.first?.type == .menu { return }
             super.pressesCancelled(presses, with: event)
         }
 
@@ -1252,6 +1278,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         }
 
         @objc private func skipForward() {
+            guard !playbackState.userPaused else { return }
             let currentTime = mediaPlayer.time.intValue
             let duration = mediaPlayer.media?.length.intValue ?? 0
 
@@ -1267,6 +1294,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         }
 
         @objc private func skipBackward() {
+            guard !playbackState.userPaused else { return }
             let currentTime = mediaPlayer.time.intValue
             let target = max(0, currentTime - 15000)
 
@@ -1311,6 +1339,7 @@ class VLCPlaybackData: ObservableObject {
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     @Published var showUI: Bool = true
+    @Published var isLooping: Bool = false
 
     // Subtitles
     @Published var subtitleTracks: [(id: Int, name: String)] = []
@@ -1330,6 +1359,8 @@ struct TrackMenuView: View {
     let currentId: Int
     let includeOff: Bool
     let onSelect: (Int) -> Void
+
+    @FocusState private var focusedId: Int?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1362,6 +1393,12 @@ struct TrackMenuView: View {
                 .padding(.vertical, 16)
             }
         }
+        .onAppear {
+            // Slight delay ensures the layout is ready before forcefully moving focus
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                focusedId = currentId
+            }
+        }
         .frame(width: 540, height: min(CGFloat(tracks.count + (includeOff ? 1 : 0)) * 80 + 120, 620))
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 24))
@@ -1389,6 +1426,7 @@ struct TrackMenuView: View {
             .padding(.vertical, 14)
         }
         .buttonStyle(.plain)
+        .focused($focusedId, equals: id)
     }
 }
 
@@ -1503,7 +1541,22 @@ struct VLCControlsOverlay: View {
                                     }
                                     .buttonStyle(.card)
                                 }
+
+                                // Loop button
+                                Button(action: { data.isLooping.toggle() }) {
+                                    VStack(spacing: 6) {
+                                        Image(systemName: "repeat")
+                                            .font(.system(size: 26))
+                                            .foregroundColor(data.isLooping ? Theme.accent : .white)
+                                        Text("Loop")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundColor(data.isLooping ? Theme.accent : .white)
+                                    }
+                                    .frame(width: 100, height: 70)
+                                }
+                                .buttonStyle(.card)
                             }
+                            .disabled(data.showSubtitleMenu || data.showAudioMenu)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
@@ -1580,18 +1633,18 @@ struct PlayerView: View {
             Color.black.ignoresSafeArea()
 
             if preferredPlayer == "vlc" {
-                VLCPlayerView(url: request.url, headers: request.headers)
+                VLCPlayerView(url: request.url, headers: request.headers, onDismiss: onDismiss)
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
             } else {
-                NativePlayerView(url: request.url, headers: request.headers)
+                NativePlayerView(url: request.url, headers: request.headers, onDismiss: onDismiss)
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
+                    .onExitCommand { onDismiss() }
             }
         }
         .onAppear {
             isPlayerFocused = true
         }
-        .onExitCommand { onDismiss() }
     }
 }
