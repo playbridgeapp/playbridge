@@ -171,6 +171,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         FileLogger.i(TAG, "stopPlayback() — clearing MPV state for transition")
         resolutionJob?.cancel()
         launchJob?.cancel()
+        playJob?.cancel()
         isLoadingNewStream = true
         pendingStops++
         engine?.stop()
@@ -269,6 +270,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 engine?.detachSurface()
             }
         })
+        // Eagerly attach if surface already exists (e.g. singleTop reuse)
+        if (surfaceView.holder.surface?.isValid == true) {
+            engine?.attachSurface(surfaceView.holder.surface)
+        }
 
         controlsManager = MpvControlsManager(
             controlsRoot          = findViewById(R.id.controls_root),
@@ -347,8 +352,20 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
     }
 
+    private var lastOnNewIntentUrl: String? = null
+    private var lastOnNewIntentTime = 0L
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (isFinishing) return
+        val url = intent.getStringExtra(ServerService.EXTRA_URL)
+        val now = System.currentTimeMillis()
+        if (url != null && url == lastOnNewIntentUrl && (now - lastOnNewIntentTime) < 2000) {
+            FileLogger.i(TAG, "Debounced duplicate onNewIntent for $url")
+            return
+        }
+        lastOnNewIntentUrl = url
+        lastOnNewIntentTime = now
         FileLogger.i(TAG, "onNewIntent received")
 
         // Cancel any pending resolution or countdown from a previous intent
@@ -372,9 +389,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun onStop() {
         super.onStop()
-        if (!isFinishing && !isChangingConfigurations) {
-            finish()
-        }
     }
 
     override fun onDestroy() {
@@ -558,6 +572,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun handleIntent(intent: Intent?) {
+        if (isFinishing) return
         setupSeriesNavigator(intent)
 
         // Read playlist if present

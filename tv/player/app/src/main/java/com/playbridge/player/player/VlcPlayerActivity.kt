@@ -255,7 +255,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var pendingResumeTime: Long? = null
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    private var lastSeekCommitTime = 0L
+    private var seekCommitCount = 0L
 
     private val performSeekRunnable = Runnable {
         pendingSeekTime?.let { targetTime ->
@@ -266,37 +266,53 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     /**
-     * Schedule a post-seek video decoder resync to fix frozen video in malformed MKV files.
-     *
-     * When seeking in an MKV with corrupt EBML data, VLC's parser resyncs forward past the bad
-     * cluster. Audio recovers immediately (small/frequent packets), but the video decoder loses
-     * its keyframe reference and shows the last decoded frame indefinitely — player.time advances
-     * with audio, making the freeze invisible to event-based detection.
-     *
-     * Fix: 2s after the seek commits (by which point the demuxer is in clean data), toggle the
-     * video track off→on. This closes the video decoder without re-seeking, then reopens it at
-     * the current demuxer position. VLC waits for the next keyframe (already in the clean region)
-     * and video resumes. Brief black screen (~100–500ms), but recovers a permanently frozen frame.
+     * Intelligently schedules a post-seek video decoder resync to fix frozen video.
+     * Uses Media.Stats to detect if frames are actually stuck before applying the track toggle.
+     * If stuck, attempts up to 4 track toggles with exponential backoff.
      */
     private fun schedulePostSeekVideoResync() {
-        val commitTime = System.currentTimeMillis()
-        lastSeekCommitTime = commitTime
-        seekHandler.postDelayed({
-            if (lastSeekCommitTime != commitTime) return@postDelayed // superseded by a newer seek
-            val player = engine?.getMediaPlayer() ?: return@postDelayed
-            if (!player.isPlaying || pendingSeekTime != null) return@postDelayed
+        val commitId = ++seekCommitCount
 
-            val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
-                ?: return@postDelayed
+        fun attemptResync(delayMs: Long, retryCount: Int) {
+            if (retryCount > 4) return // Max 4 retries
 
-            FileLogger.d(TAG,"Post-seek video decoder resync (track toggle)")
-            player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+            // Wait to let video resume. If it hasn't, we will check.
             seekHandler.postDelayed({
-                if (lastSeekCommitTime == commitTime) {
-                    engine?.getMediaPlayer()?.selectTrack(videoTrack.id)
-                }
-            }, 200)
-        }, 2000)
+                if (commitId != seekCommitCount) return@postDelayed
+                val player = engine?.getMediaPlayer() ?: return@postDelayed
+                if (!player.isPlaying || pendingSeekTime != null) return@postDelayed
+
+                val media = player.media ?: return@postDelayed
+                val statsBefore = media.stats?.displayedPictures?.toInt() ?: return@postDelayed
+
+                // Wait a short duration to see if pictures are actually being displayed
+                seekHandler.postDelayed({
+                    if (commitId != seekCommitCount) return@postDelayed
+                    if (!player.isPlaying || pendingSeekTime != null) return@postDelayed
+
+                    val statsAfter = media.stats?.displayedPictures?.toInt() ?: return@postDelayed
+                    if (statsAfter <= statsBefore) {
+                        // Video is stuck! No new pictures displayed in the last interval.
+                        val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+                            ?: return@postDelayed
+
+                        FileLogger.w(TAG, "Post-seek video stuck (frames: $statsBefore -> $statsAfter). Resync attempt $retryCount")
+                        player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+                        seekHandler.postDelayed({
+                            if (commitId == seekCommitCount) {
+                                engine?.getMediaPlayer()?.selectTrack(videoTrack.id)
+                                attemptResync(delayMs * 2, retryCount + 1)
+                            }
+                        }, 200)
+                    } else {
+                        FileLogger.d(TAG, "Post-seek video is rendering normally (frames: $statsBefore -> $statsAfter).")
+                    }
+                }, 500)
+            }, delayMs)
+        }
+
+        // Start checking 500ms after the seek committed
+        attemptResync(500L, 1)
     }
 
     override fun play() { engine?.play() }

@@ -111,7 +111,11 @@ class VlcPlayerEngine(private val context: Context) : PlaybackEngine {
     override suspend fun load(payload: PlayPayload) {
         logger.i(TAG, "load() called with url: ${payload.url}")
         val media = Media(libVlc, Uri.parse(payload.url)).apply {
-            setHWDecoderEnabled(true, true)
+            // enable hw decoder but do not force it, to prevent mediacodec freezing on seek
+            setHWDecoderEnabled(true, false)
+            addOption(":avcodec-fast")
+            addOption(":drop-late-frames")
+            addOption(":skip-frames")
 
             val extraHeaders = mutableListOf<String>()
             var userAgentSet = false
