@@ -290,18 +290,21 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 }
 
             case .leftArrow, .rightArrow:
-                showUI()
                 let forward = type == .rightArrow
                 
                 if playbackState.isVirtualScrubbing {
+                    showUI()
                     // Already scrubbing, just increment multiplier
                     increaseScrubMultiplier(forward)
-                } else {
+                } else if !playbackState.userPaused {
+                    showUI()
                     // Start hold timer to detect Siri Remote continuous hold
                     holdTimer?.invalidate()
                     holdTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
                         self?.startVirtualScrub(forward: forward)
                     }
+                } else {
+                    super.pressesBegan(presses, with: event)
                 }
 
             default:
@@ -313,11 +316,13 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             if presses.first?.type == .menu { return }
             
             if let type = presses.first?.type, (type == .leftArrow || type == .rightArrow) {
-                // If hold timer is still valid, it was a click, not a hold.
-                if let timer = holdTimer, timer.isValid {
-                    timer.invalidate()
-                    if !playbackState.isVirtualScrubbing {
-                        if type == .rightArrow { skipForward() } else { skipBackward() }
+                if !playbackState.userPaused || playbackState.isVirtualScrubbing {
+                    // If hold timer is still valid, it was a click, not a hold.
+                    if let timer = holdTimer, timer.isValid {
+                        timer.invalidate()
+                        if !playbackState.isVirtualScrubbing {
+                            if type == .rightArrow { skipForward() } else { skipBackward() }
+                        }
                     }
                 }
             }
