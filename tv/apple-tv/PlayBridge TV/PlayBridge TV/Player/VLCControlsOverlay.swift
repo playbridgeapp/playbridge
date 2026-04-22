@@ -10,6 +10,11 @@ class VLCPlaybackData: ObservableObject {
     @Published var duration: Double = 0
     @Published var showUI: Bool = true
     @Published var isLooping: Bool = false
+    
+    // Virtual Scrubbing Ghost HUD
+    @Published var isVirtualScrubbing: Bool = false
+    @Published var scrubMultiplier: Int = 0
+    @Published var virtualTime: Double = 0.0
 
     // Subtitles
     @Published var subtitleTracks: [(id: Int, name: String)] = []
@@ -121,8 +126,17 @@ struct VLCControlsOverlay: View {
                 VStack(spacing: 0) {
                     Spacer()
 
-                    // Center play/pause indicator (large, when user paused)
-                    if data.userPaused {
+                    // Center action indicator (pause icon or fast-forward scrub indicator)
+                    if data.isVirtualScrubbing {
+                        HStack(spacing: 12) {
+                            Image(systemName: data.scrubMultiplier > 0 ? "forward.fill" : "backward.fill")
+                            Text("\(abs(data.scrubMultiplier))x")
+                        }
+                        .font(.system(size: 72, weight: .bold))
+                        .foregroundColor(.white)
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.bottom, 60)
+                    } else if data.userPaused {
                         Image(systemName: "pause.fill")
                             .font(.system(size: 72, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
@@ -136,7 +150,8 @@ struct VLCControlsOverlay: View {
                     VStack(spacing: 24) {
                         // Progress bar
                         HStack(spacing: 16) {
-                            Text(formatTime(data.currentTime))
+                            let displayTime = data.isVirtualScrubbing ? data.virtualTime : data.currentTime
+                            Text(formatTime(displayTime))
                                 .font(.system(size: 22, weight: .medium, design: .monospaced))
                                 .foregroundColor(.white.opacity(0.8))
 
@@ -153,7 +168,7 @@ struct VLCControlsOverlay: View {
                                             width: proxy.size.width
                                                 * CGFloat(
                                                     data.duration > 0
-                                                        ? data.currentTime / data.duration : 0))
+                                                        ? displayTime / data.duration : 0))
                                 }
                             }.frame(height: 8)
 

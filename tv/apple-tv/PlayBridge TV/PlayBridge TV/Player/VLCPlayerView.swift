@@ -31,6 +31,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         var onSwitch: ((Double) -> Void)?
         
         private var initialTimeApplied: Bool = false
+        private var ignoreTimeUpdatesUntil: Date = Date.distantPast
 
         // Custom focusable view to capture remote events
         class FocusableView: UIView {
@@ -222,7 +223,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                     }
                 }
                 
-                self.playbackState.currentTime = Double(self.mediaPlayer.time.intValue) / 1000.0
+                if Date() > self.ignoreTimeUpdatesUntil {
+                    self.playbackState.currentTime = Double(self.mediaPlayer.time.intValue) / 1000.0
+                }
+                
                 if let media = self.mediaPlayer.media {
                     let length = Double(media.length.intValue) / 1000.0
                     if length > 0 {
@@ -239,6 +243,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         }
 
         // MARK: - Interactions
+        private var holdTimer: Timer?
+        private var virtualScrubTickTimer: Timer?
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             guard let type = presses.first?.type else {
@@ -273,68 +279,115 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 return
             }
 
-            if mediaPlayer.isPlaying {
-                // PLAYING MODE: arrows seek, center pauses
-                switch type {
-                case .playPause, .select:
+            switch type {
+            case .playPause, .select:
+                if playbackState.isVirtualScrubbing {
+                    commitVirtualScrub()
+                } else if !playbackState.userPaused {
                     togglePlayPause()
-                case .leftArrow:
-                    showUI()
-                    startContinuousSeek(forward: false)
-                case .rightArrow:
-                    showUI()
-                    startContinuousSeek(forward: true)
-                default:
+                } else {
                     super.pressesBegan(presses, with: event)
                 }
-            } else {
-                // PAUSED MODE: arrows navigate buttons, center activates focused button
-                switch type {
-                case .playPause:
-                    togglePlayPause()
-                default:
-                    // Let the focus engine handle all navigation and selection
-                    super.pressesBegan(presses, with: event)
+
+            case .leftArrow, .rightArrow:
+                showUI()
+                let forward = type == .rightArrow
+                
+                if playbackState.isVirtualScrubbing {
+                    // Already scrubbing, just increment multiplier
+                    increaseScrubMultiplier(forward)
+                } else {
+                    // Start hold timer to detect Siri Remote continuous hold
+                    holdTimer?.invalidate()
+                    holdTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+                        self?.startVirtualScrub(forward: forward)
+                    }
                 }
+
+            default:
+                super.pressesBegan(presses, with: event)
             }
         }
 
         override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-            stopContinuousSeek()
             if presses.first?.type == .menu { return }
+            
+            if let type = presses.first?.type, (type == .leftArrow || type == .rightArrow) {
+                // If hold timer is still valid, it was a click, not a hold.
+                if let timer = holdTimer, timer.isValid {
+                    timer.invalidate()
+                    if !playbackState.isVirtualScrubbing {
+                        if type == .rightArrow { skipForward() } else { skipBackward() }
+                    }
+                }
+            }
             super.pressesEnded(presses, with: event)
         }
 
         override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-            stopContinuousSeek()
             if presses.first?.type == .menu { return }
+            holdTimer?.invalidate()
             super.pressesCancelled(presses, with: event)
         }
 
-        private func startContinuousSeek(forward: Bool) {
-            // Initial skip (one-time)
-            if forward { skipForward() } else { skipBackward() }
-
-            continuousSeekTimer?.invalidate()
-            // After 0.4s hold, start repeating fast
-            continuousSeekTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) {
-                [weak self] _ in
+        // MARK: - Virtual Scrubbing
+        
+        private func startVirtualScrub(forward: Bool) {
+            playbackState.isVirtualScrubbing = true
+            playbackState.virtualTime = playbackState.currentTime
+            mediaPlayer.pause() // Freeze video behind UI
+            
+            showUI(autoHide: false) // Lock UI permanently while scrubbing
+            increaseScrubMultiplier(forward)
+            
+            virtualScrubTickTimer?.invalidate()
+            virtualScrubTickTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
                 DispatchQueue.main.async {
-                    self?.continuousSeekTimer?.invalidate()
-                    self?.continuousSeekTimer = Timer.scheduledTimer(
-                        withTimeInterval: 0.2, repeats: true
-                    ) { [weak self] _ in
-                        DispatchQueue.main.async {
-                            if forward { self?.skipForward() } else { self?.skipBackward() }
-                        }
+                    // Each scale tick represents multiple seconds per real second
+                    let speedFactor = 12.0 
+                    let delta = Double(self.playbackState.scrubMultiplier) * speedFactor * 0.05
+                    
+                    var nextTime = self.playbackState.virtualTime + delta
+                    if self.playbackState.duration > 0 {
+                        nextTime = max(0, min(nextTime, self.playbackState.duration))
+                    } else {
+                        nextTime = max(0, nextTime)
                     }
+                    self.playbackState.virtualTime = nextTime
                 }
             }
         }
-
-        private func stopContinuousSeek() {
-            continuousSeekTimer?.invalidate()
-            continuousSeekTimer = nil
+        
+        private func increaseScrubMultiplier(_ forward: Bool) {
+            let dir = forward ? 1 : -1
+            
+            if playbackState.scrubMultiplier == 0 {
+                playbackState.scrubMultiplier = dir
+            } else if (playbackState.scrubMultiplier > 0 && forward) || (playbackState.scrubMultiplier < 0 && !forward) {
+                // Increment magnitude up to 4x
+                let magnitude = min(abs(playbackState.scrubMultiplier) + 1, 4)
+                playbackState.scrubMultiplier = magnitude * dir
+            } else {
+                // Changing directions resets
+                playbackState.scrubMultiplier = dir
+            }
+        }
+        
+        private func commitVirtualScrub() {
+            virtualScrubTickTimer?.invalidate()
+            virtualScrubTickTimer = nil
+            
+            // Preemptively snap the UI to the correct timeline
+            playbackState.currentTime = playbackState.virtualTime
+            ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75) // Lock out stale VLC ticks
+            
+            playbackState.isVirtualScrubbing = false
+            playbackState.scrubMultiplier = 0
+            
+            mediaPlayer.time = VLCTime(int: Int32(playbackState.virtualTime * 1000))
+            mediaPlayer.play()
+            showUI(autoHide: true)
         }
 
 
@@ -367,6 +420,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             }
 
             if target > currentTime {
+                // Optimistic visual update
+                playbackState.currentTime = Double(target) / 1000.0
+                ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+                
                 mediaPlayer.time = VLCTime(int: target)
             }
             showUI()
@@ -377,6 +434,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             let currentTime = mediaPlayer.time.intValue
             let target = max(0, currentTime - 15000)
 
+            // Optimistic visual update
+            playbackState.currentTime = Double(target) / 1000.0
+            ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+            
             mediaPlayer.time = VLCTime(int: target)
             showUI()
         }
@@ -387,7 +448,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 self.setNeedsFocusUpdate()
                 
                 self.hideControlsTimer?.invalidate()
-                if autoHide {
+                if autoHide && !self.playbackState.isVirtualScrubbing {
                     self.hideControlsTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false)
                     { [weak self] _ in
                         DispatchQueue.main.async {
