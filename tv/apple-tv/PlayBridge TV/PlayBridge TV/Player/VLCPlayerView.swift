@@ -6,13 +6,17 @@ import TVVLCKit
 struct VLCPlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
+    let initialTime: Double
     let onDismiss: () -> Void
+    let onSwitch: (Double) -> Void
 
     func makeUIViewController(context: Context) -> VLCViewController {
         let controller = VLCViewController()
         controller.url = url
         controller.headers = headers
+        controller.initialTime = initialTime
         controller.onDismiss = onDismiss
+        controller.onSwitch = onSwitch
         return controller
     }
 
@@ -22,7 +26,11 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         var mediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
         var url: URL?
         var headers: [String: String]?
+        var initialTime: Double = 0.0
         var onDismiss: (() -> Void)?
+        var onSwitch: ((Double) -> Void)?
+        
+        private var initialTimeApplied: Bool = false
 
         // Custom focusable view to capture remote events
         class FocusableView: UIView {
@@ -81,6 +89,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 },
                 onTogglePlayPause: { [weak self] in
                     self?.togglePlayPause()
+                },
+                onSwitchEngine: { [weak self] in
+                    guard let self = self else { return }
+                    self.onSwitch?(self.playbackState.currentTime)
                 })
             let hosting = UIHostingController(rootView: overlay)
             hosting.view.backgroundColor = .clear
@@ -202,6 +214,14 @@ struct VLCPlayerView: UIViewControllerRepresentable {
 
         func mediaPlayerTimeChanged(_ aNotification: Notification) {
             DispatchQueue.main.async {
+                if !self.initialTimeApplied && self.initialTime > 0 {
+                    if let media = self.mediaPlayer.media, media.length.intValue > 0 {
+                        self.mediaPlayer.time = VLCTime(int: Int32(self.initialTime * 1000))
+                        self.initialTimeApplied = true
+                        return
+                    }
+                }
+                
                 self.playbackState.currentTime = Double(self.mediaPlayer.time.intValue) / 1000.0
                 if let media = self.mediaPlayer.media {
                     let length = Double(media.length.intValue) / 1000.0

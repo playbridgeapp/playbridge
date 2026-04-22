@@ -105,6 +105,7 @@ struct VLCControlsOverlay: View {
     let onSelectSubtitle: (Int) -> Void
     let onSelectAudio: (Int) -> Void
     let onTogglePlayPause: () -> Void
+    let onSwitchEngine: () -> Void
 
     var body: some View {
         ZStack {
@@ -221,6 +222,18 @@ struct VLCControlsOverlay: View {
                                         Text("Loop")
                                             .font(.system(size: 16, weight: .medium))
                                             .foregroundColor(data.isLooping ? Theme.accent : .white)
+                                    }
+                                    .frame(width: 100, height: 70)
+                                }
+                                .buttonStyle(.card)
+                                
+                                // Switch Engine button
+                                Button(action: { onSwitchEngine() }) {
+                                    VStack(spacing: 6) {
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                            .font(.system(size: 26))
+                                        Text("Switch")
+                                            .font(.system(size: 16, weight: .medium))
                                     }
                                     .frame(width: 100, height: 70)
                                 }

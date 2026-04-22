@@ -5,10 +5,13 @@ import AVKit
 struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
+    let initialTime: Double
     let onDismiss: () -> Void
+    let onSwitch: (Double) -> Void
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
+        controller.delegate = context.coordinator
 
         // Setup Audio Session for TV output
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -30,12 +33,85 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         // Native AVPlayer
         let player = AVPlayer(playerItem: playerItem)
+        
+        // Seek to initial time if context switching occurred
+        if initialTime > 0 {
+            player.seek(to: CMTime(seconds: initialTime, preferredTimescale: 1))
+        }
+
         controller.player = player
         controller.allowsPictureInPicturePlayback = true
+
+        // Configure custom tvOS AVPlayer UI Overlays
+        context.coordinator.player = player
+        
+        let loopAction = UIAction(
+            title: "Loop",
+            image: UIImage(systemName: "repeat")
+        ) { [weak coordinator = context.coordinator] action in
+            coordinator?.toggleLoop(action)
+        }
+        
+        let switchAction = UIAction(
+            title: "Switch to VLC",
+            image: UIImage(systemName: "arrow.triangle.2.circlepath")
+        ) { [weak coordinator = context.coordinator] _ in
+            coordinator?.invokeSwitch()
+        }
+        
+        controller.transportBarCustomMenuItems = [loopAction, switchAction]
 
         player.play()
         return controller
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDismiss: onDismiss, onSwitch: onSwitch)
+    }
+
+    class Coordinator: NSObject, AVPlayerViewControllerDelegate {
+        var isLooping = false
+        weak var player: AVPlayer?
+        let onDismiss: () -> Void
+        let onSwitch: (Double) -> Void
+        
+        init(onDismiss: @escaping () -> Void, onSwitch: @escaping (Double) -> Void) {
+            self.onDismiss = onDismiss
+            self.onSwitch = onSwitch
+            super.init()
+            
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(itemDidFinish),
+                name: .AVPlayerItemDidPlayToEndTime,
+                object: nil
+            )
+        }
+        
+        @objc func toggleLoop(_ action: UIAction) {
+            isLooping.toggle()
+            action.state = isLooping ? .on : .off
+        }
+        
+        @objc func invokeSwitch() {
+            if let currentTime = player?.currentTime().seconds {
+                onSwitch(currentTime)
+            }
+        }
+        
+        @objc func itemDidFinish(notification: Notification) {
+            // Ensure this notification applies to our specific player loop scope
+            guard let finishedItem = notification.object as? AVPlayerItem,
+                  finishedItem == player?.currentItem else { return }
+                  
+            if isLooping {
+                player?.seek(to: .zero)
+                player?.play()
+            } else {
+                onDismiss()
+            }
+        }
+    }
 }
