@@ -8,16 +8,17 @@ import UIKit
 
 // MARK: - VLC Local Proxy (for custom HTTP headers)
 
-/// Manages the upstream URLSession and routes streamed data to the correct
-/// NWConnection without ever blocking a thread (no semaphores).
-/// Each connection owns a serial DispatchQueue that serialises NWConnection
-/// sends so chunks arrive in order without overlap.
+/// Manages upstream URLSession tasks and routes data to NWConnections.
+/// Cancels upstream tasks immediately when VLC closes its connection (e.g. after
+/// reading an MP4 range or HLS segment), preventing "Socket is not connected" spam.
 class ProxySessionManager: NSObject, URLSessionDataDelegate {
     static let shared = ProxySessionManager()
 
     private struct ConnState {
         let connection: NWConnection
-        let sendQueue: DispatchQueue
+        let task: URLSessionDataTask       // upstream task — cancelled when VLC disconnects
+        let sendQueue: DispatchQueue       // serial: keeps send order, never blocks a thread
+        var cancelled = false
     }
 
     private var states: [Int: ConnState] = [:]
@@ -29,19 +30,53 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 0
         config.httpMaximumConnectionsPerHost = 8
-        let opQueue = OperationQueue()
-        opQueue.maxConcurrentOperationCount = OperationQueue.defaultMaxConcurrentOperationCount
-        return URLSession(configuration: config, delegate: self, delegateQueue: opQueue)
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = OperationQueue.defaultMaxConcurrentOperationCount
+        return URLSession(configuration: config, delegate: self, delegateQueue: q)
     }()
 
     func proxy(request: URLRequest, to connection: NWConnection) {
         let task = session.dataTask(with: request)
-        let q = DispatchQueue(label: "vlc-proxy-send-\(task.taskIdentifier)", qos: .userInitiated)
+        let q = DispatchQueue(label: "vlc-send-\(task.taskIdentifier)", qos: .userInitiated)
+        let state = ConnState(connection: connection, task: task, sendQueue: q)
+
         lock.lock()
-        states[task.taskIdentifier] = ConnState(connection: connection, sendQueue: q)
+        states[task.taskIdentifier] = state
         lock.unlock()
+
+        print("[Proxy] T\(task.taskIdentifier) upstream request: \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "?")")
+        if let headers = request.allHTTPHeaderFields, !headers.isEmpty {
+            print("[Proxy] T\(task.taskIdentifier) request headers: \(headers)")
+        }
+
+        // Watch for VLC closing its end of the connection
+        connection.stateUpdateHandler = { [weak self] connState in
+            switch connState {
+            case .failed(let err):
+                print("[Proxy] T\(task.taskIdentifier) VLC connection failed: \(err)")
+                self?.cancelUpstream(for: task.taskIdentifier)
+            case .cancelled:
+                print("[Proxy] T\(task.taskIdentifier) VLC connection cancelled")
+                self?.cancelUpstream(for: task.taskIdentifier)
+            default: break
+            }
+        }
+
         task.resume()
     }
+
+    // Cancel the upstream task and remove state when VLC disconnects
+    private func cancelUpstream(for taskId: Int) {
+        lock.lock()
+        let state = states.removeValue(forKey: taskId)
+        lock.unlock()
+        if state != nil {
+            print("[Proxy] T\(taskId) cancelling upstream (VLC disconnected)")
+        }
+        state?.task.cancel()
+    }
+
+    // MARK: URLSessionDataDelegate
 
     func urlSession(
         _ session: URLSession,
@@ -54,21 +89,27 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         lock.unlock()
 
         guard let state = state, let http = response as? HTTPURLResponse else {
+            print("[Proxy] T\(dataTask.taskIdentifier) no state or non-HTTP response, cancelling")
             completionHandler(.cancel)
             return
         }
 
+        print("[Proxy] T\(dataTask.taskIdentifier) upstream response: \(http.statusCode) content-length=\(http.allHeaderFields["Content-Length"] ?? "unknown") type=\(http.allHeaderFields["Content-Type"] ?? "unknown")")
+
         var header = "HTTP/1.1 \(http.statusCode) \(HTTPURLResponse.localizedString(forStatusCode: http.statusCode))\r\n"
         for (key, value) in http.allHeaderFields {
-            if let key = key as? String {
-                header += "\(key): \(value)\r\n"
-            }
+            if let key = key as? String { header += "\(key): \(value)\r\n" }
         }
         header += "\r\n"
 
-        // Enqueue header send asynchronously - never blocks URLSession callbacks
-        state.sendQueue.async {
-            state.connection.send(content: header.data(using: .utf8), completion: .contentProcessed({ _ in }))
+        let taskId = dataTask.taskIdentifier
+        state.sendQueue.async { [weak self] in
+            state.connection.send(content: header.data(using: .utf8), completion: .contentProcessed({ error in
+                if let error = error {
+                    print("[Proxy] T\(taskId) send header failed: \(error)")
+                    self?.cancelUpstream(for: taskId)
+                }
+            }))
         }
         completionHandler(.allow)
     }
@@ -79,9 +120,12 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         lock.unlock()
         guard let state = state else { return }
 
+        let taskId = dataTask.taskIdentifier
         let chunk = data
-        state.sendQueue.async {
-            state.connection.send(content: chunk, completion: .contentProcessed({ _ in }))
+        state.sendQueue.async { [weak self] in
+            state.connection.send(content: chunk, completion: .contentProcessed({ error in
+                if error != nil { self?.cancelUpstream(for: taskId) }
+            }))
         }
     }
 
@@ -91,15 +135,19 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         lock.unlock()
         guard let state = state else { return }
 
-        if let error = error as? NSError, error.code != NSURLErrorCancelled {
-            print("VLC Proxy upstream error: \(error.localizedDescription)")
+        if let error = error as? NSError {
+            if error.code != NSURLErrorCancelled {
+                print("[Proxy] T\(task.taskIdentifier) upstream completed with error: \(error.localizedDescription)")
+            } else {
+                print("[Proxy] T\(task.taskIdentifier) upstream cancelled (VLC closed connection)")
+            }
+        } else {
+            print("[Proxy] T\(task.taskIdentifier) upstream completed successfully")
         }
 
         state.sendQueue.async {
             state.connection.send(
-                content: nil,
-                contentContext: .finalMessage,
-                isComplete: true,
+                content: nil, contentContext: .finalMessage, isComplete: true,
                 completion: .contentProcessed({ _ in state.connection.cancel() })
             )
         }
@@ -121,7 +169,8 @@ class VLCProxyServer {
         c.host = "127.0.0.1"
         c.port = Int(port)
         c.path = targetURL.path.isEmpty ? "/" : targetURL.path
-        c.query = targetURL.query
+        // Use percentEncodedQuery to avoid double-encoding (e.g. %3D -> %253D)
+        c.percentEncodedQuery = targetURL.query
         return c.url!
     }
 
@@ -170,31 +219,53 @@ class VLCProxyServer {
             let lines = req.components(separatedBy: "\r\n")
             guard let requestLine = lines.first else { connection.cancel(); return }
 
+            print("[Proxy] VLC request: \(requestLine)")
+
             let parts = requestLine.split(separator: " ")
             let method = parts.count > 0 ? String(parts[0]) : "GET"
-            let rawPath = parts.count > 1 ? String(parts[1]) : "/"
+            let requestURI = parts.count > 1 ? String(parts[1]) : "/"
 
+            // Split request-URI into path and query
+            let uriParts = requestURI.split(separator: "?", maxSplits: 1)
+            let requestPath = String(uriParts[0])
+            let requestQuery: String? = uriParts.count > 1 ? String(uriParts[1]) : nil
+
+            // Decode VLC's percent-encoded path for comparison (targetURL.path is always decoded)
+            let decodedRequestPath = requestPath.removingPercentEncoding ?? requestPath
+
+            // Determine the upstream URL
             let upstreamURL: URL
-            if rawPath == self.targetURL.path || rawPath == "/" {
+            let targetPath = self.targetURL.path.isEmpty ? "/" : self.targetURL.path
+
+            if decodedRequestPath == targetPath || requestPath == "/" {
+                // Initial request — use the original target URL exactly
                 upstreamURL = self.targetURL
-            } else if let abs = URL(string: rawPath, relativeTo: self.targetURL)?.absoluteURL {
-                upstreamURL = abs
+                print("[Proxy] Resolved as initial request -> \(upstreamURL.absoluteString)")
             } else {
+                // Sub-request (HLS segment/sub-playlist)
+                // Decode first — .path setter will re-encode correctly
                 var c = URLComponents()
-                c.scheme = self.targetURL.scheme; c.host = self.targetURL.host
-                c.port = self.targetURL.port;     c.path = rawPath
+                c.scheme = self.targetURL.scheme
+                c.host = self.targetURL.host
+                c.port = self.targetURL.port
+                c.path = decodedRequestPath
+                c.percentEncodedQuery = requestQuery
                 upstreamURL = c.url ?? self.targetURL
+                print("[Proxy] Resolved as sub-request -> \(upstreamURL.absoluteString)")
             }
 
             var urlRequest = URLRequest(url: upstreamURL)
             urlRequest.httpMethod = method
 
+            // Forward relevant headers from VLC
             for line in lines.dropFirst() {
                 guard !line.isEmpty, let colon = line.firstIndex(of: ":") else { continue }
                 let k = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
                 let v = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
                 switch k.lowercased() {
-                case "range", "accept-encoding", "accept": urlRequest.setValue(v, forHTTPHeaderField: k)
+                case "range", "accept-encoding", "accept":
+                    urlRequest.setValue(v, forHTTPHeaderField: k)
+                    print("[Proxy] Forwarding VLC header: \(k): \(v)")
                 default: break
                 }
             }
