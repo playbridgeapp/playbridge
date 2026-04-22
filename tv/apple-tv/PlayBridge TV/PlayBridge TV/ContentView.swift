@@ -17,8 +17,7 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
     private struct ConnState {
         let connection: NWConnection
         let task: URLSessionDataTask       // upstream task — cancelled when VLC disconnects
-        let sendQueue: DispatchQueue       // serial: keeps send order, never blocks a thread
-        var cancelled = false
+        let sendGate: DispatchSemaphore    // backpressure: only 1 in-flight send at a time
     }
 
     private var states: [Int: ConnState] = [:]
@@ -27,7 +26,7 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
     lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForRequest = 300   // 5 min — large files with backpressure need slack
         config.timeoutIntervalForResource = 0
         config.httpMaximumConnectionsPerHost = 8
         let q = OperationQueue()
@@ -37,8 +36,8 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
 
     func proxy(request: URLRequest, to connection: NWConnection) {
         let task = session.dataTask(with: request)
-        let q = DispatchQueue(label: "vlc-send-\(task.taskIdentifier)", qos: .userInitiated)
-        let state = ConnState(connection: connection, task: task, sendQueue: q)
+        let gate = DispatchSemaphore(value: 1)
+        let state = ConnState(connection: connection, task: task, sendGate: gate)
 
         lock.lock()
         states[task.taskIdentifier] = state
@@ -70,10 +69,11 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         lock.lock()
         let state = states.removeValue(forKey: taskId)
         lock.unlock()
-        if state != nil {
+        if let state = state {
             print("[Proxy] T\(taskId) cancelling upstream (VLC disconnected)")
+            state.sendGate.signal()   // unblock any waiting didReceive call
+            state.task.cancel()
         }
-        state?.task.cancel()
     }
 
     // MARK: URLSessionDataDelegate
@@ -103,14 +103,18 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         header += "\r\n"
 
         let taskId = dataTask.taskIdentifier
-        state.sendQueue.async { [weak self] in
-            state.connection.send(content: header.data(using: .utf8), completion: .contentProcessed({ error in
-                if let error = error {
-                    print("[Proxy] T\(taskId) send header failed: \(error)")
-                    self?.cancelUpstream(for: taskId)
-                }
-            }))
-        }
+
+        // Backpressure: wait for any prior send to finish before sending header
+        state.sendGate.wait()
+
+        state.connection.send(content: header.data(using: .utf8), completion: .contentProcessed({ [weak self] error in
+            state.sendGate.signal()
+            if let error = error {
+                print("[Proxy] T\(taskId) send header failed: \(error)")
+                self?.cancelUpstream(for: taskId)
+            }
+        }))
+
         completionHandler(.allow)
     }
 
@@ -121,12 +125,17 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         guard let state = state else { return }
 
         let taskId = dataTask.taskIdentifier
-        let chunk = data
-        state.sendQueue.async { [weak self] in
-            state.connection.send(content: chunk, completion: .contentProcessed({ error in
-                if error != nil { self?.cancelUpstream(for: taskId) }
-            }))
-        }
+
+        // Backpressure: block until the previous send completes before sending next chunk.
+        // This prevents unbounded memory growth for large files (e.g. 9 GB).
+        // URLSession serialises delegate callbacks per-task, so blocking here
+        // naturally throttles upstream data delivery.
+        state.sendGate.wait()
+
+        state.connection.send(content: data, completion: .contentProcessed({ [weak self] error in
+            state.sendGate.signal()
+            if error != nil { self?.cancelUpstream(for: taskId) }
+        }))
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -145,12 +154,16 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
             print("[Proxy] T\(task.taskIdentifier) upstream completed successfully")
         }
 
-        state.sendQueue.async {
-            state.connection.send(
-                content: nil, contentContext: .finalMessage, isComplete: true,
-                completion: .contentProcessed({ _ in state.connection.cancel() })
-            )
-        }
+        // Wait for last data chunk to finish sending before closing
+        state.sendGate.wait()
+
+        state.connection.send(
+            content: nil, contentContext: .finalMessage, isComplete: true,
+            completion: .contentProcessed({ _ in
+                state.sendGate.signal()
+                state.connection.cancel()
+            })
+        )
     }
 }
 
@@ -1061,7 +1074,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
 
                 // Optimized caching for tvOS streaming
                 media.addOptions([
-                    "--network-caching": "3000",
+                    "--network-caching": "15000",
                     "--clock-jitter": "0",
                     "--drop-late-frames": "1",
                     "--skip-frames": "1",
