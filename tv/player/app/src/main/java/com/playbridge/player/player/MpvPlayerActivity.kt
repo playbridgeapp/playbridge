@@ -544,13 +544,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 runOnUiThread {
                     controlsManager.hideBuffering()
                     
-                    if (containerFps > 0.0) {
-                        updateRefreshRate(containerFps.toFloat())
-                    }
-                    
                     // Apply Loudness Enhancer if enabled
                     if (isLoudnessEnhancerEnabled) {
                         MPVLib.setPropertyString("af", "volume=gain=15")
+                    }
+
+                    if (containerFps > 0.0) {
+                        updateRefreshRate(containerFps.toFloat())
                     }
                     if (pendingResumePositionMs > 0) {
                         engine?.seek(pendingResumePositionMs)

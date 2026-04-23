@@ -24,8 +24,22 @@ class PairingStore(private val context: Context) {
         private val DEVICE_NAME = stringPreferencesKey("device_name")
         private val PAIRED_DEVICES = stringPreferencesKey("paired_devices")
         private val DEVICE_ID = stringPreferencesKey("device_id")
+        private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         
         const val DEFAULT_PORT = com.playbridge.shared.protocol.Config.DEFAULT_PORT
+    }
+    
+    /**
+     * Track if the user has seen the pairing screen.
+     */
+    val isOnboardingDone: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[ONBOARDING_DONE] ?: false
+    }
+
+    suspend fun setOnboardingDone(done: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[ONBOARDING_DONE] = done
+        }
     }
     
     /**

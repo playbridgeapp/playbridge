@@ -137,11 +137,20 @@ fun MainContent(
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
+    val isOnboardingDone by pairingStore.isOnboardingDone.collectAsState(initial = true)
 
-    // On first launch: show PairingScreen if no device has ever connected, Library otherwise.
-    LaunchedEffect(pairedDevices) {
+    // On first launch: show PairingScreen only if no device has ever connected AND onboarding not done.
+    LaunchedEffect(pairedDevices, isOnboardingDone) {
         if (!isInitialCheckDone) {
-            currentScreen = if (pairedDevices.isEmpty()) Screen.Pairing else Screen.Library
+            currentScreen = if (pairedDevices.isEmpty() && !isOnboardingDone) {
+                Screen.Pairing
+            } else {
+                Screen.Library
+            }
+            
+            if (!isOnboardingDone) {
+                pairingStore.setOnboardingDone(true)
+            }
             isInitialCheckDone = true
         }
     }

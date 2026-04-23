@@ -726,13 +726,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     controlsManager.hideBuffering()
                     stuckBufferHandler.removeCallbacksAndMessages(null)
 
-                    // 1. Detect and apply refresh rate matching FIRST (before potential audio session re-init)
-                    val fps = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
-                    if (fps > 0f) {
-                        updateRefreshRate(fps)
-                    }
-
-                    // 2. Apply Loudness Enhancer if enabled
+                    // Apply Loudness Enhancer if enabled
                     if (isLoudnessEnhancerEnabled) {
                         try {
                             val session = player.audioSessionId
@@ -745,6 +739,12 @@ class ExoPlayerActivity : PlayerActivity() {
                                 loudnessEnhancer?.enabled = true
                             }
                         } catch (e: Exception) { FileLogger.e(TAG, "Loudness re-apply failed", e) }
+                    }
+
+                    // Detect and apply refresh rate matching
+                    val fps = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
+                    if (fps > 0f) {
+                        updateRefreshRate(fps)
                     }
                     
                     if (pendingResumePosition > 0L) {
@@ -1968,20 +1968,17 @@ class ExoPlayerActivity : PlayerActivity() {
 
             private fun getExoHdrFormat(): String? {
         val format = engine?.getExoPlayer()?.videoFormat ?: return null
-        
-        // Prioritize Dolby Vision detection via mime/metadata
-        if (format.sampleMimeType?.contains("dvhe") == true || 
-            format.sampleMimeType?.contains("dvh1") == true ||
-            format.sampleMimeType?.contains("video/dolby-vision") == true) {
-            return "Dolby Vision"
-        }
-
         val colorInfo = format.colorInfo ?: return null
+        
         return when (colorInfo.colorTransfer) {
             androidx.media3.common.C.COLOR_TRANSFER_ST2084 -> "HDR10"
             androidx.media3.common.C.COLOR_TRANSFER_HLG -> "HLG"
+            // Dolby Vision is often signaled via mime type or specific profiles in Media3,
+            // but ST2084 is the common transfer. We check mime as well.
             else -> {
-                if (colorInfo.colorTransfer != androidx.media3.common.C.COLOR_TRANSFER_SDR && colorInfo.colorTransfer != -1) {
+                if (format.sampleMimeType?.contains("dvhe") == true || format.sampleMimeType?.contains("dvh1") == true) {
+                    "Dolby Vision"
+                } else if (colorInfo.colorTransfer != androidx.media3.common.C.COLOR_TRANSFER_SDR && colorInfo.colorTransfer != -1) {
                     "HDR"
                 } else {
                     null
