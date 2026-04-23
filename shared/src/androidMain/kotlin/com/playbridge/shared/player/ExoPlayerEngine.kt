@@ -149,6 +149,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             .setConnectTimeoutMs(20_000)
             .setReadTimeoutMs(20_000)
 
+        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        val useTunneling = prefs.getBoolean("tunneled_playback", false)
+
         // 2. Track Selector
         trackSelector = DefaultTrackSelector(context).apply {
             val params = buildUponParameters()
@@ -182,6 +185,11 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 val capBps = (cap * 1_000_000).toInt()
                 logger.i(TAG, "Applying max bitrate cap: $cap Mbps -> $capBps bps")
                 params.setMaxVideoBitrate(capBps)
+            }
+
+            if (useTunneling) {
+                logger.i(TAG, "Enabling Video Tunneling")
+                params.setTunnelingEnabled(true)
             }
 
             setParameters(params)

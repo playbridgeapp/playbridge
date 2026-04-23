@@ -54,6 +54,9 @@ fun SettingsScreen(
     var frameRateMatching by remember {
         mutableStateOf(prefs.getBoolean("frame_rate_matching", false))
     }
+    var tunneledPlayback by remember {
+        mutableStateOf(prefs.getBoolean("tunneled_playback", false))
+    }
     var loudnessEnhancer by remember {
         mutableStateOf(prefs.getBoolean("loudness_enhancer", false))
     }
@@ -172,6 +175,22 @@ fun SettingsScreen(
                     val e = enabled.toBoolean()
                     loudnessEnhancer = e
                     prefs.edit().putBoolean("loudness_enhancer", e).apply()
+                }
+            )
+
+            // ── Tunneled Playback ──
+            SettingsDropdown(
+                label = "Tunneled Playback (Fix 4K DV)",
+                description = "Enables hardware-level video/audio synchronization. Recommended for resolving 'dark video' or color issues with Dolby Vision and 4K content. Can cause issues on some cheaper boxes.",
+                options = listOf(
+                    "false" to "Disabled",
+                    "true" to "Enabled (Recommended for 4K)"
+                ),
+                selected = tunneledPlayback.toString(),
+                onSelected = { enabled ->
+                    val e = enabled.toBoolean()
+                    tunneledPlayback = e
+                    prefs.edit().putBoolean("tunneled_playback", e).apply()
                 }
             )
 
