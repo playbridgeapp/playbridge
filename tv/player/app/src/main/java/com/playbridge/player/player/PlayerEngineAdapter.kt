@@ -24,6 +24,8 @@ interface PlayerEngineAdapter {
     /** Video frame rate in fps. 0.0 means unknown. */
     val frameRate: Float
 
+    fun setLoudnessEnhancer(enabled: Boolean)
+
     /** Start/resume playback. */
     fun play()
 

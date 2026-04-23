@@ -35,6 +35,7 @@ abstract class PlayerActivity : ComponentActivity() {
     var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p"
     var maxBitrateCapMbps: Double? = null         // explicit bitrate cap from phone settings (Mbps)
     var isFrameRateMatchingEnabled: Boolean = false
+    var isLoudnessEnhancerEnabled: Boolean = false
 
     protected fun setupSeriesNavigator(intent: Intent?) {
         defaultVideoQuality = intent?.getStringExtra("default_video_quality")
@@ -131,7 +132,8 @@ abstract class PlayerActivity : ComponentActivity() {
         // Load refresh rate matching setting
         val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
         isFrameRateMatchingEnabled = prefs.getBoolean("frame_rate_matching", false)
-        FileLogger.i("PlayerActivity", "Frame rate matching enabled: $isFrameRateMatchingEnabled")
+        isLoudnessEnhancerEnabled = prefs.getBoolean("loudness_enhancer", false)
+        FileLogger.i("PlayerActivity", "Frame rate matching enabled: $isFrameRateMatchingEnabled, Loudness enhancer: $isLoudnessEnhancerEnabled")
     }
 
     private var lastMatchedFps: Float = 0f
@@ -156,6 +158,14 @@ abstract class PlayerActivity : ComponentActivity() {
         } catch (e: Exception) {
             FileLogger.e("PlayerActivity", "Failed to set frame rate: ${e.message}")
         }
+    }
+
+    /**
+     * Toggles the audio loudness enhancer (Night Mode) for the current player engine.
+     */
+    protected fun applyLoudnessEnhancer(enabled: Boolean, adapter: PlayerEngineAdapter?) {
+        FileLogger.i("PlayerActivity", "Applying loudness enhancer: $enabled")
+        adapter?.setLoudnessEnhancer(enabled)
     }
 
     override fun onDestroy() {

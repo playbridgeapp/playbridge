@@ -128,6 +128,8 @@ class ExoPlayerActivity : PlayerActivity() {
     // Playlist queue for auto-advancing through episodes
     private var playlistItems: MutableList<com.playbridge.shared.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
+    private var lastVolume: Float = 1.0f
+    private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
 
     private var activeDialog: android.app.Dialog? = null
 
@@ -286,6 +288,29 @@ class ExoPlayerActivity : PlayerActivity() {
             override val bufferedPosition: Long get() = engine?.getExoPlayer()?.bufferedPosition ?: 0L
             override val streamInfo: String? get() = formatExoStreamInfo()
             override val frameRate: Float get() = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
+
+            override fun setLoudnessEnhancer(enabled: Boolean) {
+                isLoudnessEnhancerEnabled = enabled
+                if (enabled) {
+                    try {
+                        val session = engine?.getExoPlayer()?.audioSessionId ?: 0
+                        if (session != 0) {
+                            if (loudnessEnhancer == null || loudnessEnhancer!!.id != session) {
+                                loudnessEnhancer?.release()
+                                loudnessEnhancer = android.media.audiofx.LoudnessEnhancer(session)
+                            }
+                            loudnessEnhancer?.setTargetGain(2000) // +20dB
+                            loudnessEnhancer?.enabled = true
+                            FileLogger.i(TAG, "Loudness Enhancer enabled (+20dB) for session $session")
+                        }
+                    } catch (e: Exception) {
+                        FileLogger.e(TAG, "Failed to enable Loudness Enhancer", e)
+                    }
+                } else {
+                    loudnessEnhancer?.enabled = false
+                    FileLogger.i(TAG, "Loudness Enhancer disabled")
+                }
+            }
 
             override fun play() { engine?.getExoPlayer()?.play() }
             override fun pause() { engine?.getExoPlayer()?.pause() }
@@ -696,6 +721,25 @@ class ExoPlayerActivity : PlayerActivity() {
                     controlsManager.hideBuffering()
                     stuckBufferHandler.removeCallbacksAndMessages(null)
 
+                    // Apply Loudness Enhancer if enabled
+                    if (isLoudnessEnhancerEnabled) {
+                        // We need to access the engineAdapter logic or re-trigger it
+                        // Since we are inside the activity, we can call the logic directly
+                        // or via the engineAdapter if it were accessible.
+                        // For simplicity, we re-apply the logic here:
+                        try {
+                            val session = player.audioSessionId
+                            if (session != 0) {
+                                if (loudnessEnhancer == null || loudnessEnhancer!!.id != session) {
+                                    loudnessEnhancer?.release()
+                                    loudnessEnhancer = android.media.audiofx.LoudnessEnhancer(session)
+                                }
+                                loudnessEnhancer?.setTargetGain(2000)
+                                loudnessEnhancer?.enabled = true
+                            }
+                        } catch (e: Exception) { FileLogger.e(TAG, "Loudness re-apply failed", e) }
+                    }
+
                     // Detect and apply refresh rate matching
                     val fps = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
                     if (fps > 0f) {
@@ -968,7 +1012,8 @@ class ExoPlayerActivity : PlayerActivity() {
     override fun onDestroy() {
         unregisterReceiver(controlReceiver)
         activeDialog?.dismiss()
-        activeDialog = null
+        loudnessEnhancer?.release()
+        loudnessEnhancer = null
         releasePlayer()
         super.onDestroy()
     }

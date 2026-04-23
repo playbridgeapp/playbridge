@@ -169,6 +169,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 if (fps > 0f) {
                     runOnUiThread { updateRefreshRate(fps) }
                 }
+
+                // Apply Loudness Enhancer if enabled
+                if (isLoudnessEnhancerEnabled) {
+                    player.volume = 150 // +50% boost
+                } else {
+                    player.volume = 100
+                }
             }
 
             MediaPlayer.Event.Paused ->
@@ -455,6 +462,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             override val bufferedPosition: Long get() = (engine?.getMediaPlayer()?.time ?: 0) + 1000 // VLC doesn't expose buffer easily as ms
             override val streamInfo: String? get() = formatVlcStreamInfo()
             override val frameRate: Float get() = calculateVlcFrameRate()
+
+            override fun setLoudnessEnhancer(enabled: Boolean) {
+                val vlcPlayer = engine?.getMediaPlayer() ?: return
+                if (enabled) {
+                    vlcPlayer.volume = 150
+                    FileLogger.i(TAG, "VLC Loudness Enhancer enabled (Volume 150%)")
+                } else {
+                    vlcPlayer.volume = 100
+                    FileLogger.i(TAG, "VLC Loudness Enhancer disabled (Volume 100%)")
+                }
+            }
 
             override fun play() { engine?.play() }
             override fun pause() { engine?.pause() }

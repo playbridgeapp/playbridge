@@ -281,6 +281,17 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             override val streamInfo: String? get() = formatMpvStreamInfo()
             override val frameRate: Float get() = containerFps.toFloat()
 
+            override fun setLoudnessEnhancer(enabled: Boolean) {
+                if (enabled) {
+                    // Set audio filter for 15dB gain
+                    MPVLib.setPropertyString("af", "volume=gain=15")
+                    FileLogger.i(TAG, "MPV Loudness Enhancer enabled (+15dB)")
+                } else {
+                    MPVLib.setPropertyString("af", "")
+                    FileLogger.i(TAG, "MPV Loudness Enhancer disabled")
+                }
+            }
+
             override fun play() { engine?.play() }
             override fun pause() { engine?.pause() }
             override fun seekTo(positionMs: Long) { this@MpvPlayerActivity.seekTo(positionMs) }
@@ -529,6 +540,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 pendingStops = 0
                 runOnUiThread {
                     controlsManager.hideBuffering()
+                    
+                    // Apply Loudness Enhancer if enabled
+                    if (isLoudnessEnhancerEnabled) {
+                        MPVLib.setPropertyString("af", "volume=gain=15")
+                    }
+
                     if (containerFps > 0.0) {
                         updateRefreshRate(containerFps.toFloat())
                     }

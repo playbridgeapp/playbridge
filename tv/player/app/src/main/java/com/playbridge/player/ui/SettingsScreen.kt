@@ -54,6 +54,9 @@ fun SettingsScreen(
     var frameRateMatching by remember {
         mutableStateOf(prefs.getBoolean("frame_rate_matching", false))
     }
+    var loudnessEnhancer by remember {
+        mutableStateOf(prefs.getBoolean("loudness_enhancer", false))
+    }
 
     // Tracks whether the server restart cycle is in progress
     var isRestarting by remember { mutableStateOf(false) }
@@ -153,6 +156,22 @@ fun SettingsScreen(
                     val e = enabled.toBoolean()
                     frameRateMatching = e
                     prefs.edit().putBoolean("frame_rate_matching", e).apply()
+                }
+            )
+
+            // ── Loudness Enhancer ──
+            SettingsDropdown(
+                label = "Loudness Enhancer (Night Mode)",
+                description = "Boosts quiet dialogue and normalizes audio peaks for a better low-volume experience. Prevents 'quiet voices, loud explosions'. (+15-20dB Boost)",
+                options = listOf(
+                    "false" to "Disabled",
+                    "true" to "Enabled"
+                ),
+                selected = loudnessEnhancer.toString(),
+                onSelected = { enabled ->
+                    val e = enabled.toBoolean()
+                    loudnessEnhancer = e
+                    prefs.edit().putBoolean("loudness_enhancer", e).apply()
                 }
             )
 
