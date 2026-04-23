@@ -279,6 +279,8 @@ class ExoPlayerActivity : PlayerActivity() {
 
         val loopButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_loop)
         val switchPlayerButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_switch_player)
+        val hdrBadge = findViewById<android.widget.TextView>(com.playbridge.player.R.id.tv_hdr_badge)
+        val metaContainer = findViewById<android.view.View>(com.playbridge.player.R.id.ll_stream_meta_container)
 
         // Engine adapter for ExoPlayer
         val engineAdapter = object : PlayerEngineAdapter {
@@ -288,6 +290,7 @@ class ExoPlayerActivity : PlayerActivity() {
             override val bufferedPosition: Long get() = engine?.getExoPlayer()?.bufferedPosition ?: 0L
             override val streamInfo: String? get() = formatExoStreamInfo()
             override val frameRate: Float get() = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
+            override val hdrFormat: String? get() = getExoHdrFormat()
 
             override fun setLoudnessEnhancer(enabled: Boolean) {
                 isLoudnessEnhancerEnabled = enabled
@@ -336,6 +339,8 @@ class ExoPlayerActivity : PlayerActivity() {
             elapsedText = elapsedText,
             remainingText = remainingText,
             titleText = titleText,
+            hdrBadge = hdrBadge,
+            metaContainer = metaContainer,
             bufferingSpinner = bufferingSpinner,
             engine = engineAdapter,
             engineType = "ExoPlayer",
@@ -721,12 +726,14 @@ class ExoPlayerActivity : PlayerActivity() {
                     controlsManager.hideBuffering()
                     stuckBufferHandler.removeCallbacksAndMessages(null)
 
-                    // Apply Loudness Enhancer if enabled
+                    // 1. Detect and apply refresh rate matching FIRST (before potential audio session re-init)
+                    val fps = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
+                    if (fps > 0f) {
+                        updateRefreshRate(fps)
+                    }
+
+                    // 2. Apply Loudness Enhancer if enabled
                     if (isLoudnessEnhancerEnabled) {
-                        // We need to access the engineAdapter logic or re-trigger it
-                        // Since we are inside the activity, we can call the logic directly
-                        // or via the engineAdapter if it were accessible.
-                        // For simplicity, we re-apply the logic here:
                         try {
                             val session = player.audioSessionId
                             if (session != 0) {
@@ -738,12 +745,6 @@ class ExoPlayerActivity : PlayerActivity() {
                                 loudnessEnhancer?.enabled = true
                             }
                         } catch (e: Exception) { FileLogger.e(TAG, "Loudness re-apply failed", e) }
-                    }
-
-                    // Detect and apply refresh rate matching
-                    val fps = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
-                    if (fps > 0f) {
-                        updateRefreshRate(fps)
                     }
                     
                     if (pendingResumePosition > 0L) {
@@ -1965,7 +1966,31 @@ class ExoPlayerActivity : PlayerActivity() {
         }
     }
 
-            private fun formatExoStreamInfo(): String? {
+            private fun getExoHdrFormat(): String? {
+        val format = engine?.getExoPlayer()?.videoFormat ?: return null
+        
+        // Prioritize Dolby Vision detection via mime/metadata
+        if (format.sampleMimeType?.contains("dvhe") == true || 
+            format.sampleMimeType?.contains("dvh1") == true ||
+            format.sampleMimeType?.contains("video/dolby-vision") == true) {
+            return "Dolby Vision"
+        }
+
+        val colorInfo = format.colorInfo ?: return null
+        return when (colorInfo.colorTransfer) {
+            androidx.media3.common.C.COLOR_TRANSFER_ST2084 -> "HDR10"
+            androidx.media3.common.C.COLOR_TRANSFER_HLG -> "HLG"
+            else -> {
+                if (colorInfo.colorTransfer != androidx.media3.common.C.COLOR_TRANSFER_SDR && colorInfo.colorTransfer != -1) {
+                    "HDR"
+                } else {
+                    null
+                }
+            }
+        }
+    }
+
+    private fun formatExoStreamInfo(): String? {
         val player = engine?.getExoPlayer() ?: return null
         val parts = mutableListOf<String>()
 

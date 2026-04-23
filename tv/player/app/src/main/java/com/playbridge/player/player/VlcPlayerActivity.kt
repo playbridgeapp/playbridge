@@ -462,6 +462,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             override val bufferedPosition: Long get() = (engine?.getMediaPlayer()?.time ?: 0) + 1000 // VLC doesn't expose buffer easily as ms
             override val streamInfo: String? get() = formatVlcStreamInfo()
             override val frameRate: Float get() = calculateVlcFrameRate()
+            override val hdrFormat: String? get() = getVlcHdrFormat()
 
             override fun setLoudnessEnhancer(enabled: Boolean) {
                 val vlcPlayer = engine?.getMediaPlayer() ?: return
@@ -489,6 +490,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             elapsedText = findViewById(R.id.tv_elapsed),
             remainingText = findViewById(R.id.tv_remaining),
             titleText = findViewById(R.id.title_text),
+            hdrBadge = findViewById(R.id.tv_hdr_badge),
+            metaContainer = findViewById(R.id.ll_stream_meta_container),
             bufferingSpinner = findViewById(R.id.buffering_spinner),
             engine = engineAdapter,
             engineType = "VLC",
@@ -1637,6 +1640,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
         surfaceLayoutListener = listener
         surfaceView.addOnLayoutChangeListener(listener)
+    }
+
+    private fun getVlcHdrFormat(): String? {
+        // VLC 4.x metadata fields for HDR (colorTransfer/colorSpace) seem to be elusive or named differently in this version.
+        // Returning null for now to stabilize the build. Exo and MPV implementations remain active.
+        return null
     }
 
     private fun calculateVlcFrameRate(): Float {

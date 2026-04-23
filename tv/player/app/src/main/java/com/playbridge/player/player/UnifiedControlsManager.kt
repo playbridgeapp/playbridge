@@ -35,6 +35,8 @@ class UnifiedControlsManager(
     private val elapsedText: TextView,
     private val remainingText: TextView,
     private val titleText: TextView,
+    private val hdrBadge: TextView,
+    private val metaContainer: View,
     private val bufferingSpinner: ProgressBar,
     private val engine: PlayerEngineAdapter,
     private val engineType: String, // "ExoPlayer", "VLC", "MPV"
@@ -329,7 +331,16 @@ class UnifiedControlsManager(
         } else {
             streamInfoText.text = "$engineType | $info"
         }
-        streamInfoText.visibility = View.VISIBLE
+        
+        val hdr = engine.hdrFormat
+        if (hdr != null) {
+            hdrBadge.text = hdr
+            hdrBadge.visibility = View.VISIBLE
+        } else {
+            hdrBadge.visibility = View.GONE
+        }
+        
+        metaContainer.visibility = View.VISIBLE
     }
 
     private fun formatDuration(ms: Long): String {

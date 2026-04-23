@@ -23,6 +23,8 @@ interface PlayerEngineAdapter {
 
     /** Video frame rate in fps. 0.0 means unknown. */
     val frameRate: Float
+    /** HDR format like "HDR10", "HLG", "Dolby Vision". null if SDR. */
+    val hdrFormat: String?
 
     fun setLoudnessEnhancer(enabled: Boolean)
 

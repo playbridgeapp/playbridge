@@ -280,6 +280,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             override val bufferedPosition: Long get() = (positionMs + bufferAheadMs).coerceAtMost(durationMs)
             override val streamInfo: String? get() = formatMpvStreamInfo()
             override val frameRate: Float get() = containerFps.toFloat()
+            override val hdrFormat: String? get() = getMpvHdrFormat()
 
             override fun setLoudnessEnhancer(enabled: Boolean) {
                 if (enabled) {
@@ -307,6 +308,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             elapsedText           = findViewById(R.id.tv_elapsed),
             remainingText         = findViewById(R.id.tv_remaining),
             titleText             = findViewById(R.id.title_text),
+            hdrBadge              = findViewById(R.id.tv_hdr_badge),
+            metaContainer         = findViewById(R.id.ll_stream_meta_container),
             bufferingSpinner      = findViewById(R.id.buffering_spinner),
             engine                = engineAdapter,
             engineType            = "MPV",
@@ -541,13 +544,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 runOnUiThread {
                     controlsManager.hideBuffering()
                     
+                    if (containerFps > 0.0) {
+                        updateRefreshRate(containerFps.toFloat())
+                    }
+                    
                     // Apply Loudness Enhancer if enabled
                     if (isLoudnessEnhancerEnabled) {
                         MPVLib.setPropertyString("af", "volume=gain=15")
-                    }
-
-                    if (containerFps > 0.0) {
-                        updateRefreshRate(containerFps.toFloat())
                     }
                     if (pendingResumePositionMs > 0) {
                         engine?.seek(pendingResumePositionMs)
@@ -815,6 +818,25 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         playJob?.cancel()
         playJob = lifecycleScope.launch {
             playVideoInternal(url, headers, startPaused)
+        }
+    }
+
+    private fun getMpvHdrFormat(): String? {
+        val colormatrix = MPVLib.getPropertyString("video-params/colormatrix") ?: ""
+        val primaries = MPVLib.getPropertyString("video-params/primaries") ?: ""
+        val gamma = MPVLib.getPropertyString("video-params/gamma") ?: ""
+        val pixelformat = MPVLib.getPropertyString("video-params/pixelformat") ?: ""
+
+        // Common HDR markers in MPV
+        return when {
+            gamma == "pq" || colormatrix == "bt.2020-ncl" || primaries == "bt.2020" -> {
+                if (gamma == "hlg") "HLG" else "HDR10"
+            }
+            "10" in pixelformat || "12" in pixelformat -> {
+                // If 10-bit but not caught by above, might be generic HDR or High Bit Depth
+                if (gamma == "pq") "HDR10" else null 
+            }
+            else -> null
         }
     }
 
