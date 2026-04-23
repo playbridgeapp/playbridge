@@ -78,6 +78,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private var positionMs: Long = 0L
     private var durationMs: Long = 0L
     private var isPlayingState: Boolean = false
+    private var containerFps: Double = 0.0
     // Buffered-ahead time in ms (from demuxer-cache-time, observed as seconds Double)
     private var bufferAheadMs: Long = 0L
 
@@ -278,6 +279,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             override val duration: Long get() = durationMs
             override val bufferedPosition: Long get() = (positionMs + bufferAheadMs).coerceAtMost(durationMs)
             override val streamInfo: String? get() = formatMpvStreamInfo()
+            override val frameRate: Float get() = containerFps.toFloat()
 
             override fun play() { engine?.play() }
             override fun pause() { engine?.pause() }
@@ -335,6 +337,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         MPVLib.observeProperty("audio-codec",         1) // String
         MPVLib.observeProperty("audio-channels",      1) // String e.g. "stereo", "5.1"
         MPVLib.observeProperty("demuxer-cache-time",  5) // Double (seconds buffered ahead)
+        MPVLib.observeProperty("container-fps",       5) // Double (fps)
 
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
@@ -493,8 +496,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     override fun eventProperty(property: String, value: Double) {
-        if (property == "demuxer-cache-time") {
-            bufferAheadMs = (value * 1000).toLong()
+        when (property) {
+            "demuxer-cache-time" -> {
+                bufferAheadMs = (value * 1000).toLong()
+            }
+            "container-fps" -> {
+                containerFps = value
+            }
         }
     }
 
@@ -521,6 +529,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 pendingStops = 0
                 runOnUiThread {
                     controlsManager.hideBuffering()
+                    if (containerFps > 0.0) {
+                        updateRefreshRate(containerFps.toFloat())
+                    }
                     if (pendingResumePositionMs > 0) {
                         engine?.seek(pendingResumePositionMs)
                         pendingResumePositionMs = 0

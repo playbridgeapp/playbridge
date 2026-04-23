@@ -21,6 +21,9 @@ interface PlayerEngineAdapter {
     /** Formatted stream information string (e.g., "1080p • H.264 • stereo"). */
     val streamInfo: String?
 
+    /** Video frame rate in fps. 0.0 means unknown. */
+    val frameRate: Float
+
     /** Start/resume playback. */
     fun play()
 

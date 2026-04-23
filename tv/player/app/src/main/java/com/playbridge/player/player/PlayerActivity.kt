@@ -12,6 +12,9 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.logging.FileLogger
+import android.view.Surface
+import android.view.SurfaceView
+import androidx.annotation.RequiresApi
 
 abstract class PlayerActivity : ComponentActivity() {
 
@@ -31,6 +34,7 @@ abstract class PlayerActivity : ComponentActivity() {
     var seriesNavigator: com.playbridge.shared.stremio.SeriesNavigator? = null
     var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p"
     var maxBitrateCapMbps: Double? = null         // explicit bitrate cap from phone settings (Mbps)
+    var isFrameRateMatchingEnabled: Boolean = false
 
     protected fun setupSeriesNavigator(intent: Intent?) {
         defaultVideoQuality = intent?.getStringExtra("default_video_quality")
@@ -123,6 +127,35 @@ abstract class PlayerActivity : ComponentActivity() {
         // of whether this activity was launched by handleCommand() (phone cast) or directly
         // from the TV's history/favourites screen (which bypasses handleCommand entirely).
         ServerService.notifyContextPlayer()
+
+        // Load refresh rate matching setting
+        val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        isFrameRateMatchingEnabled = prefs.getBoolean("frame_rate_matching", false)
+        FileLogger.i("PlayerActivity", "Frame rate matching enabled: $isFrameRateMatchingEnabled")
+    }
+
+    private var lastMatchedFps: Float = 0f
+
+    /**
+     * Updates the display refresh rate to match the intended video frame rate.
+     * Uses Android 11+ Surface.setFrameRate API.
+     */
+    protected fun updateRefreshRate(fps: Float) {
+        if (!isFrameRateMatchingEnabled || fps <= 0f) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
+
+        // Skip if we already matched this exact FPS recently to avoid redundant handshakes
+        if (Math.abs(fps - lastMatchedFps) < 0.01f) return
+
+        val surfaceView = getVideoSurfaceView() ?: return
+
+        FileLogger.i("PlayerActivity", "Requesting refresh rate matching: ${fps}fps")
+        try {
+            surfaceView.holder.surface.setFrameRate(fps, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
+            lastMatchedFps = fps
+        } catch (e: Exception) {
+            FileLogger.e("PlayerActivity", "Failed to set frame rate: ${e.message}")
+        }
     }
 
     override fun onDestroy() {

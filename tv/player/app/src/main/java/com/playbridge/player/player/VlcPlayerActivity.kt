@@ -163,6 +163,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 if (isPreBuffering) {
                     runOnUiThread { player.pause() }
                 }
+                
+                // Detect and apply refresh rate matching
+                val fps = calculateVlcFrameRate()
+                if (fps > 0f) {
+                    runOnUiThread { updateRefreshRate(fps) }
+                }
             }
 
             MediaPlayer.Event.Paused ->
@@ -448,6 +454,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             override val duration: Long get() = engine?.getMediaPlayer()?.length ?: 0L
             override val bufferedPosition: Long get() = (engine?.getMediaPlayer()?.time ?: 0) + 1000 // VLC doesn't expose buffer easily as ms
             override val streamInfo: String? get() = formatVlcStreamInfo()
+            override val frameRate: Float get() = calculateVlcFrameRate()
 
             override fun play() { engine?.play() }
             override fun pause() { engine?.pause() }
@@ -1612,5 +1619,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
         surfaceLayoutListener = listener
         surfaceView.addOnLayoutChangeListener(listener)
+    }
+
+    private fun calculateVlcFrameRate(): Float {
+        val player = engine?.getMediaPlayer() ?: return 0f
+        val track = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+        if (track is org.videolan.libvlc.interfaces.IMedia.VideoTrack) {
+            if (track.frameRateDen > 0) {
+                return track.frameRateNum.toFloat() / track.frameRateDen.toFloat()
+            }
+        }
+        return 0f
     }
 }

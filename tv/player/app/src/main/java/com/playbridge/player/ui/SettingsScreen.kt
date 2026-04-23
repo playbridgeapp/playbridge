@@ -51,6 +51,9 @@ fun SettingsScreen(
         mutableStateOf(prefs.getString("preferred_ip", "") ?: "")
     }
     var showIpDialog by remember { mutableStateOf(false) }
+    var frameRateMatching by remember {
+        mutableStateOf(prefs.getBoolean("frame_rate_matching", false))
+    }
 
     // Tracks whether the server restart cycle is in progress
     var isRestarting by remember { mutableStateOf(false) }
@@ -134,6 +137,22 @@ fun SettingsScreen(
                         // Keep legacy pref in sync for ServerService
                         .putBoolean("use_external_player", mode == "external")
                         .apply()
+                }
+            )
+
+            // ── Frame Rate Matching ──
+            SettingsDropdown(
+                label = "Frame Rate Matching",
+                description = "Automatically matches the TV's refresh rate to the video's frame rate (e.g. 24Hz for movies). May cause a brief screen blackout (HDMI handshake). Only supported on Android 11+.",
+                options = listOf(
+                    "false" to "Disabled",
+                    "true" to "Enabled (API 30+)"
+                ),
+                selected = frameRateMatching.toString(),
+                onSelected = { enabled ->
+                    val e = enabled.toBoolean()
+                    frameRateMatching = e
+                    prefs.edit().putBoolean("frame_rate_matching", e).apply()
                 }
             )
 

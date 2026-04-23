@@ -285,6 +285,7 @@ class ExoPlayerActivity : PlayerActivity() {
             override val duration: Long get() = engine?.getExoPlayer()?.duration ?: 0L
             override val bufferedPosition: Long get() = engine?.getExoPlayer()?.bufferedPosition ?: 0L
             override val streamInfo: String? get() = formatExoStreamInfo()
+            override val frameRate: Float get() = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
 
             override fun play() { engine?.getExoPlayer()?.play() }
             override fun pause() { engine?.getExoPlayer()?.pause() }
@@ -694,6 +695,12 @@ class ExoPlayerActivity : PlayerActivity() {
                     FileLogger.i(TAG, "Playback ready")
                     controlsManager.hideBuffering()
                     stuckBufferHandler.removeCallbacksAndMessages(null)
+
+                    // Detect and apply refresh rate matching
+                    val fps = engine?.getExoPlayer()?.videoFormat?.frameRate ?: 0f
+                    if (fps > 0f) {
+                        updateRefreshRate(fps)
+                    }
                     
                     if (pendingResumePosition > 0L) {
                         FileLogger.i(TAG, "Applying pending resume position: ${pendingResumePosition}ms")
