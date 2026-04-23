@@ -61,7 +61,7 @@ private const val TAG = "ExoPlayerActivity"
  *
  * Delegates to:
  * - [ContentSniffer] for SSL bypass and content type detection
- * - [PlayerControlsManager] for custom controls overlay
+ * - [UnifiedControlsManager] for custom controls overlay
  * - [ProgressManager] for progress save/restore and thumbnails
  * - [InputHandler] for D-pad, phone remote, and control commands
  */
@@ -70,6 +70,7 @@ class ExoPlayerActivity : PlayerActivity() {
     private var engine: ExoPlayerEngine? = null
     private lateinit var viewModel: com.playbridge.shared.player.PlayerViewModel
     private lateinit var resumeStore: com.playbridge.player.data.HistoryResumeStore
+    private var pendingResumePosition: Long = -1L
 
     private lateinit var playerView: PlayerView
 
@@ -115,7 +116,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
     // Managers
     private val contentSniffer = ContentSniffer()
-    private lateinit var controlsManager: PlayerControlsManager
+    private lateinit var controlsManager: UnifiedControlsManager
     private lateinit var videoFilterManager: VideoFilterManager
     private lateinit var progressManager: ProgressManager
     private lateinit var inputHandler: InputHandler
@@ -277,8 +278,21 @@ class ExoPlayerActivity : PlayerActivity() {
         val loopButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_loop)
         val switchPlayerButton = findViewById<android.widget.ImageButton>(com.playbridge.player.R.id.btn_switch_player)
 
+        // Engine adapter for ExoPlayer
+        val engineAdapter = object : PlayerEngineAdapter {
+            override val isPlaying: Boolean get() = engine?.getExoPlayer()?.isPlaying == true
+            override val currentPosition: Long get() = engine?.getExoPlayer()?.currentPosition ?: 0L
+            override val duration: Long get() = engine?.getExoPlayer()?.duration ?: 0L
+            override val bufferedPosition: Long get() = engine?.getExoPlayer()?.bufferedPosition ?: 0L
+            override val streamInfo: String? get() = formatExoStreamInfo()
+
+            override fun play() { engine?.getExoPlayer()?.play() }
+            override fun pause() { engine?.getExoPlayer()?.pause() }
+            override fun seekTo(positionMs: Long) { engine?.getExoPlayer()?.seekTo(positionMs) }
+        }
+
         // Initialize managers
-        controlsManager = PlayerControlsManager(
+        controlsManager = UnifiedControlsManager(
             controlsRoot = controlsRoot,
             controlsPanel = controlsPanel,
             seekBar = seekBar,
@@ -297,7 +311,8 @@ class ExoPlayerActivity : PlayerActivity() {
             remainingText = remainingText,
             titleText = titleText,
             bufferingSpinner = bufferingSpinner,
-            playerProvider = { engine?.getExoPlayer() },
+            engine = engineAdapter,
+            engineType = "ExoPlayer",
             onShowTrackSelection = { showTrackSelectionDialog() },
             onShowPlaylist = { showPlaylistPicker() },
             onShowStreams = { showStreamSelectionDialog() },
@@ -307,7 +322,6 @@ class ExoPlayerActivity : PlayerActivity() {
             onNext = { playNextInPlaylist() },
             onToggleLoop = { setLooping(!isLooping) }
         )
-        controlsManager.setupControls()
 
         progressManager = ProgressManager(
             context = this,
@@ -319,7 +333,7 @@ class ExoPlayerActivity : PlayerActivity() {
         inputHandler = InputHandler(
             activity = this,
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
-            playerProvider = { engine?.getExoPlayer() },
+            engine = engineAdapter,
             controls = controlsManager,
             isExternalOverlayVisible = { prePlayPayload != null || activeDialog != null }
         )
@@ -421,6 +435,11 @@ class ExoPlayerActivity : PlayerActivity() {
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Failed to parse ContentPlayPayload", e)
             }
+        }
+        val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
+        if (startPos > 0L) {
+            FileLogger.i(TAG, "Starting from explicit position: ${startPos}ms (from intent)")
+            pendingResumePosition = startPos
         }
 
         // Standard direct URL path
@@ -628,6 +647,12 @@ class ExoPlayerActivity : PlayerActivity() {
         )
 
         lifecycleScope.launch {
+            // Restore playback position from history if no explicit start position was provided
+            if (pendingResumePosition <= 0L) {
+                FileLogger.d(TAG, "No explicit start position, attempting to restore from history...")
+                progressManager.restoreProgress(url)
+            }
+
             engine?.load(payload)
 
             // Re-apply activity-specific player settings after engine creates the player
@@ -669,6 +694,13 @@ class ExoPlayerActivity : PlayerActivity() {
                     FileLogger.i(TAG, "Playback ready")
                     controlsManager.hideBuffering()
                     stuckBufferHandler.removeCallbacksAndMessages(null)
+                    
+                    if (pendingResumePosition > 0L) {
+                        FileLogger.i(TAG, "Applying pending resume position: ${pendingResumePosition}ms")
+                        player.seekTo(pendingResumePosition)
+                        pendingResumePosition = -1L
+                    }
+
                     stuckBufferRetryCount = 0
                     networkErrorRetryCount = 0
                     audioDiscontinuityRetryCount = 0
@@ -1881,7 +1913,81 @@ class ExoPlayerActivity : PlayerActivity() {
         }
     }
 
-            private class CustomLoadErrorHandlingPolicy : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+            private fun formatExoStreamInfo(): String? {
+        val player = engine?.getExoPlayer() ?: return null
+        val parts = mutableListOf<String>()
+
+        var videoFormat: androidx.media3.common.Format? = null
+        var audioFormat: androidx.media3.common.Format? = null
+        for (group in player.currentTracks.groups) {
+            for (i in 0 until group.length) {
+                if (group.isTrackSelected(i)) {
+                    val fmt = group.getTrackFormat(i)
+                    when (group.type) {
+                        androidx.media3.common.C.TRACK_TYPE_VIDEO -> if (videoFormat == null) videoFormat = fmt
+                        androidx.media3.common.C.TRACK_TYPE_AUDIO -> if (audioFormat == null) audioFormat = fmt
+                    }
+                }
+            }
+        }
+
+        if (videoFormat != null) {
+            if (videoFormat.height != androidx.media3.common.Format.NO_VALUE) {
+                parts.add("${videoFormat.height}p")
+            }
+            videoFormat.codecs?.let { codec ->
+                val shortCodec = when {
+                    codec.startsWith("avc") -> "H.264"
+                    codec.startsWith("hvc") || codec.startsWith("hev") -> "H.265"
+                    codec.startsWith("vp9") || codec.startsWith("vp09") -> "VP9"
+                    codec.startsWith("av01") -> "AV1"
+                    else -> codec.uppercase()
+                }
+                parts.add(shortCodec)
+            }
+            if (videoFormat.bitrate != androidx.media3.common.Format.NO_VALUE && videoFormat.bitrate > 0) {
+                parts.add("%.1f Mbps".format(videoFormat.bitrate / 1_000_000f))
+            }
+        }
+
+        if (audioFormat != null) {
+            val audioParts = mutableListOf<String>()
+            audioFormat.codecs?.let { codec ->
+                val shortCodec = when {
+                    codec.startsWith("mp4a") -> "AAC"
+                    codec.startsWith("ac-3") || codec == "ac3" -> "AC3"
+                    codec.startsWith("ec-3") || codec == "eac3" -> "EAC3"
+                    codec.startsWith("dtsc") || codec.startsWith("dtsh") || codec.startsWith("dtse") -> "DTS"
+                    codec.startsWith("opus") -> "Opus"
+                    codec.startsWith("flac") -> "FLAC"
+                    else -> codec.uppercase()
+                }
+                audioParts.add(shortCodec)
+            }
+            if (audioFormat.channelCount != androidx.media3.common.Format.NO_VALUE) {
+                val chLabel = when (audioFormat.channelCount) {
+                    1 -> "Mono"
+                    2 -> "Stereo"
+                    6 -> "5.1"
+                    8 -> "7.1"
+                    else -> "${audioFormat.channelCount}ch"
+                }
+                audioParts.add(chLabel)
+            }
+            audioFormat.language?.let { lang ->
+                if (lang.isNotBlank() && lang != "und") {
+                    audioParts.add(lang.uppercase())
+                }
+            }
+            if (audioParts.isNotEmpty()) {
+                parts.add("\uD83D\uDD0A " + audioParts.joinToString(" "))
+            }
+        }
+
+        return if (parts.isNotEmpty()) parts.joinToString("  •  ") else null
+    }
+
+    private class CustomLoadErrorHandlingPolicy : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
             override fun getRetryDelayMsFor(loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
             val exception = loadErrorInfo.exception
 

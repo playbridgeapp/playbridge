@@ -1,0 +1,32 @@
+package com.playbridge.player.player
+
+/**
+ * Interface to abstract engine-specific playback controls for the unified UI.
+ * This allows UnifiedControlsManager to interact with ExoPlayer, VLC, or MPV
+ * without direct dependencies on their internal classes.
+ */
+interface PlayerEngineAdapter {
+    /** Whether the player is currently in a playing state. */
+    val isPlaying: Boolean
+
+    /** Current position in milliseconds. */
+    val currentPosition: Long
+
+    /** Total duration in milliseconds. */
+    val duration: Long
+
+    /** Current buffered position in milliseconds. */
+    val bufferedPosition: Long
+
+    /** Formatted stream information string (e.g., "1080p • H.264 • stereo"). */
+    val streamInfo: String?
+
+    /** Start/resume playback. */
+    fun play()
+
+    /** Pause playback. */
+    fun pause()
+
+    /** Seek to the specified position in milliseconds. */
+    fun seekTo(positionMs: Long)
+}

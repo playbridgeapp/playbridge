@@ -1,0 +1,53 @@
+
+> Configure project :libs:mpv-android
+WARNING: The option setting 'android.disallowKotlinSourceSets=false' is experimental.
+The current default is 'true'.
+
+> Task :shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :libs:mpv-android:preBuild UP-TO-DATE
+> Task :libs:mpv-android:preReleaseBuild UP-TO-DATE
+> Task :libs:mpv-android:generateReleaseResources UP-TO-DATE
+> Task :libs:mpv-android:packageReleaseResources UP-TO-DATE
+> Task :libs:mpv-android:processReleaseNavigationResources UP-TO-DATE
+> Task :libs:mpv-android:parseReleaseLocalResources UP-TO-DATE
+> Task :libs:mpv-android:generateReleaseRFile UP-TO-DATE
+> Task :libs:mpv-android:compileReleaseKotlin NO-SOURCE
+> Task :libs:mpv-android:javaPreCompileRelease UP-TO-DATE
+> Task :libs:mpv-android:compileReleaseJavaWithJavac NO-SOURCE
+> Task :libs:mpv-android:bundleLibCompileToJarRelease UP-TO-DATE
+> Task :shared:compileAndroidMain UP-TO-DATE
+> Task :shared:androidPreBuild UP-TO-DATE
+> Task :shared:preAndroidMainBuild UP-TO-DATE
+> Task :shared:bundleAndroidMainClassesToCompileJar UP-TO-DATE
+> Task :tv:player:app:preBuild UP-TO-DATE
+> Task :tv:player:app:preDebugBuild UP-TO-DATE
+> Task :tv:player:app:generateDebugBuildConfig UP-TO-DATE
+> Task :tv:player:app:generateDebugResources UP-TO-DATE
+> Task :tv:player:app:packageDebugResources UP-TO-DATE
+> Task :shared:generateAndroidMainEmptyResourceFiles UP-TO-DATE
+> Task :libs:mpv-android:preDebugBuild UP-TO-DATE
+> Task :libs:mpv-android:processDebugNavigationResources UP-TO-DATE
+> Task :tv:player:app:processDebugNavigationResources UP-TO-DATE
+> Task :tv:player:app:parseDebugLocalResources UP-TO-DATE
+> Task :tv:player:app:generateDebugRFile UP-TO-DATE
+
+> Task :tv:player:app:compileDebugKotlin
+w: file:///Users/atulmehla/repos/personal/PlayBridge/tv/player/app/src/main/java/com/playbridge/player/player/ExoPlayerActivity.kt:154:103 Unchecked cast of 'HashMap<*, *>?' to 'Map<String, String>'.
+w: file:///Users/atulmehla/repos/personal/PlayBridge/tv/player/app/src/main/java/com/playbridge/player/player/ExoPlayerActivity.kt:157:82 Unchecked cast of 'Serializable?' to 'Map<String, String>'.
+w: file:///Users/atulmehla/repos/personal/PlayBridge/tv/player/app/src/main/java/com/playbridge/player/player/ExoPlayerActivity.kt:202:20 'var navigationBarColor: Int' is deprecated. Deprecated in Java.
+w: file:///Users/atulmehla/repos/personal/PlayBridge/tv/player/app/src/main/java/com/playbridge/player/player/ExoPlayerActivity.kt:454:92 Unchecked cast of 'HashMap<*, *>?' to 'Map<String, String>'.
+w: file:///Users/atulmehla/repos/personal/PlayBridge/tv/player/app/src/main/java/com/playbridge/player/player/ExoPlayerActivity.kt:457:71 Unchecked cast of 'Serializable?' to 'Map<String, String>'.
+w: file:///Users/atulmehla/repos/personal/PlayBridge/tv/player/app/src/main/java/com/playbridge/player/player/ExoPlayerActivity.kt:811:150 Unchecked cast of 'HashMap<*, *>?' to 'Map<String, String>'.
+w: file:///Users/atulmehla/repos/personal/PlayBridge/tv/player/app/src/main/java/com/playbridge/player/player/ExoPlayerActivity.kt:814:40 'fun getSerializableExtra(p0: String!): Serializable?' is deprecated. Deprecated in Java.
+
+[Incubating] Problems report is available at: file:///Users/atulmehla/repos/personal/PlayBridge/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.1.0/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 8s
+18 actionable tasks: 1 executed, 17 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.1.0/userguide/configuration_cache_enabling.html

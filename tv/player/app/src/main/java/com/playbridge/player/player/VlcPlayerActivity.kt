@@ -61,7 +61,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private lateinit var resumeStore: com.playbridge.player.data.HistoryResumeStore
     private var vmUiJob: kotlinx.coroutines.Job? = null
     private lateinit var surfaceView: SurfaceView
-    private lateinit var controlsManager: VlcControlsManager
+    private lateinit var controlsManager: UnifiedControlsManager
+    private lateinit var inputHandler: InputHandler
 
     private val playerLock = Any()
 
@@ -97,18 +98,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     surfaceView.visibility = android.view.View.VISIBLE
                 }
             }
+            player.setEventListener { event ->
+                handlePlayerEvent(event)
+            }
             player.vlcVout.apply {
-                // Now setVideoView is safe as it's a fresh player
                 setVideoView(surfaceView)
                 addCallback(this@VlcPlayerActivity)
                 attachViews()
             }
             player.scale = 0f
-            player.setEventListener { event ->
-                controlsManager.handleEvent(event)
-                handlePlayerEvent(event)
-            }
-            controlsManager.attachPlayer()
 
             // 5a proxy: sync Activity-owned state into the VM so it stays consistent.
             if (playlistItems.isNotEmpty()) {
@@ -177,6 +175,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 FileLogger.e(TAG, "VLC encountered an error (url=${originalM3u8Url ?: "(unknown)"})")
                 isLoadingNewStream = false
                 handleVlcError()
+            }
+
+            MediaPlayer.Event.PositionChanged -> {
+                // UnifiedControlsManager handles progress updates automatically via its internal runnable
             }
 
             MediaPlayer.Event.EndReached -> {
@@ -321,7 +323,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     override fun getMediaDuration(): Long = engine?.getMediaPlayer()?.length ?: 0L
     override fun getCurrentPosition(): Long = (engine?.getMediaPlayer()?.time) ?: 0L
     override fun seekTo(position: Long) {
-        engine?.getMediaPlayer()?.time = position
+        val player = engine?.getMediaPlayer() ?: return
+        player.time = position
         pendingSeekTime = null
         seekHandler.removeCallbacks(performSeekRunnable)
     }
@@ -350,47 +353,42 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private val remoteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == ServerService.ACTION_REMOTE) {
-                val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
-                when (key) {
-                    "up", "down", "left", "right" -> {
-                        if (!controlsManager.isControlsVisible()) {
-                            controlsManager.showControls()
-                        }
-                    }
-                    "enter" -> {
-                        controlsManager.toggleControls()
-                    }
-                    "back" -> {
-                        if (controlsManager.isControlsVisible()) {
-                            controlsManager.hideControls()
-                        } else {
-                            finish()
-                        }
+            when (intent?.action) {
+                ServerService.ACTION_REMOTE -> {
+                    val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
+                    inputHandler.handleRemoteCommand(key)
+                }
+                ServerService.ACTION_CONTROL -> {
+                    val command = intent.getStringExtra(ServerService.EXTRA_COMMAND)
+                    when (command) {
+                        "loop_on"  -> setLooping(true)
+                        "loop_off" -> setLooping(false)
+                        else       -> inputHandler.handleControlCommand(command)
                     }
                 }
-            } else if (intent?.action == ServerService.ACTION_CONTROL) {
-                when (intent.getStringExtra(ServerService.EXTRA_COMMAND)) {
-                    "play_pause" -> controlsManager.togglePlayPause()
-                    "stop" -> finish()
-                    "seek_fwd" -> controlsManager.onSeekForward()
-                    "seek_rev" -> controlsManager.onSeekBackward()
-                    "loop_on"  -> setLooping(true)
-                    "loop_off" -> setLooping(false)
+                ServerService.ACTION_QUEUE_ADD -> {
+                    ServerService.drainPendingQueueItems().forEach { payload ->
+                        playlistItems.add(payload)
+                    }
+                    controlsManager.setPlaylistVisible(true)
+                    broadcastPlaylistStatus()
                 }
-            } else if (intent?.action == ServerService.ACTION_QUEUE_ADD) {
-                ServerService.drainPendingQueueItems().forEach { payload ->
-                    playlistItems.add(payload)
-                }
-                controlsManager.setPlaylistVisible(true)
-                broadcastPlaylistStatus()
-            } else if (intent?.action == ServerService.ACTION_PLAYLIST_JUMP) {
-                val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
-                if (index >= 0) {
-                    playItemAtIndex(index) // broadcasts status internally
+                ServerService.ACTION_PLAYLIST_JUMP -> {
+                    val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
+                    if (index >= 0) {
+                        playItemAtIndex(index) // broadcasts status internally
+                    }
                 }
             }
         }
+    }
+
+    private fun handleRemoteKey(key: String?) {
+        inputHandler.handleRemoteCommand(key)
+    }
+
+    private fun handleControlCommand(command: String?) {
+        inputHandler.handleControlCommand(command)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -401,7 +399,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (::controlsManager.isInitialized && controlsManager.isControlsVisible()) {
-                    controlsManager.hideControls()
+                    controlsManager.hideUI()
                 } else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
@@ -443,8 +441,20 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             lifecycleScope = lifecycleScope,
             playerActivity = this
         )
+        // Engine adapter for VLC
+        val engineAdapter = object : PlayerEngineAdapter {
+            override val isPlaying: Boolean get() = engine?.getMediaPlayer()?.isPlaying == true
+            override val currentPosition: Long get() = engine?.getMediaPlayer()?.time ?: 0L
+            override val duration: Long get() = engine?.getMediaPlayer()?.length ?: 0L
+            override val bufferedPosition: Long get() = (engine?.getMediaPlayer()?.time ?: 0) + 1000 // VLC doesn't expose buffer easily as ms
+            override val streamInfo: String? get() = formatVlcStreamInfo()
 
-        controlsManager = VlcControlsManager(
+            override fun play() { engine?.play() }
+            override fun pause() { engine?.pause() }
+            override fun seekTo(positionMs: Long) { this@VlcPlayerActivity.seekTo(positionMs) }
+        }
+
+        controlsManager = UnifiedControlsManager(
             controlsRoot = findViewById(R.id.controls_root),
             controlsPanel = findViewById(R.id.controls_panel),
             seekBar = findViewById(R.id.player_seekbar),
@@ -455,7 +465,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             remainingText = findViewById(R.id.tv_remaining),
             titleText = findViewById(R.id.title_text),
             bufferingSpinner = findViewById(R.id.buffering_spinner),
-            playerProvider = { engine?.getMediaPlayer() },
+            engine = engineAdapter,
+            engineType = "VLC",
             tracksButton = findViewById(R.id.btn_tracks),
             playlistButton = findViewById(R.id.btn_playlist),
             streamsButton = findViewById(R.id.btn_streams),
@@ -464,16 +475,21 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             filterButton = findViewById(R.id.btn_filter),
             loopButton = findViewById(R.id.btn_loop),
             switchPlayerButton = findViewById(R.id.btn_switch_player),
-            onShowSettings = { showSettingsDialog() },
+            onShowTrackSelection = { showSettingsDialog() },
             onShowPlaylist = { showPlaylistPicker() },
             onShowStreams = { showStreamSelectionDialog() },
             onSwitchPlayer = { showSwitchPlayerDialog("internal_vlc") },
-            onError = { handleVlcError() },
-            onSeekForwardRequested = { handleSeek(1) },
-            onSeekBackwardRequested = { handleSeek(-1) },
             onPrevious = { playPreviousInPlaylist() },
             onNext = { playNextInPlaylist() },
             onToggleLoop = { setLooping(!isLooping) }
+        )
+
+        inputHandler = InputHandler(
+            activity = this,
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
+            engine = engineAdapter,
+            controls = controlsManager,
+            isExternalOverlayVisible = { prePlayPayload != null || activeDialog != null }
         )
 
         val filter = IntentFilter().apply {
@@ -621,7 +637,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
         if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
-            // VlcControlsManager doesn't have setNavigationVisible yet, but we can ensure they are showing
+            // UnifiedControlsManager handles buttons, but we can ensure they are showing
         }
 
         if (url == null) {
@@ -670,7 +686,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
-                        controlsManager.hideControls()
+                        controlsManager.hideUI()
                     } else {
                         controlsManager.hideBuffering()
                         FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
@@ -732,7 +748,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
-                        controlsManager.hideControls()
+                        controlsManager.hideUI()
                     } else {
                         controlsManager.hideBuffering()
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve previous episode", android.widget.Toast.LENGTH_SHORT).show()
@@ -842,7 +858,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                             intent?.putExtra(ServerService.EXTRA_URL, stream.url)
 
                             playVideo(url = stream.url, headers = currentHeaders)
-                            controlsManager.hideControls()
+                            controlsManager.hideUI()
                         },
                         onRefresh = {
                             com.playbridge.shared.stremio.StremioClient.clearCache(
@@ -869,7 +885,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) engine?.play()
-            controlsManager.showControls()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }
@@ -935,7 +951,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) player.play()
-            controlsManager.showControls()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }
@@ -976,7 +992,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                 playVideo(url = stream.url, headers = null)
-                controlsManager.hideControls()
+                controlsManager.hideUI()
             } else {
                 isLoadingNewStream = false
                 controlsManager.hideBuffering()
@@ -1097,12 +1113,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun updateStreamInfo() {
-        val player = engine?.getMediaPlayer() ?: return
+    private fun formatVlcStreamInfo(): String? {
+        val player = engine?.getMediaPlayer() ?: return null
         val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
         val audioTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)
 
-        val info = buildString {
+        return buildString {
             if (videoTrack != null) {
                 append(videoTrack.name ?: "Video")
             }
@@ -1111,8 +1127,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 append("\uD83D\uDD0A ")
                 append(audioTrack.name ?: "Audio")
             }
-        }
-        runOnUiThread { controlsManager.setStreamInfo(info) }
+        }.takeIf { it.isNotEmpty() }
+    }
+
+    private fun updateStreamInfo() {
+        // Handled via adapter streamInfo property in UnifiedControlsManager
     }
 
     private fun handleVlcError() {
@@ -1392,7 +1411,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) player.play()
-            controlsManager.showControls()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }
@@ -1421,7 +1440,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         // UI-side cleanup is fast and must stay on the main thread.
         engineToRelease?.getMediaPlayer()?.setEventListener(null)
-        controlsManager.detachPlayer()
+        controlsManager.detach()
         engineToRelease?.getMediaPlayer()?.vlcVout?.apply {
             removeCallback(this@VlcPlayerActivity)
             detachViews()
@@ -1462,87 +1481,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         controlsManager.showSeekUI()
     }
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (inputHandler.handleKeyEvent(event.keyCode, event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     // Handle physical remote/keyboard events
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
-        if (event?.action != android.view.KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
-
-        val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
-        val isExternalOverlayVisible = prePlayPayload != null || activeDialog != null
-
-        if (isFullOverlayVisible || isExternalOverlayVisible) {
-            // When full overlay is visible, let the system handle D-pad navigation for focus,
-            // except for DPAD_UP/DPAD_DOWN which we ignore to prevent focus jumping off controls.
-            return when (keyCode) {
-                android.view.KeyEvent.KEYCODE_DPAD_UP,
-                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (isExternalOverlayVisible) false else true
-                }
-                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
-                android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                android.view.KeyEvent.KEYCODE_ENTER,
-                android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> super.onKeyDown(keyCode, event)
-                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    controlsManager.togglePlayPause()
-                    true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                    engine?.play()
-                    true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                    engine?.pause()
-                    true
-                }
-                else -> super.onKeyDown(keyCode, event)
-            }
-        }
-
-        // When full overlay is hidden (or only seek UI is visible), D-pad controls playback (ExoPlayer parity)
-        return when (keyCode) {
-            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-            android.view.KeyEvent.KEYCODE_ENTER,
-            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                engine?.pause()
-                controlsManager.showControls()
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                val repeatCount = event.repeatCount
-                val multiplier = if (repeatCount > 10) 5 else 1
-                handleSeek(-multiplier)
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                val repeatCount = event.repeatCount
-                val multiplier = if (repeatCount > 10) 5 else 1
-                handleSeek(multiplier)
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
-                true
-            }
-            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                controlsManager.togglePlayPause()
-                true
-            }
-            android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                engine?.play()
-                true
-            }
-            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                engine?.pause()
-                true
-            }
-            else -> super.onKeyDown(keyCode, event)
-        }
+        // Some devices might need volume handling if inputHandler doesn't take it
+        return super.onKeyDown(keyCode, event)
     }
 
 

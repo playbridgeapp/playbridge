@@ -64,7 +64,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
 
     private lateinit var surfaceView: SurfaceView
-    private lateinit var controlsManager: MpvControlsManager
+    private lateinit var controlsManager: UnifiedControlsManager
+    private lateinit var inputHandler: InputHandler
     private lateinit var progressManager: ProgressManager
     private lateinit var historyStore: HistoryStore
     private var engine: MpvPlayerEngine? = null
@@ -97,6 +98,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // Position to seek to once MPV_EVENT_FILE_LOADED fires
     private var pendingResumePositionMs: Long = 0L
 
+    private var isLooping = false
     private var isLoadingNewStream = false
 
     /**
@@ -116,7 +118,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private val seekTimeoutRunnable = Runnable {
         FileLogger.w(TAG, "Seek timeout — MPV stuck retrying failed range request. Recovering to ${preSeePositionMs}ms.")
         runOnUiThread {
-            controlsManager.onBufferingChanged(false)
+            controlsManager.hideBuffering()
             Toast.makeText(this, "Seek failed (network error)", Toast.LENGTH_SHORT).show()
             // Seek back to the pre-seek position (known-good). Using positionMs here would
             // re-seek to the stuck target because MPV reports the target as time-pos mid-seek.
@@ -143,28 +145,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private var navigationJob: kotlinx.coroutines.Job? = null
 
     // ── PlayerActivity abstract impl ─────────────────────────────────────────
-
     override fun play() { engine?.play() }
-
     override fun pause() { engine?.pause() }
-
     override fun isPlaying(): Boolean = isPlayingState
-
     override fun getMediaDuration(): Long = durationMs
-
     override fun getCurrentPosition(): Long = positionMs
-
-    override fun seekTo(position: Long) {
-        if (durationMs > 0) {
-            preSeePositionMs = positionMs
-            engine?.seek(position)
-            scheduleSeekTimeout()
-        } else {
-            // Restore position on load
-            pendingResumePositionMs = position
-        }
-    }
-
     override fun getVideoSurfaceView(): android.view.SurfaceView? = surfaceView
 
     override fun stopPlayback() {
@@ -175,6 +160,17 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         isLoadingNewStream = true
         pendingStops++
         engine?.stop()
+    }
+
+    override fun seekTo(position: Long) {
+        if (durationMs > 0) {
+            preSeePositionMs = positionMs
+            engine?.seek(position)
+            scheduleSeekTimeout()
+        } else {
+            // Restore position on load
+            pendingResumePositionMs = position
+        }
     }
 
     override fun getPlayerProgressManager(): ProgressManager? = if (::progressManager.isInitialized) progressManager else null
@@ -191,7 +187,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             object : androidx.activity.OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
                     if (::controlsManager.isInitialized && controlsManager.isControlsVisible()) {
-                        controlsManager.hideControls()
+                        controlsManager.hideUI()
                     } else {
                         isEnabled = false
                         onBackPressedDispatcher.onBackPressed()
@@ -275,7 +271,20 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             engine?.attachSurface(surfaceView.holder.surface)
         }
 
-        controlsManager = MpvControlsManager(
+        // Engine adapter for MPV
+        val engineAdapter = object : PlayerEngineAdapter {
+            override val isPlaying: Boolean get() = isPlayingState
+            override val currentPosition: Long get() = positionMs
+            override val duration: Long get() = durationMs
+            override val bufferedPosition: Long get() = (positionMs + bufferAheadMs).coerceAtMost(durationMs)
+            override val streamInfo: String? get() = formatMpvStreamInfo()
+
+            override fun play() { engine?.play() }
+            override fun pause() { engine?.pause() }
+            override fun seekTo(positionMs: Long) { this@MpvPlayerActivity.seekTo(positionMs) }
+        }
+
+        controlsManager = UnifiedControlsManager(
             controlsRoot          = findViewById(R.id.controls_root),
             controlsPanel         = findViewById(R.id.controls_panel),
             seekBar               = findViewById(R.id.player_seekbar),
@@ -286,28 +295,31 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             remainingText         = findViewById(R.id.tv_remaining),
             titleText             = findViewById(R.id.title_text),
             bufferingSpinner      = findViewById(R.id.buffering_spinner),
+            engine                = engineAdapter,
+            engineType            = "MPV",
             tracksButton          = findViewById(R.id.btn_tracks),
             playlistButton        = findViewById(R.id.btn_playlist),
             streamsButton         = findViewById(R.id.btn_streams),
             prevButton            = findViewById(R.id.btn_prev),
             nextButton            = findViewById(R.id.btn_next),
             filterButton          = findViewById(R.id.btn_filter),
+            loopButton            = findViewById(R.id.btn_loop),
             switchPlayerButton    = findViewById(R.id.btn_switch_player),
-            getPosition           = { positionMs },
-            getDuration           = { durationMs },
-            getBufferedPosition   = { (positionMs + bufferAheadMs).coerceAtMost(durationMs) },
-            isPlayerPlaying       = { isPlayingState },
-            onTogglePlayPause     = {
-                if (isPlayingState) engine?.pause() else engine?.play()
-            },
-            onShowSettings        = { showTrackSelectionDialog() },
+            onShowTrackSelection  = { showTrackSelectionDialog() },
             onShowPlaylist        = { showPlaylistPicker() },
             onShowStreams         = { showStreamSelectionDialog() },
             onSwitchPlayer        = { showSwitchPlayerDialog("internal_mpv") },
-            onSeekForwardRequested  = { handleSeek(1) },
-            onSeekBackwardRequested = { handleSeek(-1) },
             onPrevious            = { playPreviousInPlaylist() },
-            onNext                = { playNextInPlaylist() }
+            onNext                = { playNextInPlaylist() },
+            onToggleLoop          = { setLooping(!isLooping) }
+        )
+
+        inputHandler = InputHandler(
+            activity = this,
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
+            engine = engineAdapter,
+            controls = controlsManager,
+            isExternalOverlayVisible = { prePlayPayload != null || activeDialog != null }
         )
 
         // Register MPV observer NOW — after controlsManager is initialized — so that
@@ -438,7 +450,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             // Must post to the UI thread: this callback fires on MPV's native event thread.
             runOnUiThread {
                 if (::controlsManager.isInitialized) {
-                    controlsManager.onPlayingChanged(isPlayingState)
+                    controlsManager.updatePlayPauseIcon()
                 }
             }
         }
@@ -491,6 +503,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     // Required by MPVLib.EventObserver — no-op for MPVNode-typed property changes
     override fun eventProperty(property: String, value: MPVNode) {}
+
+    private fun setLooping(loop: Boolean) {
+        isLooping = loop
+        controlsManager.updateLoopIcon(loop)
+    }
 
     override fun event(eventId: Int, data: MPVNode) {
         when (eventId) {
@@ -657,136 +674,22 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun handleRemoteKey(key: String?) {
-        when (key) {
-            "up"    -> controlsManager.showControls()
-            "down"  -> controlsManager.showControls()
-            "left"  -> {
-                if (controlsManager.isFullOverlayVisible()) {
-                    // D-pad navigation handles focus
-                } else {
-                    handleSeek(-1)
-                }
-            }
-            "right" -> {
-                if (controlsManager.isFullOverlayVisible()) {
-                    // D-pad navigation handles focus
-                } else {
-                    handleSeek(1)
-                }
-            }
-            "center", "enter" -> {
-                if (controlsManager.isFullOverlayVisible()) {
-                    // D-pad center click handles button actions
-                } else {
-                    controlsManager.showControls()
-                }
-            }
-            "back" -> {
-                if (controlsManager.isControlsVisible()) {
-                    controlsManager.hideControls()
-                } else {
-                    finish()
-                }
-            }
-            "play_pause" -> {
-                if (isPlayingState) pause() else play()
-            }
-        }
+        inputHandler.handleRemoteCommand(key)
     }
 
     private fun handleControlCommand(command: String?) {
-        when (command) {
-            "play"  -> play()
-            "pause" -> pause()
-            "toggle_play_pause" -> if (isPlayingState) pause() else play()
-            "seek_forward"  -> handleSeek(1)
-            "seek_backward" -> handleSeek(-1)
+        inputHandler.handleControlCommand(command)
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (inputHandler.handleKeyEvent(event.keyCode, event)) {
+            return true
         }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
-        if (!::controlsManager.isInitialized) return super.onKeyDown(keyCode, event)
-
-        val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
-        val isExternalOverlayVisible = prePlayPayload != null || activeDialog != null
-
-        if (isFullOverlayVisible || isExternalOverlayVisible) {
-            return when (keyCode) {
-                // While full overlay (stream picker / episode list) is open, consume
-                // directional keys silently so the Compose focus system handles them,
-                // but pass through everything else.
-                android.view.KeyEvent.KEYCODE_DPAD_UP,
-                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (isExternalOverlayVisible) false else true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { controlsManager.togglePlayPause(); true }
-                android.view.KeyEvent.KEYCODE_MEDIA_PLAY  -> { play(); true }
-                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> { pause(); true }
-                else -> super.onKeyDown(keyCode, event)
-            }
-        }
-
-        return when (keyCode) {
-            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-            android.view.KeyEvent.KEYCODE_ENTER,
-            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                if (controlsManager.isControlsVisible()) {
-                    // Controls already showing — center click is handled by Compose focus
-                    super.onKeyDown(keyCode, event)
-                } else {
-                    controlsManager.showControls()
-                    true
-                }
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (controlsManager.isControlsVisible()) {
-                    super.onKeyDown(keyCode, event)
-                } else {
-                    val multiplier = if ((event?.repeatCount ?: 0) > 10) 5 else 1
-                    handleSeek(-multiplier)
-                    true
-                }
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (controlsManager.isControlsVisible()) {
-                    super.onKeyDown(keyCode, event)
-                } else {
-                    val multiplier = if ((event?.repeatCount ?: 0) > 10) 5 else 1
-                    handleSeek(multiplier)
-                    true
-                }
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
-                am.adjustStreamVolume(
-                    android.media.AudioManager.STREAM_MUSIC,
-                    android.media.AudioManager.ADJUST_RAISE,
-                    android.media.AudioManager.FLAG_SHOW_UI
-                )
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
-                am.adjustStreamVolume(
-                    android.media.AudioManager.STREAM_MUSIC,
-                    android.media.AudioManager.ADJUST_LOWER,
-                    android.media.AudioManager.FLAG_SHOW_UI
-                )
-                true
-            }
-            android.view.KeyEvent.KEYCODE_BACK -> {
-                if (controlsManager.isControlsVisible()) {
-                    controlsManager.hideControls()
-                } else {
-                    finish()
-                }
-                true
-            }
-            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { controlsManager.togglePlayPause(); true }
-            android.view.KeyEvent.KEYCODE_MEDIA_PLAY  -> { play(); true }
-            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> { pause(); true }
-            else -> super.onKeyDown(keyCode, event)
-        }
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun handleSeek(direction: Int) {
@@ -887,8 +790,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
     }
 
-    private fun updateStreamInfo() {
-        val info = buildString {
+    private fun formatMpvStreamInfo(): String? {
+        return buildString {
             if (videoHeight > 0) append("${videoHeight}p")
             if (videoCodecRaw.isNotEmpty()) {
                 val short = when {
@@ -918,8 +821,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 }
                 if (isNotEmpty()) append(" $ch")
             }
-        }
-        runOnUiThread { controlsManager.setStreamInfo(info) }
+        }.takeIf { it.isNotEmpty() }
+    }
+
+    private fun updateStreamInfo() {
+        // Handled via adapter streamInfo property in UnifiedControlsManager
     }
 
     /**
@@ -969,7 +875,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                             this@MpvPlayerActivity.currentUrl = stream.url
 
                             playVideo(url = stream.url, headers = currentHeaders)
-                            controlsManager.hideControls()
+                            controlsManager.hideUI()
 
                         },
                         onRefresh = {
@@ -998,7 +904,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) play()
-            controlsManager.showControls()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }
@@ -1059,7 +965,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) play()
-            controlsManager.showControls()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }
@@ -1098,7 +1004,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                 playVideo(url = stream.url, headers = null)
-                controlsManager.hideControls()
+                controlsManager.hideUI()
             } else {
                 isLoadingNewStream = false
                 controlsManager.hideBuffering()
@@ -1132,7 +1038,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             runOnUiThread {
                 Toast.makeText(this@MpvPlayerActivity, title, Toast.LENGTH_SHORT).show()
                 controlsManager.setTitle(title)
-                controlsManager.hideControls()
+                controlsManager.hideUI()
             }
 
             stopPlayback()
@@ -1167,7 +1073,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
                         playVideo(url = stream.url, headers = null)
-                        controlsManager.hideControls()
+                        controlsManager.hideUI()
                     } else {
                         isLoadingNewStream = false
                         controlsManager.hideBuffering()
@@ -1212,7 +1118,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
                         playVideo(url = stream.url, headers = null)
-                        controlsManager.hideControls()
+                        controlsManager.hideUI()
                     } else {
                         isLoadingNewStream = false
                         controlsManager.hideBuffering()
@@ -1307,7 +1213,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) play()
-            controlsManager.showControls()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }

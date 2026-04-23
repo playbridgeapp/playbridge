@@ -5,23 +5,18 @@ import android.media.AudioManager
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
-import androidx.media3.exoplayer.ExoPlayer
 
 private const val TAG = "InputHandler"
 
 /**
  * Handles all input sources for the player: phone control commands,
  * phone remote key simulation, and physical TV remote D-pad events.
- *
- * Two modes of operation:
- *   1. Normal (overlay hidden): left/right seek, up/down volume, center pauses + opens overlay
- *   2. Overlay (pause menu visible): left/right navigate buttons, up/down ignored, center clicks button
  */
 class InputHandler(
     private val activity: Activity,
     private val audioManager: AudioManager,
-    private val playerProvider: () -> ExoPlayer?,
-    private val controls: PlayerControlsManager,
+    private val engine: PlayerEngineAdapter,
+    private val controls: UnifiedControlsManager,
     private val isExternalOverlayVisible: () -> Boolean = { false }
 ) {
 
@@ -32,31 +27,24 @@ class InputHandler(
         Log.i(TAG, "Control command: $command")
 
         when (command) {
-            "pause" -> playerProvider()?.pause()
-            "play" -> playerProvider()?.play()
+            "pause" -> engine.pause()
+            "play" -> engine.play()
             "stop" -> {
-                playerProvider()?.stop()
                 activity.finish()
             }
             "toggle" -> {
-                playerProvider()?.let {
-                    if (it.isPlaying) it.pause() else it.play()
-                }
+                if (engine.isPlaying) engine.pause() else engine.play()
             }
             "seek_back" -> {
-                playerProvider()?.let {
-                    val newPos = maxOf(0L, it.currentPosition - 10_000L)
-                    it.seekTo(newPos)
-                    controls.showSeekUI()
-                }
+                val newPos = maxOf(0L, engine.currentPosition - 10_000L)
+                engine.seekTo(newPos)
+                controls.showSeekUI()
             }
             "seek_forward" -> {
-                playerProvider()?.let {
-                    val dur = it.duration
-                    val newPos = if (dur > 0) minOf(dur, it.currentPosition + 10_000L) else it.currentPosition + 10_000L
-                    it.seekTo(newPos)
-                    controls.showSeekUI()
-                }
+                val dur = engine.duration
+                val newPos = if (dur > 0) minOf(dur, engine.currentPosition + 10_000L) else engine.currentPosition + 10_000L
+                engine.seekTo(newPos)
+                controls.showSeekUI()
             }
         }
     }
@@ -97,7 +85,7 @@ class InputHandler(
         if (event?.action != KeyEvent.ACTION_DOWN) return false
 
         // --- Full controls overlay or external overlay is visible ---
-        if (controls.isFullOverlayVisible || isExternalOverlayVisible()) {
+        if (controls.isFullOverlayVisible() || isExternalOverlayVisible()) {
             return when (keyCode) {
                 // Up/Down: consume silently (no volume change in overlay)
                 // EXCEPT if it's an external overlay (like Compose PrePlay),
@@ -117,7 +105,6 @@ class InputHandler(
                     true
                 }
                 KeyEvent.KEYCODE_MEDIA_STOP -> {
-                    playerProvider()?.stop()
                     activity.finish()
                     true
                 }
@@ -128,7 +115,7 @@ class InputHandler(
         // --- Normal mode (no overlay) ---
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                playerProvider()?.pause()
+                engine.pause()
                 controls.updatePlayPauseIcon()
                 controls.showControlsUI()
                 true
@@ -168,15 +155,14 @@ class InputHandler(
                 true
             }
             KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                playerProvider()?.play()
+                engine.play()
                 true
             }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                playerProvider()?.pause()
+                engine.pause()
                 true
             }
             KeyEvent.KEYCODE_MEDIA_STOP -> {
-                playerProvider()?.stop()
                 activity.finish()
                 true
             }
