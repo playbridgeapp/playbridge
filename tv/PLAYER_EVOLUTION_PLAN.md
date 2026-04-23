@@ -29,7 +29,7 @@ Before evolving, we must preserve what PlayBridge does better than anyone else:
 Modern TV users expect a "cinema-grade" experience.
 - [x] **Adaptive Frame Rate Matching:** Implemented `Surface.setFrameRate` (API 30+) across ExoPlayer, MPV, and VLC engines with automatic handshake debouncing.
 - [x] **Loudness Enhancer (Night Mode):** Implemented via hardware-backed `LoudnessEnhancer` (Exo), `af=volume` filter (MPV), and software volume scaling (VLC).
-- [ ] **HDR Format Detection:** Better surfacing of HDR10/Dolby Vision metadata to the user.
+- [x] **HDR Format Detection:** Surfacing of HDR10/Dolby Vision metadata to the user via UI badges.
 
 ### Phase 2: Modernization & Aesthetics (Inspiration: mpvEx)
 Replace the dated "Leanback" look with a responsive, modern UI.
