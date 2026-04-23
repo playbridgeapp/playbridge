@@ -1,5 +1,11 @@
 package com.playbridge.player.player
 
+import com.playbridge.shared.player.PlaybackEngine
+import com.playbridge.shared.player.PlaybackState
+import com.playbridge.shared.player.VlcPlayerEngine
+import com.playbridge.shared.player.VideoFilter
+import com.playbridge.shared.player.M3uParser
+
 import android.content.Intent
 import android.net.Uri
 import android.content.BroadcastReceiver
@@ -50,26 +56,50 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         private const val TAG = "VlcPlayerActivity"
     }
 
-    private var libVLC: LibVLC? = null
-    private var mediaPlayer: MediaPlayer? = null
+    private var engine: VlcPlayerEngine? = null
+    private lateinit var viewModel: com.playbridge.shared.player.PlayerViewModel
+    private lateinit var resumeStore: com.playbridge.player.data.HistoryResumeStore
+    private var vmUiJob: kotlinx.coroutines.Job? = null
     private lateinit var surfaceView: SurfaceView
-    private lateinit var controlsManager: VlcControlsManager
+    private lateinit var controlsManager: UnifiedControlsManager
+    private lateinit var inputHandler: InputHandler
 
     private val playerLock = Any()
 
     private fun setupMediaPlayer() {
         synchronized(playerLock) {
-            mediaPlayer?.let { oldPlayer ->
-                oldPlayer.setEventListener(null)
-                oldPlayer.vlcVout.detachViews()
-                oldPlayer.release()
+            // Recreate engine to ensure a clean native state and avoid resource race conditions
+            engine?.release()
+            vmUiJob?.cancel()
+            if (::viewModel.isInitialized) {
+                viewModel.dispose()
+            }
+            try {
+                engine = VlcPlayerEngine(this)
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to initialize VlcPlayerEngine", e)
+                return
             }
 
-            val player = MediaPlayer(libVLC)
+            val currentEngine = engine ?: return
+            val player = currentEngine.getMediaPlayer() ?: return
+
+            viewModel = com.playbridge.shared.player.PlayerViewModel(
+                engine = currentEngine,
+                resumeStore = resumeStore,
+                scope = lifecycleScope,
+            )
+            vmUiJob = lifecycleScope.launch {
+                viewModel.ui.collect { state -> handleVmUiState(state) }
+            }
+
             runOnUiThread {
                 if (::surfaceView.isInitialized) {
                     surfaceView.visibility = android.view.View.VISIBLE
                 }
+            }
+            player.setEventListener { event ->
+                handlePlayerEvent(event)
             }
             player.vlcVout.apply {
                 setVideoView(surfaceView)
@@ -77,16 +107,40 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 attachViews()
             }
             player.scale = 0f
-            player.setEventListener { event ->
-                controlsManager.handleEvent(event)
-                handlePlayerEvent(event)
+
+            // 5a proxy: sync Activity-owned state into the VM so it stays consistent.
+            if (playlistItems.isNotEmpty()) {
+                viewModel.setPlaylist(playlistItems, playlistIndex)
             }
-            mediaPlayer = player
-            controlsManager.attachPlayer()
+            seriesNavigator?.let { viewModel.setSeriesNavigator(it) }
+        }
+    }
+
+    /**
+     * React to [PlayerViewModel] UI state changes (Step 5a).
+     *
+     * The Activity still owns all UI updates.  The VM collector runs in
+     * parallel purely for logging and future load-bearing migration.
+     */
+    private fun handleVmUiState(state: com.playbridge.shared.player.PlayerUiState) {
+        when (state) {
+            is com.playbridge.shared.player.PlayerUiState.Idle ->
+                FileLogger.d(TAG, "VM state: Idle")
+            is com.playbridge.shared.player.PlayerUiState.PrePlay ->
+                FileLogger.d(TAG, "VM state: PrePlay resolving=${state.isResolving}")
+            is com.playbridge.shared.player.PlayerUiState.Loading ->
+                FileLogger.d(TAG, "VM state: Loading ${state.payload.url}")
+            is com.playbridge.shared.player.PlayerUiState.Playing ->
+                FileLogger.d(TAG, "VM state: Playing")
+            is com.playbridge.shared.player.PlayerUiState.Error ->
+                FileLogger.d(TAG, "VM state: Error ${state.code}: ${state.message}")
+            is com.playbridge.shared.player.PlayerUiState.Ended ->
+                FileLogger.d(TAG, "VM state: Ended")
         }
     }
 
     private fun handlePlayerEvent(event: MediaPlayer.Event) {
+        val player = engine?.getMediaPlayer() ?: return
         when (event.type) {
             MediaPlayer.Event.Opening ->
                 FileLogger.i(TAG, "Opening: ${originalM3u8Url ?: "(unknown)"}")
@@ -97,22 +151,35 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             }
 
             MediaPlayer.Event.Playing -> {
-                FileLogger.i(TAG, "Playing at ${mediaPlayer?.time ?: 0}ms")
+                FileLogger.i(TAG, "Playing at ${player.time}ms")
                 isLoadingNewStream = false
                 updateStreamInfo()
                 // Defer resume seek until VLC is actually playing and ready to accept seeks.
                 pendingResumeTime?.let { resumeAt ->
                     pendingResumeTime = null
-                    runOnUiThread { mediaPlayer?.time = resumeAt }
+                    runOnUiThread { player.time = resumeAt }
                 }
                 runOnUiThread { applyPreferredLanguages() }
                 if (isPreBuffering) {
-                    runOnUiThread { mediaPlayer?.pause() }
+                    runOnUiThread { player.pause() }
+                }
+                
+                // Detect and apply refresh rate matching
+                val fps = calculateVlcFrameRate()
+                if (fps > 0f) {
+                    runOnUiThread { updateRefreshRate(fps) }
+                }
+
+                // Apply Loudness Enhancer if enabled
+                if (isLoudnessEnhancerEnabled) {
+                    player.volume = 150 // +50% boost
+                } else {
+                    player.volume = 100
                 }
             }
 
             MediaPlayer.Event.Paused ->
-                FileLogger.i(TAG, "Paused at ${mediaPlayer?.time ?: 0}ms")
+                FileLogger.i(TAG, "Paused at ${player.time}ms")
 
             MediaPlayer.Event.Stopped ->
                 FileLogger.i(TAG, "Stopped")
@@ -123,12 +190,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 handleVlcError()
             }
 
+            MediaPlayer.Event.PositionChanged -> {
+                // UnifiedControlsManager handles progress updates automatically via its internal runnable
+            }
+
             MediaPlayer.Event.EndReached -> {
                 FileLogger.i(TAG, "End reached — loop=$isLooping playlist size=${playlistItems.size}, index=$playlistIndex")
                 if (isLooping) {
                     runOnUiThread {
-                        mediaPlayer?.time = 0
-                        mediaPlayer?.play()
+                        player.time = 0
+                        player.play()
                     }
                 } else {
                     runOnUiThread {
@@ -162,7 +233,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var currentHeaders: Map<String, String>? = null
 
     // Playlist state
-    private var playlistItems: MutableList<com.playbridge.protocol.PlayPayload> = mutableListOf()
+    private var playlistItems: MutableList<com.playbridge.shared.protocol.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
     // Preferred language selections — persisted across stream switches and app restarts
@@ -177,7 +248,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var activeDialog: android.app.Dialog? = null
 
     // Pre-play state
-    private var prePlayPayload by mutableStateOf<com.playbridge.protocol.ContentPlayPayload?>(null)
+    private var prePlayPayload by mutableStateOf<com.playbridge.shared.protocol.ContentPlayPayload?>(null)
     private var isPrePlayLaunching by mutableStateOf(false)
     private var prePlayCountdown by androidx.compose.runtime.mutableIntStateOf(0)
     private var isPreBuffering = false
@@ -199,57 +270,74 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var pendingResumeTime: Long? = null
     private val seekHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    private var lastSeekCommitTime = 0L
+    private var seekCommitCount = 0L
 
     private val performSeekRunnable = Runnable {
         pendingSeekTime?.let { targetTime ->
-            mediaPlayer?.time = targetTime
+            engine?.getMediaPlayer()?.time = targetTime
             pendingSeekTime = null
             schedulePostSeekVideoResync()
         }
     }
 
     /**
-     * Schedule a post-seek video decoder resync to fix frozen video in malformed MKV files.
-     *
-     * When seeking in an MKV with corrupt EBML data, VLC's parser resyncs forward past the bad
-     * cluster. Audio recovers immediately (small/frequent packets), but the video decoder loses
-     * its keyframe reference and shows the last decoded frame indefinitely — player.time advances
-     * with audio, making the freeze invisible to event-based detection.
-     *
-     * Fix: 2s after the seek commits (by which point the demuxer is in clean data), toggle the
-     * video track off→on. This closes the video decoder without re-seeking, then reopens it at
-     * the current demuxer position. VLC waits for the next keyframe (already in the clean region)
-     * and video resumes. Brief black screen (~100–500ms), but recovers a permanently frozen frame.
+     * Intelligently schedules a post-seek video decoder resync to fix frozen video.
+     * Uses Media.Stats to detect if frames are actually stuck before applying the track toggle.
+     * If stuck, attempts up to 4 track toggles with exponential backoff.
      */
     private fun schedulePostSeekVideoResync() {
-        val commitTime = System.currentTimeMillis()
-        lastSeekCommitTime = commitTime
-        seekHandler.postDelayed({
-            if (lastSeekCommitTime != commitTime) return@postDelayed // superseded by a newer seek
-            val player = mediaPlayer ?: return@postDelayed
-            if (!player.isPlaying || pendingSeekTime != null) return@postDelayed
+        val commitId = ++seekCommitCount
 
-            val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
-                ?: return@postDelayed
+        fun attemptResync(delayMs: Long, retryCount: Int) {
+            if (retryCount > 4) return // Max 4 retries
 
-            FileLogger.d(TAG,"Post-seek video decoder resync (track toggle)")
-            player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+            // Wait to let video resume. If it hasn't, we will check.
             seekHandler.postDelayed({
-                if (lastSeekCommitTime == commitTime) {
-                    mediaPlayer?.selectTrack(videoTrack.id)
-                }
-            }, 200)
-        }, 2000)
+                if (commitId != seekCommitCount) return@postDelayed
+                val player = engine?.getMediaPlayer() ?: return@postDelayed
+                if (!player.isPlaying || pendingSeekTime != null) return@postDelayed
+
+                val media = player.media ?: return@postDelayed
+                val statsBefore = media.stats?.displayedPictures?.toInt() ?: return@postDelayed
+
+                // Wait a short duration to see if pictures are actually being displayed
+                seekHandler.postDelayed({
+                    if (commitId != seekCommitCount) return@postDelayed
+                    if (!player.isPlaying || pendingSeekTime != null) return@postDelayed
+
+                    val statsAfter = media.stats?.displayedPictures?.toInt() ?: return@postDelayed
+                    if (statsAfter <= statsBefore) {
+                        // Video is stuck! No new pictures displayed in the last interval.
+                        val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+                            ?: return@postDelayed
+
+                        FileLogger.w(TAG, "Post-seek video stuck (frames: $statsBefore -> $statsAfter). Resync attempt $retryCount")
+                        player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+                        seekHandler.postDelayed({
+                            if (commitId == seekCommitCount) {
+                                engine?.getMediaPlayer()?.selectTrack(videoTrack.id)
+                                attemptResync(delayMs * 2, retryCount + 1)
+                            }
+                        }, 200)
+                    } else {
+                        FileLogger.d(TAG, "Post-seek video is rendering normally (frames: $statsBefore -> $statsAfter).")
+                    }
+                }, 500)
+            }, delayMs)
+        }
+
+        // Start checking 500ms after the seek committed
+        attemptResync(500L, 1)
     }
 
-    override fun play() { mediaPlayer?.play() }
-    override fun pause() { mediaPlayer?.pause() }
-    override fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
-    override fun getMediaDuration(): Long = mediaPlayer?.length ?: 0L
-    override fun getCurrentPosition(): Long = (mediaPlayer?.time) ?: 0L
+    override fun play() { engine?.play() }
+    override fun pause() { engine?.pause() }
+    override fun isPlaying(): Boolean = engine?.getMediaPlayer()?.isPlaying == true
+    override fun getMediaDuration(): Long = engine?.getMediaPlayer()?.length ?: 0L
+    override fun getCurrentPosition(): Long = (engine?.getMediaPlayer()?.time) ?: 0L
     override fun seekTo(position: Long) {
-        mediaPlayer?.time = position
+        val player = engine?.getMediaPlayer() ?: return
+        player.time = position
         pendingSeekTime = null
         seekHandler.removeCallbacks(performSeekRunnable)
     }
@@ -259,10 +347,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
         resolutionJob?.cancel()
         launchJob?.cancel()
+        playJob?.cancel()
         isLoadingNewStream = true
-        mediaPlayer?.let { player ->
-            player.stop()
-            player.vlcVout.detachViews()
+        synchronized(playerLock) {
+            engine?.let { e ->
+                e.getMediaPlayer()?.vlcVout?.detachViews()
+                e.stop()
+            }
         }
         runOnUiThread {
             if (::surfaceView.isInitialized) {
@@ -275,47 +366,42 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private val remoteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == ServerService.ACTION_REMOTE) {
-                val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
-                when (key) {
-                    "up", "down", "left", "right" -> {
-                        if (!controlsManager.isControlsVisible()) {
-                            controlsManager.showControls()
-                        }
-                    }
-                    "enter" -> {
-                        controlsManager.toggleControls()
-                    }
-                    "back" -> {
-                        if (controlsManager.isControlsVisible()) {
-                            controlsManager.hideControls()
-                        } else {
-                            finish()
-                        }
+            when (intent?.action) {
+                ServerService.ACTION_REMOTE -> {
+                    val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
+                    inputHandler.handleRemoteCommand(key)
+                }
+                ServerService.ACTION_CONTROL -> {
+                    val command = intent.getStringExtra(ServerService.EXTRA_COMMAND)
+                    when (command) {
+                        "loop_on"  -> setLooping(true)
+                        "loop_off" -> setLooping(false)
+                        else       -> inputHandler.handleControlCommand(command)
                     }
                 }
-            } else if (intent?.action == ServerService.ACTION_CONTROL) {
-                when (intent.getStringExtra(ServerService.EXTRA_COMMAND)) {
-                    "play_pause" -> controlsManager.togglePlayPause()
-                    "stop" -> finish()
-                    "seek_fwd" -> controlsManager.onSeekForward()
-                    "seek_rev" -> controlsManager.onSeekBackward()
-                    "loop_on"  -> setLooping(true)
-                    "loop_off" -> setLooping(false)
+                ServerService.ACTION_QUEUE_ADD -> {
+                    ServerService.drainPendingQueueItems().forEach { payload ->
+                        playlistItems.add(payload)
+                    }
+                    controlsManager.setPlaylistVisible(true)
+                    broadcastPlaylistStatus()
                 }
-            } else if (intent?.action == ServerService.ACTION_QUEUE_ADD) {
-                ServerService.drainPendingQueueItems().forEach { payload ->
-                    playlistItems.add(payload)
-                }
-                controlsManager.setPlaylistVisible(true)
-                broadcastPlaylistStatus()
-            } else if (intent?.action == ServerService.ACTION_PLAYLIST_JUMP) {
-                val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
-                if (index >= 0) {
-                    playItemAtIndex(index) // broadcasts status internally
+                ServerService.ACTION_PLAYLIST_JUMP -> {
+                    val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
+                    if (index >= 0) {
+                        playItemAtIndex(index) // broadcasts status internally
+                    }
                 }
             }
         }
+    }
+
+    private fun handleRemoteKey(key: String?) {
+        inputHandler.handleRemoteCommand(key)
+    }
+
+    private fun handleControlCommand(command: String?) {
+        inputHandler.handleControlCommand(command)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -326,7 +412,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (::controlsManager.isInitialized && controlsManager.isControlsVisible()) {
-                    controlsManager.hideControls()
+                    controlsManager.hideUI()
                 } else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
@@ -361,34 +447,40 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         historyStore = HistoryStore(this)
+        resumeStore = com.playbridge.player.data.HistoryResumeStore(historyStore)
         progressManager = ProgressManager(
             context = this,
             historyStore = historyStore,
             lifecycleScope = lifecycleScope,
             playerActivity = this
         )
+        // Engine adapter for VLC
+        val engineAdapter = object : PlayerEngineAdapter {
+            override val isPlaying: Boolean get() = engine?.getMediaPlayer()?.isPlaying == true
+            override val currentPosition: Long get() = engine?.getMediaPlayer()?.time ?: 0L
+            override val duration: Long get() = engine?.getMediaPlayer()?.length ?: 0L
+            override val bufferedPosition: Long get() = (engine?.getMediaPlayer()?.time ?: 0) + 1000 // VLC doesn't expose buffer easily as ms
+            override val streamInfo: String? get() = formatVlcStreamInfo()
+            override val frameRate: Float get() = calculateVlcFrameRate()
+            override val hdrFormat: String? get() = getVlcHdrFormat()
 
-        // Setup VLC
-        val args = ArrayList<String>().apply {
-            if (com.playbridge.player.BuildConfig.DEBUG) add("-vvv") // Verbose logging in debug only
+            override fun setLoudnessEnhancer(enabled: Boolean) {
+                val vlcPlayer = engine?.getMediaPlayer() ?: return
+                if (enabled) {
+                    vlcPlayer.volume = 150
+                    FileLogger.i(TAG, "VLC Loudness Enhancer enabled (Volume 150%)")
+                } else {
+                    vlcPlayer.volume = 100
+                    FileLogger.i(TAG, "VLC Loudness Enhancer disabled (Volume 100%)")
+                }
+            }
 
-            // Network stability
-            add("--http-reconnect")
-            add("--network-caching=5000") // Increased for stability
-            add("--clock-jitter=500")
-            add("--clock-synchro=0")
+            override fun play() { engine?.play() }
+            override fun pause() { engine?.pause() }
+            override fun seekTo(positionMs: Long) { this@VlcPlayerActivity.seekTo(positionMs) }
         }
-        try {
-            // Use applicationContext to avoid leaking activity and for better native library stability
-            libVLC = LibVLC(applicationContext, args)
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "Failed to initialize LibVLC", e)
-            Toast.makeText(this, "Failed to start VLC player", Toast.LENGTH_SHORT).show()
-            finish()
-            return
-        }
 
-        controlsManager = VlcControlsManager(
+        controlsManager = UnifiedControlsManager(
             controlsRoot = findViewById(R.id.controls_root),
             controlsPanel = findViewById(R.id.controls_panel),
             seekBar = findViewById(R.id.player_seekbar),
@@ -398,8 +490,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             elapsedText = findViewById(R.id.tv_elapsed),
             remainingText = findViewById(R.id.tv_remaining),
             titleText = findViewById(R.id.title_text),
+            hdrBadge = findViewById(R.id.tv_hdr_badge),
+            metaContainer = findViewById(R.id.ll_stream_meta_container),
             bufferingSpinner = findViewById(R.id.buffering_spinner),
-            playerProvider = { mediaPlayer },
+            engine = engineAdapter,
+            engineType = "VLC",
             tracksButton = findViewById(R.id.btn_tracks),
             playlistButton = findViewById(R.id.btn_playlist),
             streamsButton = findViewById(R.id.btn_streams),
@@ -408,19 +503,22 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             filterButton = findViewById(R.id.btn_filter),
             loopButton = findViewById(R.id.btn_loop),
             switchPlayerButton = findViewById(R.id.btn_switch_player),
-            onShowSettings = { showSettingsDialog() },
+            onShowTrackSelection = { showSettingsDialog() },
             onShowPlaylist = { showPlaylistPicker() },
             onShowStreams = { showStreamSelectionDialog() },
             onSwitchPlayer = { showSwitchPlayerDialog("internal_vlc") },
-            onError = { handleVlcError() },
-            onSeekForwardRequested = { handleSeek(1) },
-            onSeekBackwardRequested = { handleSeek(-1) },
             onPrevious = { playPreviousInPlaylist() },
             onNext = { playNextInPlaylist() },
             onToggleLoop = { setLooping(!isLooping) }
         )
 
-        setupMediaPlayer()
+        inputHandler = InputHandler(
+            activity = this,
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
+            engine = engineAdapter,
+            controls = controlsManager,
+            isExternalOverlayVisible = { prePlayPayload != null || activeDialog != null }
+        )
 
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
@@ -451,8 +549,19 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
+    private var lastOnNewIntentUrl: String? = null
+    private var lastOnNewIntentTime = 0L
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        val url = intent.getStringExtra(ServerService.EXTRA_URL)
+        val now = System.currentTimeMillis()
+        if (url != null && url == lastOnNewIntentUrl && (now - lastOnNewIntentTime) < 2000) {
+            FileLogger.i(TAG, "Debounced duplicate onNewIntent for $url")
+            return
+        }
+        lastOnNewIntentUrl = url
+        lastOnNewIntentTime = now
         FileLogger.i(TAG, "onNewIntent received")
 
         // Cancel any pending resolution or countdown from a previous intent
@@ -505,8 +614,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val payloadJson = intent.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
         if (payloadJson != null) {
             try {
-                val p = com.playbridge.protocol.protocolJson.decodeFromString(
-                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                    com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
                     payloadJson
                 )
                 prePlayPayload = p
@@ -551,13 +660,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         displayTitle?.let {
-            Toast.makeText(this, it, Toast.LENGTH_SHORT).show()
             controlsManager.setTitle(it)
         }
 
         // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
         if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
-            // VlcControlsManager doesn't have setNavigationVisible yet, but we can ensure they are showing
+            // UnifiedControlsManager handles buttons, but we can ensure they are showing
         }
 
         if (url == null) {
@@ -566,44 +674,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             return
         }
 
-        if (title != null) {
-            Toast.makeText(this, title, Toast.LENGTH_SHORT).show()
-            controlsManager.setTitle(title)
-        }
-
         originalM3u8Url = url
         currentHeaders = headers
 
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-            val urlWithoutQuery = url.substringBefore("?")
-            if (urlWithoutQuery.endsWith(".m3u")) {
-                try {
-                    val parsedPlaylist = M3uParser.fetchAndParseM3u(url, headers)
-                    if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
-                        playlistItems = parsedPlaylist.toMutableList()
-                        PlaylistStore.currentPlaylist = parsedPlaylist
-                        playlistIndex = 0
-                        controlsManager.setPlaylistVisible(true)
-
-                        val firstItem = parsedPlaylist[0]
-                        controlsManager.setTitle(firstItem.title ?: title)
-                        originalM3u8Url = firstItem.url
-                        currentHeaders = firstItem.headers
-                        subtitleUrls = firstItem.subtitles ?: emptyList()
-                        currentSubtitleUrl = null
-
-                        if (firstItem.url.contains(".m3u8", ignoreCase = true)) {
-                            M3uParser.parseMasterPlaylist(firstItem.url, firstItem.headers)
-                        }
-                        playVideo(firstItem.url, firstItem.headers)
-                        return@launch
-                    }
-                } catch (e: Exception) {
-                    FileLogger.e(TAG, "Error parsing M3U", e)
-                }
-            }
-            playVideo(url, headers)
-        }
+        playVideo(url, headers)
     }
 
     private fun playNextInPlaylist() {
@@ -640,7 +714,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
-                        controlsManager.hideControls()
+                        controlsManager.hideUI()
                     } else {
                         controlsManager.hideBuffering()
                         FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
@@ -662,6 +736,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         playlistIndex++
+        if (::viewModel.isInitialized) {
+            viewModel.setPlaylist(playlistItems, playlistIndex)
+        }
         val nextItem = playlistItems[playlistIndex]
         playPlaylistItem(nextItem)
         broadcastPlaylistStatus()
@@ -699,7 +776,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
-                        controlsManager.hideControls()
+                        controlsManager.hideUI()
                     } else {
                         controlsManager.hideBuffering()
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve previous episode", android.widget.Toast.LENGTH_SHORT).show()
@@ -717,6 +794,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         playlistIndex--
+        if (::viewModel.isInitialized) {
+            viewModel.setPlaylist(playlistItems, playlistIndex)
+        }
         val prevItem = playlistItems[playlistIndex]
         playPlaylistItem(prevItem)
         broadcastPlaylistStatus()
@@ -725,6 +805,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private fun playItemAtIndex(index: Int) {
         if (playlistItems.isEmpty() || index < 0 || index >= playlistItems.size) return
         playlistIndex = index
+        if (::viewModel.isInitialized) {
+            viewModel.setPlaylist(playlistItems, playlistIndex)
+        }
         playPlaylistItem(playlistItems[index])
         broadcastPlaylistStatus()
     }
@@ -764,8 +847,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val nav = seriesNavigator ?: return
         val currentUrl = intent?.getStringExtra(ServerService.EXTRA_URL)
 
-        val wasPlaying = mediaPlayer?.isPlaying == true
-        if (wasPlaying) mediaPlayer?.pause()
+        val wasPlaying = engine?.getMediaPlayer()?.isPlaying == true
+        if (wasPlaying) engine?.pause()
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
         activeDialog = dialog
@@ -776,7 +859,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         composeView.setContent {
             val scope = rememberCoroutineScope()
-            var streams by remember { mutableStateOf<List<com.playbridge.player.stremio.ScoredStremioStream>>(emptyList()) }
+            var streams by remember { mutableStateOf<List<com.playbridge.shared.stremio.ScoredStremioStream>>(emptyList()) }
             var isLoading by remember { mutableStateOf(true) }
 
             LaunchedEffect(Unit) {
@@ -803,10 +886,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                             intent?.putExtra(ServerService.EXTRA_URL, stream.url)
 
                             playVideo(url = stream.url, headers = currentHeaders)
-                            controlsManager.hideControls()
+                            controlsManager.hideUI()
                         },
                         onRefresh = {
-                            com.playbridge.player.stremio.StremioClient.clearCache(
+                            com.playbridge.shared.stremio.StremioClient.clearCache(
                                 contentId = nav.context.imdbId,
                                 type = "series",
                                 season = nav.currentSeason,
@@ -829,14 +912,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener {
             activeDialog = null
-            if (wasPlaying) mediaPlayer?.play()
-            controlsManager.showControls()
+            if (wasPlaying) engine?.play()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }
 
     private fun showPlaylistPicker() {
-        val displayItems: List<com.playbridge.protocol.PlayPayload>
+        val displayItems: List<com.playbridge.shared.protocol.PlayPayload>
         val displayIndex: Int
         val isSeriesMode: Boolean
 
@@ -849,7 +932,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             displayItems = nav.episodeList!!.map { ep ->
                 val s = ep.season.toString().padStart(2, '0')
                 val e = ep.episode.toString().padStart(2, '0')
-                com.playbridge.protocol.PlayPayload(
+                com.playbridge.shared.protocol.PlayPayload(
                     url = "", // Not needed for UI
                     title = "S${s}E${e} - ${ep.title ?: "Episode ${ep.episode}"}"
                 )
@@ -860,7 +943,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             return
         }
 
-        val player = mediaPlayer ?: return
+        val player = engine?.getMediaPlayer() ?: return
         val wasPlaying = player.isPlaying
         if (wasPlaying) player.pause()
 
@@ -896,7 +979,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) player.play()
-            controlsManager.showControls()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }
@@ -937,7 +1020,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                 playVideo(url = stream.url, headers = null)
-                controlsManager.hideControls()
+                controlsManager.hideUI()
             } else {
                 isLoadingNewStream = false
                 controlsManager.hideBuffering()
@@ -946,7 +1029,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun playPlaylistItem(item: com.playbridge.protocol.PlayPayload) {
+    private fun playPlaylistItem(item: com.playbridge.shared.protocol.PlayPayload) {
         isLoadingNewStream = true
         syncSelectionsToProgressManager()
         progressManager.saveProgress()
@@ -976,6 +1059,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         isLooping = enabled
         controlsManager.updateLoopIcon(enabled)
         FileLogger.i(TAG, "Loop mode: $enabled")
+        if (::viewModel.isInitialized) {
+            viewModel.setLooping(enabled)
+        }
     }
 
     // ── Video scaling helpers ─────────────────────────────────────────────────
@@ -1007,11 +1093,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     /**
-     * Apply [mode] to the live [mediaPlayer].  Single source of truth used by both
+     * Apply [mode] to the live [engine?.getMediaPlayer()].  Single source of truth used by both
      * the settings dialog callback and history restore so they stay in sync.
      */
     private fun applyVlcScalingMode(mode: String) {
-        val player = mediaPlayer ?: return
+        val player = engine?.getMediaPlayer() ?: return
         when (mode) {
             "Fit" -> { player.scale = 0f; player.aspectRatio = null }
             "Fill" -> { player.scale = 0f; player.aspectRatio = "16:9" }
@@ -1030,7 +1116,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
      * current VLC default is left unchanged — we never force an unexpected track.
      */
     private fun applyPreferredLanguages() {
-        val player = mediaPlayer ?: return
+        val player = engine?.getMediaPlayer() ?: return
 
         preferredAudioLanguage?.let { lang ->
             val tracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio) ?: return@let
@@ -1055,12 +1141,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun updateStreamInfo() {
-        val player = mediaPlayer ?: return
+    private fun formatVlcStreamInfo(): String? {
+        val player = engine?.getMediaPlayer() ?: return null
         val videoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
         val audioTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)
 
-        val info = buildString {
+        return buildString {
             if (videoTrack != null) {
                 append(videoTrack.name ?: "Video")
             }
@@ -1069,8 +1155,11 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 append("\uD83D\uDD0A ")
                 append(audioTrack.name ?: "Audio")
             }
-        }
-        runOnUiThread { controlsManager.setStreamInfo(info) }
+        }.takeIf { it.isNotEmpty() }
+    }
+
+    private fun updateStreamInfo() {
+        // Handled via adapter streamInfo property in UnifiedControlsManager
     }
 
     private fun handleVlcError() {
@@ -1156,8 +1245,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         if (playlistItems.isEmpty() && historyItem?.playlistJson != null) {
             try {
-                val decoded = com.playbridge.protocol.protocolJson.decodeFromString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                val decoded = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
                     historyItem.playlistJson!!
                 )
                 if (decoded.isNotEmpty()) {
@@ -1174,8 +1263,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Build playlist JSON for history persistence (computed after fallback restore)
         val plistJson = if (playlistItems.isNotEmpty()) {
             try {
-                com.playbridge.protocol.protocolJson.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.protocol.PlayPayload.serializer()),
+                com.playbridge.shared.protocol.protocolJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
                     playlistItems
                 )
             } catch (e: Exception) {
@@ -1200,81 +1289,48 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
         val finalResumeTime = if (startPos > 0L) startPos else (resumeTime ?: historyItem?.position)
 
-        val media = Media(libVLC, Uri.parse(url)).apply {
-            setHWDecoderEnabled(true, true)
+            val payload = com.playbridge.shared.protocol.PlayPayload(
+                url = url,
+                headers = headers
+            )
 
-            val extraHeaders = mutableListOf<String>()
-            var userAgentSet = false
-            headers?.forEach { (key, value) ->
-                when (key.lowercase()) {
-                    "user-agent" -> {
-                        addOption(":http-user-agent=$value")
-                        userAgentSet = true
-                    }
-                    "referer" -> addOption(":http-referrer=$value")
-                    "cookie" -> addOption(":http-cookies=$value")
-                    else -> extraHeaders.add("$key: $value")
+            // Recreate setup to ensure a clean native state and avoid resource race conditions
+            setupMediaPlayer()
+
+            // Brief delay to allow native resources (MediaCodec) to fully return to the system pool
+            kotlinx.coroutines.delay(300)
+
+            engine?.let { e ->
+                // Restore settings from history if present
+                historyItem?.playbackSpeed?.let {
+                    currentPlaybackSpeed = it
+                    runOnUiThread { e.setRate(it) }
                 }
-            }
-            if (!userAgentSet) {
-                addOption(":http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            }
-            if (extraHeaders.isNotEmpty()) {
-                // VLC expects headers separated by \r\n with no trailing separator.
-                addOption(":http-extra-headers=${extraHeaders.joinToString("\r\n")}")
-            }
-        }
-
-        // Recreate MediaPlayer to ensure a clean native state and avoid resource race conditions
-        setupMediaPlayer()
-
-        // Brief delay to allow native resources (MediaCodec) to fully return to the system pool
-        kotlinx.coroutines.delay(300)
-
-        mediaPlayer?.let { player ->
-            player.media = media
-            media.release()
-
-            // Restore settings from history if present
-            historyItem?.playbackSpeed?.let {
-                currentPlaybackSpeed = it
-                runOnUiThread { player.rate = it }
-            }
-            historyItem?.videoScalingMode?.let {
-                currentVideoScalingMode = vlcScalingModeFromInt(it)
-                runOnUiThread { applyVlcScalingMode(currentVideoScalingMode) }
-            }
-            if (historyItem?.externalSubtitleUrl != null) {
-                // Per-URL history has a subtitle — use it (most specific, wins over session)
-                currentSubtitleUrl = historyItem.externalSubtitleUrl
-                val subUrl = historyItem.externalSubtitleUrl
-                runOnUiThread {
-                    player.addSlave(
-                        org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle,
-                        android.net.Uri.parse(subUrl),
-                        true
-                    )
+                historyItem?.videoScalingMode?.let {
+                    currentVideoScalingMode = vlcScalingModeFromInt(it)
+                    runOnUiThread { applyVlcScalingMode(currentVideoScalingMode) }
                 }
-            } else {
-                // No per-URL history — carry the current session subtitle forward so
-                // Stremio episode switches don't silently drop the user's sidecar sub.
-                currentSubtitleUrl?.let { subUrl ->
+                if (historyItem?.externalSubtitleUrl != null) {
+                    currentSubtitleUrl = historyItem.externalSubtitleUrl
+                    val subUrl = historyItem.externalSubtitleUrl
                     runOnUiThread {
-                        player.addSlave(
-                            org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle,
-                            android.net.Uri.parse(subUrl),
-                            true
-                        )
+                        lifecycleScope.launch { e.attachExternalSubtitle(subUrl, null) }
+                    }
+                } else {
+                    currentSubtitleUrl?.let { subUrl ->
+                        runOnUiThread {
+                            lifecycleScope.launch { e.attachExternalSubtitle(subUrl, null) }
+                        }
                     }
                 }
+
+                pendingResumeTime = if (finalResumeTime != null && finalResumeTime > 0) finalResumeTime else null
+
+                e.load(payload)
+                if (startPaused) {
+                    e.pause()
+                }
             }
-
-            // Stage the resume seek so the Playing event handler applies it once VLC
-            // has buffered enough to reliably accept the command.
-            pendingResumeTime = if (finalResumeTime != null && finalResumeTime > 0) finalResumeTime else null
-
-            runOnUiThread { player.play() }
-        }
     }
 
     private fun syncSelectionsToProgressManager() {
@@ -1286,9 +1342,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun showSettingsDialog() {
-        val player = mediaPlayer ?: return
+        val currentEngine = engine ?: return
+        val player = currentEngine.getMediaPlayer() ?: return
         val wasPlaying = player.isPlaying
-        if (wasPlaying) player.pause()
+        if (wasPlaying) currentEngine.pause()
 
         val videoTracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)?.toList() ?: emptyList()
         val currentVideoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)?.id
@@ -1382,7 +1439,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) player.play()
-            controlsManager.showControls()
+            controlsManager.showControlsUI()
         }
         dialog.show()
     }
@@ -1402,15 +1459,17 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         // Capture and null out references before any cleanup so nothing else uses them.
-        val playerToRelease = mediaPlayer
-        val vlcToRelease = libVLC
-        mediaPlayer = null
-        libVLC = null
+        vmUiJob?.cancel()
+        if (::viewModel.isInitialized) {
+            viewModel.dispose()
+        }
+        val engineToRelease = engine
+        engine = null
 
         // UI-side cleanup is fast and must stay on the main thread.
-        playerToRelease?.setEventListener(null)
-        controlsManager.detachPlayer()
-        playerToRelease?.vlcVout?.apply {
+        engineToRelease?.getMediaPlayer()?.setEventListener(null)
+        controlsManager.detach()
+        engineToRelease?.getMediaPlayer()?.vlcVout?.apply {
             removeCallback(this@VlcPlayerActivity)
             detachViews()
         }
@@ -1418,8 +1477,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Native VLC teardown can be slow; run it off the main thread to avoid an ANR in
         // MainActivity (same process, same main thread) when the user presses Back.
         Thread {
-            playerToRelease?.release()
-            vlcToRelease?.release()
+            engineToRelease?.release()
         }.start()
     }
 
@@ -1435,7 +1493,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     override fun onSurfacesDestroyed(vout: IVLCVout?) {}
 
     private fun handleSeek(multiplier: Int) {
-        val player = mediaPlayer ?: return
+        val player = engine?.getMediaPlayer() ?: return
         val length = player.length
 
         val currentTime = pendingSeekTime ?: player.time
@@ -1451,91 +1509,21 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         controlsManager.showSeekUI()
     }
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (inputHandler.handleKeyEvent(event.keyCode, event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     // Handle physical remote/keyboard events
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
-        if (event?.action != android.view.KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
-
-        val isFullOverlayVisible = controlsManager.isFullOverlayVisible()
-        val isExternalOverlayVisible = prePlayPayload != null || activeDialog != null
-
-        if (isFullOverlayVisible || isExternalOverlayVisible) {
-            // When full overlay is visible, let the system handle D-pad navigation for focus,
-            // except for DPAD_UP/DPAD_DOWN which we ignore to prevent focus jumping off controls.
-            return when (keyCode) {
-                android.view.KeyEvent.KEYCODE_DPAD_UP,
-                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (isExternalOverlayVisible) false else true
-                }
-                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
-                android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                android.view.KeyEvent.KEYCODE_ENTER,
-                android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> super.onKeyDown(keyCode, event)
-                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    controlsManager.togglePlayPause()
-                    true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                    mediaPlayer?.play()
-                    true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                    mediaPlayer?.pause()
-                    true
-                }
-                else -> super.onKeyDown(keyCode, event)
-            }
-        }
-
-        // When full overlay is hidden (or only seek UI is visible), D-pad controls playback (ExoPlayer parity)
-        return when (keyCode) {
-            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-            android.view.KeyEvent.KEYCODE_ENTER,
-            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                mediaPlayer?.pause()
-                controlsManager.showControls()
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                val repeatCount = event.repeatCount
-                val multiplier = if (repeatCount > 10) 5 else 1
-                handleSeek(-multiplier)
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                val repeatCount = event.repeatCount
-                val multiplier = if (repeatCount > 10) 5 else 1
-                handleSeek(multiplier)
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
-                true
-            }
-            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
-                true
-            }
-            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                controlsManager.togglePlayPause()
-                true
-            }
-            android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                mediaPlayer?.play()
-                true
-            }
-            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                mediaPlayer?.pause()
-                true
-            }
-            else -> super.onKeyDown(keyCode, event)
-        }
+        // Some devices might need volume handling if inputHandler doesn't take it
+        return super.onKeyDown(keyCode, event)
     }
 
 
-    private fun resolveStreamsAndPreBuffer(p: com.playbridge.protocol.ContentPlayPayload) {
+    private fun resolveStreamsAndPreBuffer(p: com.playbridge.shared.protocol.ContentPlayPayload) {
         resolutionJob?.cancel()
         isPrePlayLaunching = false
         prePlayCountdown = 0
@@ -1553,7 +1541,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                 FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
 
-                val streams = com.playbridge.player.stremio.StremioClient.resolveStreamsByContentId(
+                val streams = com.playbridge.shared.stremio.StremioClient.resolveStreamsByContentId(
                     addonBaseUrls = p.addonBaseUrls,
                     addonNames = p.addonNames,
                     contentId = p.contentId,
@@ -1588,7 +1576,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
     }
 
-    private fun playVideoAfterResolution(url: String, p: com.playbridge.protocol.ContentPlayPayload) {
+    private fun playVideoAfterResolution(url: String, p: com.playbridge.shared.protocol.ContentPlayPayload) {
         isPrePlayLaunching = true
         isPreBuffering = true
 
@@ -1632,7 +1620,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onPause() {
         super.onPause()
-        mediaPlayer?.pause()
+        engine?.pause()
         syncSelectionsToProgressManager()
         lifecycleScope.launch {
             val bitmap = progressManager.captureBitmapSuspend()
@@ -1647,10 +1635,27 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             val width = right - left
             val height = bottom - top
             if (width > 0 && height > 0) {
-                mediaPlayer?.vlcVout?.setWindowSize(width, height)
+                engine?.getMediaPlayer()?.vlcVout?.setWindowSize(width, height)
             }
         }
         surfaceLayoutListener = listener
         surfaceView.addOnLayoutChangeListener(listener)
+    }
+
+    private fun getVlcHdrFormat(): String? {
+        // VLC 4.x metadata fields for HDR (colorTransfer/colorSpace) seem to be elusive or named differently in this version.
+        // Returning null for now to stabilize the build. Exo and MPV implementations remain active.
+        return null
+    }
+
+    private fun calculateVlcFrameRate(): Float {
+        val player = engine?.getMediaPlayer() ?: return 0f
+        val track = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)
+        if (track is org.videolan.libvlc.interfaces.IMedia.VideoTrack) {
+            if (track.frameRateDen > 0) {
+                return track.frameRateNum.toFloat() / track.frameRateDen.toFloat()
+            }
+        }
+        return 0f
     }
 }

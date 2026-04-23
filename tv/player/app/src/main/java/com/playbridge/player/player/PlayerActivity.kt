@@ -12,6 +12,9 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.logging.FileLogger
+import android.view.Surface
+import android.view.SurfaceView
+import androidx.annotation.RequiresApi
 
 abstract class PlayerActivity : ComponentActivity() {
 
@@ -28,9 +31,11 @@ abstract class PlayerActivity : ComponentActivity() {
     protected open fun getPlayerProgressManager(): ProgressManager? = null
 
     // Shared playback configuration and series navigation state
-    var seriesNavigator: com.playbridge.player.stremio.SeriesNavigator? = null
+    var seriesNavigator: com.playbridge.shared.stremio.SeriesNavigator? = null
     var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p"
     var maxBitrateCapMbps: Double? = null         // explicit bitrate cap from phone settings (Mbps)
+    var isFrameRateMatchingEnabled: Boolean = false
+    var isLoudnessEnhancerEnabled: Boolean = false
 
     protected fun setupSeriesNavigator(intent: Intent?) {
         defaultVideoQuality = intent?.getStringExtra("default_video_quality")
@@ -44,11 +49,11 @@ abstract class PlayerActivity : ComponentActivity() {
         seriesNavigator = when {
             seriesContextJson != null -> {
                 try {
-                    val ctx = com.playbridge.protocol.protocolJson.decodeFromString(
-                        com.playbridge.protocol.SeriesContext.serializer(),
+                    val ctx = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                        com.playbridge.shared.protocol.SeriesContext.serializer(),
                         seriesContextJson
                     )
-                    com.playbridge.player.stremio.SeriesNavigator(
+                    com.playbridge.shared.stremio.SeriesNavigator(
                         context             = ctx,
                         qualityPreference   = defaultVideoQuality,
                         preferredSourceTypes= ctx.preferredSourceTypes,
@@ -64,11 +69,11 @@ abstract class PlayerActivity : ComponentActivity() {
             }
             contentPayloadJson != null -> {
                 try {
-                    val p = com.playbridge.protocol.protocolJson.decodeFromString(
-                        com.playbridge.protocol.ContentPlayPayload.serializer(),
+                    val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                        com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
                         contentPayloadJson
                     )
-                    val ctx = com.playbridge.protocol.SeriesContext(
+                    val ctx = com.playbridge.shared.protocol.SeriesContext(
                         imdbId = p.contentId,
                         season = p.season ?: 1,
                         episode = p.episode ?: 1,
@@ -83,7 +88,7 @@ abstract class PlayerActivity : ComponentActivity() {
                         episodeRuntimeMinutes = p.episodeRuntimeMinutes,
                         maxBitrateCapMbps = p.maxBitrateCapMbps
                     )
-                    com.playbridge.player.stremio.SeriesNavigator(
+                    com.playbridge.shared.stremio.SeriesNavigator(
                         context             = ctx,
                         qualityPreference   = defaultVideoQuality ?: p.defaultVideoQuality,
                         contentType         = p.contentType,
@@ -123,6 +128,44 @@ abstract class PlayerActivity : ComponentActivity() {
         // of whether this activity was launched by handleCommand() (phone cast) or directly
         // from the TV's history/favourites screen (which bypasses handleCommand entirely).
         ServerService.notifyContextPlayer()
+
+        // Load refresh rate matching setting
+        val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        isFrameRateMatchingEnabled = prefs.getBoolean("frame_rate_matching", false)
+        isLoudnessEnhancerEnabled = prefs.getBoolean("loudness_enhancer", false)
+        FileLogger.i("PlayerActivity", "Frame rate matching enabled: $isFrameRateMatchingEnabled, Loudness enhancer: $isLoudnessEnhancerEnabled")
+    }
+
+    private var lastMatchedFps: Float = 0f
+
+    /**
+     * Updates the display refresh rate to match the intended video frame rate.
+     * Uses Android 11+ Surface.setFrameRate API.
+     */
+    protected fun updateRefreshRate(fps: Float) {
+        if (!isFrameRateMatchingEnabled || fps <= 0f) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
+
+        // Skip if we already matched this exact FPS recently to avoid redundant handshakes
+        if (Math.abs(fps - lastMatchedFps) < 0.01f) return
+
+        val surfaceView = getVideoSurfaceView() ?: return
+
+        FileLogger.i("PlayerActivity", "Requesting refresh rate matching: ${fps}fps")
+        try {
+            surfaceView.holder.surface.setFrameRate(fps, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
+            lastMatchedFps = fps
+        } catch (e: Exception) {
+            FileLogger.e("PlayerActivity", "Failed to set frame rate: ${e.message}")
+        }
+    }
+
+    /**
+     * Toggles the audio loudness enhancer (Night Mode) for the current player engine.
+     */
+    protected fun applyLoudnessEnhancer(enabled: Boolean, adapter: PlayerEngineAdapter?) {
+        FileLogger.i("PlayerActivity", "Applying loudness enhancer: $enabled")
+        adapter?.setLoudnessEnhancer(enabled)
     }
 
     override fun onDestroy() {
@@ -273,8 +316,8 @@ abstract class PlayerActivity : ComponentActivity() {
         // Persist SeriesNavigator state into EXTRA_SERIES_CONTEXT
         seriesNavigator?.let { nav ->
             try {
-                val json = com.playbridge.protocol.protocolJson.encodeToString(
-                    com.playbridge.protocol.SeriesContext.serializer(),
+                val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
+                    com.playbridge.shared.protocol.SeriesContext.serializer(),
                     nav.context
                 )
                 newIntent.putExtra(ServerService.EXTRA_SERIES_CONTEXT, json)

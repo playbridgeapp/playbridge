@@ -221,7 +221,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     .build()
                 client.newWebSocket(request, object : okhttp3.WebSocketListener() {
                     override fun onOpen(ws: okhttp3.WebSocket, response: okhttp3.Response) {
-                        ws.send(com.playbridge.protocol.createRequestPairingJson())
+                        ws.send(com.playbridge.shared.protocol.createRequestPairingJson())
                         // TV will close the connection after the ack; close our side too
                         ws.close(1000, "pairing_requested")
                     }

@@ -14,9 +14,9 @@ import com.playbridge.player.logging.FileLogger
 import androidx.core.app.NotificationCompat
 import com.playbridge.player.MainActivity
 import com.playbridge.player.R
-import com.playbridge.protocol.Command
-import com.playbridge.protocol.createContextJson
-import com.playbridge.protocol.protocolJson
+import com.playbridge.shared.protocol.Command
+import com.playbridge.shared.protocol.createContextJson
+import com.playbridge.shared.protocol.protocolJson
 import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.model.PairedDevice
 import kotlinx.coroutines.*
@@ -76,7 +76,7 @@ class ServerService : Service() {
         nsdManager = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
 
         // Initialize Stremio client with cache
-        com.playbridge.player.stremio.StremioClient.init(applicationContext)
+        com.playbridge.shared.stremio.StremioClient.init(applicationContext)
 
         createNotificationChannel()
         val filter = android.content.IntentFilter(ACTION_CONTEXT_IDLE)
@@ -116,7 +116,7 @@ class ServerService : Service() {
 
             val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
                 serviceName = deviceName
-                serviceType = com.playbridge.protocol.NsdConstants.SERVICE_TYPE
+                serviceType = com.playbridge.shared.protocol.NsdConstants.SERVICE_TYPE
                 setPort(port)
                 setAttribute("uuid", deviceId)
                 if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
@@ -206,28 +206,27 @@ class ServerService : Service() {
                 // Observe connection state for notification updates and expose to UI
                 launch {
                     server.connectionState.collect { state ->
-                        updateNotification(state)
-                        _connectionState.value = state
+                        try {
+                            updateNotification(state)
+                            _connectionState.value = state
 
-                        // Show/hide overlay window tied to connection:
-                        // When the overlay is visible, Android's BAL check sees
-                        // callingUidHasNonAppVisibleWindow=true which exempts us from
-                        // background activity launch restrictions on Android 14+.
-                        when (state) {
-                            is WebSocketServer.ConnectionState.Connected -> overlayWindow.show()
-                            is WebSocketServer.ConnectionState.Running,
-                            is WebSocketServer.ConnectionState.Stopped,
-                            is WebSocketServer.ConnectionState.Error -> overlayWindow.hide()
-                            else -> Unit
-                        }
+                            when (state) {
+                                is WebSocketServer.ConnectionState.Connected -> overlayWindow.show()
+                                is WebSocketServer.ConnectionState.Running,
+                                is WebSocketServer.ConnectionState.Stopped,
+                                is WebSocketServer.ConnectionState.Error -> overlayWindow.hide()
+                                else -> Unit
+                            }
 
-                        // Persist paired device on connection
-                        if (state is WebSocketServer.ConnectionState.Connected) {
-                            val device = PairedDevice(
-                                id = state.clientId,
-                                name = "Phone (${state.clientId.take(4)})"
-                            )
-                            pairingStore.addPairedDevice(device)
+                            if (state is WebSocketServer.ConnectionState.Connected) {
+                                val device = PairedDevice(
+                                    id = state.clientId,
+                                    name = "Phone (${state.clientId.take(4)})"
+                                )
+                                pairingStore.addPairedDevice(device)
+                            }
+                        } catch (e: Exception) {
+                            FileLogger.e(TAG, "connectionState collector crashed on state: $state", e)
                         }
                     }
                 }
@@ -235,14 +234,22 @@ class ServerService : Service() {
                 // Observe connected client count
                 launch {
                     server.connectedClientCount.collect { count ->
-                        _connectedClientCount.value = count
+                        try {
+                            _connectedClientCount.value = count
+                        } catch (e: Exception) {
+                            FileLogger.e(TAG, "connectedClientCount collector crashed", e)
+                        }
                     }
                 }
 
                 // Expose commands for the activity to observe
                 launch {
                     server.commands.collect { command ->
-                        handleCommand(command)
+                        try {
+                            handleCommand(command)
+                        } catch (e: Exception) {
+                            FileLogger.e(TAG, "commands collector crashed on command", e)
+                        }
                     }
                 }
 
@@ -253,42 +260,38 @@ class ServerService : Service() {
                     val pairingCooldownMs = 8_000L  // ignore repeat signals within 8 s
 
                     server.connectionAttemptFlow.collect {
-                        val now = System.currentTimeMillis()
+                        try {
+                            val now = System.currentTimeMillis()
 
-                        // ── Spam guard ──────────────────────────────────────────────────────────
-                        // Ignore if we launched the pairing screen very recently. This covers
-                        // rapid taps on the phone or AuthFailed retries that fire quickly.
-                        if (now - lastPairingLaunchMs < pairingCooldownMs) {
-                            FileLogger.d(TAG, "request_pairing ignored — cooldown active (${now - lastPairingLaunchMs} ms ago)")
-                            return@collect
-                        }
-
-                        // ── Context guard ────────────────────────────────────────────────────────
-                        // Don't interrupt active playback or browsing. The phone still shows the
-                        // PIN dialog so the user can pair manually once they're done watching.
-                        when (activeContext) {
-                            "player", "external_player" -> {
-                                FileLogger.d(TAG, "request_pairing ignored — video is playing")
+                            // ── Spam guard ──────────────────────────────────────────────────────────
+                            if (now - lastPairingLaunchMs < pairingCooldownMs) {
+                                FileLogger.d(TAG, "request_pairing ignored — cooldown active (${now - lastPairingLaunchMs} ms ago)")
                                 return@collect
                             }
-                            "browser" -> {
-                                FileLogger.d(TAG, "request_pairing ignored — browser is active")
-                                return@collect
+
+                            // ── Context guard ────────────────────────────────────────────────────────
+                            when (activeContext) {
+                                "player", "external_player" -> {
+                                    FileLogger.d(TAG, "request_pairing ignored — video is playing")
+                                    return@collect
+                                }
+                                "browser" -> {
+                                    FileLogger.d(TAG, "request_pairing ignored — browser is active")
+                                    return@collect
+                                }
                             }
-                        }
 
-                        lastPairingLaunchMs = now
+                            lastPairingLaunchMs = now
 
-                        // Raise the invisible overlay window BEFORE calling startActivity().
-                        // Without this, Android 14+ BAL restrictions block the launch because
-                        // connectionState is still Running (not Connected) at this point.
-                        // The connectionState observer hides the overlay if auth ultimately fails.
-                        overlayWindow.show()
-                        val intent = Intent(applicationContext, MainActivity::class.java).apply {
-                            action = ACTION_OPEN_PAIRING
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            overlayWindow.show()
+                            val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                                action = ACTION_OPEN_PAIRING
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            }
+                            launchActivityFromBackground(intent, "New device connecting — showing pairing screen")
+                        } catch (e: Exception) {
+                            FileLogger.e(TAG, "connectionAttemptFlow collector crashed", e)
                         }
-                        launchActivityFromBackground(intent, "New device connecting — showing pairing screen")
                     }
                 }
             }
@@ -447,8 +450,8 @@ class ServerService : Service() {
                         command.seriesContext?.let { seriesContext ->
                             // Serialize SeriesContext to JSON string for Intent transport.
                             // Deserialized in ExoPlayerActivity.handleIntent().
-                            val json = com.playbridge.protocol.protocolJson.encodeToString(
-                                com.playbridge.protocol.SeriesContext.serializer(),
+                            val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
+                                com.playbridge.shared.protocol.SeriesContext.serializer(),
                                 seriesContext
                             )
                             putExtra(EXTRA_SERIES_CONTEXT, json)
@@ -495,8 +498,8 @@ class ServerService : Service() {
 
                 activeContext = "player"
                 broadcastContext()
-                val json = com.playbridge.protocol.protocolJson.encodeToString(
-                    com.playbridge.protocol.ContentPlayPayload.serializer(),
+                val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
+                    com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
                     command.payload
                 )
                 val intent = Intent(this, targetActivity).apply {
@@ -626,8 +629,8 @@ class ServerService : Service() {
                             putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, firstItem.maxBitrateCapMbps)
                         }
                         firstItem.seriesContext?.let { seriesContext ->
-                            val json = com.playbridge.protocol.protocolJson.encodeToString(
-                                com.playbridge.protocol.SeriesContext.serializer(),
+                            val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
+                                com.playbridge.shared.protocol.SeriesContext.serializer(),
                                 seriesContext
                             )
                             putExtra(EXTRA_SERIES_CONTEXT, json)
@@ -984,13 +987,13 @@ class ServerService : Service() {
          * Items buffered here when queue_add arrives before the player's receiver is registered.
          * The player drains this after registering, and on each ACTION_QUEUE_ADD broadcast.
          */
-        val pendingQueueItems = java.util.concurrent.ConcurrentLinkedQueue<com.playbridge.protocol.PlayPayload>()
+        val pendingQueueItems = java.util.concurrent.ConcurrentLinkedQueue<com.playbridge.shared.protocol.PlayPayload>()
 
         /**
          * Atomically drain and return all pending queue items.
          */
-        fun drainPendingQueueItems(): List<com.playbridge.protocol.PlayPayload> {
-            val items = mutableListOf<com.playbridge.protocol.PlayPayload>()
+        fun drainPendingQueueItems(): List<com.playbridge.shared.protocol.PlayPayload> {
+            val items = mutableListOf<com.playbridge.shared.protocol.PlayPayload>()
             while (true) items.add(pendingQueueItems.poll() ?: break)
             return items
         }

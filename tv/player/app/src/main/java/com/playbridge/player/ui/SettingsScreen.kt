@@ -51,6 +51,15 @@ fun SettingsScreen(
         mutableStateOf(prefs.getString("preferred_ip", "") ?: "")
     }
     var showIpDialog by remember { mutableStateOf(false) }
+    var frameRateMatching by remember {
+        mutableStateOf(prefs.getBoolean("frame_rate_matching", false))
+    }
+    var tunneledPlayback by remember {
+        mutableStateOf(prefs.getBoolean("tunneled_playback", false))
+    }
+    var loudnessEnhancer by remember {
+        mutableStateOf(prefs.getBoolean("loudness_enhancer", false))
+    }
 
     // Tracks whether the server restart cycle is in progress
     var isRestarting by remember { mutableStateOf(false) }
@@ -134,6 +143,54 @@ fun SettingsScreen(
                         // Keep legacy pref in sync for ServerService
                         .putBoolean("use_external_player", mode == "external")
                         .apply()
+                }
+            )
+
+            // ── Frame Rate Matching ──
+            SettingsDropdown(
+                label = "Frame Rate Matching",
+                description = "Automatically matches the TV's refresh rate to the video's frame rate (e.g. 24Hz for movies). May cause a brief screen blackout (HDMI handshake). Only supported on Android 11+.",
+                options = listOf(
+                    "false" to "Disabled",
+                    "true" to "Enabled (API 30+)"
+                ),
+                selected = frameRateMatching.toString(),
+                onSelected = { enabled ->
+                    val e = enabled.toBoolean()
+                    frameRateMatching = e
+                    prefs.edit().putBoolean("frame_rate_matching", e).apply()
+                }
+            )
+
+            // ── Loudness Enhancer ──
+            SettingsDropdown(
+                label = "Loudness Enhancer (Night Mode)",
+                description = "Boosts quiet dialogue and normalizes audio peaks for a better low-volume experience. Prevents 'quiet voices, loud explosions'. (+15-20dB Boost)",
+                options = listOf(
+                    "false" to "Disabled",
+                    "true" to "Enabled"
+                ),
+                selected = loudnessEnhancer.toString(),
+                onSelected = { enabled ->
+                    val e = enabled.toBoolean()
+                    loudnessEnhancer = e
+                    prefs.edit().putBoolean("loudness_enhancer", e).apply()
+                }
+            )
+
+            // ── Tunneled Playback ──
+            SettingsDropdown(
+                label = "Tunneled Playback (Fix 4K DV)",
+                description = "Enables hardware-level video/audio synchronization. Recommended for resolving 'dark video' or color issues with Dolby Vision and 4K content. Can cause issues on some cheaper boxes.",
+                options = listOf(
+                    "false" to "Disabled",
+                    "true" to "Enabled (Recommended for 4K)"
+                ),
+                selected = tunneledPlayback.toString(),
+                onSelected = { enabled ->
+                    val e = enabled.toBoolean()
+                    tunneledPlayback = e
+                    prefs.edit().putBoolean("tunneled_playback", e).apply()
                 }
             )
 
@@ -247,13 +304,13 @@ fun SettingsScreen(
                     val h = hours.toInt()
                     cacheHours = h
                     prefs.edit().putInt("stream_cache_hours", h).apply()
-                    com.playbridge.player.stremio.StremioClient.updateCacheDuration(h)
+                    com.playbridge.shared.stremio.StremioClient.updateCacheDuration(h)
                 }
             )
 
             Button(
                 onClick = {
-                    com.playbridge.player.stremio.StremioClient.clearAllCache()
+                    com.playbridge.shared.stremio.StremioClient.clearAllCache()
                     Toast.makeText(context, "Stream cache cleared", Toast.LENGTH_SHORT).show()
                 }
             ) {

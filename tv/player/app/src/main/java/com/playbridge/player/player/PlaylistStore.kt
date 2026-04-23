@@ -1,6 +1,6 @@
 package com.playbridge.player.player
 
-import com.playbridge.protocol.PlayPayload
+import com.playbridge.shared.protocol.PlayPayload
 
 object PlaylistStore {
     var currentPlaylist: List<PlayPayload>? = null

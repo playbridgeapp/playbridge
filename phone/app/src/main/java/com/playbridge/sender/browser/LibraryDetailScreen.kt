@@ -82,10 +82,10 @@ fun LibraryDetailScreen(
     type: String,
     addonRepository: AddonRepository,
     onPlayStream: (url: String, title: String) -> Unit = { _, _ -> },
-    onPlayContent: (com.playbridge.protocol.ContentPlayPayload) -> Unit = {},
+    onPlayContent: (com.playbridge.shared.protocol.ContentPlayPayload) -> Unit = {},
     onPlayTrailer: ((String) -> Unit)? = null,
-    onPlayPlaylist: (items: List<com.playbridge.protocol.PlayPayload>) -> Unit = {},
-    onQueueAdd: (com.playbridge.protocol.PlayPayload) -> Unit = {},
+    onPlayPlaylist: (items: List<com.playbridge.shared.protocol.PlayPayload>) -> Unit = {},
+    onQueueAdd: (com.playbridge.shared.protocol.PlayPayload) -> Unit = {},
     onPlaylistJump: (Int) -> Unit = {},
     playlistState: PlaylistUiState? = null,
     onNowPlayingStarted: (tmdbId: Int, season: Int, startEpisode: Int) -> Unit = { _, _, _ -> },
@@ -2109,7 +2109,7 @@ private suspend fun buildSeriesContext(
     addonVideos: List<com.playbridge.sender.data.library.StremioVideo>?,
     addonRepository: AddonRepository,
     preferredAddonName: String? = null
-): com.playbridge.protocol.SeriesContext? {
+): com.playbridge.shared.protocol.SeriesContext? {
     if (!isSeries || resolvedImdbId == null || currentEpisodeSelection == null) return null
 
     val installedStreamAddons = addonRepository.getInstalledAddons()
@@ -2129,7 +2129,7 @@ private suspend fun buildSeriesContext(
         ?.filter { it.season != null && it.episode != null && it.season > 0 }
         ?.distinctBy { Pair(it.season, it.episode) }
         ?.map { vid ->
-            com.playbridge.protocol.SeriesEpisodeRef(
+            com.playbridge.shared.protocol.SeriesEpisodeRef(
                 season  = vid.season!!,
                 episode = vid.episode!!,
                 title   = vid.title.ifBlank { null }
@@ -2137,7 +2137,7 @@ private suspend fun buildSeriesContext(
         }
         ?.sortedWith(compareBy({ it.season }, { it.episode }))
 
-    return com.playbridge.protocol.SeriesContext(
+    return com.playbridge.shared.protocol.SeriesContext(
         imdbId       = resolvedImdbId,
         season       = selectedSeason,
         episode      = currentEpisodeSelection.episode ?: 1,
@@ -2181,7 +2181,7 @@ private suspend fun buildContentPayload(
     preferredAddonName: String? = null,
     preferredSourceTypeKeys: List<String> = emptyList(),
     episodeRuntimeMinutes: Int? = null
-): com.playbridge.protocol.ContentPlayPayload? {
+): com.playbridge.shared.protocol.ContentPlayPayload? {
     // 1. Resolve canonical stream-capable ID
     var contentId = resolvedImdbId ?: rawId
 
@@ -2213,7 +2213,7 @@ private suspend fun buildContentPayload(
             ?.filter { it.season != null && it.episode != null && it.season > 0 }
             ?.distinctBy { Pair(it.season, it.episode) }
             ?.map { vid ->
-                com.playbridge.protocol.SeriesEpisodeRef(
+                com.playbridge.shared.protocol.SeriesEpisodeRef(
                     season = vid.season!!,
                     episode = vid.episode!!,
                     title = vid.title.ifBlank { null }
@@ -2222,7 +2222,7 @@ private suspend fun buildContentPayload(
             ?.sortedWith(compareBy({ it.season }, { it.episode }))
     } else null
 
-    return com.playbridge.protocol.ContentPlayPayload(
+    return com.playbridge.shared.protocol.ContentPlayPayload(
         contentId = contentId,
         contentType = if (isSeries) "series" else "movie",
         title = displayTitle,

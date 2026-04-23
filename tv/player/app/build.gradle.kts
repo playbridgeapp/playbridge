@@ -56,7 +56,7 @@ android {
         }
         jniLibs {
             // mpv-android and libvlc both ship libc++_shared.so for every ABI; pick one copy.
-            pickFirst("lib/**/libc++_shared.so")
+            pickFirsts.add("lib/**/libc++_shared.so")
         }
     }
 
@@ -104,28 +104,28 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     // Media3 ExoPlayer - Full Suite
-    implementation(libs.media3.exoplayer)
-    implementation(libs.media3.exoplayer.hls)           // HLS streaming (.m3u8)
-    implementation(libs.media3.exoplayer.dash)          // DASH streaming (.mpd)
-    implementation(libs.media3.exoplayer.smoothstreaming) // SmoothStreaming
-    implementation(libs.media3.exoplayer.rtsp)          // RTSP streaming
-    implementation(libs.media3.datasource.okhttp)       // Better HTTP performance
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.exoplayer.hls)           // HLS streaming (.m3u8)
+    implementation(libs.androidx.media3.exoplayer.dash)          // DASH streaming (.mpd)
+    implementation(libs.androidx.media3.exoplayer.smoothstreaming) // SmoothStreaming
+    implementation(libs.androidx.media3.exoplayer.rtsp)          // RTSP streaming
+    implementation(libs.androidx.media3.datasource.okhttp)       // Better HTTP performance
     implementation(libs.okhttp)                         // OkHttp client
     implementation(libs.okhttp.urlconnection)           // Cookie support for OkHttp
-    implementation(libs.media3.ui)                      // PlayerView UI
-    implementation(libs.media3.common)                  // Common utilities
-    implementation(libs.media3.session)                 // Media session support
-    implementation(libs.media3.effect)                  // Media effects support
+    implementation(libs.androidx.media3.ui)                      // PlayerView UI
+    implementation(libs.androidx.media3.common)                  // Common utilities
+    implementation(libs.androidx.media3.session)                 // Media session support
+    implementation(libs.androidx.media3.effect)                  // Media effects support
 
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     // Utils
-    implementation(libs.coil.compose)
-    implementation(libs.coil.network.okhttp)
+    implementation(libs.coil3.compose)
+    implementation(libs.coil3.network.okhttp)
 
-    implementation(project(":protocol"))
+    implementation(project(":shared"))
 
     // LibVLC
     implementation(libs.libvlc.all)

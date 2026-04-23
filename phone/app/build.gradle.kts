@@ -52,6 +52,12 @@ android {
         compose = true
     }
 
+    packaging {
+        jniLibs {
+            pickFirsts.add("lib/**/libc++_shared.so")
+        }
+    }
+
     splits {
         abi {
             isEnable = true
@@ -134,5 +140,5 @@ dependencies {
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.ui)
 
-    implementation(project(":protocol"))
+    implementation(project(":shared"))
 }

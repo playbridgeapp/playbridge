@@ -15,7 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.tv.material3.*
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.data.PlaybackHistoryItem
-import com.playbridge.protocol.Command
+import com.playbridge.shared.protocol.Command
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import coil3.request.crossfade

@@ -506,7 +506,7 @@ fun ManualConnectionDialog(
     onConnect: (String, Int) -> Unit
 ) {
     var ip by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf(com.playbridge.protocol.Config.DEFAULT_PORT.toString()) }
+    var port by remember { mutableStateOf(com.playbridge.shared.protocol.Config.DEFAULT_PORT.toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,

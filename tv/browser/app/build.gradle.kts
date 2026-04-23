@@ -52,6 +52,9 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/INDEX.LIST"
         }
+        jniLibs {
+            pickFirsts.add("lib/**/libc++_shared.so")
+        }
     }
 
     splits {
@@ -77,6 +80,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore)
     implementation(libs.geckoview.omni)
+    implementation(project(":shared"))
 
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.compose.ui.tooling)

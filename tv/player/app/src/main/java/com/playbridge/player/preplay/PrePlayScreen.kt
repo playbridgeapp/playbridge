@@ -35,11 +35,11 @@ import androidx.tv.material3.*
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.playbridge.player.stremio.ScoredStremioStream
-import com.playbridge.player.stremio.SourceTypeRanker
-import com.playbridge.player.stremio.StremioClient
+import com.playbridge.shared.stremio.ScoredStremioStream
+import com.playbridge.shared.stremio.SourceTypeRanker
+import com.playbridge.shared.stremio.StremioClient
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
-import com.playbridge.protocol.ContentPlayPayload
+import com.playbridge.shared.protocol.ContentPlayPayload
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -304,15 +304,14 @@ fun PrePlayScreen(
                             }
                         }
 
-                        if (payload.forcePicker) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(bottom = 12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                // Resolution
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(bottom = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Resolution
                                 TvDropdownFilterChip(
                                     label = "Resolution",
                                     valueText = resolutionRankLabel(resolutionRank),
@@ -426,7 +425,6 @@ fun PrePlayScreen(
                                     }
                                 }
                             }
-                        }
 
                         if (filteredStreams.isEmpty()) {
                             Text(

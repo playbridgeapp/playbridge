@@ -73,7 +73,7 @@ object DownloadUtils {
                 )
                 helper.prepare(object : DownloadHelper.Callback {
 
-                    override fun onPrepared(helper: DownloadHelper) {
+                    override fun onPrepared(helper: DownloadHelper, isAdaptive: Boolean) {
                         // Collect available video formats from the adaptive track group
                         data class Quality(val label: String, val width: Int, val height: Int, val bitrate: Int, val trackGroup: TrackGroup, val trackIndex: Int)
                         val qualities = mutableListOf<Quality>()

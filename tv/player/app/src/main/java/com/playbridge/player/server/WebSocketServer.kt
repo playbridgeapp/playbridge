@@ -1,9 +1,9 @@
 package com.playbridge.player.server
 
 import android.util.Log
-import com.playbridge.protocol.Command
-import com.playbridge.protocol.createPongJson
-import com.playbridge.protocol.parseCommand
+import com.playbridge.shared.protocol.Command
+import com.playbridge.shared.protocol.createPongJson
+import com.playbridge.shared.protocol.parseCommand
 import com.playbridge.player.logging.FileLogger
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -30,7 +30,7 @@ private const val TAG = "WebSocketServer"
  * WebSocket server for receiving commands from the phone app
  */
 class WebSocketServer(
-    private val port: Int = com.playbridge.protocol.Config.DEFAULT_PORT,
+    private val port: Int = com.playbridge.shared.protocol.Config.DEFAULT_PORT,
     private val authToken: String,
     private val subtitleDir: File? = null
 ) {
@@ -215,7 +215,7 @@ class WebSocketServer(
 
                     try {
                         // Robust JSON parsing
-                        val authMessage = com.playbridge.protocol.protocolJson.decodeFromString<com.playbridge.protocol.AuthMessage>(text)
+                        val authMessage = com.playbridge.shared.protocol.protocolJson.decodeFromString<com.playbridge.shared.protocol.AuthMessage>(text)
 
                         if (authMessage.type == "auth") {
                             if (authMessage.token == authToken) {

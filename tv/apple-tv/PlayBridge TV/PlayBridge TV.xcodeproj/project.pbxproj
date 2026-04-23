@@ -95,8 +95,6 @@
 				E6F46D492F937ABC00653943 /* PlayBridge TV */,
 			);
 			name = "PlayBridge TV";
-			packageProductDependencies = (
-			);
 			productName = "PlayBridge TV";
 			productReference = E6F46D472F937ABC00653943 /* PlayBridge TV.app */;
 			productType = "com.apple.product-type.application";
@@ -331,6 +329,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = W89Q48RSC4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsForMedia = YES;
@@ -364,6 +363,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = W89Q48RSC4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsForMedia = YES;
