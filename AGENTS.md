@@ -14,14 +14,15 @@ This repository contains multiple **independent Gradle projects** (not a monorep
 
 ## Build & Run Commands
 **Always run from the specific project directory (`phone/`, `tv/`, or `protocol/`)!**
+**CRITICAL: Always wrap `./gradlew` commands in `zsh -c "..."` to ensure consistent environment loading on macOS.**
 
 ```bash
 # Build & Bundle
-./gradlew app:assembleDebug      # Build Debug APK
-./gradlew app:assembleRelease    # Build Release APK
-./gradlew app:bundleRelease      # Build Release AAB
-./gradlew build                  # Build Protocol module
-./gradlew clean app:assembleDebug # Clean and build
+zsh -c "source ~/.zshrc && ./gradlew app:assembleDebug"       # Build Debug APK
+zsh -c "source ~/.zshrc && ./gradlew app:assembleRelease"     # Build Release APK
+zsh -c "source ~/.zshrc && ./gradlew app:bundleRelease"       # Build Release AAB
+zsh -c "source ~/.zshrc && ./gradlew build"                   # Build Protocol module
+zsh -c "source ~/.zshrc && ./gradlew clean app:assembleDebug" # Clean and build
 ```
 
 ## Testing & Linting Commands
@@ -29,22 +30,22 @@ This repository contains multiple **independent Gradle projects** (not a monorep
 
 ```bash
 # Run all unit tests
-./gradlew test
+zsh -c "source ~/.zshrc && ./gradlew test"
 
 # Run a specific unit test class
-./gradlew test --tests "com.playbridge.sender.browser.DownloadUtilsTest"
+zsh -c "source ~/.zshrc && ./gradlew test --tests \"com.playbridge.sender.browser.DownloadUtilsTest\""
 
 # Run a specific test method (BEST for quick iteration)
-./gradlew test --tests "com.playbridge.sender.browser.DownloadUtilsTest.testMethodName"
+zsh -c "source ~/.zshrc && ./gradlew test --tests \"com.playbridge.sender.browser.DownloadUtilsTest.testMethodName\""
 
 # Run instrumented tests (requires emulator/device)
-./gradlew connectedAndroidTest
+zsh -c "source ~/.zshrc && ./gradlew connectedAndroidTest"
 
 # Run a specific Compose UI test class
-./gradlew app:connectedAndroidTest --tests "*ComposeTest"
+zsh -c "source ~/.zshrc && ./gradlew app:connectedAndroidTest --tests \"*ComposeTest\""
 
 # Run Android Lint
-./gradlew lint
+zsh -c "source ~/.zshrc && ./gradlew lint"
 ```
 
 ## Code Style & Guidelines
@@ -104,3 +105,4 @@ Phone and TV both depend on GeckoView. The version in `gradle/libs.versions.toml
 ## Environment
 - **Target SDK**: 36 | **Min SDK**: 26 (Phone)
 - **JDK**: 17 | **AGP**: 9.0.1 | **Kotlin**: 2.2.10
+- **Shell Requirement**: Always execute `./gradlew` via `zsh -c "source ~/.zshrc && ./gradlew ..."` on macOS.
