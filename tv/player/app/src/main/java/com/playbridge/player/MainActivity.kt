@@ -256,6 +256,10 @@ fun MainContent(
                         item.customFilterValues?.let { vals ->
                             putExtra(ServerService.EXTRA_CUSTOM_FILTER_VALUES, floatArrayOf(vals[0], vals[1], vals[2]))
                         }
+                        // Resume from last position
+                        if (item.position > 0) {
+                            putExtra(ServerService.EXTRA_START_POSITION, item.position)
+                        }
                     }
                     currentContext.startActivity(intent)
                 }

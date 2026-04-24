@@ -787,7 +787,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             playbackSpeed = currentPlaybackSpeed
         )
 
-        val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
+        val startPos = intent?.getLongExtra(ServerService.EXTRA_START_POSITION, -1L) ?: -1L
         if (startPos > 0L) {
             pendingResumePositionMs = startPos
         }

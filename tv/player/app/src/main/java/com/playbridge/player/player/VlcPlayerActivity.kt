@@ -1286,7 +1286,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             videoScalingMode = vlcScalingModeToInt(currentVideoScalingMode)
         )
 
-        val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
+        val startPos = intent?.getLongExtra(ServerService.EXTRA_START_POSITION, -1L) ?: -1L
         val finalResumeTime = if (startPos > 0L) startPos else (resumeTime ?: historyItem?.position)
 
             val payload = com.playbridge.shared.protocol.PlayPayload(

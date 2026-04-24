@@ -931,6 +931,7 @@ class ServerService : Service() {
         const val EXTRA_QUEUE_ITEM_DETECTED_BY = "queue_item_detected_by"
         const val EXTRA_PLAYLIST_JUMP_INDEX = "playlist_jump_index"
         const val EXTRA_CONTENT_PAYLOAD = "content_payload"
+        const val EXTRA_START_POSITION = "extra_start_position"
 
         // Static flow for UI to observe connection state
         private val _connectionState = MutableStateFlow<WebSocketServer.ConnectionState>(WebSocketServer.ConnectionState.Stopped)

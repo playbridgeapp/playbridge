@@ -79,7 +79,15 @@ class ExoPlayerActivity : PlayerActivity() {
     override fun isPlaying(): Boolean = engine?.getExoPlayer()?.isPlaying == true
     override fun getMediaDuration(): Long = engine?.getExoPlayer()?.duration ?: 0L
     override fun getCurrentPosition(): Long = engine?.getExoPlayer()?.currentPosition ?: 0L
-    override fun seekTo(position: Long) { engine?.getExoPlayer()?.seekTo(position) }
+    override fun seekTo(position: Long) {
+        val player = engine?.getExoPlayer()
+        if (player != null && player.playbackState != Player.STATE_IDLE) {
+            player.seekTo(position)
+        } else {
+            FileLogger.d(TAG, "Player not ready, stashing seek position: ${position}ms")
+            pendingResumePosition = position
+        }
+    }
     override fun getVideoSurfaceView(): android.view.SurfaceView? = playerView.videoSurfaceView as? android.view.SurfaceView
 
     override fun stopPlayback() {
@@ -467,7 +475,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 FileLogger.e(TAG, "Failed to parse ContentPlayPayload", e)
             }
         }
-        val startPos = intent?.getLongExtra("extra_start_position", -1L) ?: -1L
+        val startPos = intent?.getLongExtra(ServerService.EXTRA_START_POSITION, -1L) ?: -1L
         if (startPos > 0L) {
             FileLogger.i(TAG, "Starting from explicit position: ${startPos}ms (from intent)")
             pendingResumePosition = startPos
