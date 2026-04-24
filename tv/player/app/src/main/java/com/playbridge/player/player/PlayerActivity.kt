@@ -29,6 +29,7 @@ abstract class PlayerActivity : ComponentActivity() {
     /** Stop current playback and clear the video surface (make it black) for a smooth transition. */
     abstract fun stopPlayback()
     protected open fun getPlayerProgressManager(): ProgressManager? = null
+    protected open fun showVideoFilterDialog() {}
 
     // Shared playback configuration and series navigation state
     var seriesNavigator: com.playbridge.shared.stremio.SeriesNavigator? = null
@@ -215,6 +216,14 @@ abstract class PlayerActivity : ComponentActivity() {
         /** Whether ExoPlayer should prioritize time goals over size thresholds. */
         val prioritizeTime: Boolean,
     )
+
+    protected fun formatBitrate(bps: Long): String {
+        return when {
+            bps >= 1_000_000 -> String.format("%.1f Mbps", bps / 1_000_000.0)
+            bps >= 1_000 -> String.format("%d Kbps", bps / 1_000)
+            else -> "$bps bps"
+        }
+    }
 
     fun computeBufferConfig(): BufferConfig {
         val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager

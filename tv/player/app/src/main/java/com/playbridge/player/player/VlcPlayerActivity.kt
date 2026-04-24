@@ -40,7 +40,11 @@ import androidx.tv.material3.Text
 import androidx.compose.runtime.getValue
 import com.playbridge.player.R
 import com.playbridge.player.server.ServerService
+import androidx.compose.runtime.collectAsState
 import com.playbridge.player.data.HistoryStore
+import com.playbridge.player.ui.player.PlayerControlsOverlay
+import com.playbridge.player.ui.player.PlayerControlsViewModel
+import com.playbridge.player.ui.player.PlayerControlsState
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
@@ -61,8 +65,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private lateinit var resumeStore: com.playbridge.player.data.HistoryResumeStore
     private var vmUiJob: kotlinx.coroutines.Job? = null
     private lateinit var surfaceView: SurfaceView
-    private lateinit var controlsManager: UnifiedControlsManager
+    private val controlsViewModel = PlayerControlsViewModel()
+    private val videoFilterManager = com.playbridge.shared.player.VideoFilterManager()
     private lateinit var inputHandler: InputHandler
+    private lateinit var engineAdapter: PlayerEngineAdapter
 
     private val playerLock = Any()
 
@@ -247,10 +253,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     // Settings dialog state
     private var activeDialog: android.app.Dialog? = null
 
-    // Pre-play state
-    private var prePlayPayload by mutableStateOf<com.playbridge.shared.protocol.ContentPlayPayload?>(null)
-    private var isPrePlayLaunching by mutableStateOf(false)
-    private var prePlayCountdown by androidx.compose.runtime.mutableIntStateOf(0)
     private var isPreBuffering = false
     private lateinit var composeView: androidx.compose.ui.platform.ComposeView
     private var resolutionJob: kotlinx.coroutines.Job? = null
@@ -356,6 +358,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             }
         }
         runOnUiThread {
+            controlsViewModel.hideControls()
             if (::surfaceView.isInitialized) {
                 surfaceView.visibility = android.view.View.INVISIBLE
             }
@@ -383,7 +386,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     ServerService.drainPendingQueueItems().forEach { payload ->
                         playlistItems.add(payload)
                     }
-                    controlsManager.setPlaylistVisible(true)
+                    controlsViewModel.setPlaylistVisible(true)
                     broadcastPlaylistStatus()
                 }
                 ServerService.ACTION_PLAYLIST_JUMP -> {
@@ -411,8 +414,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (::controlsManager.isInitialized && controlsManager.isControlsVisible()) {
-                    controlsManager.hideUI()
+                if (controlsViewModel.controlsState.value.isVisible) {
+                    controlsViewModel.hideControls()
                 } else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
@@ -421,30 +424,39 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         })
 
         setContentView(R.layout.activity_vlc_player)
-        surfaceView = findViewById(R.id.surface_view)
-
-        composeView = findViewById(R.id.preplay_compose_view)
-        composeView.setContent {
-            val p = prePlayPayload
-            if (p != null) {
-                com.playbridge.player.preplay.PrePlayScreen(
-                    payload = p,
-                    isLaunching = isPrePlayLaunching,
-                    launchCountdown = prePlayCountdown,
-                    onStreamSelected = { stream ->
-                        resolutionJob?.cancel()
-                        playVideoAfterResolution(stream.url, p)
-                    },
-                    onBack = {
-                        resolutionJob?.cancel()
-                        prePlayPayload = null
-                        composeView.visibility = android.view.View.GONE
-                        ServerService.notifyContextIdle()
-                        finish()
-                    }
-                )
+        findViewById<androidx.compose.ui.platform.ComposeView>(R.id.modern_controls_view).apply {
+            setContent {
+                PlayBridgeTVTheme {
+                    val state by controlsViewModel.controlsState.collectAsState()
+                    PlayerControlsOverlay(
+                        state = state,
+                        onTogglePlay = { controlsViewModel.togglePlayPause() },
+                        onTrackSelection = { showSettingsDialog() },
+                        onPlaylist = { showPlaylistPicker() },
+                        onStreams = { showStreamSelectionDialog() },
+                        onPrev = { playPreviousInPlaylist() },
+                        onNext = { playNextInPlaylist() },
+                        onFilter = { showVideoFilterDialog() },
+                        onLoop = { setLooping(!isLooping) },
+                        onSwitchPlayer = { showSwitchPlayerDialog("internal_vlc") },
+                        onSeek = { controlsViewModel.handleScrubbing(it) },
+                        onPrePlayStreamSelected = { stream ->
+                            resolutionJob?.cancel()
+                            playVideoAfterResolution(stream.url, state.prePlayPayload!!)
+                        },
+                        onPrePlayBack = {
+                            resolutionJob?.cancel()
+                            controlsViewModel.setPrePlay(null)
+                            ServerService.notifyContextIdle()
+                            finish()
+                        }
+                    )
+                }
             }
         }
+        surfaceView = findViewById(R.id.surface_view)
+
+        surfaceView = findViewById(R.id.surface_view)
 
         historyStore = HistoryStore(this)
         resumeStore = com.playbridge.player.data.HistoryResumeStore(historyStore)
@@ -454,70 +466,33 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             lifecycleScope = lifecycleScope,
             playerActivity = this
         )
-        // Engine adapter for VLC
+        
         val engineAdapter = object : PlayerEngineAdapter {
             override val isPlaying: Boolean get() = engine?.getMediaPlayer()?.isPlaying == true
             override val currentPosition: Long get() = engine?.getMediaPlayer()?.time ?: 0L
             override val duration: Long get() = engine?.getMediaPlayer()?.length ?: 0L
-            override val bufferedPosition: Long get() = (engine?.getMediaPlayer()?.time ?: 0) + 1000 // VLC doesn't expose buffer easily as ms
+            override val bufferedPosition: Long get() = (engine?.getMediaPlayer()?.time ?: 0) + 1000 // VLC dummy buffer for UI
             override val streamInfo: String? get() = formatVlcStreamInfo()
             override val frameRate: Float get() = calculateVlcFrameRate()
-            override val hdrFormat: String? get() = getVlcHdrFormat()
+            override val hdrFormat: String? get() = null // VLC doesn't expose HDR format details easily via JNI
 
             override fun setLoudnessEnhancer(enabled: Boolean) {
-                val vlcPlayer = engine?.getMediaPlayer() ?: return
-                if (enabled) {
-                    vlcPlayer.volume = 150
-                    FileLogger.i(TAG, "VLC Loudness Enhancer enabled (Volume 150%)")
-                } else {
-                    vlcPlayer.volume = 100
-                    FileLogger.i(TAG, "VLC Loudness Enhancer disabled (Volume 100%)")
-                }
+                engine?.getMediaPlayer()?.volume = if (enabled) 150 else 100
             }
 
-            override fun play() { engine?.play() }
-            override fun pause() { engine?.pause() }
-            override fun seekTo(positionMs: Long) { this@VlcPlayerActivity.seekTo(positionMs) }
+            override fun play() { engine?.getMediaPlayer()?.play() }
+            override fun pause() { engine?.getMediaPlayer()?.pause() }
+            override fun seekTo(positionMs: Long) { engine?.getMediaPlayer()?.time = positionMs }
         }
 
-        controlsManager = UnifiedControlsManager(
-            controlsRoot = findViewById(R.id.controls_root),
-            controlsPanel = findViewById(R.id.controls_panel),
-            seekBar = findViewById(R.id.player_seekbar),
-            playPauseButton = findViewById(R.id.btn_play_pause),
-            streamInfoText = findViewById(R.id.tv_stream_info),
-            seasonInfoText = findViewById(R.id.tv_season_info),
-            elapsedText = findViewById(R.id.tv_elapsed),
-            remainingText = findViewById(R.id.tv_remaining),
-            titleText = findViewById(R.id.title_text),
-            hdrBadge = findViewById(R.id.tv_hdr_badge),
-            metaContainer = findViewById(R.id.ll_stream_meta_container),
-            bufferingSpinner = findViewById(R.id.buffering_spinner),
-            engine = engineAdapter,
-            engineType = "VLC",
-            tracksButton = findViewById(R.id.btn_tracks),
-            playlistButton = findViewById(R.id.btn_playlist),
-            streamsButton = findViewById(R.id.btn_streams),
-            prevButton = findViewById(R.id.btn_prev),
-            nextButton = findViewById(R.id.btn_next),
-            filterButton = findViewById(R.id.btn_filter),
-            loopButton = findViewById(R.id.btn_loop),
-            switchPlayerButton = findViewById(R.id.btn_switch_player),
-            onShowTrackSelection = { showSettingsDialog() },
-            onShowPlaylist = { showPlaylistPicker() },
-            onShowStreams = { showStreamSelectionDialog() },
-            onSwitchPlayer = { showSwitchPlayerDialog("internal_vlc") },
-            onPrevious = { playPreviousInPlaylist() },
-            onNext = { playNextInPlaylist() },
-            onToggleLoop = { setLooping(!isLooping) }
-        )
+        controlsViewModel.setEngine(engineAdapter, "VLC")
 
         inputHandler = InputHandler(
             activity = this,
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
             engine = engineAdapter,
-            controls = controlsManager,
-            isExternalOverlayVisible = { prePlayPayload != null || activeDialog != null }
+            controls = controlsViewModel,
+            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayPayload != null || activeDialog != null }
         )
 
         val filter = IntentFilter().apply {
@@ -544,7 +519,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
         }
         if (playlistItems.isNotEmpty()) {
-            controlsManager.setPlaylistVisible(true)
+            controlsViewModel.setPlaylistVisible(true)
             broadcastPlaylistStatus()
         }
     }
@@ -567,7 +542,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Cancel any pending resolution or countdown from a previous intent
         resolutionJob?.cancel()
         launchJob?.cancel()
-        isPrePlayLaunching = false
+        controlsViewModel.setPrePlayLaunching(false)
         isPreBuffering = false
 
         stopPlayback()
@@ -592,23 +567,23 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val isSeries = seriesNavigator?.contentType == "series"
 
         // Show playlist button when a playlist is active OR series navigator has list mode
-        controlsManager.setPlaylistVisible(hasPlaylist || hasEpisodeList)
+        controlsViewModel.setPlaylistVisible(hasPlaylist || hasEpisodeList)
 
         // Show streams button when series navigator is active
-        controlsManager.setStreamsVisible(seriesNavigator != null)
+        controlsViewModel.setNavigationVisible(seriesNavigator != null)
 
         seriesNavigator?.let { nav ->
             if (nav.contentType == "series") {
                 val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                controlsManager.setSeasonInfo(seasonInfo)
+                controlsViewModel.setSeasonInfo(seasonInfo)
             } else {
-                controlsManager.setSeasonInfo(null)
+                controlsViewModel.setSeasonInfo(null)
             }
         }
 
         // Ensure prev/next buttons are visible for ANY series
         if (isSeries || hasPlaylist) {
-            controlsManager.setNavigationVisible(true)
+            controlsViewModel.setNavigationVisible(true)
         }
 
         val payloadJson = intent.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
@@ -618,8 +593,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
                     payloadJson
                 )
-                prePlayPayload = p
-                composeView.visibility = android.view.View.VISIBLE
+                controlsViewModel.setPrePlay(p)
                 resolveStreamsAndPreBuffer(p)
                 return // resolveStreamsAndPreBuffer handles the rest
             } catch (e: Exception) {
@@ -628,8 +602,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         }
 
         // Standard direct URL path
-        composeView.visibility = android.view.View.GONE
-        prePlayPayload = null
+        controlsViewModel.setPrePlay(null)
 
         val url = intent.getStringExtra(ServerService.EXTRA_URL)
         val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
@@ -659,9 +632,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             title
         }
 
-        displayTitle?.let {
-            controlsManager.setTitle(it)
-        }
+        controlsViewModel.setTitle(displayTitle ?: "")
 
         // Show prev/next buttons without the playlist button ONLY if series navigation is in optimistic mode (no list)
         if (seriesNavigator != null && seriesNavigator?.episodeList.isNullOrEmpty() && playlistItems.isEmpty()) {
@@ -691,7 +662,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
 
                     stopPlayback()
-                    controlsManager.showBuffering()
+                    controlsViewModel.setBuffering(true)
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
@@ -699,24 +670,24 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         // the mutex might resolve the same URL we are already playing.
                         val currentUrl = originalM3u8Url
                         if (stream.url == currentUrl) {
-                            controlsManager.hideBuffering()
+                            controlsViewModel.setBuffering(false)
                             return@launch
                         }
 
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                        controlsManager.setSeasonInfo(seasonInfo)
+                        controlsViewModel.setSeasonInfo(seasonInfo)
 
                         val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                        controlsManager.setTitle(mainTitle)
+                        controlsViewModel.setTitle(mainTitle)
 
                         // Update intent
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
-                        controlsManager.hideUI()
+                        controlsViewModel.hideControls()
                     } else {
-                        controlsManager.hideBuffering()
+                        controlsViewModel.setBuffering(false)
                         FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "No more episodes found", android.widget.Toast.LENGTH_SHORT).show()
                         finish()
@@ -754,31 +725,31 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
 
                     stopPlayback()
-                    controlsManager.showBuffering()
+                    controlsViewModel.setBuffering(true)
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
                         // Early-return guard: avoid flicker if a cancelled coroutine slips through
                         val currentUrl = originalM3u8Url
                         if (stream.url == currentUrl) {
-                            controlsManager.hideBuffering()
+                            controlsViewModel.setBuffering(false)
                             return@launch
                         }
 
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                        controlsManager.setSeasonInfo(seasonInfo)
+                        controlsViewModel.setSeasonInfo(seasonInfo)
 
                         val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                        controlsManager.setTitle(mainTitle)
+                        controlsViewModel.setTitle(mainTitle)
 
                         // Update intent
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                         playVideo(url = stream.url, headers = null)
-                        controlsManager.hideUI()
+                        controlsViewModel.hideControls()
                     } else {
-                        controlsManager.hideBuffering()
+                        controlsViewModel.setBuffering(false)
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve previous episode", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -886,7 +857,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                             intent?.putExtra(ServerService.EXTRA_URL, stream.url)
 
                             playVideo(url = stream.url, headers = currentHeaders)
-                            controlsManager.hideUI()
+                            controlsViewModel.hideControls()
                         },
                         onRefresh = {
                             com.playbridge.shared.stremio.StremioClient.clearCache(
@@ -913,7 +884,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) engine?.play()
-            controlsManager.showControlsUI()
+            controlsViewModel.showControls(true)
         }
         dialog.show()
     }
@@ -979,7 +950,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) player.play()
-            controlsManager.showControlsUI()
+            controlsViewModel.showControls(true)
         }
         dialog.show()
     }
@@ -996,34 +967,34 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             progressManager.saveProgress()
 
             stopPlayback()
-            controlsManager.showBuffering()
+            controlsViewModel.setBuffering(true)
             val stream = nav.resolveAndAdvanceToIndex(index)
             if (stream != null) {
                 // Early-return guard: a cancelled coroutine that slipped through the mutex
                 // might resolve the same URL we are already playing — skip to avoid flicker.
                 val currentUrl = originalM3u8Url
                 if (stream.url == currentUrl) {
-                    controlsManager.hideBuffering()
+                    controlsViewModel.setBuffering(false)
                     return@launch
                 }
 
                 // Display season info on top left (e.g. "Season 1 (1x5)")
                 val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                controlsManager.setSeasonInfo(seasonInfo)
+                controlsViewModel.setSeasonInfo(seasonInfo)
 
                 // Use the series title for the main title bar if available, else SxE
                 val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                controlsManager.setTitle(mainTitle)
+                controlsViewModel.setTitle(mainTitle)
 
                 // Update intent
                 intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                 intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
 
                 playVideo(url = stream.url, headers = null)
-                controlsManager.hideUI()
+                controlsViewModel.hideControls()
             } else {
                 isLoadingNewStream = false
-                controlsManager.hideBuffering()
+                controlsViewModel.setBuffering(false)
                 android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
@@ -1034,8 +1005,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         syncSelectionsToProgressManager()
         progressManager.saveProgress()
 
-        stopPlayback()
-        controlsManager.setTitle(item.title)
+        controlsViewModel.updateMetadata(
+            title = item.title ?: "",
+            subtitle = if (seriesNavigator != null && seriesNavigator?.contentType == "series") {
+                "Season ${seriesNavigator?.currentSeason} (${seriesNavigator?.currentSeason}x${seriesNavigator?.currentEpisode})"
+            } else null,
+            streamInfo = null,
+            hdrFormat = null
+        )
+        
         originalM3u8Url = item.url
         currentHeaders = item.headers
         subtitleUrls = item.subtitles ?: emptyList()
@@ -1057,7 +1035,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
      */
     private fun setLooping(enabled: Boolean) {
         isLooping = enabled
-        controlsManager.updateLoopIcon(enabled)
+        controlsViewModel.setLooping(enabled)
         FileLogger.i(TAG, "Loop mode: $enabled")
         if (::viewModel.isInitialized) {
             viewModel.setLooping(enabled)
@@ -1181,7 +1159,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private fun playVideo(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false) {
         isLoadingNewStream = true
-        val title = controlsManager.getTitle()
+        val title = controlsViewModel.controlsState.value.title
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "URL: $url")
         FileLogger.i(TAG, "Title: $title")
@@ -1198,10 +1176,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         playlistItems = parsedPlaylist.toMutableList()
                         com.playbridge.player.player.PlaylistStore.currentPlaylist = parsedPlaylist
                         playlistIndex = 0
-                        runOnUiThread { controlsManager.setPlaylistVisible(true) }
+                        runOnUiThread { controlsViewModel.setPlaylistVisible(true) }
 
                         val firstItem = parsedPlaylist[0]
-                        runOnUiThread { controlsManager.setTitle(firstItem.title ?: title) }
+                        runOnUiThread { controlsViewModel.setTitle(firstItem.title ?: title ?: "") }
                         originalM3u8Url = firstItem.url
                         currentHeaders = firstItem.headers
                         subtitleUrls = firstItem.subtitles ?: emptyList()
@@ -1229,9 +1207,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         if (seriesNavigator == null) {
             setupSeriesNavigator(intent)
         }
-        val title = controlsManager.getTitle()
+        val title = controlsViewModel.controlsState.value.title
         if (seriesNavigator == null) {
-            controlsManager.setSeasonInfo(null)
+            controlsViewModel.setSeasonInfo(null)
         }
 
         // Handle cancellation gracefully during history restoration
@@ -1252,7 +1230,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 if (decoded.isNotEmpty()) {
                     playlistItems = decoded.toMutableList()
                     playlistIndex = historyItem.playlistIndex
-                    runOnUiThread { controlsManager.setPlaylistVisible(true) }
+                    runOnUiThread { controlsViewModel.setPlaylistVisible(true) }
                     FileLogger.i(TAG, "Restored playlist from history: ${playlistItems.size} items at index $playlistIndex")
                 }
             } catch (e: Exception) {
@@ -1274,7 +1252,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         progressManager.setCurrentMedia(
             url = url,
-            title = title,
+            title = title ?: "",
             contentType = null,
             headers = headers,
             playlistJson = plistJson,
@@ -1339,6 +1317,48 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             playbackSpeed = currentPlaybackSpeed,
             videoScalingMode = vlcScalingModeToInt(currentVideoScalingMode)
         )
+    }
+
+    override fun showVideoFilterDialog() {
+        val currentEngine = engine ?: return
+        val player = currentEngine.getMediaPlayer() ?: return
+        val wasPlaying = player.isPlaying
+        if (wasPlaying) currentEngine.pause()
+
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        activeDialog = dialog
+        val composeView = androidx.compose.ui.platform.ComposeView(this)
+
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+
+        composeView.setContent {
+            PlayBridgeTVTheme {
+                VideoFilterDialog(
+                    currentFilter = videoFilterManager.currentFilter,
+                    customBrightness = videoFilterManager.customBrightness,
+                    customContrast = videoFilterManager.customContrast,
+                    customSaturation = videoFilterManager.customSaturation,
+                    previewFrame = null, // VLC doesn't easily provide a bitmap for preview
+                    onFilterSelected = { filter ->
+                        videoFilterManager.applyFilter(filter)
+                    },
+                    onCustomChanged = { b, c, s ->
+                        videoFilterManager.applyCustom(b, c, s)
+                    },
+                    onDismiss = { dialog.dismiss() }
+                )
+            }
+        }
+
+        dialog.setContentView(composeView)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener {
+            activeDialog = null
+            if (wasPlaying) player.play()
+            controlsViewModel.showControls(true)
+        }
+        dialog.show()
     }
 
     private fun showSettingsDialog() {
@@ -1439,7 +1459,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.setOnDismissListener {
             activeDialog = null
             if (wasPlaying) player.play()
-            controlsManager.showControlsUI()
+            controlsViewModel.showControls(true)
         }
         dialog.show()
     }
@@ -1468,7 +1488,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         // UI-side cleanup is fast and must stay on the main thread.
         engineToRelease?.getMediaPlayer()?.setEventListener(null)
-        controlsManager.detach()
+        controlsViewModel.detach()
         engineToRelease?.getMediaPlayer()?.vlcVout?.apply {
             removeCallback(this@VlcPlayerActivity)
             detachViews()
@@ -1501,12 +1521,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val newTime = (currentTime + offset).coerceIn(0, if (length > 0) length else Long.MAX_VALUE)
 
         pendingSeekTime = newTime
-        controlsManager.setPendingSeekTime(newTime)
+        controlsViewModel.setPendingSeekTime(newTime)
 
         seekHandler.removeCallbacks(performSeekRunnable)
         seekHandler.postDelayed(performSeekRunnable, 400)
 
-        controlsManager.showSeekUI()
+        controlsViewModel.showSeekUI()
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
@@ -1525,8 +1545,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     private fun resolveStreamsAndPreBuffer(p: com.playbridge.shared.protocol.ContentPlayPayload) {
         resolutionJob?.cancel()
-        isPrePlayLaunching = false
-        prePlayCountdown = 0
+        controlsViewModel.setPrePlayLaunching(false)
+        controlsViewModel.setPrePlayCountdown(0)
 
         resolutionJob = lifecycleScope.launch {
             try {
@@ -1577,7 +1597,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun playVideoAfterResolution(url: String, p: com.playbridge.shared.protocol.ContentPlayPayload) {
-        isPrePlayLaunching = true
+        controlsViewModel.setPrePlayLaunching(true)
         isPreBuffering = true
 
         // Start buffering in the background immediately
@@ -1596,7 +1616,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             baseTitle
         }
 
-        controlsManager.setTitle(displayTitle)
+        controlsViewModel.setTitle(displayTitle ?: "")
 
         // Initialize player and start buffering but KEEP composeView visible
         playVideo(url, null, startPaused = true)
@@ -1605,15 +1625,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         launchJob?.cancel()
         launchJob = lifecycleScope.launch {
             for (i in 5 downTo 1) {
-                prePlayCountdown = i
+                controlsViewModel.setPrePlayCountdown(i)
                 kotlinx.coroutines.delay(1000)
             }
 
             // Countdown finished, hide overlay and start playback
             FileLogger.i(TAG, "Pre-buffer countdown finished, revealing player")
             isPreBuffering = false
-            prePlayPayload = null
-            composeView.visibility = android.view.View.GONE
+            controlsViewModel.setPrePlay(null)
             play() // Ensure it starts playing
         }
     }

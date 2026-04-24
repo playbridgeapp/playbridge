@@ -10,7 +10,10 @@
         android:layout_height="match_parent"
         android:layout_centerInParent="true" />
 
-    <include layout="@layout/overlay_player_controls" />
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/modern_controls_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
     <androidx.compose.ui.platform.ComposeView
         android:id="@+id/preplay_compose_view"

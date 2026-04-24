@@ -4,7 +4,7 @@ import android.app.Activity
 import android.media.AudioManager
 import android.util.Log
 import android.view.KeyEvent
-import android.view.View
+import com.playbridge.player.ui.player.PlayerControlsViewModel
 
 private const val TAG = "InputHandler"
 
@@ -16,7 +16,7 @@ class InputHandler(
     private val activity: Activity,
     private val audioManager: AudioManager,
     private val engine: PlayerEngineAdapter,
-    private val controls: UnifiedControlsManager,
+    private val controls: PlayerControlsViewModel,
     private val isExternalOverlayVisible: () -> Boolean = { false }
 ) {
 
@@ -85,7 +85,7 @@ class InputHandler(
         if (event?.action != KeyEvent.ACTION_DOWN) return false
 
         // --- Full controls overlay or external overlay is visible ---
-        if (controls.isFullOverlayVisible() || isExternalOverlayVisible()) {
+        if (controls.controlsState.value.isVisible || isExternalOverlayVisible()) {
             return when (keyCode) {
                 // Up/Down: consume silently (no volume change in overlay)
                 // EXCEPT if it's an external overlay (like Compose PrePlay),
@@ -95,8 +95,20 @@ class InputHandler(
                 }
                 // Left/Right: let system do focus navigation between buttons
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> false
-                // Center/Enter: let system deliver click to focused button
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> false
+                // Center/Enter: if in seek UI (not full), pause and show full controls.
+                // Otherwise, let system deliver click to focused button.
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    if (!controls.controlsState.value.isFullControlsVisible) {
+                        controls.commitSeek() // Ensure any pending scrub is committed
+                        if (engine.isPlaying) {
+                            engine.pause()
+                        }
+                        controls.showControls(full = true, playing = false)
+                        true
+                    } else {
+                        false
+                    }
+                }
                 // Back: let system handle (exits player)
                 KeyEvent.KEYCODE_BACK -> false
                 // Media keys still work
@@ -115,9 +127,10 @@ class InputHandler(
         // --- Normal mode (no overlay) ---
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                engine.pause()
-                controls.updatePlayPauseIcon()
-                controls.showControlsUI()
+                if (engine.isPlaying) {
+                    engine.pause()
+                }
+                controls.showControls(full = true, playing = false)
                 true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -148,18 +161,6 @@ class InputHandler(
                     AudioManager.ADJUST_LOWER,
                     AudioManager.FLAG_SHOW_UI
                 )
-                true
-            }
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                controls.togglePlayPause()
-                true
-            }
-            KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                engine.play()
-                true
-            }
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                engine.pause()
                 true
             }
             KeyEvent.KEYCODE_MEDIA_STOP -> {

@@ -1,0 +1,203 @@
+package com.playbridge.player.ui.player
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.playbridge.player.player.PlayerEngineAdapter
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import android.util.Log
+
+class PlayerControlsViewModel : ViewModel() {
+    private val _controlsState = MutableStateFlow(PlayerControlsState())
+    val controlsState = _controlsState.asStateFlow()
+
+    private var autoHideJob: Job? = null
+    private var progressUpdateJob: Job? = null
+    private var engine: PlayerEngineAdapter? = null
+
+    fun setEngine(playerEngine: PlayerEngineAdapter, engineType: String) {
+        this.engine = playerEngine
+        _controlsState.update { it.copy(engineType = engineType) }
+        startProgressUpdates()
+    }
+
+    fun showControls(full: Boolean = true, playing: Boolean? = null) {
+        _controlsState.update { 
+            it.copy(
+                isVisible = true, 
+                isFullControlsVisible = full,
+                isPlaying = playing ?: engine?.isPlaying ?: false,
+                title = it.title // Keep title
+            )
+        }
+        resetAutoHideTimer()
+    }
+
+    fun showSeekUI() {
+        showControls(full = false)
+    }
+
+    fun hideControls() {
+        _controlsState.update { it.copy(isVisible = false) }
+        autoHideJob?.cancel()
+    }
+
+    fun togglePlayPause() {
+        engine?.let {
+            if (it.isPlaying) {
+                it.pause()
+                setPlaying(false)
+            } else {
+                it.play()
+                setPlaying(true)
+                hideControls()
+            }
+        }
+        resetAutoHideTimer()
+    }
+
+    fun updateMetadata(title: String? = null, subtitle: String? = null, streamInfo: String? = null, hdrFormat: String? = null) {
+        _controlsState.update { 
+            it.copy(
+                title = title ?: it.title,
+                subtitle = subtitle ?: it.subtitle,
+                streamInfo = streamInfo ?: it.streamInfo,
+                hdrFormat = hdrFormat ?: it.hdrFormat
+            )
+        }
+    }
+
+    fun setTitle(title: String) {
+        _controlsState.update { it.copy(title = title) }
+    }
+
+    fun getTitle(): String = _controlsState.value.title
+
+    fun setPlaying(playing: Boolean) {
+        _controlsState.update { it.copy(isPlaying = playing) }
+    }
+
+    fun setPendingSeekTime(time: Long) {
+        // This can be used to show a preview value on the seekbar
+        _controlsState.update { it.copy(currentPosition = time) }
+    }
+
+    fun setSeasonInfo(info: String?) {
+        _controlsState.update { it.copy(subtitle = info) }
+    }
+
+    fun setPlaylistVisible(visible: Boolean) {
+        _controlsState.update { it.copy(hasPlaylist = visible) }
+    }
+
+    fun setStreamsVisible(visible: Boolean) {
+        _controlsState.update { it.copy(hasMultipleStreams = visible) }
+    }
+    
+    fun setNavigationVisible(visible: Boolean) {
+        // In current Compose impl, navigation buttons are shown if hasPlaylist is true
+        // For now, we mix them, but we could add a specific flag if needed.
+        _controlsState.update { it.copy(hasPlaylist = visible) }
+    }
+
+    fun setLooping(enabled: Boolean) {
+        _controlsState.update { it.copy(isLooping = enabled) }
+    }
+
+    fun setBuffering(isBuffering: Boolean) {
+        _controlsState.update { it.copy(isBuffering = isBuffering) }
+    }
+    
+    fun setPrePlay(payload: com.playbridge.shared.protocol.ContentPlayPayload?) {
+        _controlsState.update { it.copy(prePlayPayload = payload) }
+    }
+    
+    fun setPrePlayCountdown(seconds: Int) {
+        _controlsState.update { it.copy(prePlayCountdown = seconds) }
+    }
+    
+    fun setPrePlayLaunching(launching: Boolean) {
+        _controlsState.update { it.copy(isPrePlayLaunching = launching) }
+    }
+
+    private var scrubPosition: Long = 0
+    private var isScrubbing = false
+    private var commitSeekJob: Job? = null
+
+    fun handleScrubbing(deltaMs: Long) {
+        val currentEngine = engine ?: return
+        if (!isScrubbing) {
+            isScrubbing = true
+            scrubPosition = currentEngine.currentPosition
+        }
+
+        val duration = currentEngine.duration
+        if (duration > 0) {
+            scrubPosition = (scrubPosition + deltaMs).coerceIn(0, duration)
+            _controlsState.update { it.copy(currentPosition = scrubPosition) }
+
+            commitSeekJob?.cancel()
+            commitSeekJob = viewModelScope.launch {
+                delay(400)
+                commitSeek()
+            }
+        }
+        showSeekUI()
+    }
+
+    fun commitSeek() {
+        if (isScrubbing) {
+            engine?.seekTo(scrubPosition)
+            isScrubbing = false
+            resetAutoHideTimer()
+        }
+    }
+
+    private fun startProgressUpdates() {
+        progressUpdateJob?.cancel()
+        progressUpdateJob = viewModelScope.launch {
+            while (true) {
+                engine?.let {
+                    _controlsState.update { s ->
+                        s.copy(
+                            currentPosition = if (isScrubbing) s.currentPosition else it.currentPosition,
+                            duration = it.duration,
+                            bufferedPosition = it.bufferedPosition,
+                            isPlaying = it.isPlaying,
+                            streamInfo = it.streamInfo,
+                            hdrFormat = it.hdrFormat
+                        )
+                    }
+                }
+                delay(1000)
+            }
+        }
+    }
+
+    fun resetAutoHideTimer(durationMs: Long = 5000) {
+        autoHideJob?.cancel()
+        val state = _controlsState.value
+        // Hide if:
+        // 1. It's just the seek UI (not full)
+        // 2. OR it's full controls and we're playing
+        val shouldHide = !state.isFullControlsVisible || state.isPlaying
+        
+        if (shouldHide) {
+            autoHideJob = viewModelScope.launch {
+                delay(durationMs)
+                hideControls()
+            }
+        }
+    }
+
+    fun detach() {
+        autoHideJob?.cancel()
+        progressUpdateJob?.cancel()
+        commitSeekJob?.cancel()
+        engine = null
+    }
+}
