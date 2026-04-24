@@ -39,6 +39,7 @@ fun PlayerControlsOverlay(
     onSettingsDismiss: () -> Unit = {},
     onOverlayDismiss: () -> Unit = {},
     onStreamSelected: (com.playbridge.shared.stremio.ScoredStremioStream) -> Unit = {},
+    onRefreshStreams: () -> Unit = {},
     onFilterSelected: (com.playbridge.shared.player.VideoFilter) -> Unit = {},
     onCustomFilterChanged: (brightness: Float, contrast: Float, saturation: Float) -> Unit = {_,_,_ ->},
     onPlaylistItemPicked: (Int) -> Unit = {},
@@ -96,11 +97,12 @@ fun PlayerControlsOverlay(
                     StreamSelectionDialog(
                         streams = state.availableStreams,
                         currentUrl = state.currentStreamUrl,
+                        isLoading = state.isLoadingStreams,
                         preferredQuality = state.prePlayPayload?.defaultVideoQuality,
                         preferredAddonName = state.prePlayPayload?.preferredAddonName,
                         preferredSourceTypeKeys = state.prePlayPayload?.preferredSourceTypes,
                         onStreamSelected = onStreamSelected,
-                        onRefresh = {}, // Handled by phone mostly, but can add if needed
+                        onRefresh = onRefreshStreams,
                         onDismiss = onOverlayDismiss
                     )
                 }

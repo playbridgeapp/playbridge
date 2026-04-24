@@ -26,6 +26,7 @@ internal data class StremioStreamItem(
     val url: String? = null,
     val name: String? = null,
     val title: String? = null,
+    val description: String? = null,
     val addonName: String? = null,
     val behaviorHints: StremioStreamBehaviorHints? = null
 ) {
@@ -64,6 +65,7 @@ data class ScoredStremioStream(
     val url: String,
     val name: String? = null,
     val title: String? = null,
+    val description: String? = null,
     val addonName: String? = null,
     val score: Int,
     val rank: Int,
@@ -260,7 +262,7 @@ class StremioClient(
 
         allStreams.map { item ->
             val rank = QualityRanker.rankFromText("${item.name.orEmpty()} ${item.title.orEmpty()}")
-            ScoredStremioStream(item.url!!, item.name, item.title, item.addonName, score(item), rank, isSeasonPack(item), isExtrasContent(item), targetRank > 0 && rank == targetRank)
+            ScoredStremioStream(item.url!!, item.name, item.title, item.description, item.addonName, score(item), rank, isSeasonPack(item), isExtrasContent(item), targetRank > 0 && rank == targetRank)
         }.sortedByDescending { it.score }
     }
 

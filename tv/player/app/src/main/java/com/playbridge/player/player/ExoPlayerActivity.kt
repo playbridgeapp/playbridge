@@ -99,6 +99,7 @@ class ExoPlayerActivity : PlayerActivity() {
     override fun stopPlayback() {
         FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
         releasePlayer()
+        controlsViewModel.setAvailableStreams(emptyList()) // Clear cached streams for the transition
         runOnUiThread {
             controlsViewModel.hideControls()
             playerView.visibility = android.view.View.INVISIBLE
@@ -246,6 +247,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         },
                         onPlaylist = { showPlaylistOverlay() },
                         onStreams = { showStreamSelectionOverlay() },
+                        onRefreshStreams = { resolveStreamsForCurrentVideo() },
                         onPrev = { playPreviousInPlaylist() },
                         onNext = { playNextInPlaylist() },
                         onFilter = { showVideoFilterOverlay() },
@@ -1509,11 +1511,26 @@ class ExoPlayerActivity : PlayerActivity() {
      * Show the stream selection dialog for Stremio sources.
      */
     private fun showStreamSelectionOverlay() {
+        if (controlsViewModel.controlsState.value.availableStreams.isNotEmpty()) {
+            val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
+            controlsViewModel.showStreamPicker(currentUrl = currentUrl)
+            return
+        }
+        resolveStreamsForCurrentVideo()
+    }
+
+    /**
+     * Resolve streams for the current video and update the picker.
+     */
+    private fun resolveStreamsForCurrentVideo() {
         val nav = seriesNavigator ?: return
         val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
 
         val wasPlaying = engine?.getExoPlayer()?.isPlaying == true
         if (wasPlaying) engine?.getExoPlayer()?.pause()
+
+        controlsViewModel.setAvailableStreams(emptyList()) // Clear for visual feedback during refresh
+        controlsViewModel.setLoadingStreams(true)
 
         resolutionJob?.cancel()
         resolutionJob = lifecycleScope.launch {
@@ -1738,6 +1755,8 @@ class ExoPlayerActivity : PlayerActivity() {
                     // UI will show error in PrePlayScreen
                     return@launch
                 }
+
+                controlsViewModel.setAvailableStreams(streams) // Cache streams
 
                 // Auto-pick the best stream (sorted by score)
                 val best = streams.firstOrNull()

@@ -361,6 +361,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 e.stop()
             }
         }
+        controlsViewModel.setAvailableStreams(emptyList()) // Clear cached streams for the transition
         runOnUiThread {
             controlsViewModel.hideControls()
             if (::surfaceView.isInitialized) {
@@ -444,6 +445,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         },
                         onPlaylist = { showPlaylistOverlay() },
                         onStreams = { showStreamSelectionOverlay() },
+                        onRefreshStreams = { resolveStreamsForCurrentVideo() },
                         onPrev = { playPreviousInPlaylist() },
                         onNext = { playNextInPlaylist() },
                         onFilter = { showVideoFilterOverlay() },
@@ -895,11 +897,25 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
      */
     @OptIn(ExperimentalTvMaterial3Api::class)
     private fun showStreamSelectionOverlay() {
+        if (controlsViewModel.controlsState.value.availableStreams.isNotEmpty()) {
+            controlsViewModel.showStreamPicker(currentUrl = originalM3u8Url)
+            return
+        }
+        resolveStreamsForCurrentVideo()
+    }
+
+    /**
+     * Resolve streams for the current video and update the picker.
+     */
+    private fun resolveStreamsForCurrentVideo() {
         val nav = seriesNavigator ?: return
-        val currentUrl = intent?.getStringExtra(ServerService.EXTRA_URL)
+        val currentUrl = originalM3u8Url
 
         val wasPlaying = engine?.getMediaPlayer()?.isPlaying == true
         if (wasPlaying) engine?.pause()
+
+        controlsViewModel.setAvailableStreams(emptyList()) // Clear for visual feedback during refresh
+        controlsViewModel.setLoadingStreams(true)
 
         resolutionJob?.cancel()
         resolutionJob = lifecycleScope.launch {
@@ -1453,6 +1469,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     // UI will show error in PrePlayScreen
                     return@launch
                 }
+
+                controlsViewModel.setAvailableStreams(streams) // Cache streams
 
                 // Auto-pick the best stream (sorted by score)
                 val best = streams.firstOrNull()

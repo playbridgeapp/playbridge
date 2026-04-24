@@ -206,11 +206,20 @@ class PlayerControlsViewModel : ViewModel() {
         hideOverlay()
     }
 
-    fun showStreamPicker(streams: List<com.playbridge.shared.stremio.ScoredStremioStream>, currentUrl: String?) {
+    fun setAvailableStreams(streams: List<com.playbridge.shared.stremio.ScoredStremioStream>) {
+        _controlsState.update { it.copy(availableStreams = streams, isLoadingStreams = false) }
+    }
+
+    fun setLoadingStreams(loading: Boolean) {
+        _controlsState.update { it.copy(isLoadingStreams = loading) }
+    }
+
+    fun showStreamPicker(streams: List<com.playbridge.shared.stremio.ScoredStremioStream>? = null, currentUrl: String? = null) {
         _controlsState.update { 
             it.copy(
-                availableStreams = streams,
-                currentStreamUrl = currentUrl
+                availableStreams = streams ?: it.availableStreams,
+                currentStreamUrl = currentUrl ?: it.currentStreamUrl,
+                isLoadingStreams = if (streams != null) false else it.isLoadingStreams
             )
         }
         showOverlay(ActiveOverlay.STREAM_PICKER)

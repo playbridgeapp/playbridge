@@ -56,6 +56,7 @@ data class PlayerControlsState(
     // Stream Selection Data
     val availableStreams: List<com.playbridge.shared.stremio.ScoredStremioStream> = emptyList(),
     val currentStreamUrl: String? = null,
+    val isLoadingStreams: Boolean = false,
     
     // Playlist Data
     val playlistItems: List<com.playbridge.shared.protocol.PlayPayload> = emptyList(),

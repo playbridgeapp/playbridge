@@ -48,6 +48,7 @@ import com.playbridge.shared.stremio.SourceTypeRanker
 fun StreamSelectionDialog(
     streams: List<ScoredStremioStream>,
     currentUrl: String?,
+    isLoading: Boolean = false,
     preferredQuality: String? = null,
     preferredAddonName: String? = null,
     preferredSourceTypeKeys: List<String>? = null,
@@ -159,10 +160,11 @@ fun StreamSelectionDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "↻",
+                            text = if (isLoading) "⌛" else "↻",
                             color = if (isRefreshFocused) Color(0xFF00D9FF) else Color.Gray,
                             fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.then(if (isLoading) Modifier else Modifier) // could add animation here
                         )
                     }
                 }
@@ -297,9 +299,18 @@ fun StreamSelectionDialog(
                             fontSize = 14.sp,
                             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                             color = if (isCurrent) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
+                            lineHeight = 18.sp
                         )
+
+                        if (!stream.description.isNullOrBlank()) {
+                            Text(
+                                text = stream.description!!,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                modifier = Modifier.padding(top = 4.dp),
+                                lineHeight = 16.sp
+                            )
+                        }
 
                         // Metadata Row
                         Row(
@@ -366,7 +377,17 @@ fun StreamSelectionDialog(
                     }
                 }
 
-                if (filteredStreams.isEmpty()) {
+                if (isLoading) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(text = "Resolving streams...", color = Color(0xFF00D9FF), fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(text = "Fetching sources from addons", color = Color.Gray, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                } else if (filteredStreams.isEmpty()) {
                     item {
                         Box(modifier = Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
                             Text(text = "No matching streams", color = Color.Gray)
