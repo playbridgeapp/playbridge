@@ -87,12 +87,8 @@ class InputHandler(
         // --- Full controls overlay or external overlay is visible ---
         if (controls.controlsState.value.isVisible || isExternalOverlayVisible()) {
             return when (keyCode) {
-                // Up/Down: consume silently (no volume change in overlay)
-                // EXCEPT if it's an external overlay (like Compose PrePlay),
-                // we might want to let it handle DPAD navigation.
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (isExternalOverlayVisible()) false else true
-                }
+                // Up/Down: let system handle focus navigation in overlay
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> false
                 // Left/Right: let system do focus navigation between buttons
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> false
                 // Center/Enter: if in seek UI (not full), pause and show full controls.

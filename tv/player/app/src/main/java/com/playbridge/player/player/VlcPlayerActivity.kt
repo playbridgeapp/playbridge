@@ -45,6 +45,8 @@ import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.ui.player.PlayerControlsOverlay
 import com.playbridge.player.ui.player.PlayerControlsViewModel
 import com.playbridge.player.ui.player.PlayerControlsState
+import com.playbridge.player.ui.player.SettingsTab
+import com.playbridge.player.ui.player.UnifiedTrack
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
@@ -266,6 +268,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     // Settings state
     private var subtitleUrls: List<String> = emptyList()
+    private var subtitleUrl: String? = null
 
     // Seek buffering
     private var pendingSeekTime: Long? = null
@@ -431,7 +434,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     PlayerControlsOverlay(
                         state = state,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
-                        onTrackSelection = { showSettingsDialog() },
+                        onTrackSelection = { 
+                            updateUnifiedTracks()
+                            controlsViewModel.showSettings(SettingsTab.AUDIO) 
+                        },
                         onPlaylist = { showPlaylistPicker() },
                         onStreams = { showStreamSelectionDialog() },
                         onPrev = { playPreviousInPlaylist() },
@@ -449,7 +455,32 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                             controlsViewModel.setPrePlay(null)
                             ServerService.notifyContextIdle()
                             finish()
-                        }
+                        },
+                        onSettingsTabSelected = { controlsViewModel.showSettings(it) },
+                        onTrackSelected = { track ->
+                            when (track.type) {
+                                "audio" -> engine?.setAudioTrack(track.id)
+                                "video" -> engine?.setVideoTrack(track.id)
+                                "sub" -> {
+                                    subtitleUrl = null
+                                    engine?.setSubtitleTrack(track.id)
+                                }
+                                "external_sub" -> {
+                                    engine?.setSubtitleTrack(null)
+                                    subtitleUrl = track.id
+                                }
+                            }
+                            updateUnifiedTracks() // Refresh selection state
+                        },
+                        onSpeedSelected = { speed ->
+                            engine?.setPlaybackSpeed(speed)
+                            controlsViewModel.setPlaybackSpeed(speed)
+                        },
+                        onScalingSelected = { mode ->
+                            engine?.setVideoScale(mode)
+                            controlsViewModel.setVideoScaling(mode)
+                        },
+                        onSettingsDismiss = { controlsViewModel.hideSettings() }
                     )
                 }
             }
@@ -1361,108 +1392,44 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         dialog.show()
     }
 
-    private fun showSettingsDialog() {
+    private fun updateUnifiedTracks() {
         val currentEngine = engine ?: return
         val player = currentEngine.getMediaPlayer() ?: return
-        val wasPlaying = player.isPlaying
-        if (wasPlaying) currentEngine.pause()
-
-        val videoTracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)?.toList() ?: emptyList()
-        val currentVideoTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)?.id
-
-        val audioTracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)?.toList() ?: emptyList()
-        val currentAudioTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)?.id
-
-        val subtitleTracks = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.toList() ?: emptyList()
-        val currentSubtitleTrack = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.id
-
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
-        activeDialog = dialog
-        val composeView = androidx.compose.ui.platform.ComposeView(this)
-
-        composeView.setViewTreeLifecycleOwner(this)
-        composeView.setViewTreeSavedStateRegistryOwner(this)
-
-        composeView.setContent {
-            PlayBridgeTVTheme {
-                // Reactive state for UI updates
-                var liveCurrentVideoTrack by remember { mutableStateOf(currentVideoTrack) }
-                var liveCurrentAudioTrack by remember { mutableStateOf(currentAudioTrack) }
-                var liveCurrentSubtitleTrack by remember { mutableStateOf(currentSubtitleTrack) }
-                var liveCurrentSubtitleUrl by remember { mutableStateOf(currentSubtitleUrl) }
-                var liveCurrentPlaybackSpeed by remember { mutableFloatStateOf(currentPlaybackSpeed) }
-                var liveCurrentVideoScalingMode by remember { mutableStateOf(currentVideoScalingMode) }
-
-                VlcTrackSelectionDialog(
-                    videoTracks = videoTracks,
-                    currentVideoTrack = liveCurrentVideoTrack,
-                    audioTracks = audioTracks,
-                    currentAudioTrack = liveCurrentAudioTrack,
-                    subtitleTracks = subtitleTracks,
-                    currentSubtitleTrack = liveCurrentSubtitleTrack,
-                    externalSubtitleUrls = subtitleUrls,
-                    currentExternalSubtitleUrl = liveCurrentSubtitleUrl,
-                    currentPlaybackSpeed = liveCurrentPlaybackSpeed,
-                    currentVideoScalingMode = liveCurrentVideoScalingMode,
-                    onDismiss = {
-                        dialog.dismiss()
-                    },
-                    onVideoTrackSelected = { id ->
-                        if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video) else player.selectTrack(id)
-                        liveCurrentVideoTrack = id
-                    },
-                    onAudioTrackSelected = { id ->
-                        if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio) else player.selectTrack(id)
-                        liveCurrentAudioTrack = id
-                        // Persist the selected track's language so it auto-applies on next play.
-                        preferredAudioLanguage = audioTracks.firstOrNull { it.id == id }?.language
-                            ?.also { FileLogger.i(TAG, "Saved preferred audio language: $it") }
-                    },
-                    onSubtitleTrackSelected = { id ->
-                        if (id == null) player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) else player.selectTrack(id)
-                        liveCurrentSubtitleTrack = id
-                        if (id != null) {
-                            currentSubtitleUrl = null
-                            liveCurrentSubtitleUrl = null
-                        }
-                        // Persist the selected subtitle track's language.
-                        preferredSubtitleLanguage = if (id == null) null
-                        else subtitleTracks.firstOrNull { it.id == id }?.language
-                            ?.also { FileLogger.i(TAG, "Saved preferred subtitle language: $it") }
-                    },
-                    onExternalSubtitleSelected = { url ->
-                        currentSubtitleUrl = url
-                        liveCurrentSubtitleUrl = url
-                        if (url != null) {
-                            player.unselectTrackType(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) // Disable embedded
-                            liveCurrentSubtitleTrack = null
-                            // In LibVLC Android bindings, the enum is IMedia.Slave.Type
-                            player.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, android.net.Uri.parse(url), true)
-                        }
-                    },
-                    onPlaybackSpeedSelected = { speed ->
-                        currentPlaybackSpeed = speed
-                        liveCurrentPlaybackSpeed = speed
-                        player.rate = speed
-                    },
-                    onVideoScalingSelected = { mode ->
-                        currentVideoScalingMode = mode
-                        liveCurrentVideoScalingMode = mode
-                        applyVlcScalingMode(mode)
-                    }
-                )
-            }
+        
+        val audio = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)?.map { 
+            UnifiedTrack(it.id, it.name ?: "Audio ${it.id}", it.id == player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Audio)?.id, "audio")
+        } ?: emptyList()
+        
+        val video = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)?.map { 
+            UnifiedTrack(it.id, it.name ?: "Video ${it.id}", it.id == player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Video)?.id, "video")
+        } ?: emptyList()
+        
+        val embeddedSubs = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.map { 
+            UnifiedTrack(it.id, it.name ?: "Subtitle ${it.id}", it.id == player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.id && subtitleUrl == null, "sub")
+        } ?: emptyList()
+        
+        val externalSubs = subtitleUrls.map { url ->
+            val name = try {
+                val path = android.net.Uri.parse(url).path ?: ""
+                val n = path.substringAfterLast('/')
+                if (n.isNotEmpty()) java.net.URLDecoder.decode(n, "UTF-8") else "External Sub"
+            } catch (e: Exception) { "External Sub" }
+            UnifiedTrack(url, name, url == subtitleUrl, "external_sub")
         }
-
-        dialog.setContentView(composeView)
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        dialog.setOnDismissListener {
-            activeDialog = null
-            if (wasPlaying) player.play()
-            controlsViewModel.showControls(true)
-        }
-        dialog.show()
+        
+        val offSelected = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) == null && subtitleUrl == null
+        val offSub = UnifiedTrack("none", "Off", offSelected, "sub")
+        
+        controlsViewModel.updateTracks(audio, listOf(offSub) + embeddedSubs + externalSubs, video)
+        controlsViewModel.setPlaybackSpeed(player.rate)
+        controlsViewModel.setVideoScaling(player.aspectRatio ?: "Fit")
     }
+
+    private fun showSettingsDialog() {
+        updateUnifiedTracks()
+        controlsViewModel.showSettings(SettingsTab.AUDIO)
+    }
+
 
     override fun onDestroy() {
         FileLogger.i(TAG, "=== VlcPlayerActivity DESTROYED ===")

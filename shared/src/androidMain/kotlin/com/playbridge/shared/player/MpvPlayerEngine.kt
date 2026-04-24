@@ -285,6 +285,29 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         MPVLib.setPropertyDouble("speed", rate.toDouble())
     }
 
+    fun setPlaybackSpeed(speed: Float) = setRate(speed)
+    fun getPlaybackSpeed(): Float = if (mpvInitialized) MPVLib.getPropertyDouble("speed")?.toFloat() ?: 1.0f else 1.0f
+
+    fun setVideoTrack(id: String?) {
+        logger.i(TAG, "setVideoTrack($id)")
+        if (!mpvInitialized) return
+        MPVLib.setPropertyString("vid", id ?: "no")
+    }
+
+    fun setVideoScale(mode: String) {
+        logger.i(TAG, "setVideoScale($mode)")
+        // MPV video scaling / aspect ratio control
+        if (!mpvInitialized) return
+        when (mode) {
+            "Fit" -> MPVLib.setPropertyString("video-aspect-override", "-1")
+            "Fill", "16:9" -> MPVLib.setPropertyString("video-aspect-override", "1.777")
+            "4:3" -> MPVLib.setPropertyString("video-aspect-override", "1.333")
+            "Center" -> MPVLib.setPropertyString("video-aspect-override", "-1")
+        }
+    }
+
+    fun getVideoScale(): String = "Fit"
+
     override fun setAudioTrack(id: String?) {
         logger.i(TAG, "setAudioTrack($id)")
         if (!mpvInitialized) return

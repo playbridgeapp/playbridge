@@ -173,10 +173,22 @@ class VlcPlayerEngine(private val context: Context) : PlaybackEngine {
         mediaPlayer?.rate = rate
     }
 
+    fun setPlaybackSpeed(speed: Float) = setRate(speed)
+    fun getPlaybackSpeed(): Float = mediaPlayer?.rate ?: 1.0f
+
     override fun setAudioTrack(id: String?) {
         logger.i(TAG, "setAudioTrack($id)")
         if (id == null) {
             mediaPlayer?.unselectTrackType(IMedia.Track.Type.Audio)
+        } else {
+            mediaPlayer?.selectTrack(id)
+        }
+    }
+
+    fun setVideoTrack(id: String?) {
+        logger.i(TAG, "setVideoTrack($id)")
+        if (id == null) {
+            mediaPlayer?.unselectTrackType(IMedia.Track.Type.Video)
         } else {
             mediaPlayer?.selectTrack(id)
         }
@@ -209,6 +221,23 @@ class VlcPlayerEngine(private val context: Context) : PlaybackEngine {
     fun setScale(scale: Float) {
         logger.i(TAG, "setScale($scale)")
         mediaPlayer?.scale = scale
+    }
+
+    fun setVideoScale(mode: String) {
+        logger.i(TAG, "setVideoScale($mode)")
+        when (mode) {
+            "Fit" -> { mediaPlayer?.scale = 0f; mediaPlayer?.aspectRatio = null }
+            "Fill" -> { mediaPlayer?.scale = 0f; mediaPlayer?.aspectRatio = "16:9" }
+            "16:9" -> { mediaPlayer?.scale = 0f; mediaPlayer?.aspectRatio = "16:9" }
+            "4:3"  -> { mediaPlayer?.scale = 0f; mediaPlayer?.aspectRatio = "4:3" }
+            "Center" -> { mediaPlayer?.scale = 1f; mediaPlayer?.aspectRatio = null }
+        }
+    }
+
+    fun getVideoScale(): String {
+        val player = mediaPlayer ?: return "Fit"
+        if (player.scale == 1f) return "Center"
+        return player.aspectRatio ?: "Fit"
     }
 
     override fun release() {

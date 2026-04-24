@@ -46,7 +46,18 @@ import androidx.compose.runtime.collectAsState
 import com.playbridge.player.ui.player.PlayerControlsOverlay
 import com.playbridge.player.ui.player.PlayerControlsViewModel
 import com.playbridge.player.ui.player.PlayerControlsState
+import com.playbridge.player.ui.player.SettingsTab
+import com.playbridge.player.ui.player.UnifiedTrack
 // ComposeOptIn alias removed — androidx.compose.runtime.OptIn does not exist
+
+data class MpvTrack(
+    val id: Int,
+    val type: String,
+    val title: String,
+    val lang: String? = null,
+    val codec: String? = null,
+    val isSelected: Boolean = false
+)
 
 /**
  * MPV-based video player activity.
@@ -255,7 +266,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     PlayerControlsOverlay(
                         state = state,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
-                        onTrackSelection = { showTrackSelectionDialog() },
+                        onTrackSelection = { 
+                            updateUnifiedTracks()
+                            controlsViewModel.showSettings(SettingsTab.AUDIO) 
+                        },
                         onPlaylist = { showPlaylistPicker() },
                         onStreams = { showStreamSelectionDialog() },
                         onPrev = { playPreviousInPlaylist() },
@@ -273,7 +287,36 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                             controlsViewModel.setPrePlay(null)
                             ServerService.notifyContextIdle()
                             finish()
-                        }
+                        },
+                        onSettingsTabSelected = { controlsViewModel.showSettings(it) },
+                        onTrackSelected = { track ->
+                            when (track.type) {
+                                "audio" -> engine?.setAudioTrack(track.id)
+                                "video" -> engine?.setVideoTrack(track.id)
+                                "sub" -> {
+                                    currentSubtitleUrl = null
+                                    if (track.id == "none") engine?.setSubtitleTrack(null)
+                                    else engine?.setSubtitleTrack(track.id)
+                                }
+                                "external_sub" -> {
+                                    engine?.setSubtitleTrack(null)
+                                    currentSubtitleUrl = track.id
+                                    lifecycleScope.launch {
+                                        engine?.attachExternalSubtitle(track.id, null)
+                                    }
+                                }
+                            }
+                            updateUnifiedTracks()
+                        },
+                        onSpeedSelected = { speed ->
+                            engine?.setPlaybackSpeed(speed)
+                            controlsViewModel.setPlaybackSpeed(speed)
+                        },
+                        onScalingSelected = { mode ->
+                             // MPV scaling logic if available
+                             controlsViewModel.setVideoScaling(mode)
+                        },
+                        onSettingsDismiss = { controlsViewModel.hideSettings() }
                     )
                 }
             }
@@ -1240,62 +1283,39 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
     }
 
-    private fun showTrackSelectionDialog() {
-        val wasPlaying = isPlayingState
-        if (wasPlaying) pause()
-
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
-        activeDialog = dialog
-        val composeView = androidx.compose.ui.platform.ComposeView(this)
-        composeView.setViewTreeLifecycleOwner(this)
-        composeView.setViewTreeSavedStateRegistryOwner(this)
-        composeView.setContent {
-            PlayBridgeTVTheme {
-                MpvTrackSelectionDialog(
-                    audioTracks = buildTrackList().filter { it.type == "audio" },
-                    subtitleTracks = buildTrackList().filter { it.type == "sub" },
-                    externalSubtitleUrls = subtitleUrls,
-                    currentExternalSubtitleUrl = currentSubtitleUrl,
-                    currentPlaybackSpeed = currentPlaybackSpeed,
-                    onDismiss = { dialog.dismiss() },
-                    onAudioTrackSelected = { id ->
-                        engine?.setAudioTrack(id?.toString())
-                        dialog.dismiss()
-                    },
-                    onSubtitleTrackSelected = { id ->
-                        currentSubtitleUrl = null
-                        engine?.setSubtitleTrack(id?.toString())
-                        dialog.dismiss()
-                    },
-                    onExternalSubtitleSelected = { url ->
-                        currentSubtitleUrl = url
-                        if (url != null) {
-                            lifecycleScope.launch {
-                                engine?.attachExternalSubtitle(url, null)
-                            }
-                        } else {
-                            engine?.setSubtitleTrack(null)
-                        }
-                        dialog.dismiss()
-                    },
-                    onPlaybackSpeedSelected  = { speed ->
-                        currentPlaybackSpeed = speed
-                        engine?.setRate(speed)
-                        dialog.dismiss()
-                    }
-                )
-            }
+    private fun updateUnifiedTracks() {
+        val allTracks = buildTrackList()
+        val audio = allTracks.filter { it.type == "audio" }.map { 
+            UnifiedTrack(it.id.toString(), it.title, it.isSelected, "audio") 
         }
-
-        dialog.setContentView(composeView)
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        dialog.setOnDismissListener {
-            activeDialog = null
-            if (wasPlaying) play()
-            controlsViewModel.showControls(true)
+        val video = allTracks.filter { it.type == "video" }.map { 
+            UnifiedTrack(it.id.toString(), it.title, it.isSelected, "video") 
         }
-        dialog.show()
+        val embeddedSubs = allTracks.filter { it.type == "sub" }.map { 
+            UnifiedTrack(it.id.toString(), it.title, it.isSelected && currentSubtitleUrl == null, "sub") 
+        }
+        
+        val externalSubs = subtitleUrls.map { url ->
+            val name = try {
+                val path = android.net.Uri.parse(url).path ?: ""
+                val n = path.substringAfterLast('/')
+                if (n.isNotEmpty()) java.net.URLDecoder.decode(n, "UTF-8") else "External Sub"
+            } catch (e: Exception) { "External Sub" }
+            UnifiedTrack(url, name, url == currentSubtitleUrl, "external_sub")
+        }
+        
+        val noSubSelected = allTracks.none { it.type == "sub" && it.isSelected } && currentSubtitleUrl == null
+        val offSub = UnifiedTrack("none", "Off", noSubSelected, "sub")
+        
+        controlsViewModel.updateTracks(audio, listOf(offSub) + embeddedSubs + externalSubs, video)
+        controlsViewModel.setPlaybackSpeed(currentPlaybackSpeed)
     }
+
+    private fun showTrackSelectionDialog() {
+        updateUnifiedTracks()
+        controlsViewModel.showSettings(SettingsTab.AUDIO)
+    }
+
 
     private fun resolveStreamsAndPreBuffer(p: com.playbridge.shared.protocol.ContentPlayPayload) {
         resolutionJob?.cancel()

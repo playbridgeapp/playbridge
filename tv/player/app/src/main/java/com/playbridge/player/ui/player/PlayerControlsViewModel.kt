@@ -194,6 +194,36 @@ class PlayerControlsViewModel : ViewModel() {
         }
     }
 
+    fun showSettings(tab: SettingsTab) {
+        _controlsState.update { it.copy(activeSettingsTab = tab, isVisible = true, isFullControlsVisible = true) }
+        autoHideJob?.cancel() // Don't hide while settings are open
+    }
+
+    fun hideSettings() {
+        if (_controlsState.value.activeSettingsTab != null) {
+            _controlsState.update { it.copy(activeSettingsTab = null) }
+            resetAutoHideTimer()
+        }
+    }
+
+    fun updateTracks(audio: List<UnifiedTrack>, subtitles: List<UnifiedTrack>, video: List<UnifiedTrack>) {
+        _controlsState.update { 
+            it.copy(
+                audioTracks = audio,
+                subtitleTracks = subtitles,
+                videoTracks = video
+            )
+        }
+    }
+    
+    fun setPlaybackSpeed(speed: Float) {
+        _controlsState.update { it.copy(playbackSpeed = speed) }
+    }
+    
+    fun setVideoScaling(mode: String) {
+        _controlsState.update { it.copy(videoScalingMode = mode) }
+    }
+
     fun detach() {
         autoHideJob?.cancel()
         progressUpdateJob?.cancel()

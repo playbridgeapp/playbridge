@@ -2,6 +2,18 @@ package com.playbridge.player.ui.player
 
 import androidx.compose.runtime.Immutable
 
+enum class SettingsTab {
+    VIDEO, AUDIO, SUBTITLES, SPEED, SCALING
+}
+
+@Immutable
+data class UnifiedTrack(
+    val id: String,
+    val name: String,
+    val isSelected: Boolean,
+    val type: String // "video", "audio", "sub", "external_sub"
+)
+
 /**
  * Represents the state of the video player controls overlay.
  */
@@ -24,5 +36,13 @@ data class PlayerControlsState(
     val engineType: String = "",
     val prePlayPayload: com.playbridge.shared.protocol.ContentPlayPayload? = null,
     val prePlayCountdown: Int = 0,
-    val isPrePlayLaunching: Boolean = false
+    val isPrePlayLaunching: Boolean = false,
+    
+    // Media Settings Panel State
+    val activeSettingsTab: SettingsTab? = null,
+    val audioTracks: List<UnifiedTrack> = emptyList(),
+    val subtitleTracks: List<UnifiedTrack> = emptyList(),
+    val videoTracks: List<UnifiedTrack> = emptyList(),
+    val playbackSpeed: Float = 1.0f,
+    val videoScalingMode: String = "Fit"
 )

@@ -33,7 +33,6 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
-import com.playbridge.player.player.TrackSelectionDialog
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,6 +55,8 @@ import androidx.tv.material3.Text
 import com.playbridge.player.ui.player.PlayerControlsOverlay
 import com.playbridge.player.ui.player.PlayerControlsViewModel
 import com.playbridge.player.ui.player.PlayerControlsState
+import com.playbridge.player.ui.player.SettingsTab
+import com.playbridge.player.ui.player.UnifiedTrack
 
 private const val TAG = "ExoPlayerActivity"
 
@@ -226,7 +227,10 @@ class ExoPlayerActivity : PlayerActivity() {
                     PlayerControlsOverlay(
                         state = state,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
-                        onTrackSelection = { showTrackSelectionDialog() },
+                        onTrackSelection = { 
+                            updateUnifiedTracks()
+                            controlsViewModel.showSettings(SettingsTab.AUDIO) 
+                        },
                         onPlaylist = { showPlaylistPicker() },
                         onStreams = { showStreamSelectionDialog() },
                         onPrev = { playPreviousInPlaylist() },
@@ -244,7 +248,67 @@ class ExoPlayerActivity : PlayerActivity() {
                             controlsViewModel.setPrePlay(null)
                             ServerService.notifyContextIdle()
                             finish()
-                        }
+                        },
+                        onSettingsTabSelected = { controlsViewModel.showSettings(it) },
+                        onTrackSelected = { track ->
+                            val player = engine?.getExoPlayer() ?: return@PlayerControlsOverlay
+                            when (track.type) {
+                                "audio", "video", "sub" -> {
+                                    if (track.id == "auto" || track.id == "off") {
+                                        val type = when(track.type) {
+                                            "audio" -> androidx.media3.common.C.TRACK_TYPE_AUDIO
+                                            "video" -> androidx.media3.common.C.TRACK_TYPE_VIDEO
+                                            else -> androidx.media3.common.C.TRACK_TYPE_TEXT
+                                        }
+                                        player.trackSelectionParameters = player.trackSelectionParameters
+                                            .buildUpon()
+                                            .setTrackTypeDisabled(type, track.id == "off")
+                                            .clearOverridesOfType(type)
+                                            .build()
+                                    } else {
+                                        // Composite ID: "groupIndex:trackIndex"
+                                        val parts = track.id.split(":")
+                                        if (parts.size == 2) {
+                                            val groupIdx = parts[0].toInt()
+                                            val trackIdx = parts[1].toInt()
+                                            val group = player.currentTracks.groups[groupIdx]
+                                            player.trackSelectionParameters = player.trackSelectionParameters
+                                                .buildUpon()
+                                                .setTrackTypeDisabled(group.type, false)
+                                                .setOverrideForType(
+                                                    androidx.media3.common.TrackSelectionOverride(
+                                                        group.mediaTrackGroup,
+                                                        trackIdx
+                                                    )
+                                                )
+                                                .build()
+                                        }
+                                    }
+                                }
+                                "external_sub" -> {
+                                    // Handle external sub selection logic if needed
+                                    // For now, Exo handles them via side-loading in playVideo
+                                }
+                            }
+                            updateUnifiedTracks()
+                        },
+                        onSpeedSelected = { speed ->
+                            engine?.getExoPlayer()?.setPlaybackSpeed(speed)
+                            controlsViewModel.setPlaybackSpeed(speed)
+                        },
+                        onScalingSelected = { mode ->
+                             val resizeMode = when(mode) {
+                                "Fit" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                "Fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                "Zoom" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                "Fixed Width" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+                                "Fixed Height" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT
+                                else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                             }
+                             playerView.resizeMode = resizeMode
+                             controlsViewModel.setVideoScaling(mode)
+                        },
+                        onSettingsDismiss = { controlsViewModel.hideSettings() }
                     )
                 }
             }
@@ -745,6 +809,10 @@ class ExoPlayerActivity : PlayerActivity() {
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             handlePlaybackError(error)
+        }
+
+        override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+            updateUnifiedTracks()
         }
 
         private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
@@ -1677,107 +1745,10 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun showTrackSelectionDialog() {
-        val player = engine?.getExoPlayer() ?: return
-
-        val wasPlaying = player.isPlaying
-        if (wasPlaying) player.pause()
-
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
-        activeDialog = dialog
-        val composeView = androidx.compose.ui.platform.ComposeView(this)
-
-        composeView.setViewTreeLifecycleOwner(this)
-        composeView.setViewTreeSavedStateRegistryOwner(this)
-
-        composeView.setContent {
-            // Reactive state so the dialog updates in-place when tracks change
-            var liveTracks by remember { mutableStateOf(player.currentTracks) }
-            var liveParams by remember { mutableStateOf(player.trackSelectionParameters) }
-            var liveSubtitleUrl by remember { mutableStateOf(currentSubtitleUrl) }
-
-            var livePlaybackSpeed by remember { mutableStateOf(currentPlaybackSpeed) }
-            var liveVideoScalingMode by remember { mutableStateOf(currentVideoScalingMode) }
-
-            DisposableEffect(Unit) {
-                val listener = object : androidx.media3.common.Player.Listener {
-                    override fun onTracksChanged(tracks: Tracks) {
-                        liveTracks = tracks
-                    }
-                    override fun onTrackSelectionParametersChanged(parameters: androidx.media3.common.TrackSelectionParameters) {
-                        liveParams = parameters
-                    }
-                    override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) {
-                        livePlaybackSpeed = playbackParameters.speed
-                    }
-                }
-                player.addListener(listener)
-                onDispose { player.removeListener(listener) }
-            }
-
-            PlayBridgeTVTheme {
-                TrackSelectionDialog(
-                    tracks = liveTracks,
-                    trackSelectionParameters = liveParams,
-                    subtitleUrls = subtitleUrls,
-                    currentSubtitleUrl = liveSubtitleUrl,
-                    currentPlaybackSpeed = livePlaybackSpeed,
-                    currentVideoScalingMode = liveVideoScalingMode,
-                    onDismiss = {
-                        dialog.dismiss()
-                    },
-                    onTrackSelected = { trackType, format ->
-                        if (trackType == androidx.media3.common.C.TRACK_TYPE_TEXT) {
-                            currentSubtitleUrl = null
-                            liveSubtitleUrl = null
-                            subtitleManager.disable()
-                            if (format != null) {
-                                preferredSubtitleLanguage = format.language
-                                FileLogger.i(TAG, "Saved preferred subtitle language: ${format.language}")
-                            }
-                        }
-                        if (trackType == androidx.media3.common.C.TRACK_TYPE_AUDIO && format != null) {
-                            preferredAudioLanguage = format.language
-                            FileLogger.i(TAG, "Saved preferred audio language: ${format.language}")
-                        }
-
-                        applyTrackSelection(trackType, format)
-                    },
-                    onExternalSubtitleSelected = { url ->
-                        currentSubtitleUrl = url
-                        liveSubtitleUrl = url
-
-                        if (url != null) {
-                            subtitleManager.loadSubtitle(url)
-                            applyTrackSelection(androidx.media3.common.C.TRACK_TYPE_TEXT, null)
-                        } else {
-                            subtitleManager.disable()
-                            applyTrackSelection(androidx.media3.common.C.TRACK_TYPE_TEXT, null)
-                        }
-                    },
-                    onPreviewRequest = { url ->
-                         subtitleManager.getPreview(url)
-                    },
-                    onPlaybackSpeedSelected = { speed ->
-                        applyPlaybackSpeed(speed)
-                        livePlaybackSpeed = speed
-                    },
-                    onVideoScalingSelected = { mode ->
-                        applyVideoScalingMode(mode)
-                        liveVideoScalingMode = mode
-                    }
-                )
-            }
-        }
-
-        dialog.setContentView(composeView)
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        dialog.setOnDismissListener {
-            activeDialog = null
-            if (wasPlaying) player.play()
-            controlsViewModel.showControls(true)
-        }
-        dialog.show()
+        updateUnifiedTracks()
+        controlsViewModel.showSettings(SettingsTab.AUDIO)
     }
+
 
     private fun applyTrackSelection(trackType: Int, format: androidx.media3.common.Format?) {
         val player = engine?.getExoPlayer() ?: return
@@ -2070,8 +2041,65 @@ class ExoPlayerActivity : PlayerActivity() {
                     }
                 }
             }
-
             return super.getRetryDelayMsFor(loadErrorInfo)
+        }
+    }
+
+    private fun updateUnifiedTracks() {
+        val player = engine?.getExoPlayer() ?: return
+        val tracks = player.currentTracks
+        val params = player.trackSelectionParameters
+
+        fun mapTracks(type: Int, typeStr: String): List<UnifiedTrack> {
+            val list = mutableListOf<UnifiedTrack>()
+            
+            // Add "Auto/Off"
+            val isDisabled = params.disabledTrackTypes.contains(type)
+            val hasOverride = tracks.groups.any { it.type == type && params.overrides.containsKey(it.mediaTrackGroup) }
+            
+            if (type == androidx.media3.common.C.TRACK_TYPE_TEXT) {
+                list.add(UnifiedTrack("off", "Off", isDisabled, typeStr))
+            } else {
+                list.add(UnifiedTrack("auto", "Auto / Default", !hasOverride && !isDisabled, typeStr))
             }
+
+            tracks.groups.filter { it.type == type }.forEachIndexed { groupIdx, group ->
+                for (i in 0 until group.length) {
+                    val format = group.getTrackFormat(i)
+                    val isSelected = group.isTrackSelected(i)
+                    val name = buildTrackName(format)
+                    // Find actual index in tracks.groups
+                    val actualGroupIdx = tracks.groups.indexOf(group)
+                    list.add(UnifiedTrack("$actualGroupIdx:$i", name, isSelected, typeStr))
+                }
             }
-            }
+            return list
+        }
+
+        controlsViewModel.updateTracks(
+            audio = mapTracks(androidx.media3.common.C.TRACK_TYPE_AUDIO, "audio"),
+            subtitles = mapTracks(androidx.media3.common.C.TRACK_TYPE_TEXT, "sub"),
+            video = mapTracks(androidx.media3.common.C.TRACK_TYPE_VIDEO, "video")
+        )
+        controlsViewModel.setPlaybackSpeed(player.playbackParameters.speed)
+        
+        val scalingMode = when(playerView.resizeMode) {
+            androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT -> "Fit"
+            androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Fill"
+            androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Zoom"
+            androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH -> "Fixed Width"
+            androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT -> "Fixed Height"
+            else -> "Fit"
+        }
+        controlsViewModel.setVideoScaling(scalingMode)
+    }
+
+    private fun buildTrackName(format: androidx.media3.common.Format): String {
+        val items = mutableListOf<String>()
+        if (format.height != androidx.media3.common.Format.NO_VALUE) items.add("${format.height}p")
+        format.label?.let { if (it.isNotEmpty()) items.add(it) }
+        format.language?.let { if (it.isNotEmpty()) items.add(it.uppercase()) }
+        if (format.bitrate != androidx.media3.common.Format.NO_VALUE) items.add("${format.bitrate / 1000} kbps")
+        return if (items.isEmpty()) format.id ?: "Unknown" else items.joinToString(" • ")
+    }
+}
