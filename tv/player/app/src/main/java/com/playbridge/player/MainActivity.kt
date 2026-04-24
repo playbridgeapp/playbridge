@@ -10,6 +10,8 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -20,11 +22,15 @@ import androidx.tv.material3.Surface
 import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.server.WebSocketServer
-import com.playbridge.player.ui.LibraryScreen
+import com.playbridge.player.data.HistoryStore
+import com.playbridge.player.data.PlaybackHistoryItem
+import com.playbridge.player.ui.HistoryScreen
+import com.playbridge.player.ui.FavoritesScreen
 import com.playbridge.player.ui.PairingScreen
 import com.playbridge.player.ui.SettingsScreen
+import com.playbridge.player.ui.components.AppSidebar
+import com.playbridge.player.ui.components.StaticAuroraBackground
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
-import com.playbridge.player.data.HistoryStore
 import kotlinx.coroutines.flow.first
 
 class MainActivity : ComponentActivity() {
@@ -120,7 +126,8 @@ class MainActivity : ComponentActivity() {
 // (no devices ever paired) and when navigating to "Pair New Device" from the Library.
 enum class Screen {
     Pairing,
-    Library,
+    History,
+    Favorites,
     Settings
 }
 
@@ -130,8 +137,8 @@ fun MainContent(
     historyStore: HistoryStore,
     openPairingRequest: MutableState<Boolean>
 ) {
-    // Default to Library; overridden below once we know whether any device has paired.
-    var currentScreen by remember { mutableStateOf(Screen.Library) }
+    // Default to History; overridden below once we know whether any device has paired.
+    var currentScreen by remember { mutableStateOf(Screen.History) }
     var isInitialCheckDone by remember { mutableStateOf(false) }
 
     val connectionState by ServerService.connectionState.collectAsState()
@@ -145,7 +152,7 @@ fun MainContent(
             currentScreen = if (pairedDevices.isEmpty() && !isOnboardingDone) {
                 Screen.Pairing
             } else {
-                Screen.Library
+                Screen.History
             }
             
             if (!isOnboardingDone) {
@@ -192,90 +199,107 @@ fun MainContent(
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketServer.ConnectionState.Connected) {
             if (currentScreen == Screen.Pairing) {
-                currentScreen = Screen.Library
+                currentScreen = Screen.History
             }
         }
     }
 
-    when (currentScreen) {
-        Screen.Pairing -> {
-            PairingScreen(
-                ip = serverIp ?: "unknown",
-                port = serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT,
-                token = authToken,
-                deviceName = deviceName,
-                deviceId = deviceId,
-                connectionState = connectionState,
-                connectedCount = connectedCount
-            )
+    val onPlayItem: (PlaybackHistoryItem) -> Unit = { item ->
+        val prefs = currentContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
+        val activityClass = if (tvPref == "internal_vlc") {
+            com.playbridge.player.player.VlcPlayerActivity::class.java
+        } else {
+            com.playbridge.player.player.ExoPlayerActivity::class.java
         }
-        Screen.Library -> {
-            LibraryScreen(
-                historyStore = historyStore,
-                deviceName = deviceName,
-                connectedCount = connectedCount,
-                onNavigateToPairing = { currentScreen = Screen.Pairing },
-                onNavigateToSettings = { currentScreen = Screen.Settings },
-                onPlayItem = { item ->
-                    val prefs = currentContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-                    val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
-                    val activityClass = if (tvPref == "internal_vlc") {
-                        com.playbridge.player.player.VlcPlayerActivity::class.java
-                    } else {
-                        com.playbridge.player.player.ExoPlayerActivity::class.java
-                    }
 
-                    val intent = android.content.Intent(currentContext, activityClass).apply {
-                        putExtra(ServerService.EXTRA_URL, item.url)
-                        putExtra(ServerService.EXTRA_TITLE, item.title)
-                        putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)
-                        if (item.headers != null) {
-                            putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(item.headers))
-                        }
-                        // Restore playlist context if this item was part of a playlist
-                        if (item.playlistJson != null) {
-                            try {
-                                val decoded = com.playbridge.shared.protocol.protocolJson.decodeFromString(
-                                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
-                                    item.playlistJson
-                                )
-                                com.playbridge.player.player.PlaylistStore.currentPlaylist = decoded
-                                putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
-                                putExtra(ServerService.EXTRA_PLAYLIST_INDEX, item.playlistIndex)
-                            } catch (e: Exception) {
-                                com.playbridge.player.player.PlaylistStore.currentPlaylist = null
-                            }
-                        } else {
-                            com.playbridge.player.player.PlaylistStore.currentPlaylist = null
-                        }
-                        // Restore saved selections
-                        item.preferredAudioLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG, it) }
-                        item.preferredSubtitleLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG, it) }
-                        item.externalSubtitleUrl?.let { putExtra(ServerService.EXTRA_EXTERNAL_SUBTITLE_URL, it) }
-                        item.videoFilter?.let { putExtra(ServerService.EXTRA_VIDEO_FILTER, it) }
-                        item.customFilterValues?.let { vals ->
-                            putExtra(ServerService.EXTRA_CUSTOM_FILTER_VALUES, floatArrayOf(vals[0], vals[1], vals[2]))
-                        }
-                        // Resume from last position
-                        if (item.position > 0) {
-                            putExtra(ServerService.EXTRA_START_POSITION, item.position)
-                        }
-                    }
-                    currentContext.startActivity(intent)
+        val intent = android.content.Intent(currentContext, activityClass).apply {
+            putExtra(ServerService.EXTRA_URL, item.url)
+            putExtra(ServerService.EXTRA_TITLE, item.title)
+            putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)
+            if (item.headers != null) {
+                putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(item.headers))
+            }
+            // Restore playlist context if this item was part of a playlist
+            if (item.playlistJson != null) {
+                try {
+                    val decoded = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                        kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
+                        item.playlistJson
+                    )
+                    com.playbridge.player.player.PlaylistStore.currentPlaylist = decoded
+                    putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
+                    putExtra(ServerService.EXTRA_PLAYLIST_INDEX, item.playlistIndex)
+                } catch (e: Exception) {
+                    com.playbridge.player.player.PlaylistStore.currentPlaylist = null
                 }
-            )
+            } else {
+                com.playbridge.player.player.PlaylistStore.currentPlaylist = null
+            }
+            // Restore saved selections
+            item.preferredAudioLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG, it) }
+            item.preferredSubtitleLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG, it) }
+            item.externalSubtitleUrl?.let { putExtra(ServerService.EXTRA_EXTERNAL_SUBTITLE_URL, it) }
+            item.videoFilter?.let { putExtra(ServerService.EXTRA_VIDEO_FILTER, it) }
+            item.customFilterValues?.let { vals ->
+                putExtra(ServerService.EXTRA_CUSTOM_FILTER_VALUES, floatArrayOf(vals[0], vals[1], vals[2]))
+            }
+            // Resume from last position
+            if (item.position > 0) {
+                putExtra(ServerService.EXTRA_START_POSITION, item.position)
+            }
         }
-        Screen.Settings -> {
-            SettingsScreen(
-                onBack = { currentScreen = Screen.Library }
+        currentContext.startActivity(intent)
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        StaticAuroraBackground()
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            AppSidebar(
+                currentScreen = currentScreen,
+                onScreenSelected = { currentScreen = it }
             )
+
+            // Content Area
+            Box(modifier = Modifier.weight(1f)) {
+                when (currentScreen) {
+                    Screen.Pairing -> {
+                        PairingScreen(
+                            ip = serverIp ?: "unknown",
+                            port = serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT,
+                            token = authToken,
+                            deviceName = deviceName,
+                            deviceId = deviceId,
+                            connectionState = connectionState,
+                            connectedCount = connectedCount
+                        )
+                    }
+                    Screen.History -> {
+                        HistoryScreen(
+                            historyStore = historyStore,
+                            onPlayItem = onPlayItem
+                        )
+                    }
+                    Screen.Favorites -> {
+                        FavoritesScreen(
+                            historyStore = historyStore,
+                            onPlayItem = onPlayItem
+                        )
+                    }
+                    Screen.Settings -> {
+                        SettingsScreen(
+                            onBack = { currentScreen = Screen.History }
+                        )
+                    }
+                }
+            }
         }
     }
 
-    // Universal back handler: any screen that isn't Library goes back to Library.
-    // Library itself has no handler, so the system back gesture exits the app normally.
-    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.Library) {
-        currentScreen = Screen.Library
+    // Universal back handler: any screen that isn't History goes back to History.
+    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.History) {
+        currentScreen = Screen.History
     }
 }
 

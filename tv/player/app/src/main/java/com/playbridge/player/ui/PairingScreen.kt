@@ -41,8 +41,7 @@ fun PairingScreen(
 
     Box(
         modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
         Column(
