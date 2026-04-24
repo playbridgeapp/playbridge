@@ -1,6 +1,5 @@
 package com.playbridge.player.ui.components
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
@@ -20,41 +19,39 @@ import coil3.request.crossfade
 import com.playbridge.player.data.PlaybackHistoryItem
 import java.io.File
 
-@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
+
+@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HistoryItemCard(
     item: PlaybackHistoryItem,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
-        scale = CardDefaults.scale(focusedScale = 1.05f),
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = Modifier
+        scale = CardDefaults.scale(focusedScale = 1.05f),
+        modifier = modifier
             .fillMaxWidth()
             .height(100.dp)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Thumbnail area — borderless, full card height
+            // Thumbnail (16:9)
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
                     .aspectRatio(16f / 9f)
-                    .background(MaterialTheme.colorScheme.surface),
-                contentAlignment = Alignment.Center
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.BottomCenter
             ) {
                 if (item.thumbnailPath != null) {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
                             .data(File(item.thumbnailPath))
-                            .memoryCacheKey("${item.thumbnailPath}_${item.timestamp}")
-                            .diskCacheKey("${item.thumbnailPath}_${item.timestamp}")
                             .crossfade(true)
                             .build(),
                         contentDescription = null,
@@ -62,39 +59,22 @@ fun HistoryItemCard(
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    Text("▶", color = MaterialTheme.colorScheme.onSurface)
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("▶", color = MaterialTheme.colorScheme.onSurface)
+                    }
                 }
-            }
 
-            Column(
-                modifier = Modifier.weight(1f).padding(top = 12.dp, bottom = 12.dp, end = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = item.title ?: "Unknown Title",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                
-                Text(
-                    text = truncateUrl(item.url),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                
+                // Progress Indicator
                 if (item.duration > 0) {
                     val progress = item.position.toFloat() / item.duration
-                    // Progress Indicator
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 4.dp)
                             .height(4.dp)
-                            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+                            .background(Color.Black.copy(alpha = 0.5f))
                     ) {
                         Box(
                             modifier = Modifier
@@ -106,20 +86,47 @@ fun HistoryItemCard(
                 }
             }
 
+            // Info column
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = item.title ?: "Unknown Title",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = formatDisplayUrl(item.url),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
             if (item.isFavorite) {
                 Icon(
                     imageVector = Icons.Default.Favorite,
                     contentDescription = "Favorite",
                     tint = Color(0xFFFF4081),
-                    modifier = Modifier.size(24.dp).padding(end = 16.dp)
+                    modifier = Modifier
+                        .padding(end = 16.dp)
+                        .size(20.dp)
                 )
             }
         }
     }
 }
 
-fun truncateUrl(url: String, maxLength: Int = 50): String {
-    if (url.length <= maxLength) return url
+private fun formatDisplayUrl(url: String): String {
+    val cleanUrl = url.removePrefix("https://").removePrefix("http://")
+    val maxLength = 60
+    if (cleanUrl.length <= maxLength) return cleanUrl
     val partLength = (maxLength - 3) / 2
-    return "${url.take(partLength)}...${url.takeLast(partLength)}"
+    return "${cleanUrl.take(partLength)}...${cleanUrl.takeLast(partLength)}"
 }

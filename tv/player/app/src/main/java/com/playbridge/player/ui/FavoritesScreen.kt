@@ -53,9 +53,9 @@ fun FavoritesScreen(
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                    contentPadding = PaddingValues(bottom = 32.dp)
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp, end = 24.dp)
                 ) {
-                    items(favoriteItems) { item ->
+                    items(items = favoriteItems) { item ->
                         HistoryItemCard(
                             item = item,
                             onClick = { onPlayItem(item) },
