@@ -15,7 +15,7 @@ The `phone/` module handles all UI and networking for the Android sender applica
 - `app/src/main/java/com/playbridge/sender/browser/SessionObserverSetup.kt` — centralizes GeckoView context menu logic
 
 ## Inter-module Contracts
-- Calls into: `shared/` module for core logic and playback state; `protocol/` (legacy) for messages.
+- Calls into: `shared/` module for core logic and playback state.
 - Called by: none (top-level app module).
 - Communication mechanism: WebSockets to TV app (JSON serialized via kotlinx.serialization); embeds `video_detector` extension natively.
 

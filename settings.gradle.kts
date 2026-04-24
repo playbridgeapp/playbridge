@@ -22,7 +22,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "PlayBridge"
 include(":shared")
-include(":protocol")
 include(":libs:mpv-android")
 include(":phone:app")
 include(":tv:player:app")

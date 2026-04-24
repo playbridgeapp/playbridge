@@ -8,12 +8,10 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 **PlayBridge** is a casting solution enabling Android phones to send video URLs and browser control commands to Android TV devices. The project consists of two independent Android applications and a shared protocol module:
 
-| Module | Package | Purpose |
-|--------|---------|---------|
-| **Phone (Sender)** | `com.playbridge.sender` | GeckoView browser with video detection, full Stremio addon protocol (Stream/Catalog/Meta/Subtitles), persistent watchlist/tracking, and S3 cloud backup |
-| **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + Dual-engine browser + Dual-player (ExoPlayer/VLC) with GPU video filters and M3U playlist support |
-| **Protocol** | `com.playbridge.protocol` | Shared protocol: NSD constants, JSON message classes (including multi-item playlists), and command parser |
-| **Extension** | `extension/src/` | Standalone browser extension for Firefox (V2). Direct WebSocket connection to TV for desktop casting |
+| **Phone (Sender)** | `com.playbridge.sender` | GeckoView browser with video detection, full Stremio addon protocol, and persistent watchlist |
+| **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + Dual-engine browser + Dual-player (ExoPlayer/VLC) |
+| **Shared** | `com.playbridge.shared` | Kotlin Multiplatform logic: JSON message classes, playback engines, and command parser |
+| **Extension** | `extension/src/` | Standalone browser extension for Firefox |
 
 ---
 
@@ -81,10 +79,10 @@ The browser extension architecture has been moved to its own module document:
 
 ---
 
-## Protocol Module
+## Shared Module
 
-Details on the shared protocol and communication flow between Phone and TV have been moved to:
-👉 [Protocol Architecture](protocol/ARCHITECTURE.md)
+Details on the shared logic, player engines, and protocol definitions can be found in the `shared/` module.
+👉 [Shared Architecture](shared/ARCHITECTURE.md)
 
 ---
 
@@ -125,7 +123,7 @@ Details on the shared protocol and communication flow between Phone and TV have 
 - [x] GitHub Actions CI exists for separated projects (`android_build.yml`)
 - [x] Clean package structure with clear separation
 - [x] Well-documented protocol messages with KDoc
-- [x] Sealed class pattern for type-safe command handling (shared protocol module)
+- [x] Sealed class pattern for type-safe command handling (shared module)
 - [x] Unified protocol module — single source of truth for message classes
 - [x] Context-aware remote control (phone queries TV for active screen)
 - [x] Authentication implemented (Token/PIN validation via mDNS/NSD pairing)
@@ -200,13 +198,13 @@ PlayBridge/
 │       ├── icon.png
 │       ├── manifest.json
 │       └── ui/
-├── protocol/                    # Shared module
+├── shared/                      # Kotlin Multiplatform logic
 │   ├── build.gradle.kts
-│   └── src/main/java/com/playbridge/protocol/
-│       ├── BluetoothConstants.kt
-│       ├── Config.kt
-│       ├── NsdConstants.kt
-│       └── Message.kt           # Unified protocol messages + sealed Command class
+│   └── src/
+│       ├── commonMain/          # Shared logic & protocol
+│       ├── androidMain/         # Android specific engines
+│       ├── appleMain/           # Apple specific engines
+│       └── tvosMain/            # tvOS specific engines
 ├── phone/
 │   ├── app/
 │   │   └── src/main/

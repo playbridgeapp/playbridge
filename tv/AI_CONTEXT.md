@@ -15,7 +15,7 @@ The `tv/` module provides a Leanback UI for the Android TV application, acting a
 - `browser/app/src/main/java/com/playbridge/browser/AdBlocker.kt` — singleton ad blocker logic for TV browser
 
 ## Inter-module Contracts
-- Calls into: `shared/` module for core playback engines, Stremio logic, and state; `protocol/` (legacy) for messages.
+- Calls into: `shared/` module for core playback engines, Stremio logic, and state.
 - Called by: none (top-level app module).
 - Communication mechanism: Hosts a Ktor WebSocket server to receive JSON commands from Phone app.
 

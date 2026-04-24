@@ -25,7 +25,7 @@ WARNING: Any change to `PlaybackEngine` interface requires updates in all platfo
 
 ## Current State
 _As of 2026-04-24:_
-- Working: KMP setup, shared Stremio resolution, Android player engines (Exo, VLC, MPV), Apple AVPlayer engine, ResumeStore logic.
+- Working: KMP setup, shared Stremio resolution, Android player engines (Exo, VLC, MPV), Apple AVPlayer engine, ResumeStore logic, unified protocol.
 - Broken/degraded: nothing critical.
-- In progress: Completing the migration of all protocol logic from `protocol/` to `shared/`.
+- In progress: Apple TV UI refinements.
 - Blockers: none.

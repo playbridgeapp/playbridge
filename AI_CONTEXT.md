@@ -16,7 +16,6 @@ PlayBridge is a system to cast web video from an Android phone (sender) to an An
 | TV (Android) | `tv/player/` | Android TV receiver app (ExoPlayer/MPV/VLC) |
 | TV (Apple) | `tv/apple-tv/` | Apple TV receiver app (AVPlayer/VLC) |
 | Shared | `shared/` | KMP logic (Player engines, Stremio, Resume) |
-| Protocol | `protocol/` | Legacy shared data classes (migrating to `shared/`) |
 | Extension | `extension/` | Desktop web extension (Firefox) |
 
 ## Build Commands
@@ -26,7 +25,7 @@ PlayBridge is a system to cast web video from an Android phone (sender) to an An
 - Apple TV: Open Xcode at `tv/apple-tv/PlayBridge TV/PlayBridge TV.xcworkspace`
 
 ## Cross-cutting Gotchas
-WARNING: **Protocol ripple:** Any change to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.kt` (or legacy `protocol/src/main/java/com/playbridge/protocol/Message.kt`) must be reflected in:
+WARNING: **Protocol ripple:** Any change to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.kt` must be reflected in:
 1. `tv/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
 2. `phone/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
 3. `tv/apple-tv/PlayBridge TV/PlayBridge TV/Network/WebSocketServer.swift`
