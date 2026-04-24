@@ -6,6 +6,10 @@ enum class SettingsTab {
     VIDEO, AUDIO, SUBTITLES, SPEED, SCALING
 }
 
+enum class ActiveOverlay {
+    NONE, SETTINGS, STREAM_PICKER, VIDEO_FILTER, PLAYLIST_PICKER, SWITCH_PLAYER
+}
+
 @Immutable
 data class UnifiedTrack(
     val id: String,
@@ -38,11 +42,29 @@ data class PlayerControlsState(
     val prePlayCountdown: Int = 0,
     val isPrePlayLaunching: Boolean = false,
     
-    // Media Settings Panel State
-    val activeSettingsTab: SettingsTab? = null,
+    // Unified Overlay State
+    val activeOverlay: ActiveOverlay = ActiveOverlay.NONE,
+    
+    // Media Settings Panel State (used when activeOverlay == SETTINGS)
+    val activeSettingsTab: SettingsTab = SettingsTab.AUDIO,
     val audioTracks: List<UnifiedTrack> = emptyList(),
     val subtitleTracks: List<UnifiedTrack> = emptyList(),
     val videoTracks: List<UnifiedTrack> = emptyList(),
     val playbackSpeed: Float = 1.0f,
-    val videoScalingMode: String = "Fit"
+    val videoScalingMode: String = "Fit",
+
+    // Stream Selection Data
+    val availableStreams: List<com.playbridge.shared.stremio.ScoredStremioStream> = emptyList(),
+    val currentStreamUrl: String? = null,
+    
+    // Playlist Data
+    val playlistItems: List<com.playbridge.shared.protocol.PlayPayload> = emptyList(),
+    val playlistIndex: Int = 0,
+
+    // Video Filter Data
+    val currentFilter: com.playbridge.shared.player.VideoFilter = com.playbridge.shared.player.VideoFilter.NONE,
+    val customBrightness: Float = 0f,
+    val customContrast: Float = 1f,
+    val customSaturation: Float = 1f,
+    val previewFrame: android.graphics.Bitmap? = null
 )

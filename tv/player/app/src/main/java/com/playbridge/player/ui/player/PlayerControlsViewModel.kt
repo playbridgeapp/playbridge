@@ -42,6 +42,9 @@ class PlayerControlsViewModel : ViewModel() {
     }
 
     fun hideControls() {
+        if (_controlsState.value.activeOverlay != ActiveOverlay.NONE) {
+            hideOverlay()
+        }
         _controlsState.update { it.copy(isVisible = false) }
         autoHideJob?.cancel()
     }
@@ -195,15 +198,71 @@ class PlayerControlsViewModel : ViewModel() {
     }
 
     fun showSettings(tab: SettingsTab) {
-        _controlsState.update { it.copy(activeSettingsTab = tab, isVisible = true, isFullControlsVisible = true) }
-        autoHideJob?.cancel() // Don't hide while settings are open
+        showOverlay(ActiveOverlay.SETTINGS)
+        _controlsState.update { it.copy(activeSettingsTab = tab) }
     }
 
     fun hideSettings() {
-        if (_controlsState.value.activeSettingsTab != null) {
-            _controlsState.update { it.copy(activeSettingsTab = null) }
-            resetAutoHideTimer()
+        hideOverlay()
+    }
+
+    fun showStreamPicker(streams: List<com.playbridge.shared.stremio.ScoredStremioStream>, currentUrl: String?) {
+        _controlsState.update { 
+            it.copy(
+                availableStreams = streams,
+                currentStreamUrl = currentUrl
+            )
         }
+        showOverlay(ActiveOverlay.STREAM_PICKER)
+    }
+
+    fun showVideoFilter(
+        filter: com.playbridge.shared.player.VideoFilter,
+        brightness: Float,
+        contrast: Float,
+        saturation: Float,
+        preview: android.graphics.Bitmap?
+    ) {
+        _controlsState.update {
+            it.copy(
+                currentFilter = filter,
+                customBrightness = brightness,
+                customContrast = contrast,
+                customSaturation = saturation,
+                previewFrame = preview
+            )
+        }
+        showOverlay(ActiveOverlay.VIDEO_FILTER)
+    }
+
+    fun showPlaylist(items: List<com.playbridge.shared.protocol.PlayPayload>, index: Int) {
+        _controlsState.update {
+            it.copy(
+                playlistItems = items,
+                playlistIndex = index
+            )
+        }
+        showOverlay(ActiveOverlay.PLAYLIST_PICKER)
+    }
+
+    fun showSwitchPlayer() {
+        showOverlay(ActiveOverlay.SWITCH_PLAYER)
+    }
+
+    private fun showOverlay(overlay: ActiveOverlay) {
+        _controlsState.update { 
+            it.copy(
+                activeOverlay = overlay, 
+                isVisible = true, 
+                isFullControlsVisible = true 
+            ) 
+        }
+        autoHideJob?.cancel()
+    }
+
+    fun hideOverlay() {
+        _controlsState.update { it.copy(activeOverlay = ActiveOverlay.NONE) }
+        resetAutoHideTimer()
     }
 
     fun updateTracks(audio: List<UnifiedTrack>, subtitles: List<UnifiedTrack>, video: List<UnifiedTrack>) {

@@ -5,6 +5,7 @@ import android.media.AudioManager
 import android.util.Log
 import android.view.KeyEvent
 import com.playbridge.player.ui.player.PlayerControlsViewModel
+import com.playbridge.player.ui.player.ActiveOverlay
 
 private const val TAG = "InputHandler"
 
@@ -105,8 +106,24 @@ class InputHandler(
                         false
                     }
                 }
-                // Back: let system handle (exits player)
-                KeyEvent.KEYCODE_BACK -> false
+                // Back: hide overlay or controls if visible, otherwise let system handle (exits player)
+                KeyEvent.KEYCODE_BACK -> {
+                    val state = controls.controlsState.value
+                    if (state.activeOverlay != ActiveOverlay.NONE) {
+                        controls.hideOverlay()
+                        true
+                    } else {
+                        // For non-sub-overlay (just seek UI or main controls),
+                        // decide if we should hide them or let back fall through.
+                        // Usually on TV, hit Back while controls are up should hide controls.
+                        if (state.isVisible) {
+                            controls.hideControls()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
                 // Media keys still work
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                     controls.togglePlayPause()

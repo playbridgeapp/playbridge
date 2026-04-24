@@ -46,6 +46,7 @@ import com.playbridge.player.ui.player.PlayerControlsOverlay
 import com.playbridge.player.ui.player.PlayerControlsViewModel
 import com.playbridge.player.ui.player.PlayerControlsState
 import com.playbridge.player.ui.player.SettingsTab
+import com.playbridge.player.ui.player.ActiveOverlay
 import com.playbridge.player.ui.player.UnifiedTrack
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -253,7 +254,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var isLoadingNewStream = false
 
     // Settings dialog state
-    private var activeDialog: android.app.Dialog? = null
+
 
     private var isPreBuffering = false
     private lateinit var composeView: androidx.compose.ui.platform.ComposeView
@@ -417,7 +418,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (controlsViewModel.controlsState.value.isVisible) {
+                val state = controlsViewModel.controlsState.value
+                if (state.activeOverlay != ActiveOverlay.NONE) {
+                    controlsViewModel.hideOverlay()
+                } else if (state.isVisible) {
                     controlsViewModel.hideControls()
                 } else {
                     isEnabled = false
@@ -438,13 +442,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                             updateUnifiedTracks()
                             controlsViewModel.showSettings(SettingsTab.AUDIO) 
                         },
-                        onPlaylist = { showPlaylistPicker() },
-                        onStreams = { showStreamSelectionDialog() },
+                        onPlaylist = { showPlaylistOverlay() },
+                        onStreams = { showStreamSelectionOverlay() },
                         onPrev = { playPreviousInPlaylist() },
                         onNext = { playNextInPlaylist() },
-                        onFilter = { showVideoFilterDialog() },
+                        onFilter = { showVideoFilterOverlay() },
                         onLoop = { setLooping(!isLooping) },
-                        onSwitchPlayer = { showSwitchPlayerDialog("internal_vlc") },
+                        onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
                         onSeek = { controlsViewModel.handleScrubbing(it) },
                         onPrePlayStreamSelected = { stream ->
                             resolutionJob?.cancel()
@@ -480,7 +484,33 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                             engine?.setVideoScale(mode)
                             controlsViewModel.setVideoScaling(mode)
                         },
-                        onSettingsDismiss = { controlsViewModel.hideSettings() }
+                        onSettingsDismiss = { controlsViewModel.hideSettings() },
+                        onOverlayDismiss = { controlsViewModel.hideOverlay() },
+                        onStreamSelected = { stream ->
+                            controlsViewModel.hideOverlay()
+                            val mainTitle = seriesNavigator?.seriesTitle ?: "S${seriesNavigator?.currentSeason}E${seriesNavigator?.currentEpisode}"
+                            intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                            playVideo(url = stream.url, headers = null)
+                            controlsViewModel.hideControls()
+                        },
+                        onFilterSelected = { filter ->
+                            videoFilterManager.applyFilter(filter)
+                        },
+                        onCustomFilterChanged = { b, c, s ->
+                            videoFilterManager.applyCustom(b, c, s)
+                        },
+                        onPlaylistItemPicked = { index ->
+                            controlsViewModel.hideOverlay()
+                            if (playlistItems.isNotEmpty()) {
+                                playItemAtIndex(index)
+                            } else if (seriesNavigator != null) {
+                                playSeriesEpisodeAtIndex(index)
+                            }
+                        },
+                        onPlayerSwitched = { playerId ->
+                            controlsViewModel.hideOverlay()
+                            switchPlayer(playerId)
+                        }
                     )
                 }
             }
@@ -516,14 +546,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             override fun seekTo(positionMs: Long) { engine?.getMediaPlayer()?.time = positionMs }
         }
 
-        controlsViewModel.setEngine(engineAdapter, "VLC")
+        controlsViewModel.setEngine(engineAdapter, "internal_vlc")
 
         inputHandler = InputHandler(
             activity = this,
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
             engine = engineAdapter,
             controls = controlsViewModel,
-            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayPayload != null || activeDialog != null }
+            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayPayload != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
         )
 
         val filter = IntentFilter().apply {
@@ -683,84 +713,123 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private fun playNextInPlaylist() {
-        isLoadingNewStream = true
         if (playlistItems.isEmpty()) {
-            // No playlist queue — try series navigator if available
             val nav = seriesNavigator
             if (nav != null && nav.hasNext()) {
                 navigationJob?.cancel()
                 navigationJob = lifecycleScope.launch {
-                    FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
-
+                    isLoadingNewStream = true
+                    FileLogger.i(TAG, "SeriesNavigator: resolving next episode")
+                    syncSelectionsToProgressManager()
+                    progressManager.saveProgress()
                     stopPlayback()
                     controlsViewModel.setBuffering(true)
 
                     val stream = nav.resolveNext()
                     if (stream != null) {
-                        // Early-return guard: a cancelled coroutine that slipped through
-                        // the mutex might resolve the same URL we are already playing.
                         val currentUrl = originalM3u8Url
                         if (stream.url == currentUrl) {
                             controlsViewModel.setBuffering(false)
                             return@launch
                         }
-
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsViewModel.setSeasonInfo(seasonInfo)
-
                         val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
                         controlsViewModel.setTitle(mainTitle)
-
-                        // Update intent
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
                         playVideo(url = stream.url, headers = null)
                         controlsViewModel.hideControls()
                     } else {
+                        isLoadingNewStream = false
                         controlsViewModel.setBuffering(false)
-                        FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "No more episodes found", android.widget.Toast.LENGTH_SHORT).show()
                         finish()
                     }
                 }
             } else {
-                FileLogger.i(TAG, "No playlist and no series nav — finishing")
                 finish()
             }
             return
         }
 
         if (playlistIndex >= playlistItems.size - 1) {
-            FileLogger.i(TAG, "Playlist complete ($playlistIndex/${playlistItems.size}) — finishing")
             finish()
             return
         }
+        playItemAtIndex(playlistIndex + 1)
+    }
 
-        playlistIndex++
+    private fun playSeriesEpisodeAtIndex(index: Int) {
+        val nav = seriesNavigator ?: return
+        navigationJob?.cancel()
+        navigationJob = lifecycleScope.launch {
+            isLoadingNewStream = true
+            FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
+
+            // Save progress for the current episode before switching
+            syncSelectionsToProgressManager()
+            progressManager.saveProgress()
+
+            stopPlayback()
+            controlsViewModel.setBuffering(true)
+            val stream = nav.resolveAndAdvanceToIndex(index)
+            if (stream != null) {
+                // Early-return guard
+                val currentUrl = originalM3u8Url
+                if (stream.url == currentUrl) {
+                    controlsViewModel.setBuffering(false)
+                    return@launch
+                }
+
+                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
+                controlsViewModel.setSeasonInfo(seasonInfo)
+
+                val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
+                controlsViewModel.setTitle(mainTitle)
+
+                // Update intent
+                intent?.putExtra(ServerService.EXTRA_URL, stream.url)
+                intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
+
+                playVideo(url = stream.url, headers = null)
+                controlsViewModel.hideControls()
+            } else {
+                isLoadingNewStream = false
+                controlsViewModel.setBuffering(false)
+                android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun playItemAtIndex(index: Int) {
+        if (playlistItems.isEmpty() || index < 0 || index >= playlistItems.size) return
+        playlistIndex = index
         if (::viewModel.isInitialized) {
             viewModel.setPlaylist(playlistItems, playlistIndex)
         }
-        val nextItem = playlistItems[playlistIndex]
-        playPlaylistItem(nextItem)
+        controlsViewModel.showPlaylist(playlistItems, playlistIndex)
+        playPlaylistItem(playlistItems[index])
         broadcastPlaylistStatus()
     }
 
     private fun playPreviousInPlaylist() {
-        isLoadingNewStream = true
         if (playlistItems.isEmpty()) {
             val nav = seriesNavigator
             if (nav != null && nav.hasPrev()) {
                 navigationJob?.cancel()
                 navigationJob = lifecycleScope.launch {
+                    isLoadingNewStream = true
                     FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
+
+                    syncSelectionsToProgressManager()
+                    progressManager.saveProgress()
 
                     stopPlayback()
                     controlsViewModel.setBuffering(true)
 
                     val stream = nav.resolvePrev()
                     if (stream != null) {
-                        // Early-return guard: avoid flicker if a cancelled coroutine slips through
                         val currentUrl = originalM3u8Url
                         if (stream.url == currentUrl) {
                             controlsViewModel.setBuffering(false)
@@ -769,17 +838,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
                         val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
                         controlsViewModel.setSeasonInfo(seasonInfo)
-
                         val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
                         controlsViewModel.setTitle(mainTitle)
-
-                        // Update intent
                         intent?.putExtra(ServerService.EXTRA_URL, stream.url)
                         intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
                         playVideo(url = stream.url, headers = null)
                         controlsViewModel.hideControls()
                     } else {
+                        isLoadingNewStream = false
                         controlsViewModel.setBuffering(false)
                         android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve previous episode", android.widget.Toast.LENGTH_SHORT).show()
                     }
@@ -794,24 +860,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
-
-        playlistIndex--
-        if (::viewModel.isInitialized) {
-            viewModel.setPlaylist(playlistItems, playlistIndex)
-        }
-        val prevItem = playlistItems[playlistIndex]
-        playPlaylistItem(prevItem)
-        broadcastPlaylistStatus()
-    }
-
-    private fun playItemAtIndex(index: Int) {
-        if (playlistItems.isEmpty() || index < 0 || index >= playlistItems.size) return
-        playlistIndex = index
-        if (::viewModel.isInitialized) {
-            viewModel.setPlaylist(playlistItems, playlistIndex)
-        }
-        playPlaylistItem(playlistItems[index])
-        broadcastPlaylistStatus()
+        playItemAtIndex(playlistIndex - 1)
     }
 
     /**
@@ -845,90 +894,27 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
      * Show the stream selection dialog for Stremio sources.
      */
     @OptIn(ExperimentalTvMaterial3Api::class)
-    private fun showStreamSelectionDialog() {
+    private fun showStreamSelectionOverlay() {
         val nav = seriesNavigator ?: return
         val currentUrl = intent?.getStringExtra(ServerService.EXTRA_URL)
 
         val wasPlaying = engine?.getMediaPlayer()?.isPlaying == true
         if (wasPlaying) engine?.pause()
 
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
-        activeDialog = dialog
-        val composeView = androidx.compose.ui.platform.ComposeView(this)
-
-        composeView.setViewTreeLifecycleOwner(this)
-        composeView.setViewTreeSavedStateRegistryOwner(this)
-
-        composeView.setContent {
-            val scope = rememberCoroutineScope()
-            var streams by remember { mutableStateOf<List<com.playbridge.shared.stremio.ScoredStremioStream>>(emptyList()) }
-            var isLoading by remember { mutableStateOf(true) }
-
-            LaunchedEffect(Unit) {
-                streams = nav.resolveCurrentStreams()
-                isLoading = false
-            }
-
-            PlayBridgeTVTheme {
-                if (isLoading) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(text = "Loading sources...", color = Color(0xFF00D9FF))
-                    }
-                } else {
-                    StreamSelectionDialog(
-                        streams = streams,
-                        currentUrl = currentUrl,
-                        preferredQuality = nav.qualityPreference,
-                        preferredAddonName = nav.context.preferredAddonName,
-                        preferredSourceTypeKeys = nav.preferredSourceTypes,
-                        onStreamSelected = { stream ->
-                            dialog.dismiss()
-
-                            // Update intent
-                            intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-
-                            playVideo(url = stream.url, headers = currentHeaders)
-                            controlsViewModel.hideControls()
-                        },
-                        onRefresh = {
-                            com.playbridge.shared.stremio.StremioClient.clearCache(
-                                contentId = nav.context.imdbId,
-                                type = "series",
-                                season = nav.currentSeason,
-                                episode = nav.currentEpisode
-                            )
-                            isLoading = true
-                            scope.launch {
-                                streams = nav.resolveCurrentStreams()
-                                isLoading = false
-                            }
-                        },
-                        onDismiss = {
-                            dialog.dismiss()
-                        }
-                    )
-                }
-            }
+        resolutionJob?.cancel()
+        resolutionJob = lifecycleScope.launch {
+            val streams = nav.resolveCurrentStreams()
+            controlsViewModel.showStreamPicker(streams, currentUrl)
         }
-        dialog.setContentView(composeView)
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        dialog.setOnDismissListener {
-            activeDialog = null
-            if (wasPlaying) engine?.play()
-            controlsViewModel.showControls(true)
-        }
-        dialog.show()
     }
 
-    private fun showPlaylistPicker() {
+    private fun showPlaylistOverlay() {
         val displayItems: List<com.playbridge.shared.protocol.PlayPayload>
         val displayIndex: Int
-        val isSeriesMode: Boolean
 
         if (playlistItems.isNotEmpty()) {
             displayItems = playlistItems
             displayIndex = playlistIndex
-            isSeriesMode = false
         } else if (seriesNavigator?.episodeList?.isNotEmpty() == true) {
             val nav = seriesNavigator!!
             displayItems = nav.episodeList!!.map { ep ->
@@ -940,96 +926,53 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 )
             }
             displayIndex = nav.currentIndex ?: 0
-            isSeriesMode = true
         } else {
             return
         }
 
-        val player = engine?.getMediaPlayer() ?: return
-        val wasPlaying = player.isPlaying
-        if (wasPlaying) player.pause()
+        val wasPlaying = engine?.getMediaPlayer()?.isPlaying == true
+        if (wasPlaying) engine?.pause()
 
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
-        activeDialog = dialog
-        val composeView = androidx.compose.ui.platform.ComposeView(this)
+        controlsViewModel.showPlaylist(displayItems, displayIndex)
+    }
 
-        composeView.setViewTreeLifecycleOwner(this)
-        composeView.setViewTreeSavedStateRegistryOwner(this)
+    private fun showVideoFilterOverlay() {
+        val wasPlaying = engine?.getMediaPlayer()?.isPlaying == true
+        if (wasPlaying) engine?.pause()
 
-        composeView.setContent {
-            com.playbridge.player.ui.theme.PlayBridgeTVTheme {
-                PlaylistPickerDialog(
-                    items = displayItems,
-                    currentIndex = displayIndex,
-                    onItemSelected = { index ->
-                        dialog.dismiss()
-                        if (isSeriesMode) {
-                            playSeriesEpisodeAtIndex(index)
+        val currentFilter = videoFilterManager.currentFilter
+        val customVals = floatArrayOf(videoFilterManager.customBrightness, videoFilterManager.customContrast, videoFilterManager.customSaturation)
+
+        // Get a screenshot frame from the video for preview
+        // Note: Assuming getVideoSurfaceView() exists or is accessible
+        val surfaceView = findViewById<android.view.SurfaceView>(com.playbridge.player.R.id.surface_view)
+        surfaceView?.let { sv ->
+            try {
+                val bitmap = android.graphics.Bitmap.createBitmap(sv.width, sv.height, android.graphics.Bitmap.Config.ARGB_8888)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    android.view.PixelCopy.request(sv, bitmap, { result ->
+                        if (result == android.view.PixelCopy.SUCCESS) {
+                            controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], bitmap)
                         } else {
-                            playItemAtIndex(index)
+                            controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], null)
                         }
-                    },
-                    onDismiss = {
-                        dialog.dismiss()
-                    }
-                )
-            }
-        }
-
-        dialog.setContentView(composeView)
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        dialog.setOnDismissListener {
-            activeDialog = null
-            if (wasPlaying) player.play()
-            controlsViewModel.showControls(true)
-        }
-        dialog.show()
-    }
-
-    private fun playSeriesEpisodeAtIndex(index: Int) {
-        val nav = seriesNavigator ?: return
-        navigationJob?.cancel()
-        navigationJob = lifecycleScope.launch {
-            isLoadingNewStream = true
-            FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
-
-            // Save progress for the current episode before switching
-            syncSelectionsToProgressManager()
-            progressManager.saveProgress()
-
-            stopPlayback()
-            controlsViewModel.setBuffering(true)
-            val stream = nav.resolveAndAdvanceToIndex(index)
-            if (stream != null) {
-                // Early-return guard: a cancelled coroutine that slipped through the mutex
-                // might resolve the same URL we are already playing — skip to avoid flicker.
-                val currentUrl = originalM3u8Url
-                if (stream.url == currentUrl) {
-                    controlsViewModel.setBuffering(false)
-                    return@launch
+                    }, android.os.Handler(android.os.Looper.getMainLooper()))
+                } else {
+                    controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], null)
                 }
-
-                // Display season info on top left (e.g. "Season 1 (1x5)")
-                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                controlsViewModel.setSeasonInfo(seasonInfo)
-
-                // Use the series title for the main title bar if available, else SxE
-                val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                controlsViewModel.setTitle(mainTitle)
-
-                // Update intent
-                intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
-                playVideo(url = stream.url, headers = null)
-                controlsViewModel.hideControls()
-            } else {
-                isLoadingNewStream = false
-                controlsViewModel.setBuffering(false)
-                android.widget.Toast.makeText(this@VlcPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], null)
             }
+        } ?: run {
+            controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], null)
         }
     }
+
+    private fun showPlaylistPicker() {
+        showPlaylistOverlay()
+    }
+
+
 
     private fun playPlaylistItem(item: com.playbridge.shared.protocol.PlayPayload) {
         isLoadingNewStream = true
@@ -1351,45 +1294,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     override fun showVideoFilterDialog() {
-        val currentEngine = engine ?: return
-        val player = currentEngine.getMediaPlayer() ?: return
-        val wasPlaying = player.isPlaying
-        if (wasPlaying) currentEngine.pause()
-
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
-        activeDialog = dialog
-        val composeView = androidx.compose.ui.platform.ComposeView(this)
-
-        composeView.setViewTreeLifecycleOwner(this)
-        composeView.setViewTreeSavedStateRegistryOwner(this)
-
-        composeView.setContent {
-            PlayBridgeTVTheme {
-                VideoFilterDialog(
-                    currentFilter = videoFilterManager.currentFilter,
-                    customBrightness = videoFilterManager.customBrightness,
-                    customContrast = videoFilterManager.customContrast,
-                    customSaturation = videoFilterManager.customSaturation,
-                    previewFrame = null, // VLC doesn't easily provide a bitmap for preview
-                    onFilterSelected = { filter ->
-                        videoFilterManager.applyFilter(filter)
-                    },
-                    onCustomChanged = { b, c, s ->
-                        videoFilterManager.applyCustom(b, c, s)
-                    },
-                    onDismiss = { dialog.dismiss() }
-                )
-            }
-        }
-
-        dialog.setContentView(composeView)
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        dialog.setOnDismissListener {
-            activeDialog = null
-            if (wasPlaying) player.play()
-            controlsViewModel.showControls(true)
-        }
-        dialog.show()
+        showVideoFilterOverlay()
     }
 
     private fun updateUnifiedTracks() {
@@ -1433,7 +1338,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     override fun onDestroy() {
         FileLogger.i(TAG, "=== VlcPlayerActivity DESTROYED ===")
-        activeDialog?.dismiss()
+        controlsViewModel.hideOverlay()
         if (::progressManager.isInitialized) {
             syncSelectionsToProgressManager()
             progressManager.saveProgress()

@@ -270,7 +270,7 @@ abstract class PlayerActivity : ComponentActivity() {
         dialog.show()
     }
 
-    private fun switchPlayer(newMode: String) {
+    protected fun switchPlayer(newMode: String) {
         val currentPosition = getCurrentPosition()
         val pm = getPlayerProgressManager()
         val url = pm?.url ?: intent.getStringExtra(ServerService.EXTRA_URL)

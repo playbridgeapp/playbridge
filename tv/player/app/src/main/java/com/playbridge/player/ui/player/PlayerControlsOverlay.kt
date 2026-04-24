@@ -11,6 +11,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
+import com.playbridge.player.player.StreamSelectionDialog
+import com.playbridge.player.player.VideoFilterDialog
+import com.playbridge.player.player.PlaylistPickerDialog
+import com.playbridge.player.player.SwitchPlayerDialog
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -33,6 +37,12 @@ fun PlayerControlsOverlay(
     onSpeedSelected: (Float) -> Unit = {},
     onScalingSelected: (String) -> Unit = {},
     onSettingsDismiss: () -> Unit = {},
+    onOverlayDismiss: () -> Unit = {},
+    onStreamSelected: (com.playbridge.shared.stremio.ScoredStremioStream) -> Unit = {},
+    onFilterSelected: (com.playbridge.shared.player.VideoFilter) -> Unit = {},
+    onCustomFilterChanged: (brightness: Float, contrast: Float, saturation: Float) -> Unit = {_,_,_ ->},
+    onPlaylistItemPicked: (Int) -> Unit = {},
+    onPlayerSwitched: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -61,7 +71,7 @@ fun PlayerControlsOverlay(
             ) {
                 // Settings Panel (Slides from right)
                 AnimatedVisibility(
-                    visible = state.activeSettingsTab != null,
+                    visible = state.activeOverlay == ActiveOverlay.SETTINGS,
                     enter = slideInHorizontally { it } + fadeIn(),
                     exit = slideOutHorizontally { it } + fadeOut(),
                     modifier = Modifier.fillMaxSize()
@@ -76,7 +86,74 @@ fun PlayerControlsOverlay(
                     )
                 }
 
-                if (state.activeSettingsTab == null) {
+                // Stream Selection Overlay
+                AnimatedVisibility(
+                    visible = state.activeOverlay == ActiveOverlay.STREAM_PICKER,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    StreamSelectionDialog(
+                        streams = state.availableStreams,
+                        currentUrl = state.currentStreamUrl,
+                        preferredQuality = state.prePlayPayload?.defaultVideoQuality,
+                        preferredAddonName = state.prePlayPayload?.preferredAddonName,
+                        preferredSourceTypeKeys = state.prePlayPayload?.preferredSourceTypes,
+                        onStreamSelected = onStreamSelected,
+                        onRefresh = {}, // Handled by phone mostly, but can add if needed
+                        onDismiss = onOverlayDismiss
+                    )
+                }
+
+                // Video Filter Overlay
+                AnimatedVisibility(
+                    visible = state.activeOverlay == ActiveOverlay.VIDEO_FILTER,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    VideoFilterDialog(
+                        currentFilter = state.currentFilter,
+                        customBrightness = state.customBrightness,
+                        customContrast = state.customContrast,
+                        customSaturation = state.customSaturation,
+                        previewFrame = state.previewFrame,
+                        onFilterSelected = onFilterSelected,
+                        onCustomChanged = onCustomFilterChanged,
+                        onDismiss = onOverlayDismiss
+                    )
+                }
+
+                // Playlist Picker Overlay
+                AnimatedVisibility(
+                    visible = state.activeOverlay == ActiveOverlay.PLAYLIST_PICKER,
+                    enter = slideInHorizontally { it } + fadeIn(),
+                    exit = slideOutHorizontally { it } + fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    PlaylistPickerDialog(
+                        items = state.playlistItems,
+                        currentIndex = state.playlistIndex,
+                        onItemSelected = onPlaylistItemPicked,
+                        onDismiss = onOverlayDismiss
+                    )
+                }
+
+                // Switch Player Overlay
+                AnimatedVisibility(
+                    visible = state.activeOverlay == ActiveOverlay.SWITCH_PLAYER,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    SwitchPlayerDialog(
+                        currentPlayer = state.engineType.lowercase(),
+                        onPlayerSelected = onPlayerSwitched,
+                        onDismiss = onOverlayDismiss
+                    )
+                }
+
+                if (state.activeOverlay == ActiveOverlay.NONE) {
                     // Top shadow
                     Box(
                         modifier = Modifier
