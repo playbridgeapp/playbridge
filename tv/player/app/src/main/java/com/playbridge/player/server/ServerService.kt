@@ -77,6 +77,9 @@ class ServerService : Service() {
 
         // Initialize Stremio client with cache
         com.playbridge.shared.stremio.StremioClient.init(applicationContext)
+        val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        val cacheHours = prefs.getInt("stream_cache_hours", 0)
+        com.playbridge.shared.stremio.StremioClient.updateCacheDuration(cacheHours)
 
         createNotificationChannel()
         val filter = android.content.IntentFilter(ACTION_CONTEXT_IDLE)

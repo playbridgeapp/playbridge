@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,12 +17,12 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -38,6 +39,7 @@ import coil3.request.crossfade
 import com.playbridge.shared.stremio.ScoredStremioStream
 import com.playbridge.shared.stremio.SourceTypeRanker
 import com.playbridge.shared.stremio.StremioClient
+import com.playbridge.player.ui.player.*
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.shared.protocol.ContentPlayPayload
 import kotlinx.coroutines.delay
@@ -100,8 +102,11 @@ fun PrePlayScreen(
     }
 
     PlayBridgeTVTheme {
-        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            // 1. Clear Backdrop on the right
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+        ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
@@ -110,8 +115,20 @@ fun PrePlayScreen(
                         .build(),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(if (payload.forcePicker) Modifier.blur(20.dp) else Modifier)
                 )
+
+                // Global dark overlay for manual picker mode
+                if (payload.forcePicker) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.6f))
+                    )
+                }
+
                 // Opaque to transparent gradient (left to right)
                 Box(
                     modifier = Modifier
@@ -120,12 +137,12 @@ fun PrePlayScreen(
                             Brush.horizontalGradient(
                                 colors = listOf(
                                     Color.Black.copy(alpha = 0.98f),
-                                    Color.Black.copy(alpha = 0.9f),
-                                    Color.Black.copy(alpha = 0.4f),
+                                    Color.Black.copy(alpha = 0.90f),
+                                    Color.Black.copy(alpha = 0.60f),
                                     Color.Transparent
                                 ),
                                 startX = 0f,
-                                endX = 1400f // Wider gradient for better text contrast
+                                endX = 1400f
                             )
                         )
                 )
@@ -247,6 +264,14 @@ fun PrePlayScreen(
                             mutableStateOf(initialSourceTypes)
                         }
 
+                        val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+                        LaunchedEffect(streams) {
+                            if (streams.isNotEmpty() && !willAutoPick) {
+                                delay(200) // Small delay for layout
+                                try { focusRequester.requestFocus() } catch(_: Exception) {}
+                            }
+                        }
+
                         // Auto-clear filters that yielded zero matches once streams resolve.
                         LaunchedEffect(streams) {
                             if (streams.isEmpty()) return@LaunchedEffect
@@ -303,128 +328,90 @@ fun PrePlayScreen(
                                 )
                             }
                         }
-
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(bottom = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                .padding(horizontal = 4.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             // Resolution
-                                TvDropdownFilterChip(
-                                    label = "Resolution",
-                                    valueText = resolutionRankLabel(resolutionRank),
-                                    isCustom = resolutionRank != null
-                                ) { dismiss ->
-                                    DropdownMenuItem(
-                                        text = { androidx.compose.material3.Text("All (${streams.size})") },
-                                        onClick = { resolutionRank = null; dismiss() },
-                                        leadingIcon = {
-                                            if (resolutionRank == null) {
-                                                androidx.compose.material3.Icon(Icons.Default.Check, contentDescription = null)
-                                            } else {
-                                                Spacer(Modifier.size(24.dp))
-                                            }
-                                        }
+                            FilterDropdownChip(
+                                label = "Resolution",
+                                valueText = resolutionRankLabel(resolutionRank),
+                                isCustom = resolutionRank != null
+                            ) { dismiss ->
+                                FilterDropdownItem(
+                                    label = "All (${streams.size})",
+                                    selected = resolutionRank == null,
+                                    onClick = { resolutionRank = null; dismiss() }
+                                )
+                                listOf(4, 3, 2, 1).forEach { rank ->
+                                    val count = resolutionCounts[rank] ?: 0
+                                    FilterDropdownItem(
+                                        label = "${resolutionRankLabel(rank)} ($count)",
+                                        selected = resolutionRank == rank,
+                                        enabled = count > 0,
+                                        onClick = { resolutionRank = rank; dismiss() }
                                     )
-                                    listOf(4, 3, 2, 1).forEach { rank ->
-                                        val count = resolutionCounts[rank] ?: 0
-                                        DropdownMenuItem(
-                                            text = {
-                                                androidx.compose.material3.Text(
-                                                    "${resolutionRankLabel(rank)} ($count)"
-                                                )
-                                            },
-                                            onClick = { resolutionRank = rank; dismiss() },
-                                            leadingIcon = {
-                                                if (resolutionRank == rank) {
-                                                    androidx.compose.material3.Icon(Icons.Default.Check, contentDescription = null)
-                                                } else {
-                                                    Spacer(Modifier.size(24.dp))
-                                                }
-                                            },
-                                            enabled = count > 0
-                                        )
-                                    }
-                                }
-
-                                // Addon
-                                TvDropdownFilterChip(
-                                    label = "Addon",
-                                    valueText = selectedAddon ?: "All",
-                                    isCustom = selectedAddon != null,
-                                    enabled = availableAddons.isNotEmpty()
-                                ) { dismiss ->
-                                    DropdownMenuItem(
-                                        text = { androidx.compose.material3.Text("All Addons") },
-                                        onClick = { selectedAddon = null; dismiss() },
-                                        leadingIcon = {
-                                            if (selectedAddon == null) {
-                                                androidx.compose.material3.Icon(Icons.Default.Check, contentDescription = null)
-                                            } else {
-                                                Spacer(Modifier.size(24.dp))
-                                            }
-                                        }
-                                    )
-                                    availableAddons.forEach { addon ->
-                                        val count = streams.count { it.addonName == addon }
-                                        DropdownMenuItem(
-                                            text = { androidx.compose.material3.Text("$addon ($count)") },
-                                            onClick = { selectedAddon = addon; dismiss() },
-                                            leadingIcon = {
-                                                if (selectedAddon == addon) {
-                                                    androidx.compose.material3.Icon(Icons.Default.Check, contentDescription = null)
-                                                } else {
-                                                    Spacer(Modifier.size(24.dp))
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
-
-                                // Source Quality (multi-select)
-                                val sourceValueText = when (selectedSourceTypes.size) {
-                                    0 -> "Any"
-                                    1 -> SourceTypeRanker.labelOf(selectedSourceTypes.first())
-                                    else -> "${SourceTypeRanker.labelOf(selectedSourceTypes.first())} +${selectedSourceTypes.size - 1}"
-                                }
-                                TvDropdownFilterChip(
-                                    label = "Source Quality",
-                                    valueText = sourceValueText,
-                                    isCustom = selectedSourceTypes.isNotEmpty()
-                                ) { _ ->
-                                    if (selectedSourceTypes.isNotEmpty()) {
-                                        DropdownMenuItem(
-                                            text = { androidx.compose.material3.Text("Clear selection") },
-                                            onClick = { selectedSourceTypes = emptySet() },
-                                            leadingIcon = {
-                                                androidx.compose.material3.Icon(Icons.Default.Close, contentDescription = null)
-                                            }
-                                        )
-                                        HorizontalDivider()
-                                    }
-                                    SourceTypeRanker.ORDERED_LABELS.forEach { (key, label) ->
-                                        val count = sourceTypeCounts[key] ?: 0
-                                        val isSelected = key in selectedSourceTypes
-                                        DropdownMenuItem(
-                                            text = { androidx.compose.material3.Text("$label ($count)") },
-                                            onClick = {
-                                                selectedSourceTypes = if (isSelected) selectedSourceTypes - key
-                                                else selectedSourceTypes + key
-                                            },
-                                            leadingIcon = {
-                                                if (isSelected) {
-                                                    androidx.compose.material3.Icon(Icons.Default.Check, contentDescription = null)
-                                                } else {
-                                                    Spacer(Modifier.size(24.dp))
-                                                }
-                                            },
-                                            enabled = count > 0
-                                        )
-                                    }
                                 }
                             }
+ 
+                            // Addon
+                            FilterDropdownChip(
+                                label = "Addon",
+                                valueText = selectedAddon ?: "All",
+                                isCustom = selectedAddon != null,
+                                enabled = availableAddons.isNotEmpty()
+                            ) { dismiss ->
+                                FilterDropdownItem(
+                                    label = "All Addons",
+                                    selected = selectedAddon == null,
+                                    onClick = { selectedAddon = null; dismiss() }
+                                )
+                                availableAddons.forEach { addon ->
+                                    val count = streams.count { it.addonName == addon }
+                                    FilterDropdownItem(
+                                        label = "$addon ($count)",
+                                        selected = selectedAddon == addon,
+                                        onClick = { selectedAddon = addon; dismiss() }
+                                    )
+                                }
+                            }
+ 
+                            // Source Quality (multi-select)
+                            val sourceValueText = when (selectedSourceTypes.size) {
+                                0 -> "Any"
+                                1 -> SourceTypeRanker.labelOf(selectedSourceTypes.first())
+                                else -> "${SourceTypeRanker.labelOf(selectedSourceTypes.first())} +${selectedSourceTypes.size - 1}"
+                            }
+                            FilterDropdownChip(
+                                label = "Source Quality",
+                                valueText = sourceValueText,
+                                isCustom = selectedSourceTypes.isNotEmpty()
+                            ) { _ ->
+                                if (selectedSourceTypes.isNotEmpty()) {
+                                    FilterDropdownItem(
+                                        label = "Clear selection",
+                                        selected = false,
+                                        onClick = { selectedSourceTypes = emptySet() }
+                                    )
+                                    HorizontalDivider()
+                                }
+                                SourceTypeRanker.ORDERED_LABELS.forEach { (key, label) ->
+                                    val count = sourceTypeCounts[key] ?: 0
+                                    val isSelected = key in selectedSourceTypes
+                                    FilterDropdownItem(
+                                        label = "$label ($count)",
+                                        selected = isSelected,
+                                        enabled = count > 0,
+                                        onClick = {
+                                            selectedSourceTypes = if (isSelected) selectedSourceTypes - key
+                                            else selectedSourceTypes + key
+                                        }
+                                    )
+                                }
+                            }
+                        }
 
                         if (filteredStreams.isEmpty()) {
                             Text(
@@ -438,10 +425,12 @@ fun PrePlayScreen(
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                                 contentPadding = PaddingValues(bottom = 24.dp)
                             ) {
-                                items(filteredStreams) { stream ->
+                                itemsIndexed(items = filteredStreams) { index, s ->
                                     StreamItem(
-                                        stream = stream,
-                                        onClick = { onStreamSelected(stream) }
+                                        stream = s,
+                                        isAutoPick = s == streams.firstOrNull(),
+                                        modifier = if (index == 0) Modifier.focusRequester(focusRequester) else Modifier,
+                                        onClick = { onStreamSelected(s) }
                                     )
                                 }
                             }
@@ -552,142 +541,5 @@ private fun StatusText(countdown: Int) {
     }
 }
 
-/** Map a ScoredStremioStream.rank (1..4) to its display label. null = "All". */
-private fun resolutionRankLabel(rank: Int?): String = when (rank) {
-    4 -> "4K"
-    3 -> "1080p"
-    2 -> "720p"
-    1 -> "SD"
-    else -> "All"
-}
-
-/**
- * TV-friendly filter chip: a focusable Surface that anchors a DropdownMenu just
- * below itself. Mirrors the phone's `DropdownFilterChip` in StreamPickerSheet
- * so both screens look and behave the same. `isCustom = true` highlights the
- * chip as "user has deviated from the default".
- *
- * The [content] lambda is given a `dismiss` callback — call it from single-select
- * items to close the menu after choosing; multi-select items can simply omit the
- * call so the menu stays open between toggles.
- */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun TvDropdownFilterChip(
-    label: String,
-    valueText: String,
-    isCustom: Boolean,
-    enabled: Boolean = true,
-    content: @Composable (dismiss: () -> Unit) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        Surface(
-            onClick = { if (enabled) expanded = true },
-            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(50)),
-            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
-            colors = ClickableSurfaceDefaults.colors(
-                containerColor = if (isCustom) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
-                } else {
-                    Color.Black.copy(alpha = 0.5f)
-                },
-                focusedContainerColor = if (isCustom) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)
-                },
-                contentColor = Color.White,
-                focusedContentColor = Color.White
-            ),
-            enabled = enabled
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    text = "$label: $valueText",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.width(4.dp))
-                androidx.compose.material3.Icon(
-                    Icons.Default.ArrowDropDown,
-                    contentDescription = null,
-                    tint = Color.White
-                )
-            }
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            content { expanded = false }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun StreamItem(
-    stream: ScoredStremioStream,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
-        colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.Black.copy(alpha = 0.4f),
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stream.name ?: "Unknown Stream",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = stream.title ?: "Untitled",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (stream.addonName != null) {
-                    Text(
-                        text = "via ${stream.addonName}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            if (stream.isTargetTier) {
-                Surface(
-                    shape = MaterialTheme.shapes.small,
-                    colors = SurfaceDefaults.colors(
-                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                    ),
-                    modifier = Modifier.padding(start = 8.dp)
-                ) {
-                    Text(
-                        text = "Preferred",
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-        }
-    }
-}
+    // Removed local implementations of resolutionRankLabel, TvDropdownFilterChip, and StreamItem
+    // as they are now in StreamSelectionComponents.kt

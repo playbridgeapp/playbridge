@@ -1,9 +1,12 @@
 package com.playbridge.player.preplay
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
@@ -33,6 +36,15 @@ class PrePlayActivity : ComponentActivity() {
     private var isLaunching by mutableStateOf(false)
     private var launchCountdown by mutableIntStateOf(0)
 
+    private val remoteReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == ServerService.ACTION_REMOTE) {
+                val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
+                handleRemoteKey(key)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handleIntent(intent)
@@ -54,6 +66,13 @@ class PrePlayActivity : ComponentActivity() {
                     }
                 )
             }
+        }
+        
+        val filter = android.content.IntentFilter(ServerService.ACTION_REMOTE)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(remoteReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(remoteReceiver, filter)
         }
     }
 
@@ -255,7 +274,22 @@ class PrePlayActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(remoteReceiver)
         resolutionJob?.cancel()
         super.onDestroy()
+    }
+
+    private fun handleRemoteKey(key: String?) {
+        val keyCode = when (key?.lowercase()) {
+            "up" -> android.view.KeyEvent.KEYCODE_DPAD_UP
+            "down" -> android.view.KeyEvent.KEYCODE_DPAD_DOWN
+            "left" -> android.view.KeyEvent.KEYCODE_DPAD_LEFT
+            "right" -> android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+            "enter", "select", "ok" -> android.view.KeyEvent.KEYCODE_DPAD_CENTER
+            "back" -> android.view.KeyEvent.KEYCODE_BACK
+            else -> return
+        }
+        dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode))
+        dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, keyCode))
     }
 }

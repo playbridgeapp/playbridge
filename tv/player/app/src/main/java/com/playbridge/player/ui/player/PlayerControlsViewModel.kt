@@ -214,6 +214,16 @@ class PlayerControlsViewModel : ViewModel() {
         _controlsState.update { it.copy(isLoadingStreams = loading) }
     }
 
+    fun setStreamPreferences(quality: String?, addon: String?, sourceTypes: List<String>?) {
+        _controlsState.update {
+            it.copy(
+                preferredQuality = quality,
+                preferredAddonName = addon,
+                preferredSourceTypeKeys = sourceTypes
+            )
+        }
+    }
+
     fun showStreamPicker(streams: List<com.playbridge.shared.stremio.ScoredStremioStream>? = null, currentUrl: String? = null) {
         _controlsState.update { 
             it.copy(

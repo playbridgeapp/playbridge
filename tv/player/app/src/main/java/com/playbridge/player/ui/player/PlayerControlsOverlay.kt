@@ -98,9 +98,9 @@ fun PlayerControlsOverlay(
                         streams = state.availableStreams,
                         currentUrl = state.currentStreamUrl,
                         isLoading = state.isLoadingStreams,
-                        preferredQuality = state.prePlayPayload?.defaultVideoQuality,
-                        preferredAddonName = state.prePlayPayload?.preferredAddonName,
-                        preferredSourceTypeKeys = state.prePlayPayload?.preferredSourceTypes,
+                        preferredQuality = state.preferredQuality,
+                        preferredAddonName = state.preferredAddonName,
+                        preferredSourceTypeKeys = state.preferredSourceTypeKeys,
                         onStreamSelected = onStreamSelected,
                         onRefresh = onRefreshStreams,
                         onDismiss = onOverlayDismiss

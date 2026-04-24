@@ -157,8 +157,10 @@ class ExoPlayerActivity : PlayerActivity() {
                     }
                 }
                 ServerService.ACTION_REMOTE -> {
-                    val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
-                    inputHandler.handleRemoteCommand(key)
+                    if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                        val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
+                        inputHandler.handleRemoteCommand(key)
+                    }
                 }
                 ServerService.ACTION_PLAY -> {
                     val url = intent.getStringExtra(ServerService.EXTRA_URL)
@@ -533,6 +535,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     payloadJson
                 )
                 controlsViewModel.setPrePlay(p)
+                controlsViewModel.setStreamPreferences(p.defaultVideoQuality, p.preferredAddonName, p.preferredSourceTypes)
                 resolveStreamsAndPreBuffer(p)
                 return // resolveStreamsAndPreBuffer handles the rest
             } catch (e: Exception) {

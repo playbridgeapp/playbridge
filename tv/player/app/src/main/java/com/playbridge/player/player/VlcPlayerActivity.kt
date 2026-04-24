@@ -657,6 +657,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     payloadJson
                 )
                 controlsViewModel.setPrePlay(p)
+                controlsViewModel.setStreamPreferences(p.defaultVideoQuality, p.preferredAddonName, p.preferredSourceTypes)
                 resolveStreamsAndPreBuffer(p)
                 return // resolveStreamsAndPreBuffer handles the rest
             } catch (e: Exception) {

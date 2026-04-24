@@ -95,6 +95,10 @@ class InputHandler(
                 // Center/Enter: if in seek UI (not full), pause and show full controls.
                 // Otherwise, let system deliver click to focused button.
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    // If an external overlay (PrePlayScreen, StreamPicker, etc.) is visible,
+                    // let Compose handle the enter key so it reaches chips/buttons.
+                    if (isExternalOverlayVisible()) return false
+
                     if (!controls.controlsState.value.isFullControlsVisible) {
                         controls.commitSeek() // Ensure any pending scrub is committed
                         if (engine.isPlaying) {

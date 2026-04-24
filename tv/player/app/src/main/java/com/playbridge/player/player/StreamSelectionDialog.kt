@@ -31,9 +31,9 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
-import com.playbridge.shared.stremio.QualityRanker
-import com.playbridge.shared.stremio.ScoredStremioStream
 import com.playbridge.shared.stremio.SourceTypeRanker
+import com.playbridge.shared.stremio.ScoredStremioStream
+import com.playbridge.player.ui.player.*
 
 /**
  * Side-panel stream selection dialog.
@@ -62,18 +62,25 @@ fun StreamSelectionDialog(
 
     // ── Filter state ──
     // Seeded from nav/payload preferences, with fallback to stored browser_prefs.
-    var selectedRank by remember {
+    var selectedRank by remember(preferredQuality) {
         val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
         val prefQuality = preferredQuality ?: prefs.getString("auto_stream_quality", null)
-        val rank = if (!prefQuality.isNullOrBlank()) QualityRanker.targetRank(prefQuality) else 0
+        val rank = if (!prefQuality.isNullOrBlank()) {
+            when (prefQuality.lowercase()) {
+                "2160p", "4k", "uhd" -> 4
+                "1080p", "1080"      -> 3
+                "720p",  "720"       -> 2
+                else -> 0
+            }
+        } else 0
         mutableStateOf<Int?>(rank.takeIf { it > 0 })
     }
-    var selectedAddon by remember {
+    var selectedAddon by remember(preferredAddonName) {
         val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
         val prefAddonName = preferredAddonName ?: prefs.getString("auto_stream_addon_name", null)
         mutableStateOf<String?>(prefAddonName?.takeIf { it.isNotBlank() })
     }
-    var selectedSourceTypes by remember {
+    var selectedSourceTypes by remember(preferredSourceTypeKeys) {
         mutableStateOf(
             (preferredSourceTypeKeys ?: emptyList())
                 .map { it.trim().lowercase() }
@@ -186,14 +193,14 @@ fun StreamSelectionDialog(
                     1 to "SD"
                 )
                 val qualityValueLabel = qualities.firstOrNull { it.first == selectedRank }?.second ?: "All"
-                DropdownChip(
+                FilterDropdownChip(
                     label = "Quality",
                     valueText = qualityValueLabel,
                     isCustom = selectedRank != null,
                     modifier = Modifier.weight(1f)
                 ) { dismiss ->
                     qualities.forEach { (rank, label) ->
-                        DropdownItem(
+                        FilterDropdownItem(
                             label = label,
                             selected = selectedRank == rank,
                             onClick = {
@@ -206,14 +213,14 @@ fun StreamSelectionDialog(
 
                 // Addon (single-select). Disabled visually when none available.
                 val addonValueLabel = selectedAddon ?: "All"
-                DropdownChip(
+                FilterDropdownChip(
                     label = "Addon",
                     valueText = addonValueLabel,
                     isCustom = selectedAddon != null,
                     enabled = addons.isNotEmpty(),
                     modifier = Modifier.weight(1f)
                 ) { dismiss ->
-                    DropdownItem(
+                    FilterDropdownItem(
                         label = "All Addons",
                         selected = selectedAddon == null,
                         onClick = {
@@ -222,7 +229,7 @@ fun StreamSelectionDialog(
                         }
                     )
                     addons.forEach { addon ->
-                        DropdownItem(
+                        FilterDropdownItem(
                             label = addon,
                             selected = selectedAddon == addon,
                             onClick = {
@@ -239,14 +246,14 @@ fun StreamSelectionDialog(
                     1 -> SourceTypeRanker.labelOf(selectedSourceTypes.first())
                     else -> "${SourceTypeRanker.labelOf(selectedSourceTypes.first())} +${selectedSourceTypes.size - 1}"
                 }
-                DropdownChip(
+                FilterDropdownChip(
                     label = "Source",
                     valueText = sourceValueText,
                     isCustom = selectedSourceTypes.isNotEmpty(),
                     modifier = Modifier.weight(1f)
                 ) { _ ->
                     if (selectedSourceTypes.isNotEmpty()) {
-                        DropdownItem(
+                        FilterDropdownItem(
                             label = "Clear selection",
                             selected = false,
                             onClick = { selectedSourceTypes = emptySet() }
@@ -254,7 +261,7 @@ fun StreamSelectionDialog(
                     }
                     SourceTypeRanker.ORDERED_LABELS.forEach { (key, label) ->
                         val isSelected = key in selectedSourceTypes
-                        DropdownItem(
+                        FilterDropdownItem(
                             label = label,
                             selected = isSelected,
                             onClick = {
@@ -276,104 +283,18 @@ fun StreamSelectionDialog(
                     val isCurrent = stream.url == currentUrl
                     var isFocused by remember { mutableStateOf(false) }
 
-                    val backgroundColor = when {
-                        isCurrent -> Color(0xFF00D9FF).copy(alpha = 0.2f)
-                        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-                        else -> Color.Transparent
-                    }
-
-                    Column(
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(backgroundColor)
                             .then(if (index == currentIndex && filteredStreams.isNotEmpty()) Modifier.focusRequester(focusRequester) else Modifier)
                             .onFocusChanged { isFocused = it.isFocused }
-                            .clickable { onStreamSelected(stream) }
-                            .focusable()
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
-                        // Title / Release Name
-                        Text(
-                            text = stream.title ?: stream.name ?: "Unknown Stream",
-                            fontSize = 14.sp,
-                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isCurrent) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
-                            lineHeight = 18.sp
+                        StreamItem(
+                            stream = stream,
+                            isCurrent = stream.url == currentUrl,
+                            isAutoPick = stream == streams.firstOrNull(),
+                            onClick = { onStreamSelected(stream) }
                         )
-
-                        if (!stream.description.isNullOrBlank()) {
-                            Text(
-                                text = stream.description!!,
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                                modifier = Modifier.padding(top = 4.dp),
-                                lineHeight = 16.sp
-                            )
-                        }
-
-                        // Metadata Row
-                        Row(
-                            modifier = Modifier.padding(top = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Quality Badge
-                            val qualityColor = when(stream.rank) {
-                                4 -> Color(0xFFE91E63) // 4K
-                                3 -> Color(0xFF4CAF50) // 1080p
-                                2 -> Color(0xFF2196F3) // 720p
-                                else -> Color.Gray
-                            }
-                            val qualityShort = when(stream.rank) {
-                                4 -> "4K"
-                                3 -> "1080p"
-                                2 -> "720p"
-                                else -> "SD"
-                            }
-
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                colors = SurfaceDefaults.colors(
-                                    containerColor = qualityColor.copy(alpha = 0.2f)
-                                ),
-                                modifier = Modifier.padding(end = 8.dp)
-                            ) {
-                                Text(
-                                    text = qualityShort,
-                                    fontSize = 10.sp,
-                                    color = qualityColor,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                )
-                            }
-
-                            if (stream.isSeasonPack) {
-                                Text(
-                                    text = "Season Pack",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFFFFC107),
-                                    modifier = Modifier.padding(end = 8.dp)
-                                )
-                            }
-
-                            if (stream.isExtras) {
-                                Text(
-                                    text = "Extras",
-                                    fontSize = 11.sp,
-                                    color = Color.Red.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(end = 8.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.weight(1f))
-
-                            // Addon Name (in the row too for clarity when filtering is Off)
-                            Text(
-                                text = stream.addonName ?: stream.name ?: "",
-                                fontSize = 11.sp,
-                                color = Color.Gray
-                            )
-                        }
                     }
                 }
 
@@ -400,133 +321,4 @@ fun StreamSelectionDialog(
 
     // Back handler to dismiss
     androidx.activity.compose.BackHandler { onDismiss() }
-}
-
-/**
- * Focusable chip that anchors a D-pad-friendly [Popup] menu below itself. Clicking
- * (or pressing center on D-pad) toggles the menu. The menu is dismissed when the
- * user presses back or clicks outside. Menu item focus is handled by [DropdownItem].
- */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun DropdownChip(
-    label: String,
-    valueText: String,
-    isCustom: Boolean,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    content: @Composable (dismiss: () -> Unit) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    var isFocused by remember { mutableStateOf(false) }
-
-    val themeColor = Color(0xFF00D9FF)
-    val bgColor = when {
-        !enabled -> Color(0xFF1E1E38).copy(alpha = 0.4f)
-        isCustom -> themeColor.copy(alpha = 0.15f)
-        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-        else -> Color(0xFF1E1E38)
-    }
-    val borderColor = when {
-        isCustom -> themeColor.copy(alpha = 0.5f)
-        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
-        else -> Color.Transparent
-    }
-    val textColor = when {
-        !enabled -> Color.Gray
-        isCustom -> themeColor
-        else -> MaterialTheme.colorScheme.onSurface
-    }
-
-    Box(modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(38.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(bgColor)
-                .border(1.dp, borderColor, RoundedCornerShape(8.dp))
-                .onFocusChanged { isFocused = it.isFocused }
-                .clickable(enabled = enabled) { expanded = !expanded }
-                .focusable(enabled = enabled)
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "$label: $valueText",
-                color = textColor,
-                fontSize = 12.sp,
-                fontWeight = if (isCustom) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = "▾",
-                color = textColor,
-                fontSize = 11.sp
-            )
-        }
-
-        if (expanded) {
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 42.dp.roundToPx() }),
-                onDismissRequest = { expanded = false },
-                properties = PopupProperties(
-                    focusable = true,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = true
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .widthIn(min = 160.dp)
-                        .background(Color(0xFF1E1E38), RoundedCornerShape(8.dp))
-                        .border(1.dp, Color(0xFF00D9FF).copy(alpha = 0.25f), RoundedCornerShape(8.dp))
-                        .padding(vertical = 4.dp)
-                ) {
-                    content { expanded = false }
-                }
-            }
-        }
-    }
-}
-
-/** Individual item in a [DropdownChip] menu — focusable via D-pad. */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun DropdownItem(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    var isFocused by remember { mutableStateOf(false) }
-    val themeColor = Color(0xFF00D9FF)
-    val bgColor = when {
-        isFocused -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-        else -> Color.Transparent
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(36.dp)
-            .background(bgColor)
-            .onFocusChanged { isFocused = it.isFocused }
-            .clickable { onClick() }
-            .focusable()
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = if (selected) "✓ $label" else label,
-            color = if (selected) themeColor else MaterialTheme.colorScheme.onSurface,
-            fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
 }

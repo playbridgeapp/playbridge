@@ -30,6 +30,12 @@ class PlayBridgeApplication : Application() {
         super.onCreate()
         com.playbridge.shared.SharedContext.init(this)
         com.playbridge.shared.stremio.StremioClient.init(this)
+        
+        // Restore stream cache duration from settings
+        val prefs = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        val cacheHours = prefs.getInt("stream_cache_hours", 0)
+        com.playbridge.shared.stremio.StremioClient.updateCacheDuration(cacheHours)
+        
         FileLogger.init(this)
         registerActivityLifecycleCallbacks(activityLifecycleCallbacks)
         installCrashHandler()
