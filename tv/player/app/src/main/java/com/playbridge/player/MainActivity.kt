@@ -30,8 +30,10 @@ import com.playbridge.player.ui.PairingScreen
 import com.playbridge.player.ui.SettingsScreen
 import com.playbridge.player.ui.components.AppSidebar
 import com.playbridge.player.ui.components.StaticAuroraBackground
+import com.playbridge.player.ui.theme.AppTheme
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.saveable.rememberSaveable
 
 class MainActivity : ComponentActivity() {
 
@@ -93,7 +95,8 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            PlayBridgeTVTheme {
+            val appTheme = remember { mutableStateOf(AppTheme.fromPrefs(this)) }
+            PlayBridgeTVTheme(theme = appTheme.value) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     shape = RectangleShape
@@ -101,7 +104,8 @@ class MainActivity : ComponentActivity() {
                     MainContent(
                         pairingStore = pairingStore,
                         historyStore = historyStore,
-                        openPairingRequest = _openPairingRequest
+                        openPairingRequest = _openPairingRequest,
+                        currentTheme = appTheme
                     )
                 }
             }
@@ -135,10 +139,11 @@ enum class Screen {
 fun MainContent(
     pairingStore: PairingStore,
     historyStore: HistoryStore,
-    openPairingRequest: MutableState<Boolean>
+    openPairingRequest: MutableState<Boolean>,
+    currentTheme: MutableState<AppTheme>
 ) {
     // Default to History; overridden below once we know whether any device has paired.
-    var currentScreen by remember { mutableStateOf(Screen.History) }
+    var currentScreen by rememberSaveable { mutableStateOf(Screen.History) }
     var isInitialCheckDone by remember { mutableStateOf(false) }
 
     val connectionState by ServerService.connectionState.collectAsState()
@@ -289,7 +294,7 @@ fun MainContent(
                     }
                     Screen.Settings -> {
                         SettingsScreen(
-                            onBack = { currentScreen = Screen.History }
+                            onThemeChanged = { theme -> currentTheme.value = theme }
                         )
                     }
                 }

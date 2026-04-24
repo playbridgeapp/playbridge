@@ -61,10 +61,9 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun PlayBridgeTVTheme(
+    theme: AppTheme = AppTheme.DARK,
     content: @Composable () -> Unit
 ) {
-    val context = LocalContext.current
-    val theme = remember { AppTheme.fromPrefs(context) }
     val colorScheme = when (theme) {
         AppTheme.DARK   -> DarkColorScheme
         AppTheme.AMOLED -> AmoledColorScheme
