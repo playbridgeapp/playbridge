@@ -9,11 +9,11 @@ This repository contains multiple **independent Gradle projects** (not a monorep
 |---|---|---|
 | Phone | `phone/` | Sender app with GeckoView, Debrid, WebSocket client. |
 | TV | `tv/` | Receiver app with MPV/VLC, WebSocket server (Ktor), Leanback UI. |
-| Protocol | `protocol/` | Shared JVM library with data classes (`Message`, `Command`). |
+| Shared | `shared/` | KMP logic (Protocol messages, Stremio, Resume sync). |
 | Extension | `extension/` | Desktop Firefox extension, pure JS, raw WebSocket JSON. |
 
 ## Build & Run Commands
-**Always run from the specific project directory (`phone/`, `tv/`, or `protocol/`)!**
+**Always run from the specific project directory (`phone/`, `tv/`, or `shared/`)!**
 **CRITICAL: Always wrap `./gradlew` commands in `zsh -c "..."` to ensure consistent environment loading on macOS.**
 
 ```bash
@@ -21,7 +21,7 @@ This repository contains multiple **independent Gradle projects** (not a monorep
 zsh -c "source ~/.zshrc && ./gradlew app:assembleDebug"       # Build Debug APK
 zsh -c "source ~/.zshrc && ./gradlew app:assembleRelease"     # Build Release APK
 zsh -c "source ~/.zshrc && ./gradlew app:bundleRelease"       # Build Release AAB
-zsh -c "source ~/.zshrc && ./gradlew build"                   # Build Protocol module
+zsh -c "source ~/.zshrc && ./gradlew build"                   # Build Shared/Protocol module
 zsh -c "source ~/.zshrc && ./gradlew clean app:assembleDebug" # Clean and build
 ```
 
@@ -85,9 +85,9 @@ zsh -c "source ~/.zshrc && ./gradlew lint"
 ## Critical Gotchas (Agent Must-Reads)
 
 ### 1. Protocol Ripple Effect (CRITICAL)
-Any change to `protocol/src/main/java/com/playbridge/protocol/Message.kt` MUST be mirrored in:
-- `phone/app/.../connection/ConnectionViewModel.kt`
-- `tv/player/app/.../server/ServerService.kt`
+Any change to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.kt` MUST be mirrored in:
+- `phone/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
+- `tv/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
 - `extension/src/background.js` (Manual JSON parsing/formatting since JS can't import Kotlin).
 
 ### 2. GeckoView Version Sync

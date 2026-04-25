@@ -10,12 +10,13 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 | Module | Path | Role |
 | :--- | :--- | :--- |
-| **Phone (Sender)** | `phone/` | Android sender app with GeckoView, Stremio resolution, and remote control |
-| **TV (Android)** | `tv/player/` | Android TV receiver (Ktor WebSocket server, Dual-player: ExoPlayer/MPV/VLC) |
-| **TV Browser** | `tv/browser/` | Android TV standalone browser with dual-engine (GeckoView/SystemWebView) |
-| **TV (Apple)** | `tv/apple-tv/` | Native tvOS receiver (AVPlayer/VLC) with local VLC proxy |
-| **Shared (Core)** | `shared/` | KMP library: Protocol, Stremio logic, shared player middleware, and resume sync |
-| **Extension** | `extension/` | Desktop Firefox extension for casting browser video directly to TV |
+| **Phone (Sender)** | `phone/` | Android shell with GeckoView; hosts the Hub UI |
+| **Integrated Hub** | `hub/` | Unified Logic Hub (Go Backend + Svelte UI) for catalogs & resolution |
+| **TV (Android)** | `tv/player/` | Android TV receiver (Dumb player: ExoPlayer/MPV/VLC) |
+| **TV Browser** | `tv/browser/` | Android TV standalone browser |
+| **TV (Apple)** | `tv/apple-tv/` | Native tvOS receiver (Dumb player: AVPlayer/VLC) |
+| **Shared (Core)** | `shared/` | KMP library: Protocol and cross-platform bridge logic |
+| **Extension** | `extension/` | Desktop Firefox extension; interfaces with the Hub |
 
 ---
 
@@ -23,68 +24,66 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 ```mermaid
 graph TB
-    subgraph Senders ["Senders (Discovery & Control)"]
+    subgraph Senders ["Senders (Shells)"]
         subgraph Phone ["Phone App (Android)"]
-            Browser[GeckoView Browser]
-            WSClient[WebSocket Client Central]
-            Remote[Remote Control UI]
-            Addons[Stremio Addon Logic]
-            Tracking[Watchlist & Tracking]
-            Backup[Cloud Backup]
-            ExtNative[Video Detector Extension]
+            GeckoView[GeckoView Shell]
+            WSClient[WebSocket Client]
+            JSBridge[JavaScript Bridge]
         end
         
-        subgraph Extension ["Desktop Extension (Firefox)"]
+        subgraph Extension ["Desktop Extension"]
             ExtBackground[background.js]
-            ExtWS[WS Client]
         end
     end
 
-    subgraph Shared ["Shared Core (Kotlin Multiplatform)"]
-        Protocol[Protocol: Messages/Commands]
-        SyncLogic[History & Resume Sync]
-        AddonCore[Shared Stremio Logic]
-        PlayerCommon[Player Middleware]
+    subgraph Hub ["Integrated Smart Hub (Go + Svelte)"]
+        HubUI[SvelteKit UI: Catalogs/Settings]
+        GoServer[Go Backend: Resolver/Redirector]
+        SQLite[(SQLite: History/Resume)]
+        AddonClient[Stremio Addon Client]
     end
 
-    subgraph Receivers ["Receivers (Playback & Rendering)"]
-        subgraph AndroidTV ["Android TV App Suite"]
-            WSServerAndroid[Ktor WebSocket Server]
+    subgraph Shared ["Shared Core (KMP)"]
+        Protocol[Protocol: Commands]
+        SharedBridge[Bridge Middleware]
+    end
+
+    subgraph Receivers ["Receivers (Dumb Players)"]
+        subgraph AndroidTV ["Android TV"]
+            WSServerAndroid[Ktor WS Server]
             PlayerAndroid[ExoPlayer / LibVLC / MPV]
-            TVBrowser[Dual-Engine Browser]
-            Filters[GPU Video Filters]
-            ServerSvc[Server Foreground Service]
         end
 
         subgraph AppleTV ["Apple TV (tvOS)"]
-            WSServerApple[Swift WebSocket Server]
+            WSServerApple[Swift WS Server]
             PlayerApple[AVPlayer / LibVLC]
-            VLCProxy[VLC HTTP Proxy]
         end
     end
 
-    %% Protocol Dependency
-    Senders -.-> Protocol
+    %% Hub Internal
+    HubUI <--> GoServer
+    GoServer --> SQLite
+    GoServer --> AddonClient
+
+    %% Functional Flow
+    GeckoView -- Hosts --> HubUI
+    HubUI -- Cast Command --> JSBridge
+    JSBridge --> WSClient
+    ExtBackground -- Cast URL --> GoServer
+
+    %% Protocol Glue
+    Hub -.-> Protocol
     Receivers -.-> Protocol
     
-    %% Functional Flow
-    Phone --> Shared
-    Extension --> Shared
-    
-    %% Communication (Discovery/NSD handled by WS clients/servers)
-    WSClient <-->|Command/Play/Mouse| WSServerAndroid
-    WSClient <-->|Command/Play/Mouse| WSServerApple
-    ExtWS <-->|Cast URL| WSServerAndroid
-    ExtWS <-->|Cast URL| WSServerApple
+    %% Communication
+    WSClient <-->|Play / Mouse / Control| WSServerAndroid
+    WSClient <-->|Play / Mouse / Control| WSServerApple
 
     %% Internal Connections
-    ExtNative --> Browser
-    Browser --> Addons
     WSServerAndroid --> PlayerAndroid
-    WSServerAndroid --> TVBrowser
-    PlayerAndroid --> Filters
     WSServerApple --> PlayerApple
-    PlayerApple --> VLCProxy
+    PlayerAndroid -- Hits --> GoServer
+    PlayerApple -- Hits --> GoServer
 ```
 
 ---
@@ -93,7 +92,8 @@ graph TB
 
 ```
 PlayBridge/
-├── phone/               # Android Sender App
+├── phone/               # Android Shell (Phone)
+├── hub/                 # Integrated Smart Hub (Go + Svelte)
 ├── tv/
 │   ├── player/          # Android TV Player App (Receiver)
 │   ├── browser/         # Android TV Browser App (Standalone)
@@ -104,6 +104,11 @@ PlayBridge/
 ├── libs/                # Local libraries (mpv-android, etc.)
 └── docs/                # Project documentation
 ```
+
+---
+
+## Hub Architecture
+👉 [Integrated Smart Hub Architecture](hub/README.md)
 
 ---
 

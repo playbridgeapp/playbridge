@@ -12,17 +12,20 @@ PlayBridge is a system to cast web video from an Android phone (sender) to an An
 ## Module Map
 | Module | Path | Role |
 |---|---|---|
-| Phone | `phone/` | Android sender app with GeckoView browser |
-| TV (Android) | `tv/player/` | Android TV receiver app (ExoPlayer/MPV/VLC) |
-| TV (Apple) | `tv/apple-tv/` | Apple TV receiver app (AVPlayer/VLC) |
-| Shared | `shared/` | KMP logic (Player engines, Stremio, Resume) |
+| Phone | `phone/` | Android shell: hosts the Hub UI via GeckoView |
+| Hub | `hub/` | Integrated Smart Hub: Go Backend + Svelte UI |
+| TV (Android) | `tv/player/` | Android TV receiver: Dumb player (ExoPlayer/MPV/VLC) |
+| TV (Apple) | `tv/apple-tv/` | Apple TV receiver: Dumb player (AVPlayer/VLC) |
+| Shared | `shared/` | KMP logic: Protocol and cross-platform bridge |
 | Extension | `extension/` | Desktop web extension (Firefox) |
 
 ## Build Commands
 - `zsh -c "source ~/.zshrc && ./gradlew :phone:app:assembleDebug"`
 - `zsh -c "source ~/.zshrc && ./gradlew :tv:player:app:assembleDebug"`
 - `zsh -c "source ~/.zshrc && ./gradlew :shared:build"`
-- Apple TV: Open Xcode at `tv/apple-tv/PlayBridge TV/PlayBridge TV.xcworkspace`
+- **Hub Server**: `cd hub/server && go build`
+- **Hub UI**: `cd hub/ui && npm run build`
+- **Apple TV**: Open Xcode at `tv/apple-tv/PlayBridge TV/PlayBridge TV.xcworkspace`
 
 ## Cross-cutting Gotchas
 WARNING: **Protocol ripple:** Any change to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.kt` must be reflected in:
@@ -30,11 +33,15 @@ WARNING: **Protocol ripple:** Any change to `shared/src/commonMain/kotlin/com/pl
 2. `phone/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
 3. `tv/apple-tv/PlayBridge TV/PlayBridge TV/Network/WebSocketServer.swift`
 4. `extension/src/background.js` (Manual JSON parsing/formatting)
+5. `hub/ui/src/routes/+page.svelte` (JS Bridge payload)
+
+WARNING: **Dumb Receiver Rule:** Receivers (TV) MUST NOT perform content resolution. They must follow redirects from the Hub.
+
 WARNING: **GeckoView version must stay in sync:** Phone and TV both depend on GeckoView. If the version is bumped in `gradle/libs.versions.toml`, it must be bumped in both or behavior diverges.
 
 ## Current State
-_As of 2026-04-24:_
-- Working: KMP shared logic, Android phone/tv apps, Apple TV receiver app, Stremio addon resolution, Watchlist tracking, Cloud backup.
-- Broken/degraded: nothing critical.
-- In progress: Migrating all logic from `protocol` to `shared` (KMP); Apple TV player parity.
-- Blockers: TV App Play Store compliance (cleartext traffic, Privacy Policy, Data Safety).
+_As of 2026-04-25:_
+- Working: KMP shared logic, Android phone/tv apps, Apple TV receiver app (AVPlayer/VLC), Hub project scaffold.
+- Broken/degraded: Nothing critical.
+- In progress: **Unified Dumb Receiver Migration** (Moving logic to the Hub).
+- Blockers: none.
