@@ -25,7 +25,9 @@
         "webRequest",
         "webRequestBlocking",
         "storage",
-        "tabs"
+        "tabs",
+        "nativeMessaging",
+        "geckoViewAddons"
     ],
     "browser_specific_settings": {
         "gecko": {

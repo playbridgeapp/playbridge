@@ -79,6 +79,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         sendResponse({ received: true, count: videos.length });
     }
+    
+    if (message.type === 'bridge_feedback') {
+        window.dispatchEvent(new CustomEvent('PlayBridgeFeedback', {
+            detail: message
+        }));
+    }
+
     return true;
 });
 
@@ -129,3 +136,39 @@ videoObserver.observe(document.documentElement, {
 });
 
 console.log('[VideoDetector Content] Loaded');
+
+// --- PlayBridge JS Bridge ---
+// Injected into the page world to provide window.playbridge.cast()
+(function injectBridge() {
+    const bridgeScript = document.createElement('script');
+    bridgeScript.textContent = `
+        (function() {
+            if (window.playbridge) return;
+            window.playbridge = {
+                cast: function(payload) {
+                    window.dispatchEvent(new CustomEvent('PlayBridgeCast', { detail: payload }));
+                }
+            };
+            console.log('[PlayBridge JS Bridge] Shim injected');
+        })();
+    `;
+    (document.head || document.documentElement).appendChild(bridgeScript);
+    bridgeScript.remove();
+})();
+
+// Listen for the event from the page world
+window.addEventListener('PlayBridgeCast', (event) => {
+    const payload = event.detail;
+    if (!payload || !payload.url) return;
+    
+    console.log('[VideoDetector Content] Bridge Cast Request:', payload.url.substring(0, 50));
+    
+    // Forward to background script
+    browser.runtime.sendMessage({
+        type: 'cast',
+        url: payload.url,
+        title: payload.title
+    }).catch(e => {
+        // This might fail if the extension was reloaded or the tab is closing
+    });
+});

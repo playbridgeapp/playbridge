@@ -88,6 +88,7 @@ import com.playbridge.sender.data.history.TabEntity
 import com.playbridge.sender.data.history.HistoryDatabase
 import androidx.activity.viewModels
 import com.playbridge.sender.connection.ConnectionViewModel
+import com.playbridge.shared.protocol.createPlayCommandJson
 
 @Composable
 fun AnimatedMenuItem(
@@ -305,8 +306,6 @@ class BrowserActivity : ComponentActivity() {
             val discoveredDevices by connectionViewModel.discoveredDevices.collectAsState()
             val history by connectionViewModel.deviceHistory.collectAsState(initial = emptyList())
 
-            // Connection logic is now handled in ConnectionViewModel
-
             // Session and navigation state from BrowserStore
             val store = Components.store
             var browserState by remember {
@@ -391,6 +390,27 @@ class BrowserActivity : ComponentActivity() {
 
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+            
+            // Set up Bridge callback to handle Hub UI cast requests
+            LaunchedEffect(connectionViewModel) {
+                com.playbridge.sender.browser.Components.onBridgeCastRequest = { url, title ->
+                    Log.d("BrowserActivity", "Cast requested via Extension Bridge: $url ($title)")
+                    val currentMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                    
+                    val cmd = createPlayCommandJson(
+                        url = url,
+                        title = title,
+                        playerMode = currentMode
+                    )
+                    
+                    connectionViewModel.sendCommandAndRecord(
+                        commandJson = cmd,
+                        type = "play",
+                        url = url,
+                        title = title
+                    )
+                }
+            }
             val browserSettings = remember { getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
 
             // Mediaflow proxy config (read once; user must reopen cast sheet to pick up changes)

@@ -39,6 +39,7 @@ object Components {
     
     // Reference to TabManager for resolving Kotlin tab IDs from extension messages
     var tabManager: TabManager? = null
+    var onBridgeCastRequest: ((url: String, title: String?) -> Unit)? = null
     
     val applicationContext: Context
         get() = appContext
@@ -205,6 +206,17 @@ object Components {
                     override fun onPortMessage(message: Any, port: GeckoWebExtension.Port) {
                         Log.i(TAG, "=== PORT MESSAGE: $message ===")
                         processMessage(message)
+                        
+                        // Send feedback back to the extension
+                        try {
+                            val feedback = org.json.JSONObject().apply {
+                                put("type", "feedback")
+                                put("status", "received")
+                            }
+                            port.postMessage(feedback)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to send feedback message", e)
+                        }
                     }
                     
                     override fun onDisconnect(port: GeckoWebExtension.Port) {
@@ -239,14 +251,12 @@ object Components {
                     // Store extension reference
                     videoDetectorExtension = extension
 
-                    // Set up message delegate on the extension to receive messages
-                    Handler(Looper.getMainLooper()).post {
-                        extension.setMessageDelegate(globalMessageDelegate, "browser")
-                        Log.i(TAG, "Message delegate registered on extension")
+                    // Set up message delegate on the extension instance to receive messages
+                    extension.setMessageDelegate(globalMessageDelegate, "browser")
+                    Log.i(TAG, "Message delegate registered on Extension instance: ${extension.id}")
 
-                        // Connect to extension port for bidirectional messaging
-                        connectToExtension(extension)
-                    }
+                    // Connect to extension port for bidirectional messaging
+                    connectToExtension(extension)
                 } else {
                     Log.e(TAG, "ensureBuiltIn returned null extension")
                 }
@@ -339,6 +349,13 @@ object Components {
                         }
 
                         sessionToLoad?.loadUrl(ErrorPageUtils.generateErrorPage(url, statusCode))
+                    }
+                } else if (type == "cast") {
+                    val url = jsonObject["url"]?.jsonPrimitive?.content
+                    val title = jsonObject["title"]?.jsonPrimitive?.content
+                    if (url != null) {
+                        Log.i(TAG, "CAST MESSAGE received via extension: $url ($title)")
+                        onBridgeCastRequest?.invoke(url, title)
                     }
                 } else {
                     val kotlinTabId = resolveKotlinTabId(jsonObject)

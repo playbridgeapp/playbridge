@@ -358,6 +358,33 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ cleared: true });
         return true;
     }
+    if (message.type === 'cast') {
+        // Forward to native app (Components.kt onBridgeCastRequest) via GeckoView Port
+        try {
+            const port = browser.runtime.connectNative("browser");
+            
+            // Listen for feedback from native app
+            port.onMessage.addListener((response) => {
+                console.log('[VideoDetector BG] Feedback received from native:', response);
+                if (response.type === 'feedback') {
+                    // Forward to the specific tab that started the cast
+                    if (message.tabId) {
+                        browser.tabs.sendMessage(message.tabId, {
+                            type: 'bridge_feedback',
+                            ...response
+                        }).catch(() => {});
+                    }
+                }
+            });
+
+            port.postMessage(message);
+            // Increased timeout to allow for feedback round-trip
+            setTimeout(() => port.disconnect(), 1000);
+        } catch (e) {
+            console.error('[PlayBridge Bridge] Native connection failed:', e);
+        }
+        return true;
+    }
     return false;
 });
 
