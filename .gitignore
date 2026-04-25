@@ -74,3 +74,5 @@ hub/server/server.exe
 .env.*
 !.env.example
 hub/server/cache/
+hub/server/*.db
+hub/server/config.json
