@@ -68,6 +68,7 @@ tv/player/build_log.txt
 hub/ui/node_modules/
 hub/ui/.svelte-kit/
 hub/ui/build/
+pnpm-debug.log*
 hub/server/bin/
 hub/server/server.exe
 .env.*

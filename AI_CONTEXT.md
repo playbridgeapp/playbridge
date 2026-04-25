@@ -24,7 +24,7 @@ PlayBridge is a system to cast web video from an Android phone (sender) to an An
 - `zsh -c "source ~/.zshrc && ./gradlew :tv:player:app:assembleDebug"`
 - `zsh -c "source ~/.zshrc && ./gradlew :shared:build"`
 - **Hub Server**: `cd hub/server && go build`
-- **Hub UI**: `cd hub/ui && npm run build`
+- **Hub UI**: `cd hub/ui && pnpm build`
 - **Apple TV**: Open Xcode at `tv/apple-tv/PlayBridge TV/PlayBridge TV.xcworkspace`
 
 ## Cross-cutting Gotchas
