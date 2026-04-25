@@ -52,7 +52,9 @@ object Components {
             .remoteDebuggingEnabled(true)
             .consoleOutput(true)
             .build()
-        GeckoRuntime.create(appContext, settings)
+        val r = GeckoRuntime.create(appContext, settings)
+        r.warmUp()
+        r
     }
     
     // GeckoEngine wrapper for Mozilla Components

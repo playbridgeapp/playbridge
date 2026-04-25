@@ -31,6 +31,7 @@ class GeckoViewEngine(
     private var bridgePort: WebExtension.Port? = null
 
     init {
+        runtime.warmUp()
         setupGeckoView()
     }
 

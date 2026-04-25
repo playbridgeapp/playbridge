@@ -151,7 +151,7 @@ PlayBridge/
 
 **Strengths:**
 - Clean architecture with clear separation between sender/receiver
-- Modern tech stack (Compose, Kotlin Serialization, Coroutines, GeckoView v147, Media3 v1.9)
+- Modern tech stack (Compose, Kotlin Serialization, Coroutines, GeckoView v150, Media3 v1.9)
 - Well-designed protocol with extensible command structure (play, browser, control, remote, mouse, browser_control, context_query)
 - Good use of sealed classes for type-safe command handling
 - Feature-rich phone app with remote control, touchpad, HLS quality parsing, extension management, tab management, download support (standard + HLS), browsing history (Room DB), bookmarks, tab persistence, desktop mode, SSL lock indicator, and native Debrid integration

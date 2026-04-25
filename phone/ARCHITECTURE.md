@@ -168,8 +168,8 @@ com.playbridge.sender/
 | Embedded Extension | `assets/extensions/video_detector` | Legacy internal extension bundled with the phone app for video detection in GeckoView |
 
 ## Dependencies
-- **GeckoView** (Mozilla) v147.0.20260105210555 — Full Firefox engine
-- **Mozilla Android Components** v147.0 — Tabs, toolbar, extensions, sessions, prompts support
+- **GeckoView** (Mozilla) v150.0.20260415192539 — Full Firefox engine
+- **Mozilla Android Components** v150.0 — Tabs, toolbar, extensions, sessions, prompts support
 - **OkHttp** v4.12.0 — WebSocket client
 - **Jetpack Compose BOM** v2024.09.00 — UI (Material3)
 - **Kotlin Serialization** v1.7.3 — JSON protocol

@@ -120,7 +120,7 @@ com.playbridge.player/
 - **OkHttp** v4.12.0 — HTTP client for ExoPlayer data source + URL connections
 - **Kotlin Serialization** v1.7.3 — JSON protocol
 - **DataStore** v1.1.1 — Preferences persistence
-- **GeckoView** (Mozilla) v147.0.20260105210555 — Alternative browser engine with uBlock Origin
+- **GeckoView** (Mozilla) v150.0.20260415192539 — Alternative browser engine with uBlock Origin
 - **LibVLC** v4.0.0-eap24 — Fallback video player for unsupported formats
 
 ---
