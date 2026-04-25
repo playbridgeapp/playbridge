@@ -63,3 +63,12 @@ inspirations
 
 
 tv/player/build_log.txt
+
+# Hub (Go + SvelteKit)
+hub/ui/node_modules/
+hub/ui/.svelte-kit/
+hub/ui/build/
+hub/server/bin/
+hub/server/server.exe
+.env.*
+!.env.example
