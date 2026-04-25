@@ -175,5 +175,5 @@ com.playbridge.sender/
 - **Kotlin Serialization** v1.7.3 — JSON protocol
 - **DataStore** v1.1.1 — Preferences persistence
 - **Room** v2.8.4 — SQLite persistence for browsing history
-- **Media3 ExoPlayer** v1.2.1 — HLS offline download support
+- **Media3 ExoPlayer** v1.9.2 — HLS offline download support
 - **Coil** v2.7.0 — Image loading

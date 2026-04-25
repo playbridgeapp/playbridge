@@ -8,10 +8,10 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 **PlayBridge** is a casting solution enabling Android phones to send video URLs and browser control commands to Android TV devices. The project consists of two independent Android applications and a shared protocol module:
 
-| **Phone (Sender)** | `com.playbridge.sender` | GeckoView browser with video detection, full Stremio addon protocol, and persistent watchlist |
-| **TV (Receiver)** | `com.playbridge.receiver` | WebSocket server + Dual-engine browser + Dual-player (ExoPlayer/VLC) |
-| **Shared** | `com.playbridge.shared` | Kotlin Multiplatform logic: JSON message classes, playback engines, and command parser |
-| **Extension** | `extension/src/` | Standalone browser extension for Firefox |
+| **Phone (Sender)** | `phone/` | Android sender app with GeckoView, Stremio resolution, and remote control |
+| **TV (Receiver)** | `tv/` | Android TV receiver (Ktor WebSocket server, Dual-player) and Apple TV (tvOS) receiver |
+| **Shared (Core)** | `shared/` | KMP library: Protocol, Stremio logic, shared player engines (Android/Apple/tvOS) |
+| **Extension** | `extension/` | Desktop Firefox extension for casting browser video |
 
 ---
 
@@ -59,48 +59,60 @@ graph TB
 ---
 
 ## Phone App Architecture
-
-The phone app sender architecture has been moved to its own module document:
 👉 [Phone App Architecture](phone/ARCHITECTURE.md)
 
 ---
 
 ## TV App Architecture
+👉 [Android TV Architecture](tv/ARCHITECTURE.md)
+👉 [Apple TV Architecture](tv/apple-tv/ARCHITECTURE.md)
 
-The TV app receiver architecture has been moved to its own module document:
-👉 [TV App Architecture](tv/ARCHITECTURE.md)
+---
+
+## Shared Module Architecture
+👉 [Shared Architecture](shared/ARCHITECTURE.md)
 
 ---
 
 ## Standalone Browser Extension
-
-The browser extension architecture has been moved to its own module document:
 👉 [Extension Architecture](extension/ARCHITECTURE.md)
 
 ---
 
-## Shared Module
+## Project Structure
 
-Details on the shared logic, player engines, and protocol definitions can be found in the `shared/` module.
-👉 [Shared Architecture](shared/ARCHITECTURE.md)
+```
+PlayBridge/
+├── phone/               # Android Sender App
+├── tv/
+│   ├── player/          # Android TV Player App
+│   ├── browser/         # Android TV Browser App
+│   └── apple-tv/        # Native Apple TV (tvOS) App
+├── shared/              # Kotlin Multiplatform Core
+├── extension/           # Firefox Desktop Extension
+├── scripts/             # Maintenance & automation scripts
+├── libs/                # Local libraries (mpv-android, etc.)
+└── docs/                # Project documentation
+```
 
 ---
 
 ## Issues & Refactoring Recommendations
 
 ### 🔴 Critical Issues (Play Store Blockers)
+(None currently identified)
 
 ### 🟡 Moderate Issues
 
 #### 5. Missing Error Handling in Extensions
-- Browser extension silently catches errors in [background.js](phone/app/src/main/assets/extensions/video_detector/background.js) (e.g. lines 109, 267, 273, 297)
+- Browser extension silently catches errors in `background.js`
 - **Recommendation**: Add proper error logging/reporting
 
 ### 🟢 Minor Improvements
 
 #### 6. Components.kt is Not True DI
 - Uses lazy singletons, not proper dependency injection
-- **Recommendation**: Consider Hilt/Koin for testability, or keep as-is if testing isn't a priority
+- **Recommendation**: Consider Hilt/Koin for testability
 
 #### 7. ProGuard Rules Minimal
 - Default ProGuard rules may strip needed Kotlin serialization classes
@@ -113,268 +125,16 @@ Details on the shared logic, player engines, and protocol definitions can be fou
 ### ✅ Already Good
 - [x] Network security config scoped to local network only
 - [x] Fix SSL bypass for Play Store (scope to private IPs)
-- **Unsafe SSL in ContentSniffer (TV App)**
-- **Dangerous Permissions**: `CAMERA` and `RECORD_AUDIO` were successfully removed from TV manifest.
-- **Hardcoded Values**
-- [x] Build pipeline uses AAB (Android App Bundle) for TV release
-- [x] `CONTRIBUTING.md` created with contribution guidelines
-- [x] Debrid Integration (Real-Debrid, All-Debrid, Premiumize) support (phone)
-- [x] `.gitignore` properly configured (34 entries covering build, IDE, keystore, OS files)
-- [x] GitHub Actions CI exists for separated projects (`android_build.yml`)
-- [x] Clean package structure with clear separation
-- [x] Well-documented protocol messages with KDoc
-- [x] Sealed class pattern for type-safe command handling (shared module)
-- [x] Unified protocol module — single source of truth for message classes
-- [x] Context-aware remote control (phone queries TV for active screen)
-- [x] Authentication implemented (Token/PIN validation via mDNS/NSD pairing)
-- [x] README.md created
-- [x] LICENSE file added
-- [x] Room database for browsing history, bookmarks, and tab persistence (phone)
-- [x] Subtitle support (SRT/VTT) with external URLs and addon routing
-- [x] Dual-engine TV browser (SystemWebView + GeckoView) with runtime switching
-- [x] Ad blocking with EasyList, EasyPrivacy, cosmetic filtering, and popup blocking
-- [x] Persistent Watchlist & Media Tracking (phone Room DB)
-- [x] Cloud Backup system (S3 compatible) with settings export/import
-- [x] Full Stremio Addon Expansion (Catalogs, Meta, Subtitles)
-- [x] Edge-to-edge UI support with manual WindowInsets handling
-- [x] Multi-item Playlists & Queue support (Phone -> TV)
-- [x] GPU-accelerated Video Filters on TV (gpu-zero overhead)
-- [x] Custom M3U parser for IPTV playlists bypassing default HLS parser (TV app)
-- [x] Extracted PlayerActivity logic into abstract base class with ExoPlayerActivity and VlcPlayerActivity implementations (TV app)
+- [x] Unified shared module — single source of truth for protocol and shared logic
+- [x] PIN + Token authentication for discovery
+- [x] GitHub Actions CI for all modules
+- [x] Multi-engine support on both Phone and TV
+- [x] Cross-platform support (Android, tvOS, Firefox)
 
 ### ❌ Missing for Open-Source
-
-#### 1. Remove/Review Sensitive Data
-- Check `local.properties` is gitignored ✅
-- Remove any hardcoded API keys or tokens
-- Review commit history for accidentally committed secrets
-
-#### 2. Build Configuration
-- Both apps have `isMinifyEnabled = false` for release
-- Consider enabling for production releases with proper ProGuard rules
+- [ ] Review commit history for accidentally committed secrets
 
 ### ❌ Missing for Play Store (TV App)
-
-#### 1. Google Play Console Setup
-- [ ] Developer account ($25 one-time)
-- [ ] Privacy Policy URL (mandatory — must be a hosted web page)
-- [ ] Data Safety Section declaration
-- [ ] Content Rating (IARC questionnaire)
-- [ ] Target Audience declaration (NOT for children)
-- [ ] Store listing: title, descriptions, feature graphic (1024×500), screenshots, icon (512×512)
-
-#### 2. Critical Code Fixes
-- [x] Fix SSL bypass in `ContentSniffer.kt` — scope to private IPs only
-- [ ] Fix `network_security_config.xml` — remove global cleartext base-config
-- [x] Review CAMERA/RECORD_AUDIO permissions — successfully removed
-- [ ] Prepare SYSTEM_ALERT_WINDOW justification for manual review
-
-#### 3. Build Pipeline
-- [ ] Enroll in Play App Signing
-
----
-
-## Suggested Project Structure (Refactored)
-
-```
-PlayBridge/
-├── README.md
-├── LICENSE
-├── CONTRIBUTING.md              # NEW
-├── .github/
-│   ├── workflows/
-│   │   ├── android_build.yml
-│   │   └── extension_build.yml  # NEW
-│   └── PULL_REQUEST_TEMPLATE.md # NEW
-├── scripts/
-│   ├── publish_releases.sh      # Script to automate GitHub releases using gh CLI
-│   └── update_ublock.sh         # Script to update uBlock Origin assets in TV GeckoView
-├── extension/                   # Standalone Desktop Web Extension (Firefox native)
-│   └── src/                     # Extension source code
-│       ├── background.js
-│       ├── config.js            # Shared configuration constants
-│       ├── content.js
-│       ├── hls-parser.js        # Parses HLS manifests
-│       ├── icon.png
-│       ├── manifest.json
-│       └── ui/
-├── shared/                      # Kotlin Multiplatform logic
-│   ├── build.gradle.kts
-│   └── src/
-│       ├── commonMain/          # Shared logic & protocol
-│       ├── androidMain/         # Android specific engines
-│       ├── appleMain/           # Apple specific engines
-│       └── tvosMain/            # tvOS specific engines
-├── phone/
-│   ├── app/
-│   │   └── src/main/
-│   │       ├── java/com/playbridge/sender/
-│   │       │   ├── browser/
-│   │       │   │   ├── AddonInstallDialog.kt
-│   │       │   │   ├── AddonSettingsScreen.kt
-│   │       │   │   ├── AppearanceSettingsScreen.kt
-│   │       │   │   ├── BookmarksScreen.kt
-│   │       │   │   ├── BrowserActivity.kt    (~1721 lines, slimmed down)
-│   │       │   │   ├── BrowserToolbar.kt
-│   │       │   │   ├── CastSheet.kt
-│   │       │   │   ├── CommandHistoryScreen.kt
-│   │       │   │   ├── Components.kt
-│   │       │   │   ├── DashParser.kt
-│   │       │   │   ├── DebridLibraryScreen.kt  (Debrid integration)
-│   │       │   │   ├── DebridSettingsScreen.kt
-│   │       │   │   ├── DownloadConfirmDialog.kt
-│   │       │   │   ├── DownloadHeadersStore.kt
-│   │       │   │   ├── DownloadManagerSingleton.kt
-│   │       │   │   ├── DownloadUtils.kt
-│   │       │   │   ├── DownloadsScreen.kt
-│   │       │   │   ├── ErrorPageUtils.kt
-│   │       │   │   ├── ExportedSettings.kt     (serializable data models for settings import/export)
-│   │       │   │   ├── ExtensionsScreen.kt
-│   │       │   │   ├── FindOnPageBar.kt
-│   │       │   │   ├── HistoryScreen.kt
-│   │       │   │   ├── HlsExportRegistry.kt
-│   │       │   │   ├── HlsExportService.kt
-│   │       │   │   ├── HlsExporter.kt
-│   │       │   │   ├── HlsParser.kt
-│   │       │   │   ├── HomeScreen.kt
-│   │       │   │   ├── ImportExportSettingsScreen.kt
-│   │       │   │   ├── LibraryDetailScreen.kt
-│   │       │   │   ├── LibraryEnums.kt
-│   │       │   │   ├── LibraryScreen.kt
-│   │       │   │   ├── LibrarySettingsScreen.kt
-│   │       │   │   ├── LibraryUtils.kt
-│   │       │   │   ├── LibraryViewModel.kt
-│   │       │   │   ├── LinkContextMenu.kt
-│   │       │   │   ├── MagnetParsingSheet.kt   (Debrid integration)
-│   │       │   │   ├── MediaDownloadService.kt
-│   │       │   │   ├── MediaflowProxy.kt
-│   │       │   │   ├── MediaflowSettingsScreen.kt
-│   │       │   │   ├── MyListTab.kt
-│   │       │   │   ├── PlaybackSettingsScreen.kt
-│   │       │   │   ├── PopupBlockerSettingsScreen.kt
-│   │       │   │   ├── RemoteControlScreen.kt
-│   │       │   │   ├── SessionObserverSetup.kt (observer + delegates)
-│   │       │   │   ├── SettingsScreen.kt
-│   │       │   │   ├── SiteInfoSheet.kt
-│   │       │   │   ├── StreamPickerSheet.kt    (bottom sheet for resolved Stremio streams)
-│   │       │   │   ├── StreamSelector.kt
-│   │       │   │   ├── SubtitlePreferences.kt  (Subtitle preferences UI/logic)
-│   │       │   │   ├── TVSettingsScreen.kt
-│   │       │   │   ├── TabManager.kt           (tab/session lifecycle)
-│   │       │   │   ├── TabsScreen.kt
-│   │       │   │   ├── TrackingSheet.kt
-│   │       │   │   ├── VideoDetector.kt
-│   │       │   │   └── VideoPreviewSheet.kt
-│   │       │   ├── connection/
-│   │       │   │   ├── BluetoothClient.kt
-│   │       │   │   ├── ConnectionStore.kt
-│   │       │   │   ├── ConnectionViewModel.kt
-│   │       │   │   ├── NsdHelper.kt
-│   │       │   │   └── WebSocketClient.kt
-│   │       │   ├── data/
-│   │       │   │   ├── backup/
-│   │       │   │   │   ├── BackupManager.kt
-│   │       │   │   │   ├── BackupTrigger.kt
-│   │       │   │   │   └── BackupUtils.kt
-│   │       │   │   ├── debrid/                 (Debrid integration clients/providers)
-│   │       │   │   ├── history/
-│   │       │   │   │   ├── BookmarkDao.kt
-│   │       │   │   │   ├── BookmarkEntity.kt
-│   │       │   │   │   ├── CommandHistoryDao.kt
-│   │       │   │   │   ├── CommandHistoryEntity.kt
-│   │       │   │   │   ├── DatabaseProvider.kt
-│   │       │   │   │   ├── HistoryDao.kt
-│   │       │   │   │   ├── HistoryDatabase.kt
-│   │       │   │   │   ├── HistoryEntity.kt
-│   │       │   │   │   ├── TabDao.kt
-│   │       │   │   │   └── TabEntity.kt
-│   │       │   │   └── library/
-│   │       │   │       ├── AddonDao.kt
-│   │       │   │       ├── AddonModels.kt
-│   │       │   │       ├── AddonRepository.kt
-│   │       │   │       ├── OmdbModels.kt
-│   │       │   │       ├── OmdbRepository.kt
-│   │       │   │       ├── StremioSubtitleService.kt (Stremio subtitle fetching integration)
-│   │       │   │       ├── TmdbModels.kt
-│   │       │   │       ├── TmdbRepository.kt
-│   │       │   │       ├── TvdbModels.kt
-│   │       │   │       ├── TvdbRepository.kt
-│   │       │   │       ├── WatchlistDao.kt
-│   │       │   │       ├── WatchlistEntity.kt
-│   │       │   │       └── WatchlistStatus.kt
-│   │       │   ├── model/
-│   │       │   └── ui/
-│   │       └── assets/extensions/video_detector/  # Embedded legacy phone extension
-│   └── build.gradle.kts
-└── tv/
-    ├── browser/
-    │   ├── app/
-    │   │   └── src/main/
-    │   │       └── java/com/playbridge/browser/
-    │   │           ├── logging/
-    │   │           │   └── FileLogger.kt
-    │   │           ├── AdBlocker.kt
-    │   │           ├── BrowserActivity.kt
-    │   │           ├── BrowserEngine.kt
-    │   │           ├── GeckoViewEngine.kt
-    │   │           ├── PlayBridgeBrowserApplication.kt
-    │   │           └── SystemWebViewEngine.kt
-    │   └── build.gradle.kts
-    └── player/
-        ├── app/
-        │   └── src/main/
-        │       └── java/com/playbridge/player/
-        │           ├── data/
-        │           │   └── HistoryStore.kt
-        │           ├── logging/
-        │           │   └── FileLogger.kt
-        │           ├── model/
-        │           │   └── PairedDevice.kt
-        │           ├── pairing/
-        │           │   └── PairingStore.kt
-        │           ├── player/
-        │           │   ├── BufferSeekBar.kt
-        │           │   ├── ColorMatrixEffect.kt
-        │           │   ├── ContentSniffer.kt
-        │           │   ├── ExoPlayerActivity.kt (~1385 lines)
-        │           │   ├── InputHandler.kt
-        │           │   ├── M3uParser.kt
-        │           │   ├── MpvControlsManager.kt
-        │           │   ├── MpvPlayerActivity.kt
-        │           │   ├── MpvTrackSelectionDialog.kt
-        │           │   ├── PlayerActivity.kt   (~33 lines, slimmed down base class)
-        │           │   ├── PlayerControlsManager.kt
-        │           │   ├── PlaylistPickerDialog.kt
-        │           │   ├── PlaylistStore.kt
-        │           │   ├── ProgressManager.kt
-        │           │   ├── SubtitleManager.kt
-        │           │   ├── TrackSelectionDialog.kt
-        │           │   ├── VideoFilter.kt
-        │           │   ├── VideoFilterDialog.kt
-        │           │   ├── VideoFilterManager.kt
-        │           │   ├── VlcControlsManager.kt
-        │           │   ├── VlcPlayerActivity.kt (~753 lines)
-        │           │   └── VlcTrackSelectionDialog.kt
-        │           ├── server/
-        │           │   ├── BluetoothServer.kt
-        │           │   ├── OverlayWindowHelper.kt
-        │           │   ├── ServerService.kt    (~586 lines)
-        │           │   └── WebSocketServer.kt
-        │           ├── ui/
-        │           │   ├── theme/
-        │           │   │   ├── Color.kt
-        │           │   │   ├── Theme.kt
-        │           │   │   └── Type.kt
-        │           │   ├── HomeScreen.kt
-        │           │   ├── LibraryScreen.kt
-        │           │   ├── PairingScreen.kt
-        │           │   └── SettingsScreen.kt
-        │           ├── BootReceiver.kt
-        │           ├── MainActivity.kt
-        │           └── PlayBridgeApplication.kt
-        └── build.gradle.kts
-```
-
 ---
 
 ## Priority Recommendations

@@ -31,11 +31,9 @@ com.playbridge.player/
 │   └── PairingStore.kt
 ├── player
 │   ├── BufferSeekBar.kt
-│   ├── ColorMatrixEffect.kt
 │   ├── ContentSniffer.kt
 │   ├── ExoPlayerActivity.kt
 │   ├── InputHandler.kt
-│   ├── M3uParser.kt
 │   ├── MpvControlsManager.kt
 │   ├── MpvPlayerActivity.kt
 │   ├── MpvTrackSelectionDialog.kt
@@ -50,7 +48,6 @@ com.playbridge.player/
 │   ├── TrackSelectionDialog.kt
 │   ├── VideoFilter.kt
 │   ├── VideoFilterDialog.kt
-│   ├── VideoFilterManager.kt
 │   ├── VlcControlsManager.kt
 │   ├── VlcPlayerActivity.kt
 │   └── VlcTrackSelectionDialog.kt
@@ -59,10 +56,6 @@ com.playbridge.player/
 │   ├── OverlayWindowHelper.kt
 │   ├── ServerService.kt
 │   └── WebSocketServer.kt
-├── stremio
-│   ├── QualityRanker.kt
-│   ├── SeriesNavigator.kt
-│   └── StremioClient.kt
 ├── preplay
 │   ├── PrePlayActivity.kt
 │   └── PrePlayScreen.kt
@@ -100,14 +93,14 @@ com.playbridge.player/
 | Playlist Picker | PlaylistPickerDialog.kt | Compact side-panel overlay listing playlist episodes with current/watched indicators |
 | Playlist Store | PlaylistStore.kt | In-memory singleton `currentPlaylist` passed to player activities |
 | Video Filters | VideoFilter.kt | 9 preset filters (HDR, Night, Movie, Cinema, Action, Deep Black, Grayscale, Vivid) + Custom with brightness/contrast/saturation |
-| Video Filter Manager | VideoFilterManager.kt | Applies ColorMatrix filters to PlayerView hardware layer (GPU-accelerated, zero decode overhead) |
+| Video Filter Manager | VideoFilterManager.kt (shared) | Applies ColorMatrix filters to PlayerView hardware layer (GPU-accelerated, zero decode overhead) |
 | Video Filter Dialog | VideoFilterDialog.kt | Compact bottom-panel filter picker with live preview on focus, D-pad custom sliders |
 | Overlay Window | OverlayWindowHelper.kt | Helper for drawing invisible overlay to keep WebView active in background |
 | AdBlocker | AdBlocker.kt | Singleton ad blocker preloaded at app startup; EasyList + EasyPrivacy, cosmetic filtering, popup/redirect blocking |
-| GPU Video Filters | VideoFilterManager.kt | Applies live ColorMatrix filters (HDR, Vivid, Action, etc.) directly to the SurfaceView/TextureView without CPU penalties |
+| GPU Video Filters | VideoFilterManager.kt (shared) | Applies live ColorMatrix filters (HDR, Vivid, Action, etc.) directly to the SurfaceView/TextureView without CPU penalties |
 | Playlist Picker | PlaylistPickerDialog.kt | Side-wall UI for navigating series episodes and jumping within a live queue |
-| M3U Parser | M3uParser.kt | Custom parser for IPTV M3U playlists, bypassing ExoPlayer restrictions |
-| Protocol & Commands | Message.kt | Shared protocol: sealed `Command` class, message parsing, JSON helpers (in `protocol` module) |
+| M3U Parser | M3uParser.kt (shared) | Custom parser for IPTV M3U playlists, bypassing ExoPlayer restrictions |
+| Protocol & Commands | Message.kt | Shared protocol: sealed `Command` class, message parsing, JSON helpers (in `shared` module) |
 | Browser Engine Interface | BrowserEngine.kt | Abstraction for swappable browser engines (loadUrl, reload, evaluateJavascript, etc.) |
 | SystemWebView Engine | SystemWebViewEngine.kt | Android WebView engine with JS-based popup/redirect blocking, cosmetic CSS injection, ad request interception |
 | GeckoView Engine | GeckoViewEngine.kt | GeckoView engine with bundled uBlock Origin for advanced ad blocking |
@@ -115,7 +108,7 @@ com.playbridge.player/
 | TV Browser | BrowserActivity.kt (~728 lines) | TV browser with dual-engine switching, remote input, fullscreen handling, JS-based video maximize/restore, cursor control |
 | Settings | SettingsScreen.kt | TV app settings UI (including external player selection and dynamically reading packageManager info for version) |
 | File Logger | FileLogger.kt | Mirrored Android Log that persists entries to a rolling file in internal storage |
-| Color Matrix | ColorMatrixEffect.kt | Media3 GlEffect applying custom ColorMatrix for filters via GLSL |
+| Color Matrix | ColorMatrixEffect.kt (shared) | Media3 GlEffect applying custom ColorMatrix for filters via GLSL |
 
 ## Dependencies
 - **Ktor** v3.0.3 (Netty) — WebSocket server
