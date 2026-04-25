@@ -6,12 +6,16 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 ## Project Overview
 
-**PlayBridge** is a casting solution enabling Android phones to send video URLs and browser control commands to Android TV devices. The project consists of two independent Android applications and a shared protocol module:
+**PlayBridge** is a multi-platform casting suite enabling Android phones and desktop browsers to send video URLs and control commands to TV receivers. The project leverages Kotlin Multiplatform (KMP) for shared logic across platforms.
 
+| Module | Path | Role |
+| :--- | :--- | :--- |
 | **Phone (Sender)** | `phone/` | Android sender app with GeckoView, Stremio resolution, and remote control |
-| **TV (Receiver)** | `tv/` | Android TV receiver (Ktor WebSocket server, Dual-player) and Apple TV (tvOS) receiver |
-| **Shared (Core)** | `shared/` | KMP library: Protocol, Stremio logic, shared player engines (Android/Apple/tvOS) |
-| **Extension** | `extension/` | Desktop Firefox extension for casting browser video |
+| **TV (Android)** | `tv/player/` | Android TV receiver (Ktor WebSocket server, Dual-player: ExoPlayer/MPV/VLC) |
+| **TV Browser** | `tv/browser/` | Android TV standalone browser with dual-engine (GeckoView/SystemWebView) |
+| **TV (Apple)** | `tv/apple-tv/` | Native tvOS receiver (AVPlayer/VLC) with local VLC proxy |
+| **Shared (Core)** | `shared/` | KMP library: Protocol, Stremio logic, shared player middleware, and resume sync |
+| **Extension** | `extension/` | Desktop Firefox extension for casting browser video directly to TV |
 
 ---
 
@@ -19,41 +23,86 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 ```mermaid
 graph TB
-    subgraph Phone App
-        Browser[GeckoView Browser]
-        Extension[Video Detector Extension]
-        WSClient[WebSocket Client]
-        Connection[Connection Screen<br/>NSD Discovery + PIN]
-        RemoteControl[Remote Control UI]
-        HLS[HLS Parser]
-        Addons[Stremio Addons Protocol<br/>Stream/Catalog/Meta/Subs]
-        Tracking[Watchlist & Tracking<br/>Room DB]
-        Backup[Cloud Backup<br/>S3 Compatible]
+    subgraph Senders ["Senders (Discovery & Control)"]
+        subgraph Phone ["Phone App (Android)"]
+            Browser[GeckoView Browser]
+            WSClient[WebSocket Client Central]
+            Remote[Remote Control UI]
+            Addons[Stremio Addon Logic]
+            Tracking[Watchlist & Tracking]
+            Backup[Cloud Backup]
+            ExtNative[Video Detector Extension]
+        end
+        
+        subgraph Extension ["Desktop Extension (Firefox)"]
+            ExtBackground[background.js]
+            ExtWS[WS Client]
+        end
     end
-    
-    subgraph TV App
-        WSServer[WebSocket Server]
-        Player[ExoPlayer / LibVLC]
-        TVBrowser[Dual-Engine Browser<br/>SystemWebView / GeckoView]
-        AdBlock[Singleton AdBlocker<br/>EasyList + Cosmetic Filtering]
-        Filters[GPU Video Filters<br/>ColorMatrix Presets]
-        PlaylistStore[Playlist Store<br/>Episodes / Queue]
-        ServerSvc[Server Foreground Service]
+
+    subgraph Shared ["Shared Core (Kotlin Multiplatform)"]
+        Protocol[Protocol: Messages/Commands]
+        SyncLogic[History & Resume Sync]
+        AddonCore[Shared Stremio Logic]
+        PlayerCommon[Player Middleware]
     end
+
+    subgraph Receivers ["Receivers (Playback & Rendering)"]
+        subgraph AndroidTV ["Android TV App Suite"]
+            WSServerAndroid[Ktor WebSocket Server]
+            PlayerAndroid[ExoPlayer / LibVLC / MPV]
+            TVBrowser[Dual-Engine Browser]
+            Filters[GPU Video Filters]
+            ServerSvc[Server Foreground Service]
+        end
+
+        subgraph AppleTV ["Apple TV (tvOS)"]
+            WSServerApple[Swift WebSocket Server]
+            PlayerApple[AVPlayer / LibVLC]
+            VLCProxy[VLC HTTP Proxy]
+        end
+    end
+
+    %% Protocol Dependency
+    Senders -.-> Protocol
+    Receivers -.-> Protocol
     
-    Extension --> Browser
-    Browser --> WSClient
+    %% Functional Flow
+    Phone --> Shared
+    Extension --> Shared
+    
+    %% Communication (Discovery/NSD handled by WS clients/servers)
+    WSClient <-->|Command/Play/Mouse| WSServerAndroid
+    WSClient <-->|Command/Play/Mouse| WSServerApple
+    ExtWS <-->|Cast URL| WSServerAndroid
+    ExtWS <-->|Cast URL| WSServerApple
+
+    %% Internal Connections
+    ExtNative --> Browser
     Browser --> Addons
-    Addons --> Tracking
-    Tracking --> Browser
-    Connection --> WSClient
-    RemoteControl --> WSClient
-    WSClient <-->|Play/Playlist/Remote/Mouse/Control| WSServer
-    ServerSvc --> WSServer
-    WSServer --> Player
-    WSServer --> TVBrowser
-    WSServer --> PlaylistStore
-    Player --> Filters
+    WSServerAndroid --> PlayerAndroid
+    WSServerAndroid --> TVBrowser
+    PlayerAndroid --> Filters
+    WSServerApple --> PlayerApple
+    PlayerApple --> VLCProxy
+```
+
+---
+
+## Project Structure
+
+```
+PlayBridge/
+├── phone/               # Android Sender App
+├── tv/
+│   ├── player/          # Android TV Player App (Receiver)
+│   ├── browser/         # Android TV Browser App (Standalone)
+│   └── apple-tv/        # Native Apple TV (tvOS) App
+├── shared/              # Kotlin Multiplatform Core (Protocol/Logic)
+├── extension/           # Firefox Desktop Extension
+├── scripts/             # Maintenance & automation scripts
+├── libs/                # Local libraries (mpv-android, etc.)
+└── docs/                # Project documentation
 ```
 
 ---
@@ -76,24 +125,6 @@ graph TB
 
 ## Standalone Browser Extension
 👉 [Extension Architecture](extension/ARCHITECTURE.md)
-
----
-
-## Project Structure
-
-```
-PlayBridge/
-├── phone/               # Android Sender App
-├── tv/
-│   ├── player/          # Android TV Player App
-│   ├── browser/         # Android TV Browser App
-│   └── apple-tv/        # Native Apple TV (tvOS) App
-├── shared/              # Kotlin Multiplatform Core
-├── extension/           # Firefox Desktop Extension
-├── scripts/             # Maintenance & automation scripts
-├── libs/                # Local libraries (mpv-android, etc.)
-└── docs/                # Project documentation
-```
 
 ---
 
