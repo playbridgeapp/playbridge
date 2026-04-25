@@ -288,6 +288,15 @@ class WebSocketServer(
                             }
                         }
                     }
+                    is Frame.Binary -> {
+                        val bytes = frame.readBytes()
+                        if (bytes.size == 9) {
+                            val mouseCommand = com.playbridge.shared.protocol.MousePacket.unpack(bytes)
+                            if (mouseCommand != null) {
+                                _commands.emit(mouseCommand)
+                            }
+                        }
+                    }
                     is Frame.Close -> {
                         FileLogger.i(TAG, "Client requested close: $clientId")
                     }

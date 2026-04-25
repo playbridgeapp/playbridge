@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.*
+import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "WebSocketClient"
@@ -217,6 +218,12 @@ class WebSocketClient {
             return false
         }
         return ws.send(message)
+    }
+
+    fun send(bytes: ByteArray): Boolean {
+        val ws = webSocket
+        if (ws == null) return false
+        return ws.send(bytes.toByteString())
     }
     
     fun sendPing(): Boolean {

@@ -1,6 +1,6 @@
 # PlayBridge TV — Kotlin Multiplatform Migration Plan
 
-**Status:** Proposal
+**Status:** In-Progress (Steps 5b & 7 remaining)
 **Author:** Architecture review, Apr 2026
 **Companion doc:** [`tv/ARCHITECTURE_REVIEW.md`](./ARCHITECTURE_REVIEW.md)
 
@@ -18,7 +18,7 @@ We explicitly **do not** adopt Compose Multiplatform for tvOS — as of the Comp
 
 ## Goals
 
-1. **One protocol implementation.** Delete `tv/apple-tv/PlayBridgeProtocol/` and replace it with the same `protocolJson`/`MessageEnvelope`/sealed `Command` hierarchy that the Android apps already use, consumed from Swift as an iOS framework.
+1.  **One protocol implementation. (DONE)** Deleted `tv/apple-tv/PlayBridgeProtocol/` and `protocol/` module. Replaced with `com.playbridge.shared.protocol` in `:shared`.
 2. **One `PlayerViewModel`.** The state machine (idle → preplay → loading → playing → seeking → ended → error) lives in `commonMain`. Both platforms bind to it via their native UI idioms.
 3. **One Stremio / Debrid / quality-ranking code path.** `StremioClient`, `QualityRanker`, `SourceTypeRanker`, `SeriesNavigator`, and resume-store logic move to `commonMain`.
 4. **Pluggable playback engines via `expect interface PlaybackEngine`.** Android supplies `ExoPlayerEngine` / `VlcPlayerEngine` / `MpvPlayerEngine`. Apple supplies `AVPlayerEngine` / `TVVLCKitEngine`.
@@ -598,7 +598,7 @@ This step is intentionally split into two phases so the TV app stays shippable t
 
 ---
 
-#### 5b — Make the VM load-bearing (PENDING)
+#### 5b — Make the VM load-bearing (IN-PROGRESS)
 
 **Goal:** Flip playback control from Activity-driven to VM-driven. The Activity becomes a pure UI/renderer: it observes `vm.ui`, renders controls, and forwards user input back to the VM.
 
@@ -641,7 +641,7 @@ This step is intentionally split into two phases so the TV app stays shippable t
 
 ---
 
-### Step 6 — Delete `:protocol`
+### Step 6 — Delete `:protocol` (DONE)
 
 **Goal:** Remove the now-duplicated JVM-only `:protocol` module. Both `:phone:app` and `:tv:player:app` (and the browser/mpvEx apps, if they reference protocol at all) now depend on `:shared` instead.
 

@@ -1615,35 +1615,35 @@ class BrowserActivity : ComponentActivity() {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("move", dx, dy)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("move", dx, dy))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("move", dx, dy))
                                                     }
                                                 },
                                                 onMouseClick = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("click", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("click"))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("click", 0f, 0f))
                                                     }
                                                 },
                                                 onMouseScroll = { dx, dy ->
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("scroll", dx, dy)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("scroll", dx, dy))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("scroll", dx, dy))
                                                     }
                                                 },
                                                 onMouseDown = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("down", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("down"))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("down", 0f, 0f))
                                                     }
                                                 },
                                                 onMouseUp = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("up", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createMouseCommandJson("up"))
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("up", 0f, 0f))
                                                     }
                                                 },
                                                 onBrowserControl = { action ->
