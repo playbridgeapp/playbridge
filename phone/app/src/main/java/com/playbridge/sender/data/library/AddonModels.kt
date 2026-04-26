@@ -377,3 +377,18 @@ data class AddonSearchResultGroup(
     val addonName: String,
     val items: List<StremioMetaPreview>
 )
+
+/**
+ * Parses a catalog title (e.g., "[Torrentio] Popular") into a pair of
+ * (Effective Provider Name, Cleaned Title).
+ * If no [Name] prefix is found, returns the original addon name and title.
+ */
+fun parseCatalogTitle(addonName: String, catalogTitle: String): Pair<String, String> {
+    val PROVIDER_REGEX = Regex("""^\[(.*?)\]\s*(.*)$""")
+    val match = PROVIDER_REGEX.find(catalogTitle)
+    return if (match != null) {
+        match.groupValues[1] to match.groupValues[2]
+    } else {
+        addonName to catalogTitle
+    }
+}

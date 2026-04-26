@@ -457,8 +457,9 @@ class AddonRepository(
                         launch(Dispatchers.IO) {
                             val items = searchCatalog(addon, entry.type, entry.id, query)
                             if (items.isNotEmpty()) {
+                                val (effectiveProvider, _) = parseCatalogTitle(addon.name, entry.name)
                                 val snapshot = mutex.withLock {
-                                    val bucket = resultGroups.getOrPut(addon.name) { mutableListOf() }
+                                    val bucket = resultGroups.getOrPut(effectiveProvider) { mutableListOf() }
                                     val seen = bucket.map { it.id }.toMutableSet()
                                     items.forEach { item ->
                                         if (item.id.isNotBlank() && seen.add(item.id)) bucket += item

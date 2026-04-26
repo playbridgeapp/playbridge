@@ -14,6 +14,7 @@ import com.playbridge.sender.data.library.TmdbMovie
 import com.playbridge.sender.data.library.TmdbMultiSearchResult
 import com.playbridge.sender.data.library.TmdbRepository
 import com.playbridge.sender.data.library.TmdbTvShow
+import com.playbridge.sender.data.library.parseCatalogTitle
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -163,9 +164,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 addon.parsedCatalogEntries()
                     .filter { it.type.isNotBlank() && it.id.isNotBlank() }
                     .map { entry ->
+                        val (provider, cleanTitle) = parseCatalogTitle(addon.name, entry.name.ifBlank { entry.id })
                         AddonCatalogRow(
-                            catalogName = entry.name.ifBlank { entry.id },
-                            addonName = addon.name,
+                            catalogName = cleanTitle,
+                            addonName = provider,
                             type = entry.type,
                             catalogId = entry.id,
                             addonBaseUrl = addon.baseUrl,
@@ -188,9 +190,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                                 addonRepository.fetchCatalog(addon, entry.type, entry.id, skip = 0)
                             }.getOrDefault(emptyList())
                             if (items.isNotEmpty()) {
+                                val (provider, cleanTitle) = parseCatalogTitle(addon.name, entry.name.ifBlank { entry.id })
                                 val row = AddonCatalogRow(
-                                    catalogName = entry.name.ifBlank { entry.id },
-                                    addonName = addon.name,
+                                    catalogName = cleanTitle,
+                                    addonName = provider,
                                     type = entry.type,
                                     catalogId = entry.id,
                                     addonBaseUrl = addon.baseUrl,
