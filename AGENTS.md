@@ -11,18 +11,23 @@ This repository contains multiple **independent Gradle projects** (not a monorep
 | TV | `tv/` | Receiver app with MPV/VLC, WebSocket server (Ktor), Leanback UI. |
 | Shared | `shared/` | KMP logic (Protocol messages, Stremio, Resume sync). |
 | Extension | `extension/` | Desktop Firefox extension, pure JS, raw WebSocket JSON. |
+| Hub | `hub/` | Go-based content aggregator and redirection engine. |
 
 ## Build & Run Commands
 **Always run from the specific project directory (`phone/`, `tv/`, or `shared/`)!**
 **CRITICAL: Always wrap `./gradlew` commands in `zsh -c "..."` to ensure consistent environment loading on macOS.**
 
 ```bash
-# Build & Bundle
+# Android/KMP
 zsh -c "source ~/.zshrc && ./gradlew app:assembleDebug"       # Build Debug APK
 zsh -c "source ~/.zshrc && ./gradlew app:assembleRelease"     # Build Release APK
 zsh -c "source ~/.zshrc && ./gradlew app:bundleRelease"       # Build Release AAB
 zsh -c "source ~/.zshrc && ./gradlew build"                   # Build Shared/Protocol module
 zsh -c "source ~/.zshrc && ./gradlew clean app:assembleDebug" # Clean and build
+
+# Hub (Go) - Run from hub/server
+go run .                                                      # Standard run
+~/.goenv/shims/go run .                                       # Run via goenv shims (macOS)
 ```
 
 ## Testing & Linting Commands

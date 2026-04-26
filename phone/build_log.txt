@@ -1,0 +1,62 @@
+
+> Configure project :libs:mpv-android
+WARNING: The option setting 'android.disallowKotlinSourceSets=false' is experimental.
+The current default is 'true'.
+
+> Task :shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :libs:mpv-android:preBuild UP-TO-DATE
+> Task :libs:mpv-android:preReleaseBuild UP-TO-DATE
+> Task :libs:mpv-android:generateReleaseResources UP-TO-DATE
+> Task :libs:mpv-android:packageReleaseResources UP-TO-DATE
+> Task :libs:mpv-android:processReleaseNavigationResources UP-TO-DATE
+> Task :libs:mpv-android:parseReleaseLocalResources UP-TO-DATE
+> Task :libs:mpv-android:generateReleaseRFile UP-TO-DATE
+> Task :libs:mpv-android:compileReleaseKotlin NO-SOURCE
+> Task :libs:mpv-android:javaPreCompileRelease UP-TO-DATE
+> Task :libs:mpv-android:compileReleaseJavaWithJavac NO-SOURCE
+> Task :libs:mpv-android:bundleLibCompileToJarRelease UP-TO-DATE
+> Task :shared:compileAndroidMain UP-TO-DATE
+> Task :shared:androidPreBuild UP-TO-DATE
+> Task :shared:preAndroidMainBuild UP-TO-DATE
+> Task :shared:bundleAndroidMainClassesToCompileJar UP-TO-DATE
+> Task :phone:app:preBuild UP-TO-DATE
+> Task :phone:app:preDebugBuild UP-TO-DATE
+> Task :phone:app:generateDebugResources UP-TO-DATE
+> Task :phone:app:packageDebugResources UP-TO-DATE
+> Task :shared:generateAndroidMainEmptyResourceFiles UP-TO-DATE
+> Task :libs:mpv-android:preDebugBuild UP-TO-DATE
+> Task :libs:mpv-android:processDebugNavigationResources UP-TO-DATE
+> Task :phone:app:processDebugNavigationResources UP-TO-DATE
+> Task :phone:app:parseDebugLocalResources UP-TO-DATE
+> Task :phone:app:generateDebugRFile UP-TO-DATE
+> Task :phone:app:kspDebugKotlin UP-TO-DATE
+
+> Task :phone:app:compileDebugKotlin FAILED
+e: file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/Components.kt:471:50 Unresolved reference 'devices'.
+e: file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/Components.kt:471:87 Unresolved reference 'devices'.
+e: file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/Components.kt:472:31 Unresolved reference 'devices'.
+e: file:///Users/atulmehla/repos/personal/PlayBridge/phone/app/src/main/java/com/playbridge/sender/browser/Components.kt:473:25 Unresolved reference 'devices'.
+
+[Incubating] Problems report is available at: file:///Users/atulmehla/repos/personal/PlayBridge/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':phone:app:compileDebugKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to generate a Build Scan (Powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.1.0/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 13s
+18 actionable tasks: 1 executed, 17 up-to-date
