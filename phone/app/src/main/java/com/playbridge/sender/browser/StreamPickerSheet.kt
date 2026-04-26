@@ -56,7 +56,14 @@ fun StreamPickerSheet(
     val subTextColor = if (isDynamic) contentColor.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant
 
     // Auto-select preferences
-    val autoQualityKey = remember { prefs.getString("auto_stream_quality", "") ?: "" }
+    val autoPickerEnabled = remember { prefs.getBoolean("auto_select_enabled", false) }
+    val preferredQuality = remember {
+        prefs.getString("default_video_quality", "Auto") ?: "Auto"
+    }
+    // autoQualityKey is for local auto-picking. Empty if toggle is off.
+    val autoQualityKey = remember(autoPickerEnabled, preferredQuality) {
+        if (autoPickerEnabled) preferredQuality else ""
+    }
     val autoMaxMbps = remember {
         val raw = prefs.getString("auto_stream_max_mbps", "") ?: ""
         raw.toDoubleOrNull()

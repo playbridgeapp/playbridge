@@ -391,26 +391,6 @@ class BrowserActivity : ComponentActivity() {
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
             
-            // Set up Bridge callback to handle Hub UI cast requests
-            LaunchedEffect(connectionViewModel) {
-                com.playbridge.sender.browser.Components.onBridgeCastRequest = { url, title ->
-                    Log.d("BrowserActivity", "Cast requested via Extension Bridge: $url ($title)")
-                    val currentMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
-                    
-                    val cmd = createPlayCommandJson(
-                        url = url,
-                        title = title,
-                        playerMode = currentMode
-                    )
-                    
-                    connectionViewModel.sendCommandAndRecord(
-                        commandJson = cmd,
-                        type = "play",
-                        url = url,
-                        title = title
-                    )
-                }
-            }
             val browserSettings = remember { getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
 
             // Mediaflow proxy config (read once; user must reopen cast sheet to pick up changes)
@@ -434,6 +414,31 @@ class BrowserActivity : ComponentActivity() {
             val preferredSubLang by remember { mutableStateOf(prefs.getString("preferred_subtitle_lang", "") ?: "") }
             val defaultVideoQuality by remember { mutableStateOf(prefs.getString("default_video_quality", "Auto") ?: "Auto") }
             val maxBitrateCapMbps by remember { mutableStateOf(prefs.getString("auto_stream_max_mbps", "")?.toDoubleOrNull()) }
+
+            // Set up Bridge callback to handle Hub UI cast requests
+            LaunchedEffect(connectionViewModel, preferredAudioLang, preferredSubLang, defaultVideoQuality, maxBitrateCapMbps) {
+                com.playbridge.sender.browser.Components.onBridgeCastRequest = { url, title ->
+                    Log.d("BrowserActivity", "Cast requested via Extension Bridge: $url ($title)")
+                    val currentMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                    
+                    val cmd = createPlayCommandJson(
+                        url = url,
+                        title = title,
+                        playerMode = currentMode,
+                        preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                        preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                        maxBitrateCapMbps = maxBitrateCapMbps
+                    )
+                    
+                    connectionViewModel.sendCommandAndRecord(
+                        commandJson = cmd,
+                        type = "play",
+                        url = url,
+                        title = title
+                    )
+                }
+            }
 
             var detectVideosEnabled by remember { mutableStateOf(prefs.getBoolean("detect_videos", true)) }
             var isDesktopMode by remember { mutableStateOf(false) }

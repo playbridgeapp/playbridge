@@ -25,7 +25,7 @@ private sealed class SettingsSection {
     object Library : SettingsSection()
     object Debrid : SettingsSection()
     object Proxy : SettingsSection()
-    object Playback : SettingsSection()
+    object Streaming : SettingsSection()
     object TV : SettingsSection()
     object ImportExport : SettingsSection()
     object PopupBlocker : SettingsSection()
@@ -51,10 +51,11 @@ fun SettingsScreen(
             onLibrary = { section = SettingsSection.Library },
             onDebrid = { section = SettingsSection.Debrid },
             onProxy = { section = SettingsSection.Proxy },
-            onPlayback = { section = SettingsSection.Playback },
+            onStreaming = { section = SettingsSection.Streaming },
             onTV = { section = SettingsSection.TV },
             onImportExport = { section = SettingsSection.ImportExport },
-            onPopupBlocker = { section = SettingsSection.PopupBlocker }
+            onPopupBlocker = { section = SettingsSection.PopupBlocker },
+            onAddons = onAddonSettings
         )
         SettingsSection.Appearance -> AppearanceSettingsScreen(
             onBack = { section = SettingsSection.Hub }
@@ -63,8 +64,7 @@ fun SettingsScreen(
             onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.Library -> LibrarySettingsScreen(
-            onBack = { section = SettingsSection.Hub },
-            onAddonSettings = onAddonSettings
+            onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.Debrid -> DebridSettingsScreen(
             onBack = { section = SettingsSection.Hub }
@@ -72,7 +72,7 @@ fun SettingsScreen(
         SettingsSection.Proxy -> MediaflowSettingsScreen(
             onBack = { section = SettingsSection.Hub }
         )
-        SettingsSection.Playback -> PlaybackSettingsScreen(
+        SettingsSection.Streaming -> StreamingSettingsScreen(
             onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.TV -> TVSettingsScreen(
@@ -94,10 +94,11 @@ private fun SettingsHubContent(
     onLibrary: () -> Unit,
     onDebrid: () -> Unit,
     onProxy: () -> Unit,
-    onPlayback: () -> Unit,
+    onStreaming: () -> Unit,
     onTV: () -> Unit,
     onImportExport: () -> Unit,
-    onPopupBlocker: () -> Unit
+    onPopupBlocker: () -> Unit,
+    onAddons: () -> Unit
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -129,8 +130,15 @@ private fun SettingsHubContent(
             SettingsNavItem(
                 icon = Icons.Default.VideoLibrary,
                 title = "Library",
-                subtitle = "API keys and addon management",
+                subtitle = "Metadata API keys and display options",
                 onClick = onLibrary
+            )
+            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+            SettingsNavItem(
+                icon = Icons.Default.Extension,
+                title = "Addons",
+                subtitle = "Install and manage Stremio providers",
+                onClick = onAddons
             )
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
             SettingsNavItem(
@@ -149,9 +157,9 @@ private fun SettingsHubContent(
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
             SettingsNavItem(
                 icon = Icons.Default.Tune,
-                title = "Playback",
-                subtitle = "Audio, subtitles, video quality",
-                onClick = onPlayback
+                title = "Streaming Preferences",
+                subtitle = "Audio, subtitles, and auto-select quality",
+                onClick = onStreaming
             )
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
             SettingsNavItem(

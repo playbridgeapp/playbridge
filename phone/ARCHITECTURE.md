@@ -45,12 +45,12 @@ com.playbridge.sender/
 │   ├── MediaflowProxy.kt
 │   ├── MediaflowSettingsScreen.kt
 │   ├── MyListTab.kt
-│   ├── PlaybackSettingsScreen.kt
 │   ├── PopupBlockerSettingsScreen.kt
 │   ├── RemoteControlScreen.kt
 │   ├── SessionObserverSetup.kt
 │   ├── SettingsScreen.kt
 │   ├── SiteInfoSheet.kt
+│   ├── StreamingSettingsScreen.kt
 │   ├── StreamPickerSheet.kt
 │   ├── StreamSelector.kt
 │   ├── SubtitlePreferences.kt

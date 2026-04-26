@@ -389,12 +389,21 @@ fun LibraryDetailScreen(
     val canResolveStreams = hasAddons && (resolvedImdbId != null || !id.startsWith("tt"))
 
     // Stream resolution helper
-    val autoQualityKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_quality", "") ?: "" }
-    val autoMaxMbps = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_max_mbps", "")?.toDoubleOrNull() }
-    val autoAddonKey = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_addon", "") ?: "" }
+    val autoPickerEnabled = remember { browserPrefs.getBoolean("auto_select_enabled", false) }
+    val preferredQuality = remember {
+        browserPrefs.getString("default_video_quality", "Auto") ?: "Auto"
+    }
+    // autoQualityKey is used by local phone auto-picking (StreamSelector).
+    // It should be empty if auto-select is disabled so the picker sheet opens.
+    val autoQualityKey = remember(autoPickerEnabled, preferredQuality) {
+        if (autoPickerEnabled) preferredQuality else ""
+    }
+
+    val autoMaxMbps = remember { browserPrefs.getString("auto_stream_max_mbps", "")?.toDoubleOrNull() }
+    val autoAddonKey = remember { browserPrefs.getString("auto_stream_addon", "") ?: "" }
     val autoSourceTypes = remember {
         SourceTypeFilter.parseCsv(
-            context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE).getString("auto_stream_source_types", "")
+            browserPrefs.getString("auto_stream_source_types", "")
         )
     }
     val episodesInSeason = addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList()
@@ -428,8 +437,8 @@ fun LibraryDetailScreen(
                     currentEpisodeSelection = episode,
                     addonMeta = addonMeta,
                     addonRepository = addonRepository,
-                    forcePicker = forcePicker,
-                    autoQuality = autoQualityKey,
+                    forcePicker = forcePicker || !autoPickerEnabled,
+                    autoQuality = preferredQuality,
                     autoMaxMbps = autoMaxMbps,
                     preferredAddonName = autoAddonKey,
                     preferredSourceTypeKeys = autoSourceTypes.map { it.key },
@@ -2244,7 +2253,7 @@ private suspend fun buildContentPayload(
         addonNames = addonNames,
         preferredAddonBaseUrl = preferredAddonBaseUrl,
         preferredAddonName = preferredAddonName,
-        defaultVideoQuality = autoQuality?.takeIf { it.isNotEmpty() },
+        defaultVideoQuality = autoQuality?.takeIf { it.isNotEmpty() && it != "Auto" },
         maxBitrateCapMbps = autoMaxMbps,
         preferredSourceTypes = preferredSourceTypeKeys.takeIf { it.isNotEmpty() },
         episodeRuntimeMinutes = episodeRuntimeMinutes?.takeIf { it > 0 },

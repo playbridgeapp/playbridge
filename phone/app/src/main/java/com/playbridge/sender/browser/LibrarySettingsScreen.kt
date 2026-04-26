@@ -2,8 +2,6 @@ package com.playbridge.sender.browser
 
 import android.content.Context
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
@@ -23,18 +21,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
-import com.playbridge.sender.data.history.DatabaseProvider
-import com.playbridge.sender.data.library.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibrarySettingsScreen(
-    onBack: () -> Unit,
-    onAddonSettings: () -> Unit
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val tmdbPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
-    val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
 
     var tmdbApiKey by remember { mutableStateOf(tmdbPrefs.getString("tmdb_api_key", "") ?: "") }
     var showTmdbKey by remember { mutableStateOf(false) }
@@ -48,40 +42,6 @@ fun LibrarySettingsScreen(
     var seriesSourceExpanded by remember { mutableStateOf(false) }
 
     var showCardTextOverlay by remember { mutableStateOf(tmdbPrefs.getBoolean("show_card_text_overlay", false)) }
-
-    // Stream picker auto-select prefs
-    val qualityOptions = listOf(
-        "" to "Off (always show picker)",
-        "2160p" to "4K (2160p)",
-        "1080p" to "1080p",
-        "720p" to "720p"
-    )
-    var autoQuality by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_quality", "") ?: "")
-    }
-    var qualityExpanded by remember { mutableStateOf(false) }
-
-    var autoMaxMbpsText by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_max_mbps", "") ?: "")
-    }
-
-    val addonDao = remember {
-        DatabaseProvider.getDatabase(context).addonDao()
-    }
-    val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
-    val streamAddons = remember(installedAddons) {
-        installedAddons.filter { it.isEnabled && it.supportsResource("stream") && it.isFeatureEnabled("stream") }
-    }
-
-    var autoAddon by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_addon", "") ?: "")
-    }
-    var addonExpanded by remember { mutableStateOf(false) }
-
-    // Preferred source types (multi-select, stored as CSV — e.g. "bluray,web-dl").
-    var autoSourceTypes by remember {
-        mutableStateOf(SourceTypeFilter.parseCsv(browserPrefs.getString("auto_stream_source_types", "")))
-    }
 
     Scaffold(
         topBar = {
@@ -240,166 +200,6 @@ fun LibrarySettingsScreen(
                         tmdbPrefs.edit().putBoolean("show_card_text_overlay", isChecked).apply()
                     }
                 )
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-            Text("Stream Picker", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-
-            Text(
-                "Automatically pick a stream without showing the picker. Streams are matched by quality tag in their name.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            // Auto-select quality dropdown
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    readOnly = true,
-                    value = qualityOptions.find { it.first == autoQuality }?.second ?: "Off (always show picker)",
-                    onValueChange = {},
-                    label = { Text("Auto-select Quality") },
-                    trailingIcon = {
-                        IconButton(onClick = { qualityExpanded = !qualityExpanded }) {
-                            Icon(
-                                if (qualityExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                                contentDescription = if (qualityExpanded) "Collapse" else "Expand"
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .clickable { qualityExpanded = !qualityExpanded }
-                )
-                DropdownMenu(
-                    expanded = qualityExpanded,
-                    onDismissRequest = { qualityExpanded = false },
-                    modifier = Modifier.fillMaxWidth(0.9f)
-                ) {
-                    qualityOptions.forEach { (code, label) ->
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            onClick = {
-                                autoQuality = code
-                                qualityExpanded = false
-                                browserPrefs.edit().putString("auto_stream_quality", code).apply()
-                            }
-                        )
-                    }
-                }
-            }
-
-            // Max bitrate field — only relevant when auto-select is enabled
-            if (autoQuality.isNotEmpty()) {
-                OutlinedTextField(
-                    value = autoMaxMbpsText,
-                    onValueChange = { raw ->
-                        // Allow only digits and a single decimal point
-                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
-                            autoMaxMbpsText = raw
-                            browserPrefs.edit().putString("auto_stream_max_mbps", raw.trim()).apply()
-                        }
-                    },
-                    label = { Text("Max Bitrate (Mbps, optional)") },
-                    placeholder = { Text("e.g. 20 — leave blank to pick first match") },
-                    supportingText = { Text("Only streams at or below this bitrate will be auto-selected. Requires file size metadata from the addon.") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                if (streamAddons.isNotEmpty()) {
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            readOnly = true,
-                            value = if (autoAddon.isEmpty()) "Any addon" else autoAddon,
-                            onValueChange = {},
-                            label = { Text("Preferred Addon") },
-                            supportingText = { Text("Streams from this addon are tried first before falling back to others.") },
-                            trailingIcon = {
-                                IconButton(onClick = { addonExpanded = !addonExpanded }) {
-                                    Icon(
-                                        if (addonExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                                        contentDescription = null
-                                    )
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.matchParentSize().clickable { addonExpanded = !addonExpanded })
-                        DropdownMenu(
-                            expanded = addonExpanded,
-                            onDismissRequest = { addonExpanded = false },
-                            modifier = Modifier.fillMaxWidth(0.9f)
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Any addon") },
-                                onClick = {
-                                    autoAddon = ""
-                                    browserPrefs.edit().putString("auto_stream_addon", "").apply()
-                                    addonExpanded = false
-                                }
-                            )
-                            streamAddons.forEach { addon ->
-                                DropdownMenuItem(
-                                    text = { Text(addon.name) },
-                                    onClick = {
-                                        autoAddon = addon.name
-                                        browserPrefs.edit().putString("auto_stream_addon", addon.name).apply()
-                                        addonExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Preferred source types — multi-select chips. Applies to both phone
-            // auto-pick and is sent to TV so the same preference is respected there.
-            Text(
-                "Preferred Source Types",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-            Text(
-                "When set, streams whose name/title mentions one of these release types are preferred. Leave empty for no preference.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            ) {
-                items(SourceTypeFilter.ORDERED) { type ->
-                    FilterChip(
-                        selected = type in autoSourceTypes,
-                        onClick = {
-                            autoSourceTypes = if (type in autoSourceTypes) {
-                                autoSourceTypes - type
-                            } else {
-                                autoSourceTypes + type
-                            }
-                            browserPrefs.edit()
-                                .putString("auto_stream_source_types", SourceTypeFilter.toCsv(autoSourceTypes))
-                                .apply()
-                        },
-                        label = { Text(type.label) }
-                    )
-                }
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-            OutlinedButton(
-                onClick = onAddonSettings,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Manage Stremio Addons")
             }
         }
     }

@@ -13,6 +13,7 @@ enum class QualityFilter(val label: String, val patterns: List<String>) {
 
     companion object {
         fun fromKey(key: String): QualityFilter? = when (key) {
+            "Auto"  -> ALL
             "2160p" -> UHD
             "1080p" -> FHD
             "720p"  -> HD
