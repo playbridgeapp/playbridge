@@ -39,9 +39,10 @@ WARNING: **Dumb Receiver Rule:** Receivers (TV) MUST NOT perform content resolut
 
 WARNING: **GeckoView version must stay in sync:** Phone and TV both depend on GeckoView. If the version is bumped in `gradle/libs.versions.toml`, it must be bumped in both or behavior diverges.
 
-## Current State
 _As of 2026-04-25:_
-- Working: KMP shared logic, Android phone/tv apps, Apple TV receiver app (AVPlayer/VLC), Hub project scaffold.
-- Broken/degraded: Nothing critical.
-- In progress: **Unified Dumb Receiver Migration** (Moving logic to the Hub).
-- Blockers: none.
+- **Working**: KMP shared logic, Android phone/tv apps, Apple TV receiver app (AVPlayer/VLC), Hub project (Go aggregator + SvelteKit mobile-first UI).
+- **Architecture Shift**: Transitioning to "Headless Content Hub." The Hub handles scrapers, debrid resolution, and metadata. Receivers (TV) only receive a single, resolved redirect URL.
+- **New Feature**: "Live Discovery" Engine implemented in Go for real-time catalog querying and adaptive capability filtering.
+- **Streaming Preferences**: System now supports user-defined quality, bitrate, and source type preferences stored on the Hub.
+- **In progress**: Finalizing Single Stream Redirect logic and unified history sync.
+- **Blockers**: none.
