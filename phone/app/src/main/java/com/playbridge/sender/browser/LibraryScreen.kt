@@ -153,10 +153,9 @@ private fun LibraryScreenContent(
     // Search state
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
-    val searchResults by viewModel.searchResults.collectAsState()
     val isSearchLoading by viewModel.isSearchLoading.collectAsState()
     val addonSearchGroups by viewModel.addonSearchGroups.collectAsState()
-    val addonSearchResults = remember(addonSearchGroups) { addonSearchGroups.flatMap { it.items } }
+    val addonSearchResults = remember(addonSearchGroups) { addonSearchGroups.flatMap { it.items }.distinctBy { it.id } }
     val searchHistory by viewModel.searchHistory.collectAsState()
 
     // Discovery state
@@ -180,7 +179,6 @@ private fun LibraryScreenContent(
     // Home tab: which addon is selected in the filter chip row (null = All)
     var selectedAddonFilter by remember { mutableStateOf<String?>(null) }
 
-    // Search: which source chip is selected ("" = All, "tmdb" = TMDB only, addonName = that addon)
     var selectedSearchSource by remember { mutableStateOf("") }
 
     BackHandler(enabled = isSearching) {
@@ -642,7 +640,7 @@ private fun LibraryScreenContent(
                 onRemoveClick = { viewModel.removeSearchHistory(it) },
                 onClearAll = { viewModel.clearSearchHistory() }
             )
-        } else if (searchResults.isEmpty() && addonSearchResults.isEmpty()) {
+        } else if (addonSearchResults.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -655,18 +653,15 @@ private fun LibraryScreenContent(
             }
         } else {
             // Derive which results to show based on selected source chip
-            val filteredTmdb = if (selectedSearchSource.isEmpty() || selectedSearchSource == "tmdb")
-                searchResults else emptyList()
             val filteredAddon = when {
                 selectedSearchSource.isEmpty() -> addonSearchResults
-                selectedSearchSource == "tmdb" -> emptyList()
                 else -> addonSearchGroups.find { it.addonName == selectedSearchSource }?.items ?: emptyList()
             }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 // Source filter chips
                 val addonSources = addonSearchGroups.map { it.addonName }
-                if (searchResults.isNotEmpty() || addonSearchResults.isNotEmpty()) {
+                if (addonSearchResults.isNotEmpty()) {
                     LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -684,15 +679,6 @@ private fun LibraryScreenContent(
                                 label = { Text("All") }
                             )
                         }
-                        if (searchResults.isNotEmpty()) {
-                            item {
-                                FilterChip(
-                                    selected = selectedSearchSource == "tmdb",
-                                    onClick = { selectedSearchSource = "tmdb" },
-                                    label = { Text("TMDB") }
-                                )
-                            }
-                        }
                         items(addonSources) { addonName ->
                             FilterChip(
                                 selected = selectedSearchSource == addonName,
@@ -703,19 +689,16 @@ private fun LibraryScreenContent(
                     }
                 }
 
-                CombinedSearchResults(
+                AddonSearchResultsList(
                     listState = viewModel.searchResultsListState,
-                    tmdbResults = filteredTmdb,
-                    addonResults = filteredAddon,
+                    results = filteredAddon,
                     contentPadding = PaddingValues(
-                        top = if (addonSources.isNotEmpty() || searchResults.isNotEmpty()) 4.dp
+                        top = if (addonSources.isNotEmpty()) 4.dp
                                else innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
                         bottom = contentBottomPadding + 8.dp,
                         start = 8.dp,
                         end = 8.dp
                     ),
-                    onMovieClick = onMovieClick,
-                    onTvShowClick = onTvShowClick,
                     onAddonItemClick = onAddonItemClick
                 )
             }
@@ -1291,189 +1274,79 @@ private fun PosterCard(
 }
 
 @Composable
-private fun SearchResultsList(
-    listState: LazyListState = rememberLazyListState(),
-    results: List<TmdbMultiSearchResult>,
-    contentPadding: PaddingValues = PaddingValues(8.dp),
-    onMovieClick: (Int) -> Unit,
-    onTvShowClick: (Int) -> Unit
-) {
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(results) { result ->
-            SearchResultItem(
-                result = result,
-                onClick = {
-                    if (result.isMovie) onMovieClick(result.id)
-                    else onTvShowClick(result.id)
-                }
-            )
-        }
-    }
-}
-
-@Composable
-private fun SearchResultItem(
-    result: TmdbMultiSearchResult,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp)
-        ) {
-            // Poster
-            Box(
-                modifier = Modifier
-                    .width(70.dp)
-                    .height(105.dp)
-                    .clip(RoundedCornerShape(8.dp))
-            ) {
-                if (result.posterUrl != null) {
-                    AsyncImage(
-                        model = result.posterUrl,
-                        contentDescription = result.displayTitle,
-                        contentScale = ContentScale.Crop,
-                        placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
-                        error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.Movie, null, modifier = Modifier.size(24.dp))
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            // Info
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(105.dp),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text(
-                        text = result.displayTitle,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (result.year.isNotBlank()) {
-                            Text(
-                                text = result.year,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = if (result.isMovie)
-                                MaterialTheme.colorScheme.secondaryContainer
-                            else
-                                MaterialTheme.colorScheme.surfaceContainerHighest
-                        ) {
-                            Text(
-                                text = if (result.isMovie) "Movie" else "TV",
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
-                Text(
-                    text = result.overview,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-/**
- * Unified search results list showing TMDB results followed by addon catalog results.
- * Addon results appear under a labelled divider so the user can distinguish the sources.
- */
-@Composable
-private fun CombinedSearchResults(
+private fun AddonSearchResultsList(
     listState: LazyListState,
-    tmdbResults: List<TmdbMultiSearchResult>,
-    addonResults: List<StremioMetaPreview>,
+    results: List<StremioMetaPreview>,
     contentPadding: PaddingValues,
-    onMovieClick: (Int) -> Unit,
-    onTvShowClick: (Int) -> Unit,
     onAddonItemClick: (id: String, type: String) -> Unit = { _, _ -> }
 ) {
+    val movies = results.filter { it.type == "movie" }
+    val series = results.filter { it.type == "series" || it.type == "anime" }
+    val others = results.filter { it.type != "movie" && it.type != "series" && it.type != "anime" }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(24.dp) // More breathing room between rows
     ) {
-        // TMDB results
-        items(tmdbResults) { result ->
-            SearchResultItem(
-                result = result,
-                onClick = {
-                    if (result.isMovie) onMovieClick(result.id)
-                    else onTvShowClick(result.id)
-                }
-            )
+        if (movies.isNotEmpty()) {
+            item {
+                SearchSectionRow("Movies", movies, onAddonItemClick)
+            }
         }
 
-        // Addon results section
-        if (addonResults.isNotEmpty()) {
+        if (series.isNotEmpty()) {
             item {
-                val topPad = if (tmdbResults.isNotEmpty()) 4.dp else 0.dp
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = topPad, bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    HorizontalDivider(modifier = Modifier.weight(1f))
-                    Text(
-                        text = "From Addons",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    HorizontalDivider(modifier = Modifier.weight(1f))
-                }
+                SearchSectionRow("Series", series, onAddonItemClick)
             }
-            items(addonResults) { item ->
-                AddonSearchResultItem(
-                    item = item,
+        }
+
+        if (others.isNotEmpty()) {
+            item {
+                SearchSectionRow("More Content", others, onAddonItemClick)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchSectionRow(
+    title: String,
+    items: List<StremioMetaPreview>,
+    onAddonItemClick: (id: String, type: String) -> Unit
+) {
+    Column {
+        SearchSectionHeader(title)
+        Spacer(modifier = Modifier.height(8.dp))
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 4.dp)
+        ) {
+            items(items, key = { it.id }) { item ->
+                PosterCard(
+                    posterUrl = item.poster,
+                    title = item.name,
+                    year = "",
+                    rating = "",
                     onClick = { onAddonItemClick(item.id, item.type) }
                 )
             }
         }
     }
+}
+
+@Composable
+private fun SearchSectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+        fontWeight = FontWeight.Bold
+    )
 }
 
 @Composable

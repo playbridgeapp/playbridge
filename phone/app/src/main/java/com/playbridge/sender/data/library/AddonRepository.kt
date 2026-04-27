@@ -494,8 +494,8 @@ class AddonRepository(
      * Like [fetchMeta] but also returns the name of the addon that supplied the metadata.
      * Returns null when no addon could provide metadata for the given type + id.
      */
-    suspend fun fetchMetaWithSource(type: String, id: String): Pair<StremioMetaDetail, String>? {
-        val cacheKey = "meta:$type:$id"
+    suspend fun fetchMetaWithSource(type: String, id: String, forcedSource: String? = null): Pair<StremioMetaDetail, String>? {
+        val cacheKey = "meta:$type:$id:${forcedSource ?: "any"}"
         val cached = metaCache[cacheKey]
         if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
             Log.d(TAG, "Using cached meta for $cacheKey")
@@ -517,7 +517,10 @@ class AddonRepository(
         return withContext(Dispatchers.IO) {
             for (addon in addons) {
                 try {
-                    val url = "${addon.baseUrl}/meta/$type/$id.json"
+                    var url = "${addon.baseUrl}/meta/$type/$id.json"
+                    if (forcedSource != null && addon.baseUrl.contains("8080")) {
+                        url += "?src=${android.net.Uri.encode(forcedSource)}"
+                    }
                     Log.d(TAG, "Fetching meta from ${addon.name}: $url")
                     val request = Request.Builder().url(url).get().build()
                     val response = client.newCall(request).execute()

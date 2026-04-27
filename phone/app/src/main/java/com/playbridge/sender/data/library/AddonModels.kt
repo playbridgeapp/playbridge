@@ -330,8 +330,12 @@ data class StremioMetaDetail(
     val runtime: String? = null,
     val year: String? = null,
     val imdbRating: String? = null,
+    val tmdbId: Int? = null,
     val cast: List<String> = emptyList(),
     val genres: List<String> = emptyList(),
+    val director: String? = null,
+    val trailer: String? = null,
+    val logo: String? = null,
     val videos: List<StremioVideo> = emptyList()
 )
 

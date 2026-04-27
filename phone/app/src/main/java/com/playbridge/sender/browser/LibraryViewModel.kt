@@ -77,8 +77,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
 
-    private val _searchResults = MutableStateFlow<List<TmdbMultiSearchResult>>(emptyList())
-    val searchResults: StateFlow<List<TmdbMultiSearchResult>> = _searchResults.asStateFlow()
 
     private val _isSearchLoading = MutableStateFlow(false)
     val isSearchLoading: StateFlow<Boolean> = _isSearchLoading.asStateFlow()
@@ -376,7 +374,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         _isSearching.value = searching
         if (!searching) {
             _searchQuery.value = ""
-            _searchResults.value = emptyList()
             _addonSearchGroups.value = emptyList()
         }
     }
@@ -387,7 +384,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             _isSearchLoading.value = true
-            _searchResults.value = emptyList()
             _addonSearchGroups.value = emptyList()
 
             // Save to history
@@ -395,22 +391,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 searchHistoryDao.insert(com.playbridge.sender.data.history.SearchHistoryEntity(query, System.currentTimeMillis()))
             }
 
-            // TMDB: publish as soon as it responds, then clear the loading spinner
-            launch {
-                val tmdbResult = runCatching { tmdb.searchMulti(query) }.getOrNull()
-                _searchResults.value = tmdbResult?.results
-                    ?.filter { it.isMovie || it.isTvShow }
-                    ?: emptyList()
-                _isSearchLoading.value = false
-            }
-
             // Addons: each catalog publishes its group as soon as it responds
-            launch {
-                runCatching {
-                    addonRepository.searchAllCatalogsGroupedStreaming(query) { groups ->
-                        _addonSearchGroups.value = groups
-                    }
+            try {
+                addonRepository.searchAllCatalogsGroupedStreaming(query) { groups ->
+                    _addonSearchGroups.value = groups
+                    // Clear loading spinner once we have at least one response
+                    _isSearchLoading.value = false
                 }
+            } catch (e: Exception) {
+                // ...
+            } finally {
+                _isSearchLoading.value = false
             }
         }
     }
