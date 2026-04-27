@@ -158,6 +158,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     /** Serialises Stremio series navigation. Cancelled before each new nav request. */
     private var navigationJob: kotlinx.coroutines.Job? = null
     private val videoFilterManager = com.playbridge.shared.player.VideoFilterManager()
+    private val contentSniffer = ContentSniffer()
+    private var surfaceReadyDeferred = kotlinx.coroutines.CompletableDeferred<Unit>()
 
     // ── PlayerActivity abstract impl ─────────────────────────────────────────
     override fun play() { engine?.play() }
@@ -382,6 +384,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 engine?.attachSurface(holder.surface)
+                surfaceReadyDeferred.complete(Unit)
             }
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
@@ -496,7 +499,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         controlsViewModel.setPrePlayLaunching(false)
         isPreBuffering = false
 
-        stopPlayback()
+        // We skip stopPlayback() here because it hides the surface, causing reconstruction lag.
+        // playVideoInternal() will handle stopping the engine and loading the new stream.
         handleIntent(intent)
     }
 
@@ -885,6 +889,38 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         if (startPaused) {
             engine?.pause()
+        }
+
+        // Briefly hide surface to clear the old frame from the previous video
+        runOnUiThread {
+            surfaceView.visibility = android.view.View.INVISIBLE
+            surfaceReadyDeferred = kotlinx.coroutines.CompletableDeferred()
+        }
+
+        // Wait for sniffing and surface transition
+        val sniffedType = contentSniffer.sniffContent(url, headers)
+        
+        runOnUiThread {
+            surfaceView.visibility = android.view.View.VISIBLE
+        }
+        
+        // Wait for surfaceCreated to fire before we call load
+        try {
+            kotlinx.coroutines.withTimeout(2000) {
+                surfaceReadyDeferred.await()
+            }
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "Surface took too long to become ready, proceeding anyway...")
+        }
+
+        if (sniffedType != null) {
+            FileLogger.i(TAG, "Pre-flight sniff detected: $sniffedType")
+            // If HLS detected, give MPV a hint to use the HLS demuxer immediately
+            if (sniffedType == "application/x-mpegURL") {
+                MPVLib.setOptionString("demuxer-lavf-format", "hls")
+            } else {
+                MPVLib.setOptionString("demuxer-lavf-format", "")
+            }
         }
 
         val payload = com.playbridge.shared.protocol.PlayPayload(url = url, headers = headers)

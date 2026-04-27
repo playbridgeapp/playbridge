@@ -72,10 +72,16 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             // Initial options
             MPVLib.setOptionString("vo", "gpu")
             MPVLib.setOptionString("gpu-context", "android")
-            MPVLib.setOptionString("hwdec", "mediacodec-copy")
+            MPVLib.setOptionString("hwdec", "mediacodec") // Direct surface decoding is more stable on many TVs
             MPVLib.setOptionString("hwdec-codecs", "h264,hevc,vp8,vp9,av1")
             MPVLib.setOptionString("tls-verify", "no")
             MPVLib.setOptionString("cache", "yes")
+            
+            // Streaming optimizations
+            MPVLib.setOptionString("demuxer-max-bytes", "150M")
+            MPVLib.setOptionString("demuxer-max-back-bytes", "100M")
+            MPVLib.setOptionString("ytdl", "yes") // Support non-direct URLs if encountered
+            MPVLib.setOptionString("hls-bitrate", "max") // Prefer highest quality for HLS
 
             // Subtitles
             MPVLib.setOptionString("sub-fonts-dir", File(filesDir, "fonts").absolutePath)
