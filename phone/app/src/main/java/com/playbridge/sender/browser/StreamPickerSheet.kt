@@ -252,16 +252,20 @@ fun StreamPickerSheet(
                         val optionLabel = if (count > 0 && filter != QualityFilter.ALL)
                             "${filter.label} ($count)" else filter.label
                         DropdownMenuItem(
-                            text = { Text(optionLabel) },
+                            text = { Text(optionLabel, color = contentColor) },
                             onClick = { selectedFilter = filter; dismiss() },
                             leadingIcon = {
                                 if (selectedFilter == filter) {
-                                    Icon(Icons.Default.Check, contentDescription = null)
+                                    Icon(Icons.Default.Check, contentDescription = null, tint = contentColor)
                                 } else {
                                     Spacer(Modifier.size(24.dp))
                                 }
                             },
-                            enabled = count > 0 || filter == QualityFilter.ALL || isLoading
+                            enabled = count > 0 || filter == QualityFilter.ALL || isLoading,
+                            colors = MenuDefaults.itemColors(
+                                textColor = contentColor,
+                                leadingIconColor = contentColor
+                            )
                         )
                     }
                 }
@@ -277,27 +281,35 @@ fun StreamPickerSheet(
                     contentColor = contentColor
                 ) { dismiss ->
                     DropdownMenuItem(
-                        text = { Text("All Providers") },
+                        text = { Text("All Providers", color = contentColor) },
                         onClick = { selectedProvider = null; dismiss() },
                         leadingIcon = {
                             if (selectedProvider == null) {
-                                Icon(Icons.Default.Check, contentDescription = null)
+                                Icon(Icons.Default.Check, contentDescription = null, tint = contentColor)
                             } else {
                                 Spacer(Modifier.size(24.dp))
                             }
-                        }
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = contentColor,
+                            leadingIconColor = contentColor
+                        )
                     )
                     providers.forEach { provider ->
                         DropdownMenuItem(
-                            text = { Text(provider) },
+                            text = { Text(provider, color = contentColor) },
                             onClick = { selectedProvider = provider; dismiss() },
                             leadingIcon = {
                                 if (selectedProvider == provider) {
-                                    Icon(Icons.Default.Check, contentDescription = null)
+                                    Icon(Icons.Default.Check, contentDescription = null, tint = contentColor)
                                 } else {
                                     Spacer(Modifier.size(24.dp))
                                 }
-                            }
+                            },
+                            colors = MenuDefaults.itemColors(
+                                textColor = contentColor,
+                                leadingIconColor = contentColor
+                            )
                         )
                     }
                 }
@@ -318,11 +330,15 @@ fun StreamPickerSheet(
                 ) { _ ->
                     if (selectedSourceTypes.isNotEmpty()) {
                         DropdownMenuItem(
-                            text = { Text("Clear selection") },
+                            text = { Text("Clear selection", color = contentColor) },
                             onClick = { selectedSourceTypes = emptySet() },
                             leadingIcon = {
                                 Icon(Icons.Default.Close, contentDescription = null, tint = contentColor)
-                            }
+                            },
+                            colors = MenuDefaults.itemColors(
+                                textColor = contentColor,
+                                leadingIconColor = contentColor
+                            )
                         )
                         HorizontalDivider(color = contentColor.copy(alpha = 0.1f))
                     }
@@ -331,7 +347,7 @@ fun StreamPickerSheet(
                         val isSelected = type in selectedSourceTypes
                         val optionLabel = if (count > 0) "${type.label} ($count)" else type.label
                         DropdownMenuItem(
-                            text = { Text(optionLabel) },
+                            text = { Text(optionLabel, color = contentColor) },
                             onClick = {
                                 selectedSourceTypes = if (isSelected) selectedSourceTypes - type
                                 else selectedSourceTypes + type
@@ -340,7 +356,11 @@ fun StreamPickerSheet(
                                 if (isSelected) Icon(Icons.Default.Check, contentDescription = null, tint = contentColor)
                                 else Spacer(Modifier.size(24.dp))
                             },
-                            enabled = count > 0 || isLoading
+                            enabled = count > 0 || isLoading,
+                            colors = MenuDefaults.itemColors(
+                                textColor = contentColor,
+                                leadingIconColor = contentColor
+                            )
                         )
                     }
                 }
