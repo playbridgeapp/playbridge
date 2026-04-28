@@ -140,7 +140,7 @@ data class ContentPlayPayload(
     val overview: String? = null,
     val genres: List<String> = emptyList(),
     val cast: List<String> = emptyList(),
-    val director: String? = null,   // null for series
+    val director: List<String> = emptyList(),   // empty for series
 
     val backdropUrl: String? = null,
     val posterUrl: String? = null,

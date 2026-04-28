@@ -8,6 +8,9 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -168,6 +171,28 @@ object StremioResourceSerializer : KSerializer<StremioResource> {
     override fun serialize(encoder: Encoder, value: StremioResource) {
         val surrogate = StremioResource.Surrogate(value.name, value.types, value.idPrefixes)
         encoder.encodeSerializableValue(StremioResource.Surrogate.serializer(), surrogate)
+    }
+}
+
+object StringListSerializer : KSerializer<List<String>> {
+    override val descriptor: SerialDescriptor = ListSerializer(String.serializer()).descriptor
+
+    override fun deserialize(decoder: Decoder): List<String> {
+        val jsonDecoder = decoder as? JsonDecoder ?: return emptyList()
+        val element = jsonDecoder.decodeJsonElement()
+
+        return when (element) {
+            is JsonArray -> jsonDecoder.json.decodeFromJsonElement(ListSerializer(String.serializer()), element)
+            is JsonPrimitive -> {
+                if (element.isString && element.content.isNotBlank()) listOf(element.content) 
+                else emptyList()
+            }
+            else -> emptyList()
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: List<String>) {
+        encoder.encodeSerializableValue(ListSerializer(String.serializer()), value)
     }
 }
 
@@ -333,7 +358,8 @@ data class StremioMetaDetail(
     val tmdbId: Int? = null,
     val cast: List<String> = emptyList(),
     val genres: List<String> = emptyList(),
-    val director: String? = null,
+    @Serializable(with = StringListSerializer::class)
+    val director: List<String> = emptyList(),
     val trailer: String? = null,
     val logo: String? = null,
     val videos: List<StremioVideo> = emptyList()

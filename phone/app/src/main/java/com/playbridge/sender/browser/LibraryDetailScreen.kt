@@ -231,7 +231,7 @@ fun LibraryDetailScreen(
     val displayGenres = addonMeta?.genres ?: emptyList()
     val displayOverview = addonMeta?.description ?: ""
     val displayCast = addonMeta?.cast ?: emptyList()
-    val displayDirector = addonMeta?.director ?: ""
+    val displayDirector = addonMeta?.director ?: emptyList()
 
 
     // Check if we have episodes
@@ -788,9 +788,10 @@ fun LibraryDetailScreen(
                             )
                         }
 
-                        if (displayDirector.isNotBlank()) {
+                        if (displayDirector.isNotEmpty()) {
+                            val directors = displayDirector.joinToString(", ")
                             Text(
-                                text = "Director: $displayDirector",
+                                text = "Director: $directors",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.White.copy(alpha = 0.7f),
                                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
@@ -2004,7 +2005,7 @@ private suspend fun buildContentPayload(
     displayOverview: String?,
     displayGenres: List<String>,
     displayCast: List<String>,
-    displayDirector: String?,
+    displayDirector: List<String>,
     displayBackdrop: String?,
     displayPoster: String?,
     displayLogo: String?,
