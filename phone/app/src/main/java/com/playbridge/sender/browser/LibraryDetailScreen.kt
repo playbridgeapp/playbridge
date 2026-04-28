@@ -135,6 +135,7 @@ fun LibraryDetailScreen(
     var forceManualInPicker by remember { mutableStateOf(false) }
     var lastResolvedId by remember { mutableStateOf<String?>(null) }
     var lastResolvedType by remember { mutableStateOf<String?>(null) }
+    var hubAddon by remember { mutableStateOf<InstalledAddonEntity?>(null) }
     var resolutionJob by remember { mutableStateOf<Job?>(null) }
     var dominantColor by remember { mutableStateOf<Color?>(null) }
 
@@ -194,6 +195,7 @@ fun LibraryDetailScreen(
 
         isLoading = false
         hasAddons = addonRepository.hasAnyAddons()
+        hubAddon = addonRepository.getInstalledAddons().find { it.name == "PlayBridge Hub" }
     }
 
     // IDs for tracking/streams (derived from metal)
@@ -430,7 +432,14 @@ fun LibraryDetailScreen(
         if (!forPhone && proxyMode != MediaflowProxy.Mode.OFF && proxyAvailable) {
             startProxiedResolution(streamId, streamType, resTitle, episode)
         } else {
-            startResolution(streamId, streamType, resTitle, forPhone, forcePicker, episode)
+            // Instant Play for Phone: if Hub is installed and not forcePicker,
+            // use api/play instead of resolving on phone.
+            if (forPhone && !forcePicker && hubAddon != null) {
+                val hubUrl = "${hubAddon!!.baseUrl}/api/play/$streamType/$streamId"
+                openInExternalPlayer(context, hubUrl, null, null)
+            } else {
+                startResolution(streamId, streamType, resTitle, forPhone, forcePicker, episode)
+            }
         }
     }
 
