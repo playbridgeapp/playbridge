@@ -1,8 +1,6 @@
 package com.playbridge.shared.player
 
-import com.playbridge.shared.protocol.ContentPlayPayload
 import com.playbridge.shared.protocol.PlayPayload
-import com.playbridge.shared.stremio.ScoredStremioStream
 
 /**
  * UI state machine for the player screen.
@@ -14,16 +12,6 @@ sealed class PlayerUiState {
     /** No media loaded. */
     data object Idle : PlayerUiState()
 
-    /**
-     * Pre-play screen is visible: Stremio metadata shown, streams resolving
-     * or already resolved waiting for user/auto selection.
-     */
-    data class PrePlay(
-        val payload: ContentPlayPayload,
-        val resolvedStreams: List<ScoredStremioStream> = emptyList(),
-        val isResolving: Boolean = true,
-        val error: String? = null,
-    ) : PlayerUiState()
 
     /**
      * A concrete [PlayPayload] has been submitted to the engine but it has not

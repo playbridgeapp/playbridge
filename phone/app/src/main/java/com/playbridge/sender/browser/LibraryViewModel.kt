@@ -1,6 +1,7 @@
 package com.playbridge.sender.browser
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.playbridge.sender.data.library.AddonCatalogRow
@@ -143,6 +144,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun loadCatalogRows(forceRefresh: Boolean = false) {
         viewModelScope.launch {
             val addons = addonRepository.getInstalledAddons()
+            Log.d("LibraryViewModel", "loadCatalogRows: found ${addons.size} addons")
             if (addons.isEmpty()) {
                 _catalogRows.value = emptyList()
                 return@launch
@@ -153,14 +155,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             // Serve cache immediately if fresh enough (< 5 min) and not forced
             val cached = catalogCache
             if (!forceRefresh && cached != null && (now - catalogCacheTime) < CATALOG_CACHE_TTL_MS) {
+                Log.d("LibraryViewModel", "loadCatalogRows: serving cache with ${cached.size} rows")
                 _catalogRows.value = cached
                 return@launch
             }
 
             // Build skeleton rows so the UI shows shimmer/loading state right away
             val skeletons = addons.filter { it.isFeatureEnabled("catalog") }.flatMap { addon ->
-                addon.parsedCatalogEntries()
-                    .filter { it.type.isNotBlank() && it.id.isNotBlank() }
+                Log.d("LibraryViewModel", "Addon ${addon.name} catalogsJson: ${addon.catalogsJson}")
+                val entries = addon.parsedCatalogEntries()
+                Log.d("LibraryViewModel", "Addon ${addon.name} has ${entries.size} catalog entries")
+                entries.filter { it.type.isNotBlank() && it.id.isNotBlank() }
                     .map { entry ->
                         val (provider, cleanTitle) = parseCatalogTitle(addon.name, entry.name.ifBlank { entry.id })
                         AddonCatalogRow(
@@ -173,6 +178,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                         )
                     }
             }
+            Log.d("LibraryViewModel", "loadCatalogRows: built ${skeletons.size} skeletons")
             _catalogRows.value = skeletons
 
             // Fetch catalogs in parallel; update the list as each one lands (no need to wait for all)
@@ -185,8 +191,13 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     .map { entry ->
                         async {
                             val items = runCatching {
+                                Log.d("LibraryViewModel", "Fetching catalog: ${addon.name} -> ${entry.name}")
                                 addonRepository.fetchCatalog(addon, entry.type, entry.id, skip = 0)
+                            }.onFailure {
+                                Log.e("LibraryViewModel", "Failed to fetch catalog ${entry.name} from ${addon.name}", it)
                             }.getOrDefault(emptyList())
+
+                            Log.d("LibraryViewModel", "Fetched ${items.size} items for ${addon.name} -> ${entry.name}")
                             if (items.isNotEmpty()) {
                                 val (provider, cleanTitle) = parseCatalogTitle(addon.name, entry.name.ifBlank { entry.id })
                                 val row = AddonCatalogRow(
@@ -207,6 +218,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     }
             }
             deferreds.forEach { it.await() }
+            Log.d("LibraryViewModel", "loadCatalogRows: all fetches complete. Final row count: ${_catalogRows.value.size}")
             // Store completed result in cache
             catalogCache = _catalogRows.value
             catalogCacheTime = System.currentTimeMillis()

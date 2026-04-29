@@ -1,13 +1,8 @@
 package com.playbridge.shared.player
 
 import com.playbridge.shared.logging.logger
-import com.playbridge.shared.protocol.ContentPlayPayload
 import com.playbridge.shared.protocol.PlayPayload
 import com.playbridge.shared.resume.ResumeStore
-import com.playbridge.shared.stremio.ResolvedStremioStream
-import com.playbridge.shared.stremio.ScoredStremioStream
-import com.playbridge.shared.stremio.SeriesNavigator
-import com.playbridge.shared.stremio.StremioClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,9 +48,6 @@ class PlayerViewModel(
     /** Whether single-video loop is enabled. */
     private var isLooping: Boolean = false
 
-    /** Set from the Activity after constructing the navigator. */
-    var seriesNavigator: SeriesNavigator? = null
-        private set
 
     /** The payload most recently passed to [engine.load]. */
     private var currentPayload: PlayPayload? = null
@@ -139,7 +131,6 @@ class PlayerViewModel(
     fun onPayload(payload: PlayPayload, settings: PlaybackSettings = PlaybackSettings()) {
         logger.i(TAG, "onPayload: ${payload.url}")
         currentPayload = payload
-        seriesNavigator = null
 
         scope.launch {
             // Attempt M3U expansion
@@ -174,104 +165,12 @@ class PlayerViewModel(
         setPlaylist(payloads, startIndex)
         val payload = payloads[playlistIndex]
         currentPayload = payload
-        seriesNavigator = null
 
         scope.launch {
             loadPayloadInternal(payload, isPlaylist = true, playlistIndex = playlistIndex)
         }
     }
 
-    /**
-     * Stremio pre-play path: resolve streams for a [ContentPlayPayload] and
-     * either auto-select the best stream or wait in [PlayerUiState.PrePlay].
-     */
-    fun onContentPayload(payload: ContentPlayPayload, settings: PlaybackSettings = PlaybackSettings()) {
-        prePlayJob?.cancel()
-        _ui.value = PlayerUiState.PrePlay(payload, emptyList(), isResolving = true)
-
-        prePlayJob = scope.launch {
-            try {
-                val autoQuality = payload.defaultVideoQuality
-                    ?: settings.defaultVideoQuality
-                    ?: ""
-                val autoMaxMbps = payload.maxBitrateCapMbps
-                    ?: settings.maxBitrateCapMbps
-                val preferredAddon = payload.preferredAddonBaseUrl
-                    ?: settings.preferredAddonBaseUrl
-                    ?: ""
-                val preferredAddonName = payload.preferredAddonName
-                    ?: settings.preferredAddonName
-                val sourceTypes = payload.preferredSourceTypes
-                    ?: settings.preferredSourceTypes
-
-                val streams = StremioClient.resolveStreamsByContentId(
-                    addonBaseUrls = payload.addonBaseUrls,
-                    addonNames = payload.addonNames,
-                    contentId = payload.contentId,
-                    contentType = payload.contentType,
-                    season = payload.season,
-                    episode = payload.episode,
-                    qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
-                    preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
-                    preferredAddonName = preferredAddonName,
-                    preferredSourceTypes = sourceTypes,
-                    runtimeMinutes = payload.episodeRuntimeMinutes,
-                    maxBitrateMbps = autoMaxMbps,
-                )
-
-                if (streams.isEmpty()) {
-                    _ui.value = PlayerUiState.PrePlay(
-                        payload = payload,
-                        resolvedStreams = emptyList(),
-                        isResolving = false,
-                        error = "No streams found",
-                    )
-                    return@launch
-                }
-
-                val best = streams.firstOrNull()
-                if (best != null && !payload.forcePicker && autoQuality.isNotEmpty()) {
-                    logger.i(TAG, "Auto-picked stream: ${best.name}")
-                    selectStream(best, payload)
-                } else {
-                    _ui.value = PlayerUiState.PrePlay(
-                        payload = payload,
-                        resolvedStreams = streams,
-                        isResolving = false,
-                    )
-                }
-            } catch (e: Exception) {
-                logger.e(TAG, "Pre-play resolution failed", e)
-                _ui.value = PlayerUiState.PrePlay(
-                    payload = payload,
-                    resolvedStreams = emptyList(),
-                    isResolving = false,
-                    error = e.message ?: "Resolution failed",
-                )
-            }
-        }
-    }
-
-    /**
-     * Called from the pre-play UI when the user manually picks a stream.
-     */
-    fun selectStream(stream: ScoredStremioStream, contentPayload: ContentPlayPayload) {
-        val playPayload = PlayPayload(
-            url = stream.url,
-            title = contentPayload.title,
-            headers = null,
-            contentType = null,
-            detectedBy = "library",
-            subtitles = null,
-            preferredAudioLanguage = contentPayload.preferredAudioLanguage,
-            preferredSubtitleLanguage = contentPayload.preferredSubtitleLanguage,
-            defaultVideoQuality = contentPayload.defaultVideoQuality,
-            maxBitrateCapMbps = contentPayload.maxBitrateCapMbps,
-            preferredSourceTypes = contentPayload.preferredSourceTypes,
-            episodeRuntimeMinutes = contentPayload.episodeRuntimeMinutes,
-        )
-        onPayload(playPayload)
-    }
 
     // ------------------------------------------------------------------
     // Playback controls (delegated to engine)
@@ -325,9 +224,6 @@ class PlayerViewModel(
         playlistIndex = startIndex.coerceIn(0, items.size.coerceAtLeast(1) - 1)
     }
 
-    fun setSeriesNavigator(nav: SeriesNavigator?) {
-        seriesNavigator = nav
-    }
 
     fun next() {
         navigationJob?.cancel()
@@ -400,19 +296,7 @@ class PlayerViewModel(
             }
         }
 
-        // No playlist or at boundary — try series navigator
-        val nav = seriesNavigator
-        if (nav != null) {
-            val stream = when (direction) {
-                1 -> nav.resolveNext()
-                -1 -> nav.resolvePrev()
-                else -> null
-            }
-            if (stream != null) {
-                loadSeriesStream(stream, nav)
-                return
-            }
-        }
+        // No playlist or at boundary
 
         // Nothing to advance to
         if (direction == 1) {
@@ -425,17 +309,6 @@ class PlayerViewModel(
         loadPayloadInternal(item, isPlaylist = true, playlistIndex = index)
     }
 
-    private suspend fun loadSeriesStream(stream: ResolvedStremioStream, nav: SeriesNavigator) {
-        val payload = PlayPayload(
-            url = stream.url,
-            title = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}",
-            headers = null,
-            contentType = null,
-            detectedBy = "library",
-            subtitles = null,
-        )
-        loadPayloadInternal(payload, isPlaylist = false, playlistIndex = 0)
-    }
 
     private fun handlePlaybackEnded() {
         if (isLooping) {
@@ -450,17 +323,7 @@ class PlayerViewModel(
                 playlistIndex++
                 loadPlaylistItem(playlistIndex)
             } else {
-                val nav = seriesNavigator
-                if (nav != null && nav.hasNext()) {
-                    val stream = nav.resolveNext()
-                    if (stream != null) {
-                        loadSeriesStream(stream, nav)
-                    } else {
-                        _ui.value = PlayerUiState.Ended(null)
-                    }
-                } else {
-                    _ui.value = PlayerUiState.Ended(null)
-                }
+                _ui.value = PlayerUiState.Ended(null)
             }
         }
     }

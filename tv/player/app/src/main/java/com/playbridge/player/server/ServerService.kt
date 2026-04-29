@@ -75,11 +75,6 @@ class ServerService : Service() {
         overlayWindow = OverlayWindowHelper(applicationContext)
         nsdManager = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
 
-        // Initialize Stremio client with cache
-        com.playbridge.shared.stremio.StremioClient.init(applicationContext)
-        val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-        val cacheHours = prefs.getInt("stream_cache_hours", 0)
-        com.playbridge.shared.stremio.StremioClient.updateCacheDuration(cacheHours)
 
         createNotificationChannel()
         val filter = android.content.IntentFilter(ACTION_CONTEXT_IDLE)
@@ -450,66 +445,17 @@ class ServerService : Service() {
                         command.maxBitrateCapMbps?.let { cap ->
                             putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, cap)
                         }
-                        command.seriesContext?.let { seriesContext ->
-                            // Serialize SeriesContext to JSON string for Intent transport.
-                            // Deserialized in ExoPlayerActivity.handleIntent().
+                        command.visualMetadata?.let { visualMetadata ->
                             val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
-                                com.playbridge.shared.protocol.SeriesContext.serializer(),
-                                seriesContext
+                                com.playbridge.shared.protocol.VisualMetadata.serializer(),
+                                visualMetadata
                             )
-                            putExtra(EXTRA_SERIES_CONTEXT, json)
+                            putExtra(EXTRA_VISUAL_METADATA, json)
                         }
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                     }
                     launchActivityFromBackground(playerIntent, "Playing media")
                 }
-            }
-            is Command.PlayContent -> {
-                FileLogger.i(TAG, "=== PLAY_CONTENT COMMAND === id: ${command.payload.contentId}")
-
-                com.playbridge.player.player.PlaylistStore.currentPlaylist = null
-
-                // Determine target activity based on player mode
-                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-                val tvPref = if (prefs.contains("player_mode")) {
-                    prefs.getString("player_mode", "phone") ?: "phone"
-                } else {
-                    if (prefs.getBoolean("use_external_player", false)) "external" else "phone"
-                }
-                val finalMode = if (tvPref == "phone") {
-                    command.payload.playerMode ?: "internal"
-                } else {
-                    tvPref
-                }
-
-                val targetActivity = when (finalMode) {
-                    "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
-                    "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
-                    "external", "external_mpv" -> com.playbridge.player.preplay.PrePlayActivity::class.java
-                    else -> com.playbridge.player.player.ExoPlayerActivity::class.java
-                }
-
-                // Stop any running player if we are NOT reusing the active instance.
-                // Reusing the instance is handled by onNewIntent in PlayerActivities.
-                if (activeContext != "player") {
-                    FileLogger.i(TAG, "Broadcasting stop command before launching new activity")
-                    sendBroadcast(Intent(ACTION_CONTROL).apply {
-                        putExtra(EXTRA_COMMAND, "stop")
-                        setPackage(packageName)
-                    })
-                }
-
-                activeContext = "player"
-                broadcastContext()
-                val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
-                    com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
-                    command.payload
-                )
-                val intent = Intent(this, targetActivity).apply {
-                    putExtra(EXTRA_CONTENT_PAYLOAD, json)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
-                launchActivityFromBackground(intent, "Opening ${targetActivity.simpleName}")
             }
 
             is Command.Browser -> {
@@ -631,16 +577,18 @@ class ServerService : Service() {
                         if (firstItem.maxBitrateCapMbps != null) {
                             putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, firstItem.maxBitrateCapMbps)
                         }
-                        firstItem.seriesContext?.let { seriesContext ->
-                            val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
-                                com.playbridge.shared.protocol.SeriesContext.serializer(),
-                                seriesContext
-                            )
-                            putExtra(EXTRA_SERIES_CONTEXT, json)
-                        }
                     }
                     putExtra(EXTRA_IS_PLAYLIST, true)
                     putExtra(EXTRA_PLAYLIST_INDEX, command.startIndex)
+                    
+                    command.visualMetadata?.let { visualMetadata ->
+                        val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
+                            com.playbridge.shared.protocol.VisualMetadata.serializer(),
+                            visualMetadata
+                        )
+                        putExtra(EXTRA_VISUAL_METADATA, json)
+                    }
+                    
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
                 pendingQueueItems.clear() // discard any stale items from a previous session
@@ -668,7 +616,7 @@ class ServerService : Service() {
                 // Handled in WebSocketServer's auth loop before this point — should never arrive here
             }
             is Command.Unknown -> {
-                FileLogger.w(TAG, "Unknown command: ${command.type}")
+                FileLogger.w(TAG, "Unknown command: ${command.type}. Raw JSON: ${command.rawJson}")
             }
         }
     }
@@ -918,8 +866,8 @@ class ServerService : Service() {
         const val EXTRA_EXTERNAL_SUBTITLE_URL = "external_subtitle_url"
         const val EXTRA_VIDEO_FILTER = "video_filter"
         const val EXTRA_CUSTOM_FILTER_VALUES = "custom_filter_values"
-        const val EXTRA_SERIES_CONTEXT = "series_context"        // JSON-encoded SeriesContext
         const val EXTRA_MAX_BITRATE_CAP_MBPS = "max_bitrate_cap_mbps" // Double: max ABR bitrate cap for ExoPlayer
+        const val EXTRA_SKIP_PREPLAY = "skip_preplay"
         const val ACTION_QUEUE_ADD = "com.playbridge.player.ACTION_QUEUE_ADD"
         const val ACTION_PLAYLIST_JUMP = "com.playbridge.player.ACTION_PLAYLIST_JUMP"
         // Sent to MainActivity (via startActivity) to navigate to the PairingScreen.
@@ -934,6 +882,7 @@ class ServerService : Service() {
         const val EXTRA_QUEUE_ITEM_DETECTED_BY = "queue_item_detected_by"
         const val EXTRA_PLAYLIST_JUMP_INDEX = "playlist_jump_index"
         const val EXTRA_CONTENT_PAYLOAD = "content_payload"
+        const val EXTRA_VISUAL_METADATA = "visual_metadata"
         const val EXTRA_START_POSITION = "extra_start_position"
 
         // Static flow for UI to observe connection state

@@ -13,7 +13,6 @@ class PlayBridgeApplication : Application() {
         Log.d("PlayBridgeApplication", "Initializing application")
 
         com.playbridge.shared.SharedContext.init(this)
-        com.playbridge.shared.stremio.StremioClient.init(this)
 
         // Start backup trigger
         BackupTrigger(this, applicationScope).start()

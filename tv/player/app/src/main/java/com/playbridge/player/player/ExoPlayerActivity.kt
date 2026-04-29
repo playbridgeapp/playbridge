@@ -99,10 +99,8 @@ class ExoPlayerActivity : PlayerActivity() {
     override fun stopPlayback() {
         FileLogger.i(TAG, "stopPlayback() — clearing surface for transition")
         releasePlayer()
-        controlsViewModel.setAvailableStreams(emptyList()) // Clear cached streams for the transition
         runOnUiThread {
             controlsViewModel.hideControls()
-            playerView.visibility = android.view.View.INVISIBLE
         }
     }
 
@@ -121,11 +119,7 @@ class ExoPlayerActivity : PlayerActivity() {
     // VM wiring (Step 5a proxy layer)
     private var vmUiJob: kotlinx.coroutines.Job? = null
 
-    // Pre-play (metadata resolution & pre-buffering)
-    private var isPreBuffering = false
-    private lateinit var composeView: androidx.compose.ui.platform.ComposeView
-    private var resolutionJob: kotlinx.coroutines.Job? = null
-    private var launchJob: kotlinx.coroutines.Job? = null
+    private var composeView: androidx.compose.ui.platform.ComposeView? = null
 
     // Managers
     private val contentSniffer = ContentSniffer()
@@ -248,20 +242,19 @@ class ExoPlayerActivity : PlayerActivity() {
                             controlsViewModel.showSettings(SettingsTab.AUDIO) 
                         },
                         onPlaylist = { showPlaylistOverlay() },
-                        onStreams = { showStreamSelectionOverlay() },
-                        onRefreshStreams = { resolveStreamsForCurrentVideo() },
                         onPrev = { playPreviousInPlaylist() },
                         onNext = { playNextInPlaylist() },
                         onFilter = { showVideoFilterOverlay() },
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
                         onSeek = { controlsViewModel.handleScrubbing(it) },
-                        onPrePlayStreamSelected = { stream ->
-                            resolutionJob?.cancel()
-                            playVideoAfterResolution(stream.url, state.prePlayPayload!!)
+                        onPrePlayStartNow = {
+                            launchJob?.cancel()
+                            controlsViewModel.setPrePlayLaunching(true)
+                            controlsViewModel.setPrePlay(null)
                         },
                         onPrePlayBack = {
-                            resolutionJob?.cancel()
+                            launchJob?.cancel()
                             controlsViewModel.setPrePlay(null)
                             ServerService.notifyContextIdle()
                             finish()
@@ -325,29 +318,9 @@ class ExoPlayerActivity : PlayerActivity() {
                              playerView.resizeMode = resizeMode
                              controlsViewModel.setVideoScaling(mode)
                         },
-                        onSettingsDismiss = { controlsViewModel.hideSettings() },
-                        onOverlayDismiss = { controlsViewModel.hideOverlay() },
-                        onStreamSelected = { stream ->
-                            controlsViewModel.hideOverlay()
-                            val mainTitle = seriesNavigator?.seriesTitle ?: "S${seriesNavigator?.currentSeason}E${seriesNavigator?.currentEpisode}"
-                            intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                            playVideo(url = stream.url, title = mainTitle)
-                            videoFilterManager.reapplyFilter()
-                            controlsViewModel.hideControls()
-                        },
-                        onFilterSelected = { filter ->
-                            videoFilterManager.applyFilter(filter)
-                        },
-                        onCustomFilterChanged = { b, c, s ->
-                            videoFilterManager.applyCustom(b, c, s)
-                        },
                         onPlaylistItemPicked = { index ->
                             controlsViewModel.hideOverlay()
-                            if (playlistItems.isNotEmpty()) {
-                                playItemAtIndex(index)
-                            } else if (seriesNavigator != null) {
-                                playSeriesEpisodeAtIndex(index)
-                            }
+                            playItemAtIndex(index)
                         },
                         onPlayerSwitched = { playerId ->
                             controlsViewModel.hideOverlay()
@@ -439,7 +412,7 @@ class ExoPlayerActivity : PlayerActivity() {
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
             engine = engineAdapter,
             controls = controlsViewModel,
-            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayPayload != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
+            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
         )
         
         controlsViewModel.setEngine(engineAdapter, "internal_exo")
@@ -477,18 +450,14 @@ class ExoPlayerActivity : PlayerActivity() {
         super.onNewIntent(intent)
         FileLogger.i(TAG, "onNewIntent received")
 
-        // Cancel any pending resolution or countdown from a previous intent
-        resolutionJob?.cancel()
         launchJob?.cancel()
-        controlsViewModel.setPrePlayLaunching(false)
-        isPreBuffering = false
 
         stopPlayback()
         handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent?) {
-        setupSeriesNavigator(intent)
+        setupPlaybackExtras(intent)
 
         // Read playlist if present - needed early for button visibility logic
         val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
@@ -501,47 +470,17 @@ class ExoPlayerActivity : PlayerActivity() {
             playlistItems = mutableListOf()
         }
 
-        // Update button visibility based on navigator and playlist
+        // Update button visibility based on playlist
         val hasPlaylist = playlistItems.isNotEmpty()
-        val hasEpisodeList = seriesNavigator?.episodeList?.isNotEmpty() == true
-        val isSeries = seriesNavigator?.contentType == "series"
 
-        // Show playlist button when a playlist is active OR series navigator has list mode
-        controlsViewModel.setPlaylistVisible(hasPlaylist || hasEpisodeList)
+        // Show playlist button when a playlist is active
+        controlsViewModel.setPlaylistVisible(hasPlaylist)
 
-        // Show streams button when series navigator is active
-        controlsViewModel.setStreamsVisible(seriesNavigator != null)
-
-        seriesNavigator?.let { nav ->
-            if (nav.contentType == "series") {
-                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                controlsViewModel.setSeasonInfo(seasonInfo)
-            } else {
-                controlsViewModel.setSeasonInfo(null)
-            }
-        }
-
-        // Ensure prev/next buttons are visible for ANY series (including optimistic mode)
-        // or if a playlist is active. Movies with no playlist will have them hidden by setPlaylistVisible(false).
-        if (isSeries || hasPlaylist) {
+        // Ensure prev/next buttons are visible if a playlist is active.
+        if (hasPlaylist) {
             controlsViewModel.setNavigationVisible(true)
         }
 
-        val payloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
-        if (payloadJson != null) {
-            try {
-                val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
-                    com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
-                    payloadJson
-                )
-                controlsViewModel.setPrePlay(p)
-                controlsViewModel.setStreamPreferences(p.defaultVideoQuality, p.preferredAddonName, p.preferredSourceTypes)
-                resolveStreamsAndPreBuffer(p)
-                return // resolveStreamsAndPreBuffer handles the rest
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Failed to parse ContentPlayPayload", e)
-            }
-        }
         val startPos = intent?.getLongExtra(ServerService.EXTRA_START_POSITION, -1L) ?: -1L
         if (startPos > 0L) {
             FileLogger.i(TAG, "Starting from explicit position: ${startPos}ms (from intent)")
@@ -549,7 +488,8 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         // Standard direct URL path
-        controlsViewModel.setPrePlay(null)
+        // Handle pre-play metadata for pre-buffering via base class
+        handlePrePlayMetadata(intent, controlsViewModel)
 
         val url = intent?.getStringExtra(ServerService.EXTRA_URL)
         val title = intent?.getStringExtra(ServerService.EXTRA_TITLE)
@@ -592,12 +532,7 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         if (url != null) {
-            val nav = seriesNavigator
-            val baseTitle = if (nav != null && nav.seriesTitle != null) {
-                nav.seriesTitle
-            } else {
-                title
-            }
+            val baseTitle = title
 
             val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
             val displayTitle = if (playlistItems.isNotEmpty() && baseTitle?.contains(suffix) != true) {
@@ -632,7 +567,6 @@ class ExoPlayerActivity : PlayerActivity() {
         if (playlistItems.isNotEmpty()) {
             viewModel.setPlaylist(playlistItems, playlistIndex)
         }
-        seriesNavigator?.let { viewModel.setSeriesNavigator(it) }
     }
 
     private var playJob: kotlinx.coroutines.Job? = null
@@ -640,16 +574,7 @@ class ExoPlayerActivity : PlayerActivity() {
     private var navigationJob: kotlinx.coroutines.Job? = null
 
     private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
-        // Only rebuild the navigator on cold start / onNewIntent. During Stremio episode
-        // switches the navigator already exists with its advanced currentIndex — rebuilding
-        // from the intent would throw away that state and cause index drift.
-        if (seriesNavigator == null) {
-            setupSeriesNavigator(intent)
-        }
-        if (seriesNavigator == null) {
-            controlsViewModel.setSeasonInfo(null)
-        }
-        controlsViewModel.setStreamsVisible(seriesNavigator != null)
+        
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "Target URL: $url")
         FileLogger.i(TAG, "Target Title: $title")
@@ -709,9 +634,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
             controlsViewModel.updateMetadata(
             title = title ?: "",
-            subtitle = if (seriesNavigator != null && seriesNavigator?.contentType == "series") {
-                "Season ${seriesNavigator?.currentSeason} (${seriesNavigator?.currentSeason}x${seriesNavigator?.currentEpisode})"
-            } else null,
+            subtitle = null,
             streamInfo = engineAdapter.streamInfo,
             hdrFormat = engineAdapter.hdrFormat
         )
@@ -719,6 +642,7 @@ class ExoPlayerActivity : PlayerActivity() {
         startPlayback(url, title, finalContentType, detectedBy, intentHeaders, subtitles)
         }
     }
+
 
     private fun startPlayback(url: String, title: String?, contentType: String?, detectedBy: String?, intentHeaders: Map<String, String>?, subtitles: ArrayList<String>?) {
         FileLogger.i(TAG, "startPlayback() called with url: $url")
@@ -774,12 +698,12 @@ class ExoPlayerActivity : PlayerActivity() {
                 playerView.player = exoPlayer
                 exoPlayer.addListener(createPlayerListener())
                 exoPlayer.prepare()
-                exoPlayer.playWhenReady = !isPreBuffering
+                exoPlayer.playWhenReady = true
             }
 
             // Handle manual subtitles
             this@ExoPlayerActivity.subtitleUrls = subtitles ?: emptyList()
-            if (subtitleUrls.size == 1) {
+            if (subtitleUrls.isNotEmpty()) {
                 val subUrl = subtitleUrls[0]
                 currentSubtitleUrl = subUrl
                 subtitleManager.loadSubtitle(subUrl)
@@ -808,6 +732,18 @@ class ExoPlayerActivity : PlayerActivity() {
                     FileLogger.i(TAG, "Playback ready")
                     controlsViewModel.setBuffering(false)
                     stuckBufferHandler.removeCallbacksAndMessages(null)
+                    
+                    // Trigger cinematic countdown only after we are connected and ready
+                    if (controlsViewModel.controlsState.value.prePlayMetadata != null) {
+                        engine?.getExoPlayer()?.playWhenReady = false // Keep paused while buffering
+                        triggerPrePlayCountdown(controlsViewModel) {
+                            FileLogger.i(TAG, "Countdown finished - starting playback")
+                            engine?.getExoPlayer()?.playWhenReady = true
+                            controlsViewModel.setPrePlay(null)
+                        }
+                    } else {
+                        engine?.getExoPlayer()?.playWhenReady = true
+                    }
 
                     // Apply Loudness Enhancer if enabled
                     if (isLoudnessEnhancerEnabled) {
@@ -1114,6 +1050,7 @@ class ExoPlayerActivity : PlayerActivity() {
         }
         try {
             engine?.getExoPlayer()?.clearVideoSurface()
+            playerView.player = null
             engine?.release()
         } catch (e: Exception) {
             FileLogger.e(TAG, "Error releasing player: ${e.message}", e)
@@ -1134,8 +1071,6 @@ class ExoPlayerActivity : PlayerActivity() {
         when (state) {
             is com.playbridge.shared.player.PlayerUiState.Idle ->
                 FileLogger.d(TAG, "VM state: Idle")
-            is com.playbridge.shared.player.PlayerUiState.PrePlay ->
-                FileLogger.d(TAG, "VM state: PrePlay resolving=${state.isResolving}")
             is com.playbridge.shared.player.PlayerUiState.Loading ->
                 FileLogger.d(TAG, "VM state: Loading ${state.payload.url}")
             is com.playbridge.shared.player.PlayerUiState.Playing ->
@@ -1144,47 +1079,6 @@ class ExoPlayerActivity : PlayerActivity() {
                 FileLogger.d(TAG, "VM state: Error ${state.code}: ${state.message}")
             is com.playbridge.shared.player.PlayerUiState.Ended ->
                 FileLogger.d(TAG, "VM state: Ended")
-        }
-    }
-
-    /**
-     * Play the previous item in the playlist queue.
-     */
-    private fun playSeriesEpisodeAtIndex(index: Int) {
-        val nav = seriesNavigator ?: return
-        navigationJob?.cancel()
-        navigationJob = lifecycleScope.launch {
-            FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
-            
-            stopPlayback()
-            controlsViewModel.setBuffering(true)
-
-            val stream = nav.resolveAndAdvanceToIndex(index)
-            if (stream != null) {
-                FileLogger.i(TAG, "Successfully resolved JUMP episode: ${stream.name ?: stream.title}")
-                val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
-                if (stream.url == currentUrl) {
-                    controlsViewModel.setBuffering(false)
-                    return@launch
-                }
-
-                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                controlsViewModel.setSeasonInfo(seasonInfo)
-
-                val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                controlsViewModel.setTitle(mainTitle)
-
-                // Update intent
-                intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
-                playVideo(url = stream.url, title = mainTitle)
-                videoFilterManager.reapplyFilter()
-                controlsViewModel.hideControls()
-            } else {
-                controlsViewModel.setBuffering(false)
-                android.widget.Toast.makeText(this@ExoPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
-            }
         }
     }
 
@@ -1231,54 +1125,9 @@ class ExoPlayerActivity : PlayerActivity() {
 
     private fun playPreviousInPlaylist() {
         // Series navigation path (no playlist queue active)
+        // Playlist navigation only in dumb mode
         if (playlistItems.isEmpty()) {
-            val nav = seriesNavigator
-            if (nav != null && nav.hasPrev()) {
-                navigationJob?.cancel()
-                navigationJob = lifecycleScope.launch {
-                    FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
-
-                    stopPlayback()
-                    controlsViewModel.setBuffering(true)
-
-                    val stream = nav.resolvePrev()
-                    if (stream != null) {
-                        FileLogger.i(TAG, "Successfully resolved PREVIOUS: ${stream.name ?: stream.title}")
-                        // Early-return guard: avoid flicker if a cancelled coroutine slips through
-                        val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
-                        if (stream.url == currentUrl) {
-                            FileLogger.i(TAG, "Resolved URL is same as current, skipping redundant play")
-                            controlsViewModel.setBuffering(false)
-                            return@launch
-                        }
-
-                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                        controlsViewModel.setSeasonInfo(seasonInfo)
-
-                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                        controlsViewModel.setTitle(mainTitle)
-
-                        FileLogger.i(TAG, "Updating intent with PREVIOUS episode info: $seasonInfo, title: $mainTitle")
-                        // Update intent
-                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
-                        val forwardedSubs = currentSubtitleUrl?.let { arrayListOf(it) }
-                        playVideo(url = stream.url, title = mainTitle, subtitles = forwardedSubs)
-                        videoFilterManager.reapplyFilter()
-                        controlsViewModel.hideControls()
-                    } else {
-                        controlsViewModel.setBuffering(false)
-                        android.widget.Toast.makeText(
-                            this@ExoPlayerActivity,
-                            "Could not resolve previous episode",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }
-            } else {
-                android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
-            }
+            android.widget.Toast.makeText(this, "Already on first item", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1378,56 +1227,8 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             if (playlistItems.isEmpty()) {
-                // No playlist queue — try series navigator if available
-                val nav = seriesNavigator
-                if (nav != null && nav.hasNext()) {
-                    FileLogger.i(TAG, "No playlist — trying SeriesNavigator next episode")
-
-                    stopPlayback()
-                    controlsViewModel.setBuffering(true)
-
-                    val stream = nav.resolveNext()
-                    if (stream != null) {
-                        FileLogger.i(TAG, "Successfully resolved NEXT: ${stream.name ?: stream.title}")
-                        // Early-return guard: a cancelled coroutine that slipped through
-                        // the mutex might resolve the same URL we are already playing.
-                        val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
-                        if (stream.url == currentUrl) {
-                            FileLogger.i(TAG, "Resolved URL is same as current, skipping redundant play")
-                            controlsViewModel.setBuffering(false)
-                            return@launch
-                        }
-
-                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                        controlsViewModel.setSeasonInfo(seasonInfo)
-
-                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                        controlsViewModel.setTitle(mainTitle)
-
-                        FileLogger.i(TAG, "Updating intent with NEXT episode info: $seasonInfo, title: $mainTitle")
-                        // Update intent so that history saving and re-init works with the new stream
-                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
-                        // Forward the current external subtitle URL if the user picked one;
-                        // playVideo will disable it if the new episode's subtitle list clears it.
-                        val forwardedSubs = currentSubtitleUrl?.let { arrayListOf(it) }
-                        playVideo(url = stream.url, title = mainTitle, subtitles = forwardedSubs)
-                        videoFilterManager.reapplyFilter()
-                        controlsViewModel.hideControls()
-                    } else {
-                        controlsViewModel.setBuffering(false)
-                        FileLogger.i(TAG, "SeriesNavigator returned null — series complete")
-                        android.widget.Toast.makeText(
-                            this@ExoPlayerActivity,
-                            "No more episodes found",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
-                        finish()
-                    }
-                } else {                    FileLogger.i(TAG, "No playlist and no series nav — finishing")
-                    finish()
-                }
+                FileLogger.i(TAG, "No playlist queue — finishing")
+                finish()
                 return@launch
             }
 
@@ -1507,41 +1308,6 @@ class ExoPlayerActivity : PlayerActivity() {
         }
     }
 
-    /**
-     * Show the playlist picker dialog.
-     */
-    /**
-     * Show the stream selection dialog for Stremio sources.
-     */
-    private fun showStreamSelectionOverlay() {
-        if (controlsViewModel.controlsState.value.availableStreams.isNotEmpty()) {
-            val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
-            controlsViewModel.showStreamPicker(currentUrl = currentUrl)
-            return
-        }
-        resolveStreamsForCurrentVideo()
-    }
-
-    /**
-     * Resolve streams for the current video and update the picker.
-     */
-    private fun resolveStreamsForCurrentVideo() {
-        val nav = seriesNavigator ?: return
-        val currentUrl = engine?.getExoPlayer()?.currentMediaItem?.localConfiguration?.uri?.toString()
-
-        val wasPlaying = engine?.getExoPlayer()?.isPlaying == true
-        if (wasPlaying) engine?.getExoPlayer()?.pause()
-
-        controlsViewModel.setAvailableStreams(emptyList()) // Clear for visual feedback during refresh
-        controlsViewModel.setLoadingStreams(true)
-
-        resolutionJob?.cancel()
-        resolutionJob = lifecycleScope.launch {
-            val streams = nav.resolveCurrentStreams()
-            controlsViewModel.showStreamPicker(streams, currentUrl)
-        }
-    }
-
     private fun showPlaylistOverlay() {
         val displayItems: List<com.playbridge.shared.protocol.PlayPayload>
         val displayIndex: Int
@@ -1549,17 +1315,6 @@ class ExoPlayerActivity : PlayerActivity() {
         if (playlistItems.isNotEmpty()) {
             displayItems = playlistItems
             displayIndex = playlistIndex
-        } else if (seriesNavigator?.episodeList?.isNotEmpty() == true) {
-            val nav = seriesNavigator!!
-            displayItems = nav.episodeList!!.map { ep ->
-                val s = ep.season.toString().padStart(2, '0')
-                val e = ep.episode.toString().padStart(2, '0')
-                com.playbridge.shared.protocol.PlayPayload(
-                    url = "", // Not needed for UI
-                    title = "S${s}E${e} - ${ep.title ?: "Episode ${ep.episode}"}"
-                )
-            }
-            displayIndex = nav.currentIndex ?: 0
         } else {
             return
         }
@@ -1717,100 +1472,6 @@ class ExoPlayerActivity : PlayerActivity() {
             player.seekTo(currentWindowIndex, currentPos)
             player.prepare()
             player.playWhenReady = playWhenReady
-        }
-    }
-
-    private fun resolveStreamsAndPreBuffer(p: com.playbridge.shared.protocol.ContentPlayPayload) {
-        resolutionJob?.cancel()
-        controlsViewModel.setPrePlayLaunching(false)
-        controlsViewModel.setPrePlayCountdown(0)
-
-        resolutionJob = lifecycleScope.launch {
-            try {
-                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-                val autoQuality = p.defaultVideoQuality ?: prefs.getString("auto_stream_quality", "") ?: ""
-                val autoMaxMbps = p.maxBitrateCapMbps ?: prefs.getString("auto_stream_max_mbps", "")?.toDoubleOrNull()
-                val preferredAddon = p.preferredAddonBaseUrl ?: prefs.getString("auto_stream_addon", "") ?: ""
-                val preferredAddonName = p.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
-                val prefSourceTypesCsv = prefs.getString("auto_stream_source_types", "") ?: ""
-                val sourceTypes: List<String>? = (p.preferredSourceTypes?.takeIf { it.isNotEmpty() }
-                    ?: prefSourceTypesCsv.split(',').map { it.trim() }.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() })
-
-                FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
-
-                val streams = com.playbridge.shared.stremio.StremioClient.resolveStreamsByContentId(
-                    addonBaseUrls = p.addonBaseUrls,
-                    addonNames = p.addonNames,
-                    contentId = p.contentId,
-                    contentType = p.contentType,
-                    season = p.season,
-                    episode = p.episode,
-                    qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
-                    preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
-                    preferredAddonName = preferredAddonName,
-                    preferredSourceTypes = sourceTypes,
-                    runtimeMinutes = p.episodeRuntimeMinutes,
-                    maxBitrateMbps = autoMaxMbps
-                )
-
-                if (streams.isEmpty()) {
-                    FileLogger.w(TAG, "No streams resolved for ${p.contentId}")
-                    // UI will show error in PrePlayScreen
-                    return@launch
-                }
-
-                controlsViewModel.setAvailableStreams(streams) // Cache streams
-
-                // Auto-pick the best stream (sorted by score)
-                val best = streams.firstOrNull()
-                if (best != null && !p.forcePicker && autoQuality.isNotEmpty()) {
-                    FileLogger.i(TAG, "Auto-picked stream for pre-buffering: ${best.name}")
-                    playVideoAfterResolution(best.url, p)
-                } else {
-                    FileLogger.i(TAG, "Manual picker required, waiting for user selection")
-                }
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Pre-play resolution failed", e)
-            }
-        }
-    }
-
-    private fun playVideoAfterResolution(url: String, p: com.playbridge.shared.protocol.ContentPlayPayload) {
-        controlsViewModel.setPrePlayLaunching(true)
-        isPreBuffering = true
-
-        // Start buffering in the background immediately
-        FileLogger.i(TAG, "Starting background pre-buffer for: $url")
-        val nav = seriesNavigator // setupSeriesNavigator called in handleIntent
-        val baseTitle = if (nav != null && nav.seriesTitle != null) {
-            nav.seriesTitle
-        } else {
-            p.title
-        }
-
-        val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
-        val displayTitle = if (playlistItems.isNotEmpty() && baseTitle?.contains(suffix) != true) {
-            "$baseTitle $suffix"
-        } else {
-            baseTitle
-        }
-
-        // Initialize player and start buffering but KEEP composeView visible
-        playVideo(url, displayTitle, p.contentType, "library", null, null)
-
-        // Start countdown
-        launchJob?.cancel()
-        launchJob = lifecycleScope.launch {
-            for (i in 5 downTo 1) {
-                controlsViewModel.setPrePlayCountdown(i)
-                kotlinx.coroutines.delay(1000)
-            }
-
-            // Countdown finished, hide overlay and start playback
-            FileLogger.i(TAG, "Pre-buffer countdown finished, revealing player")
-            isPreBuffering = false
-            controlsViewModel.setPrePlay(null)
-            engine?.getExoPlayer()?.play() // Ensure it starts playing
         }
     }
 

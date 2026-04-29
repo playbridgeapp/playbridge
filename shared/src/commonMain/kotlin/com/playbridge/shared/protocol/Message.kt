@@ -45,39 +45,29 @@ data class SeriesEpisodeRef(
 )
 
 /**
- * Series context attached to a PlayPayload when casting a Stremio series episode.
- * Gives the TV everything it needs to resolve fresh stream URLs for prev/next episodes
- * independently, without calling back to the phone.
- *
- * addonBaseUrls: base URLs of the user's stream-capable addons, e.g.
- *   ["https://torrentio.strem.fun/sort=qualitysize|realdebrid=TOKEN"]
- *   Addon auth tokens are embedded in the base URL (standard Stremio convention).
- *
- * allEpisodes: flat list of ALL episodes across ALL seasons, sorted by (season, episode).
- *   Null if TMDB data was not available at cast time; TV falls back to optimistic +1 navigation.
+ * Display metadata for the pre-play screen and player UI on the TV.
+ * Carried within PlayPayload or PlaylistPayload.
  */
 @Serializable
-data class SeriesContext(
-    val imdbId: String,
-    val season: Int,
-    val episode: Int,
-    val seriesTitle: String? = null,
+data class VisualMetadata(
+    val title: String,
+    val year: String? = null,
+    val rating: String? = null,     // IMDb/TMDB string
+    val runtime: String? = null,    // formatted e.g. "1h 42m" or "3 Seasons"
+    val overview: String? = null,
+    val genres: List<String> = emptyList(),
+    val cast: List<String> = emptyList(),
+    val director: List<String> = emptyList(),
+    val backdropUrl: String? = null,
+    val posterUrl: String? = null,
+    val logoUrl: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
     val episodeTitle: String? = null,
-    val addonBaseUrls: List<String>,
-    val addonNames: List<String>? = null,      // NEW — Display names for the above URLs
-    val allEpisodes: List<SeriesEpisodeRef>? = null,
-    val preferredAddonBaseUrl: String? = null,
-    val preferredAddonName: String? = null,     // NEW — Name of the preferred addon
-    // Stream-picker preferences — preserved across prev/next episode resolutions and
-    // across player switches (since the navigator is re-created from this payload).
-    val preferredSourceTypes: List<String>? = null,
-    val episodeRuntimeMinutes: Int? = null,
-    val maxBitrateCapMbps: Double? = null
+    val imdbId: String? = null,
+    val tmdbId: String? = null
 )
 
-/**
- * Play video command payload
- */
 @Serializable
 data class PlayPayload(
     val url: String,
@@ -91,13 +81,7 @@ data class PlayPayload(
     val preferredSubtitleLanguage: String? = null,
     val defaultVideoQuality: String? = null,
     val maxBitrateCapMbps: Double? = null,   // max bitrate cap for ExoPlayer ABR (Mbps); null = no cap
-    // Preferred stream source types (e.g. ["bluray","web-dl","remux","webrip"]).
-    // Null / empty = no preference. Used by TV best-stream selection for Stremio addons.
-    val preferredSourceTypes: List<String>? = null,
-    // Runtime (minutes) for the currently-playing title/episode — used for bitrate estimation
-    // (videoSize ÷ runtime) when the addon doesn't report bitrate directly.
-    val episodeRuntimeMinutes: Int? = null,
-    val seriesContext: SeriesContext? = null  // non-null only for Stremio series episodes
+    val visualMetadata: VisualMetadata? = null // rich metadata for TV pre-play/player UI
 )
 
 /**
@@ -106,7 +90,8 @@ data class PlayPayload(
 @Serializable
 data class PlaylistPayload(
     val items: List<PlayPayload>,
-    val startIndex: Int = 0
+    val startIndex: Int = 0,
+    val visualMetadata: VisualMetadata? = null // Optional metadata for the whole playlist (e.g. series level)
 )
 
 /**
@@ -123,55 +108,6 @@ data class QueueAddPayload(
 @Serializable
 data class PlaylistJumpPayload(
     val index: Int
-)
-
-@Serializable
-data class ContentPlayPayload(
-    // ── Identity ─────────────────────────────────────────────
-    /** Canonical stream-capable ID, already normalised by the phone. */
-    val contentId: String,          // "tt0944947" | "kitsu:41982" | "mal:40748" | "tvdb:404367"
-    val contentType: String,        // "movie" | "series"
-
-    // ── Display metadata for the pre-play screen ─────────────
-    val title: String,
-    val year: String? = null,
-    val rating: String? = null,     // IMDb/TMDB string, as already shown on phone
-    val runtime: String? = null,    // formatted e.g. "1h 42m" or "3 Seasons"
-    val overview: String? = null,
-    val genres: List<String> = emptyList(),
-    val cast: List<String> = emptyList(),
-    val director: List<String> = emptyList(),   // empty for series
-
-    val backdropUrl: String? = null,
-    val posterUrl: String? = null,
-    val logoUrl: String? = null,
-
-    // ── Episode selection (series only) ──────────────────────
-    val season: Int? = null,
-    val episode: Int? = null,
-    val episodeTitle: String? = null,
-
-    // ── Navigator payload (reuses SeriesContext fields) ──────
-    /** Flat list across all seasons; null => optimistic +1 navigation. */
-    val allEpisodes: List<SeriesEpisodeRef>? = null,
-    val addonBaseUrls: List<String>,
-    val addonNames: List<String>? = null,
-    val preferredAddonBaseUrl: String? = null,
-    val preferredAddonName: String? = null,
-
-    // ── Playback preferences (carry-through) ─────────────────
-    val playerMode: String? = null,
-    val preferredAudioLanguage: String? = null,
-    val preferredSubtitleLanguage: String? = null,
-    val defaultVideoQuality: String? = null,
-    val maxBitrateCapMbps: Double? = null,   // max bitrate cap for ExoPlayer ABR (Mbps); null = no cap
-    // Preferred stream source types (e.g. ["bluray","web-dl","remux","webrip"]).
-    // Null / empty = no preference. Used by TV best-stream selection.
-    val preferredSourceTypes: List<String>? = null,
-    // Runtime (minutes) for the currently-selected title/episode — used on TV for
-    // bitrate estimation (videoSize ÷ runtime) when the addon doesn't report bitrate.
-    val episodeRuntimeMinutes: Int? = null,
-    val forcePicker: Boolean = false        // long-press on phone = "always show picker on TV"
 )
 
 /**
@@ -228,16 +164,6 @@ data class PlayCommand(
     val type: String = "command",
     val action: String = "play",
     val payload: PlayPayload
-)
-
-/**
- * Play content metadata command (TV resolves streams itself)
- */
-@Serializable
-data class PlayContentCommand(
-    val type: String = "command",
-    val action: String = "play_content",
-    val payload: ContentPlayPayload
 )
 
 /**
@@ -411,25 +337,22 @@ sealed class Command {
         val preferredSubtitleLanguage: String? = null,
         val defaultVideoQuality: String? = null,
         val maxBitrateCapMbps: Double? = null,
-        val preferredSourceTypes: List<String>? = null,
-        val episodeRuntimeMinutes: Int? = null,
-        val seriesContext: SeriesContext? = null
+        val visualMetadata: VisualMetadata? = null
     ) : Command()
-    data class PlayContent(val payload: ContentPlayPayload) : Command()
     data class Browser(val url: String, val browserMode: String?, val desktopMode: Boolean? = null) : Command()
     data class Control(val command: String) : Command()
     data class Remote(val key: String) : Command()
     data class Mouse(val event: String, val dx: Float, val dy: Float) : Command()
     data class BrowserControl(val action: String) : Command()
     data object ContextQuery : Command()
-    data class Playlist(val items: List<PlayPayload>, val startIndex: Int) : Command()
+    data class Playlist(val items: List<PlayPayload>, val startIndex: Int, val visualMetadata: VisualMetadata? = null) : Command()
     data class QueueAdd(val item: PlayPayload) : Command()
     data class PlaylistJump(val index: Int) : Command()
     data object Ping : Command()
     // Sent by the phone before it has a PIN/token, as a lightweight "I'm about to pair"
     // signal so the TV can open its PairingScreen and show the PIN in advance.
     data object RequestPairing : Command()
-    data class Unknown(val type: String) : Command()
+    data class Unknown(val type: String, val rawJson: String? = null) : Command()
 }
 
 // ==================== Command Parser ====================
@@ -462,20 +385,8 @@ fun parseCommand(jsonString: String): Command {
                             preferredSubtitleLanguage = payload?.preferredSubtitleLanguage,
                             defaultVideoQuality = payload?.defaultVideoQuality,
                             maxBitrateCapMbps = payload?.maxBitrateCapMbps,
-                            preferredSourceTypes = payload?.preferredSourceTypes,
-                            episodeRuntimeMinutes = payload?.episodeRuntimeMinutes,
-                            seriesContext = payload?.seriesContext
+                            visualMetadata = payload?.visualMetadata
                         )
-                    }
-                    "play_content" -> {
-                        val payload = envelope.payload?.let {
-                            protocolJson.decodeFromJsonElement<ContentPlayPayload>(it)
-                        }
-                        if (payload != null) {
-                            Command.PlayContent(payload)
-                        } else {
-                            Command.Unknown("missing_content_payload")
-                        }
                     }
                     "browser" -> {
                         val payload = envelope.payload?.let {
@@ -522,7 +433,8 @@ fun parseCommand(jsonString: String): Command {
                         }
                         Command.Playlist(
                             items = payload?.items ?: emptyList(),
-                            startIndex = payload?.startIndex ?: 0
+                            startIndex = payload?.startIndex ?: 0,
+                            visualMetadata = payload?.visualMetadata
                         )
                     }
                     "queue_add" -> {
@@ -541,13 +453,13 @@ fun parseCommand(jsonString: String): Command {
                             index = payload?.index ?: 0
                         )
                     }
-                    else -> Command.Unknown(envelope.action ?: "unknown")
+                    else -> Command.Unknown(envelope.action ?: "unknown", jsonString)
                 }
             }
-            else -> Command.Unknown(envelope.type)
+            else -> Command.Unknown(envelope.type, jsonString)
         }
     } catch (e: Exception) {
-        Command.Unknown("parse_error: ${e.message}")
+        Command.Unknown("parse_error: ${e.message}", jsonString)
     }
 }
 
@@ -565,9 +477,7 @@ fun createPlayCommandJson(
     preferredSubtitleLanguage: String? = null,
     defaultVideoQuality: String? = null,
     maxBitrateCapMbps: Double? = null,
-    preferredSourceTypes: List<String>? = null,
-    episodeRuntimeMinutes: Int? = null,
-    seriesContext: SeriesContext? = null
+    visualMetadata: VisualMetadata? = null
 ): String {
     return protocolJson.encodeToString(
         PlayCommand.serializer(),
@@ -583,17 +493,8 @@ fun createPlayCommandJson(
             preferredSubtitleLanguage = preferredSubtitleLanguage,
             defaultVideoQuality = defaultVideoQuality,
             maxBitrateCapMbps = maxBitrateCapMbps,
-            preferredSourceTypes = preferredSourceTypes,
-            episodeRuntimeMinutes = episodeRuntimeMinutes,
-            seriesContext = seriesContext
+            visualMetadata = visualMetadata
         ))
-    )
-}
-
-fun createPlayContentCommandJson(payload: ContentPlayPayload): String {
-    return protocolJson.encodeToString(
-        PlayContentCommand.serializer(),
-        PlayContentCommand(payload = payload)
     )
 }
 
@@ -644,12 +545,11 @@ fun createContextQueryJson(): String {
  * Create JSON string for playlist command (multiple items to play in sequence)
  */
 fun createPlaylistCommandJson(
-    items: List<PlayPayload>,
-    startIndex: Int = 0
+    payload: PlaylistPayload
 ): String {
     return protocolJson.encodeToString(
         PlaylistCommand.serializer(),
-        PlaylistCommand(payload = PlaylistPayload(items = items, startIndex = startIndex))
+        PlaylistCommand(payload = payload)
     )
 }
 

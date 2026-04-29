@@ -58,7 +58,6 @@ fun SettingsScreen(
     var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
     var isRestarting by remember { mutableStateOf(false) }
     var themeStr by remember { mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK") }
-    var cacheHours by remember { mutableStateOf(prefs.getInt("stream_cache_hours", 0)) }
 
     fun restartServer() {
         isRestarting = true
@@ -216,38 +215,6 @@ fun SettingsScreen(
                         }
                     }
 
-                    SettingsCategory.STREAM -> {
-                        item {
-                            SettingDropdownItem(
-                                label = "Cache Duration",
-                                description = "How long to cache resolved stream links.",
-                                options = listOf(
-                                    "0" to "Disabled",
-                                    "1" to "1 Hour",
-                                    "6" to "6 Hours",
-                                    "12" to "12 Hours",
-                                    "24" to "24 Hours"
-                                ),
-                                selected = cacheHours.toString(),
-                                onSelected = { hours ->
-                                    val h = hours.toInt()
-                                    cacheHours = h
-                                    prefs.edit().putInt("stream_cache_hours", h).apply()
-                                    com.playbridge.shared.stremio.StremioClient.updateCacheDuration(h)
-                                }
-                            )
-                        }
-                        item {
-                            SettingClickableItem(
-                                label = "Clear Stream Cache",
-                                description = "Delete all cached resolution links.",
-                                onClick = {
-                                    com.playbridge.shared.stremio.StremioClient.clearAllCache()
-                                    Toast.makeText(context, "Stream cache cleared", Toast.LENGTH_SHORT).show()
-                                }
-                            )
-                        }
-                    }
 
                     SettingsCategory.APPEARANCE -> {
                         item {
@@ -345,7 +312,6 @@ fun SettingsScreen(
 enum class SettingsCategory(val label: String, val icon: ImageVector) {
     PLAYER("Player", Icons.Default.PlayArrow),
     NETWORK("Network", Icons.Default.Settings),
-    STREAM("Streaming", Icons.Default.Favorite),
     APPEARANCE("Appearance", Icons.Default.Add),
     ABOUT("About", Icons.Default.Info)
 }

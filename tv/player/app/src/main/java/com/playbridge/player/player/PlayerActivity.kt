@@ -16,7 +16,15 @@ import android.view.Surface
 import android.view.SurfaceView
 import androidx.annotation.RequiresApi
 
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import com.playbridge.player.ui.player.PlayerControlsViewModel
+
 abstract class PlayerActivity : ComponentActivity() {
+
+    protected var launchJob: Job? = null
 
     // Common abstract properties and functions for player controls
     abstract fun play()
@@ -31,81 +39,20 @@ abstract class PlayerActivity : ComponentActivity() {
     protected open fun getPlayerProgressManager(): ProgressManager? = null
     protected open fun showVideoFilterDialog() {}
 
-    // Shared playback configuration and series navigation state
-    var seriesNavigator: com.playbridge.shared.stremio.SeriesNavigator? = null
+    // Shared playback configuration
     var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p"
     var maxBitrateCapMbps: Double? = null         // explicit bitrate cap from phone settings (Mbps)
+    var externalSubtitles: List<String>? = null   // list of external subtitle URLs
     var isFrameRateMatchingEnabled: Boolean = false
     var isLoudnessEnhancerEnabled: Boolean = false
 
-    protected fun setupSeriesNavigator(intent: Intent?) {
+    protected fun setupPlaybackExtras(intent: Intent?) {
         defaultVideoQuality = intent?.getStringExtra("default_video_quality")
         maxBitrateCapMbps = if (intent?.hasExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS) == true)
             intent.getDoubleExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS, 0.0).takeIf { it > 0.0 }
         else null
-
-        val seriesContextJson = intent?.getStringExtra(ServerService.EXTRA_SERIES_CONTEXT)
-        val contentPayloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
-
-        seriesNavigator = when {
-            seriesContextJson != null -> {
-                try {
-                    val ctx = com.playbridge.shared.protocol.protocolJson.decodeFromString(
-                        com.playbridge.shared.protocol.SeriesContext.serializer(),
-                        seriesContextJson
-                    )
-                    com.playbridge.shared.stremio.SeriesNavigator(
-                        context             = ctx,
-                        qualityPreference   = defaultVideoQuality,
-                        preferredSourceTypes= ctx.preferredSourceTypes,
-                        runtimeMinutes      = ctx.episodeRuntimeMinutes,
-                        maxBitrateMbps      = ctx.maxBitrateCapMbps ?: maxBitrateCapMbps
-                    ).also { nav ->
-                        nav.updateSourceHint(url = intent.getStringExtra(ServerService.EXTRA_URL))
-                    }
-                } catch (e: Exception) {
-                    FileLogger.e("PlayerActivity", "Failed to deserialize SeriesContext: ${e.message}")
-                    null
-                }
-            }
-            contentPayloadJson != null -> {
-                try {
-                    val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
-                        com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
-                        contentPayloadJson
-                    )
-                    val ctx = com.playbridge.shared.protocol.SeriesContext(
-                        imdbId = p.contentId,
-                        season = p.season ?: 1,
-                        episode = p.episode ?: 1,
-                        seriesTitle = p.title,
-                        episodeTitle = p.episodeTitle,
-                        addonBaseUrls = p.addonBaseUrls,
-                        addonNames = p.addonNames,
-                        allEpisodes = p.allEpisodes,
-                        preferredAddonBaseUrl = p.preferredAddonBaseUrl,
-                        preferredAddonName = p.preferredAddonName,
-                        preferredSourceTypes = p.preferredSourceTypes,
-                        episodeRuntimeMinutes = p.episodeRuntimeMinutes,
-                        maxBitrateCapMbps = p.maxBitrateCapMbps
-                    )
-                    com.playbridge.shared.stremio.SeriesNavigator(
-                        context             = ctx,
-                        qualityPreference   = defaultVideoQuality ?: p.defaultVideoQuality,
-                        contentType         = p.contentType,
-                        preferredSourceTypes= p.preferredSourceTypes,
-                        runtimeMinutes      = p.episodeRuntimeMinutes,
-                        maxBitrateMbps      = p.maxBitrateCapMbps ?: maxBitrateCapMbps
-                    ).also { nav ->
-                        nav.updateSourceHint(url = intent.getStringExtra(ServerService.EXTRA_URL))
-                    }
-                } catch (e: Exception) {
-                    FileLogger.e("PlayerActivity", "Failed to deserialize ContentPlayPayload in setupSeriesNavigator: ${e.message}")
-                    null
-                }
-            }
-            else -> null
-        }
+        
+        externalSubtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -270,6 +217,54 @@ abstract class PlayerActivity : ComponentActivity() {
         dialog.show()
     }
 
+    protected fun handlePrePlayMetadata(intent: Intent?, controlsViewModel: PlayerControlsViewModel) {
+        if (intent?.getBooleanExtra(ServerService.EXTRA_SKIP_PREPLAY, false) == true) {
+            FileLogger.d("PlayerActivity", "Skipping pre-play metadata per EXTRA_SKIP_PREPLAY")
+            controlsViewModel.setPrePlay(null)
+            return
+        }
+        val visualMetadataJson = intent?.getStringExtra(ServerService.EXTRA_VISUAL_METADATA)
+        if (visualMetadataJson != null) {
+            try {
+                val metadata = com.playbridge.shared.protocol.protocolJson.decodeFromString(
+                    com.playbridge.shared.protocol.VisualMetadata.serializer(),
+                    visualMetadataJson
+                )
+                FileLogger.i("PlayerActivity", "Received pre-play metadata: ${metadata.title}")
+                controlsViewModel.setPrePlay(metadata)
+                controlsViewModel.setPrePlayLaunching(true)
+                controlsViewModel.setPrePlayCountdown(-1) // -1 signifies "Connecting..."
+            } catch (e: Exception) {
+                FileLogger.e("PlayerActivity", "Failed to parse visual metadata", e)
+                controlsViewModel.setPrePlay(null)
+            }
+        } else {
+            controlsViewModel.setPrePlay(null)
+        }
+    }
+
+    protected fun triggerPrePlayCountdown(controlsViewModel: PlayerControlsViewModel, onFinished: () -> Unit) {
+        if (launchJob?.isActive == true) return // Already counting down
+        
+        startPrePlayCountdown(controlsViewModel, onFinished)
+    }
+
+    protected fun startPrePlayCountdown(controlsViewModel: PlayerControlsViewModel, onFinished: () -> Unit) {
+        launchJob?.cancel()
+        launchJob = lifecycleScope.launch {
+            controlsViewModel.setPrePlayLaunching(true)
+            for (i in 5 downTo 1) {
+                controlsViewModel.setPrePlayCountdown(i)
+                delay(1000)
+            }
+            controlsViewModel.setPrePlayCountdown(0)
+            delay(500)
+            
+            // This will clear the overlay AND trigger play() in the activity
+            onFinished()
+        }
+    }
+
     protected fun switchPlayer(newMode: String) {
         val currentPosition = getCurrentPosition()
         val pm = getPlayerProgressManager()
@@ -321,19 +316,9 @@ abstract class PlayerActivity : ComponentActivity() {
 
         // Remove EXTRA_CONTENT_PAYLOAD so we don't re-resolve streams
         newIntent.removeExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
+        newIntent.removeExtra(ServerService.EXTRA_VISUAL_METADATA)
+        newIntent.putExtra(ServerService.EXTRA_SKIP_PREPLAY, true)
 
-        // Persist SeriesNavigator state into EXTRA_SERIES_CONTEXT
-        seriesNavigator?.let { nav ->
-            try {
-                val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
-                    com.playbridge.shared.protocol.SeriesContext.serializer(),
-                    nav.context
-                )
-                newIntent.putExtra(ServerService.EXTRA_SERIES_CONTEXT, json)
-            } catch (e: Exception) {
-                FileLogger.e("PlayerActivity", "Failed to serialize SeriesContext for player switch", e)
-            }
-        }
 
         newIntent.putExtra(ServerService.EXTRA_URL, url)
         newIntent.putExtra(ServerService.EXTRA_TITLE, title)

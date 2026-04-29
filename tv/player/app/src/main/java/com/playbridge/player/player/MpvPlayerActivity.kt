@@ -150,12 +150,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
 
 
-    private var resolutionJob: kotlinx.coroutines.Job? = null
-    private var launchJob: kotlinx.coroutines.Job? = null
     private var playJob: kotlinx.coroutines.Job? = null
-    private var isPreBuffering = false
     private lateinit var composeView: androidx.compose.ui.platform.ComposeView
-    /** Serialises Stremio series navigation. Cancelled before each new nav request. */
     private var navigationJob: kotlinx.coroutines.Job? = null
     private val videoFilterManager = com.playbridge.shared.player.VideoFilterManager()
     private val contentSniffer = ContentSniffer()
@@ -171,13 +167,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun stopPlayback() {
         FileLogger.i(TAG, "stopPlayback() — clearing MPV state for transition")
-        resolutionJob?.cancel()
         launchJob?.cancel()
         playJob?.cancel()
         isLoadingNewStream = true
         pendingStops++
         engine?.stop()
-        controlsViewModel.setAvailableStreams(emptyList()) // Clear cached streams for the transition
         runOnUiThread {
             controlsViewModel.hideControls()
             surfaceView.visibility = android.view.View.INVISIBLE
@@ -272,20 +266,19 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                             controlsViewModel.showSettings(SettingsTab.AUDIO) 
                         },
                         onPlaylist = { showPlaylistOverlay() },
-                        onStreams = { showStreamSelectionOverlay() },
-                        onRefreshStreams = { resolveStreamsForCurrentVideo() },
                         onPrev = { playPreviousInPlaylist() },
                         onNext = { playNextInPlaylist() },
                         onFilter = { showVideoFilterOverlay() },
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
                         onSeek = { controlsViewModel.handleScrubbing(it) },
-                        onPrePlayStreamSelected = { stream ->
-                            resolutionJob?.cancel()
-                            playVideoAfterResolution(stream.url, state.prePlayPayload!!)
+                        onPrePlayStartNow = {
+                            launchJob?.cancel()
+                            controlsViewModel.setPrePlayLaunching(true)
+                            controlsViewModel.setPrePlay(null)
                         },
                         onPrePlayBack = {
-                            resolutionJob?.cancel()
+                            launchJob?.cancel()
                             controlsViewModel.setPrePlay(null)
                             ServerService.notifyContextIdle()
                             finish()
@@ -318,28 +311,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                              // MPV scaling logic if available
                              controlsViewModel.setVideoScaling(mode)
                         },
-                        onSettingsDismiss = { controlsViewModel.hideSettings() },
-                        onOverlayDismiss = { controlsViewModel.hideOverlay() },
-                        onStreamSelected = { stream ->
-                            controlsViewModel.hideOverlay()
-                            val mainTitle = seriesNavigator?.seriesTitle ?: "S${seriesNavigator?.currentSeason}E${seriesNavigator?.currentEpisode}"
-                            intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                            playVideo(url = stream.url, headers = currentHeaders)
-                            controlsViewModel.hideControls()
-                        },
-                        onFilterSelected = { filter ->
-                            videoFilterManager.applyFilter(filter)
-                        },
-                        onCustomFilterChanged = { b, c, s ->
-                            videoFilterManager.applyCustom(b, c, s)
-                        },
                         onPlaylistItemPicked = { index ->
                             controlsViewModel.hideOverlay()
-                            if (playlistItems.isNotEmpty()) {
-                                playItemAtIndex(index)
-                            } else if (seriesNavigator != null) {
-                                playSeriesEpisodeAtIndex(index)
-                            }
+                            playItemAtIndex(index)
                         },
                         onPlayerSwitched = { playerId ->
                             controlsViewModel.hideOverlay()
@@ -429,7 +403,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
             engine = engineAdapter,
             controls = controlsViewModel,
-            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayPayload != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
+            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
         )
 
         controlsViewModel.setEngine(engineAdapter, "internal_mpv")
@@ -454,6 +428,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             addAction(ServerService.ACTION_CONTROL)
             addAction(ServerService.ACTION_QUEUE_ADD)
             addAction(ServerService.ACTION_PLAYLIST_JUMP)
+            addAction(ServerService.ACTION_PLAY)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(remoteReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -493,11 +468,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         lastOnNewIntentTime = now
         FileLogger.i(TAG, "onNewIntent received")
 
-        // Cancel any pending resolution or countdown from a previous intent
-        resolutionJob?.cancel()
         launchJob?.cancel()
-        controlsViewModel.setPrePlayLaunching(false)
-        isPreBuffering = false
 
         // We skip stopPlayback() here because it hides the surface, causing reconstruction lag.
         // playVideoInternal() will handle stopping the engine and loading the new stream.
@@ -541,8 +512,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         when (state) {
             is com.playbridge.shared.player.PlayerUiState.Idle ->
                 FileLogger.d(TAG, "VM state: Idle")
-            is com.playbridge.shared.player.PlayerUiState.PrePlay ->
-                FileLogger.d(TAG, "VM state: PrePlay resolving=${state.isResolving}")
             is com.playbridge.shared.player.PlayerUiState.Loading ->
                 FileLogger.d(TAG, "VM state: Loading ${state.payload.url}")
             is com.playbridge.shared.player.PlayerUiState.Playing ->
@@ -637,6 +606,16 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 runOnUiThread {
                     controlsViewModel.setBuffering(false)
                     
+                    // Trigger cinematic countdown only after we are connected and ready
+                    if (controlsViewModel.controlsState.value.prePlayMetadata != null) {
+                        engine?.pause()
+                        triggerPrePlayCountdown(controlsViewModel) {
+                            FileLogger.i(TAG, "Countdown finished - starting playback")
+                            engine?.play()
+                            controlsViewModel.setPrePlay(null)
+                        }
+                    }
+
                     // Apply Loudness Enhancer if enabled
                     if (isLoudnessEnhancerEnabled) {
                         MPVLib.setPropertyString("af", "loudnorm")
@@ -668,12 +647,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
                         playNextInPlaylist()
                     } else {
-                        val nav = seriesNavigator
-                        if (nav != null && nav.hasNext()) {
-                            playNextInPlaylist()
-                        } else {
-                            finish()
-                        }
+                        finish()
                     }
                 }
             }
@@ -708,13 +682,29 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         playItemAtIndex(index)
                     }
                 }
+                ServerService.ACTION_PLAY -> {
+                    val url = intent.getStringExtra(ServerService.EXTRA_URL)
+                    val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
+                    val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getSerializableExtra(ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
+                    } else {
+                        @Suppress("UNCHECKED_CAST")
+                        intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
+                    }
+                    val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+
+                    if (url != null) {
+                        stopPlayback()
+                        handleIntent(intent)
+                    }
+                }
             }
         }
     }
 
     private fun handleIntent(intent: Intent?) {
         if (isFinishing) return
-        setupSeriesNavigator(intent)
+        setupPlaybackExtras(intent)
 
         // Read playlist if present
         val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
@@ -727,49 +717,24 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             playlistItems = mutableListOf()
         }
 
-        // Update button visibility based on navigator and playlist
+        // Update button visibility based on playlist
         val hasPlaylist = playlistItems.isNotEmpty()
-        val hasEpisodeList = seriesNavigator?.episodeList?.isNotEmpty() == true
-        val isSeries = seriesNavigator?.contentType == "series"
 
-        // Show playlist button when a playlist is active OR series navigator has list mode
-        controlsViewModel.setPlaylistVisible(hasPlaylist || hasEpisodeList)
+        // Show playlist button when a playlist is active
+        controlsViewModel.setPlaylistVisible(hasPlaylist)
 
-        // Show streams button when series navigator is active
-        controlsViewModel.setStreamsVisible(seriesNavigator != null)
+        // Show streams button - currently disabled in dumb mode
 
-        seriesNavigator?.let { nav ->
-            if (nav.contentType == "series") {
-                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                controlsViewModel.setSeasonInfo(seasonInfo)
-            } else {
-                controlsViewModel.setSeasonInfo(null)
-            }
-        }
+        controlsViewModel.setSeasonInfo(null)
 
-        // Ensure prev/next buttons are visible for ANY series
-        if (isSeries || hasPlaylist) {
+        // Ensure prev/next buttons are visible if a playlist is active.
+        if (hasPlaylist) {
             controlsViewModel.setNavigationVisible(true)
         }
 
-        val payloadJson = intent?.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
-        if (payloadJson != null) {
-            try {
-                val p = com.playbridge.shared.protocol.protocolJson.decodeFromString(
-                    com.playbridge.shared.protocol.ContentPlayPayload.serializer(),
-                    payloadJson
-                )
-                controlsViewModel.setPrePlay(p)
-                controlsViewModel.setStreamPreferences(p.defaultVideoQuality, p.preferredAddonName, p.preferredSourceTypes)
-                resolveStreamsAndPreBuffer(p)
-                return // resolveStreamsAndPreBuffer handles the rest
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Failed to parse ContentPlayPayload", e)
-            }
-        }
 
         // Standard direct URL path
-        controlsViewModel.setPrePlay(null)
+        handlePrePlayMetadata(intent, controlsViewModel)
 
         val url = intent?.getStringExtra(ServerService.EXTRA_URL) ?: return
         val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -784,16 +749,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Apply title immediately if known
         controlsViewModel.setTitle(title ?: "")
 
-        val displayTitle = if (seriesNavigator != null && seriesNavigator?.seriesTitle != null) {
-            seriesNavigator?.seriesTitle
-        } else {
-            title
-        }
-        controlsViewModel.setTitle(displayTitle ?: "")
-
         this.subtitleUrls = subtitles ?: emptyList()
+        if (subtitles != null && currentSubtitleUrl == null) {
+            currentSubtitleUrl = subtitles.firstOrNull()
+        }
         this.currentHeaders = headers
-        playVideo(url, headers)
+        playVideo(url, headers, subtitles = subtitles)
     }
 
     private fun handleRemoteKey(key: String?) {
@@ -830,14 +791,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     // ── Playback ─────────────────────────────────────────────────────────────
 
-    private suspend fun playVideoInternal(url: String, headers: Map<String, String>?, startPaused: Boolean = false) {
-        // Note: setupSeriesNavigator is already called by handleIntent before playVideo;
-        // calling it again here would create a redundant SeriesNavigator instance.
+    private suspend fun playVideoInternal(url: String, headers: Map<String, String>?, startPaused: Boolean = false, subtitles: ArrayList<String>? = null) {
         currentUrl = url
-        if (seriesNavigator == null) {
-            controlsViewModel.setSeasonInfo(null)
-        }
-        controlsViewModel.setStreamsVisible(seriesNavigator != null)
+        controlsViewModel.setSeasonInfo(null)
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "URL: $url")
         FileLogger.i(TAG, "Title: ${controlsViewModel.getTitle()}")
@@ -891,18 +847,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             engine?.pause()
         }
 
-        // Briefly hide surface to clear the old frame from the previous video
-        runOnUiThread {
-            surfaceView.visibility = android.view.View.INVISIBLE
-            surfaceReadyDeferred = kotlinx.coroutines.CompletableDeferred()
-        }
+        // No need to hide surface between videos, the PrePlay overlay covers it.
+        // Surface remains alive, so we only wait for surfaceReadyDeferred on first launch.
 
         // Wait for sniffing and surface transition
         val sniffedType = contentSniffer.sniffContent(url, headers)
         
-        runOnUiThread {
-            surfaceView.visibility = android.view.View.VISIBLE
-        }
+        // Wait for sniffing
         
         // Wait for surfaceCreated to fire before we call load
         try {
@@ -934,14 +885,14 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         if (!startPaused) play()
     }
 
-    private fun playVideo(url: String, headers: Map<String, String>?, startPaused: Boolean = false) {
+    private fun playVideo(url: String, headers: Map<String, String>?, startPaused: Boolean = false, subtitles: ArrayList<String>? = null) {
         // Guard against MPV_EVENT_END_FILE from a prior stop() or a failed first HTTP attempt
         // triggering finish() before the new stream has loaded.
         isLoadingNewStream = true
 
         playJob?.cancel()
         playJob = lifecycleScope.launch {
-            playVideoInternal(url, headers, startPaused)
+            playVideoInternal(url, headers, startPaused, subtitles = subtitles)
         }
     }
 
@@ -1003,10 +954,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun showStreamSelectionOverlay() {
-        if (controlsViewModel.controlsState.value.availableStreams.isNotEmpty()) {
-            controlsViewModel.showStreamPicker(currentUrl = currentUrl)
-            return
-        }
         resolveStreamsForCurrentVideo()
     }
 
@@ -1014,43 +961,14 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
      * Resolve streams for the current video and update the picker.
      */
     private fun resolveStreamsForCurrentVideo() {
-        val nav = seriesNavigator ?: return
-        val currentUrl = this.currentUrl
-
-        val wasPlaying = isPlaying()
-        if (wasPlaying) pause()
-
-        controlsViewModel.setAvailableStreams(emptyList()) // Clear for visual feedback during refresh
-        controlsViewModel.setLoadingStreams(true)
-
-        resolutionJob?.cancel()
-        resolutionJob = lifecycleScope.launch {
-            val streams = nav.resolveCurrentStreams()
-            controlsViewModel.showStreamPicker(streams, currentUrl)
-        }
+        // Not supported in dumb mode
     }
 
     private fun showPlaylistOverlay() {
-        val displayItems: List<com.playbridge.shared.protocol.PlayPayload>
-        val displayIndex: Int
+        if (playlistItems.isEmpty()) return
 
-        if (playlistItems.isNotEmpty()) {
-            displayItems = playlistItems
-            displayIndex = playlistIndex
-        } else if (seriesNavigator?.episodeList?.isNotEmpty() == true) {
-            val nav = seriesNavigator!!
-            displayItems = nav.episodeList!!.map { ep ->
-                val s = ep.season.toString().padStart(2, '0')
-                val e = ep.episode.toString().padStart(2, '0')
-                com.playbridge.shared.protocol.PlayPayload(
-                    url = "", // Not needed for UI
-                    title = "S${s}E${e} - ${ep.title ?: "Episode ${ep.episode}"}"
-                )
-            }
-            displayIndex = nav.currentIndex ?: 0
-        } else {
-            return
-        }
+        val displayItems = playlistItems
+        val displayIndex = playlistIndex
 
         val wasPlaying = isPlayingState
         if (wasPlaying) pause()
@@ -1063,43 +981,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun playSeriesEpisodeAtIndex(index: Int) {
-        val nav = seriesNavigator ?: return
-        navigationJob?.cancel()
-        navigationJob = lifecycleScope.launch {
-            isLoadingNewStream = true
-            FileLogger.i(TAG, "SeriesNavigator: resolving episode at index $index")
-
-            // Save progress for the current episode before switching
-            progressManager.saveProgress()
-
-            stopPlayback()
-            controlsViewModel.setBuffering(true)
-            val stream = nav.resolveAndAdvanceToIndex(index)
-            if (stream != null) {
-                // Early-return guard
-                if (stream.url == currentUrl) {
-                    controlsViewModel.setBuffering(false)
-                    return@launch
-                }
-
-                val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                controlsViewModel.setSeasonInfo(seasonInfo)
-
-                val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                controlsViewModel.setTitle(mainTitle)
-
-                // Update intent
-                intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-
-                playVideo(url = stream.url, headers = null)
-                controlsViewModel.hideControls()
-            } else {
-                isLoadingNewStream = false
-                controlsViewModel.setBuffering(false)
-                android.widget.Toast.makeText(this@MpvPlayerActivity, "Could not resolve episode", android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }
+        // Not implemented in dumb mode
     }
 
     private fun playItemAtIndex(index: Int) {
@@ -1138,43 +1020,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private fun playPreviousInPlaylist() {
         if (playlistItems.isEmpty()) {
-            val nav = seriesNavigator
-            if (nav != null && nav.hasPrev()) {
-                navigationJob?.cancel()
-                navigationJob = lifecycleScope.launch {
-                    isLoadingNewStream = true
-                    FileLogger.i(TAG, "SeriesNavigator: resolving previous episode")
-                    progressManager.saveProgress()
-                    stopPlayback()
-                    controlsViewModel.setBuffering(true)
-
-                    val stream = nav.resolvePrev()
-                    if (stream != null) {
-                        if (stream.url == currentUrl) {
-                            controlsViewModel.setBuffering(false)
-                            return@launch
-                        }
-                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                        controlsViewModel.setSeasonInfo(seasonInfo)
-                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                        controlsViewModel.setTitle(mainTitle)
-                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-                        playVideo(url = stream.url, headers = null)
-                        controlsViewModel.hideControls()
-                    } else {
-                        isLoadingNewStream = false
-                        controlsViewModel.setBuffering(false)
-                        Toast.makeText(this@MpvPlayerActivity, "Could not resolve previous episode", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } else {
-                Toast.makeText(this, "Already on first episode", Toast.LENGTH_SHORT).show()
-            }
+            Toast.makeText(this, "Already on first item", Toast.LENGTH_SHORT).show()
             return
         }
         if (playlistIndex <= 0) {
-            Toast.makeText(this, "Already on first episode", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Already on first item", Toast.LENGTH_SHORT).show()
             return
         }
         playItemAtIndex(playlistIndex - 1)
@@ -1182,40 +1032,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private fun playNextInPlaylist() {
         if (playlistItems.isEmpty()) {
-            val nav = seriesNavigator
-            if (nav != null && nav.hasNext()) {
-                navigationJob?.cancel()
-                navigationJob = lifecycleScope.launch {
-                    isLoadingNewStream = true
-                    FileLogger.i(TAG, "SeriesNavigator: resolving next episode")
-                    progressManager.saveProgress()
-                    stopPlayback()
-                    controlsViewModel.setBuffering(true)
-
-                    val stream = nav.resolveNext()
-                    if (stream != null) {
-                        if (stream.url == currentUrl) {
-                            controlsViewModel.setBuffering(false)
-                            return@launch
-                        }
-                        val seasonInfo = "Season ${nav.currentSeason} (${nav.currentSeason}x${nav.currentEpisode})"
-                        controlsViewModel.setSeasonInfo(seasonInfo)
-                        val mainTitle = nav.seriesTitle ?: "S${nav.currentSeason}E${nav.currentEpisode}"
-                        controlsViewModel.setTitle(mainTitle)
-                        intent?.putExtra(ServerService.EXTRA_URL, stream.url)
-                        intent?.putExtra(ServerService.EXTRA_TITLE, mainTitle)
-                        playVideo(url = stream.url, headers = null)
-                        controlsViewModel.hideControls()
-                    } else {
-                        isLoadingNewStream = false
-                        controlsViewModel.setBuffering(false)
-                        Toast.makeText(this@MpvPlayerActivity, "No more episodes found", Toast.LENGTH_SHORT).show()
-                        finish()
-                    }
-                }
-            } else {
-                finish()
-            }
+            finish()
             return
         }
 
@@ -1281,102 +1098,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         controlsViewModel.showSettings(SettingsTab.AUDIO)
     }
 
-
-    private fun resolveStreamsAndPreBuffer(p: com.playbridge.shared.protocol.ContentPlayPayload) {
-        resolutionJob?.cancel()
-        controlsViewModel.setPrePlayLaunching(false)
-        controlsViewModel.setPrePlayCountdown(0)
-
-        resolutionJob = lifecycleScope.launch {
-            try {
-                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-                val autoQuality = p.defaultVideoQuality ?: prefs.getString("auto_stream_quality", "") ?: ""
-                val autoMaxMbps = p.maxBitrateCapMbps ?: prefs.getString("auto_stream_max_mbps", "")?.toDoubleOrNull()
-                val preferredAddon = p.preferredAddonBaseUrl ?: prefs.getString("auto_stream_addon", "") ?: ""
-                val preferredAddonName = p.preferredAddonName ?: prefs.getString("auto_stream_addon_name", "")
-                val prefSourceTypesCsv = prefs.getString("auto_stream_source_types", "") ?: ""
-                val sourceTypes: List<String>? = (p.preferredSourceTypes?.takeIf { it.isNotEmpty() }
-                    ?: prefSourceTypesCsv.split(',').map { it.trim() }.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() })
-
-                FileLogger.i(TAG, "Resolving streams for pre-buffering: ${p.title}")
-
-                val streams = com.playbridge.shared.stremio.StremioClient.resolveStreamsByContentId(
-                    addonBaseUrls = p.addonBaseUrls,
-                    addonNames = p.addonNames,
-                    contentId = p.contentId,
-                    contentType = p.contentType,
-                    season = p.season,
-                    episode = p.episode,
-                    qualityPreference = autoQuality.takeIf { it.isNotEmpty() },
-                    preferredAddonBaseUrl = preferredAddon.takeIf { it.isNotEmpty() },
-                    preferredAddonName = preferredAddonName,
-                    preferredSourceTypes = sourceTypes,
-                    runtimeMinutes = p.episodeRuntimeMinutes,
-                    maxBitrateMbps = autoMaxMbps
-                )
-
-                if (streams.isEmpty()) {
-                    FileLogger.w(TAG, "No streams resolved for ${p.contentId}")
-                    // UI will show error in PrePlayScreen
-                    return@launch
-                }
-
-                controlsViewModel.setAvailableStreams(streams) // Cache streams
-
-                // Auto-pick the best stream (sorted by score)
-                val best = streams.firstOrNull()
-                if (best != null && !p.forcePicker && autoQuality.isNotEmpty()) {
-                    FileLogger.i(TAG, "Auto-picked stream for pre-buffering: ${best.name}")
-                    playVideoAfterResolution(best.url, p)
-                } else {
-                    FileLogger.i(TAG, "Manual picker required, waiting for user selection")
-                }
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Pre-play resolution failed", e)
-            }
-        }
-    }
-
-    private fun playVideoAfterResolution(url: String, p: com.playbridge.shared.protocol.ContentPlayPayload) {
-        controlsViewModel.setPrePlayLaunching(true)
-        isPreBuffering = true
-
-        // Start buffering in the background immediately
-        FileLogger.i(TAG, "Starting background pre-buffer for: $url")
-        val nav = seriesNavigator // setupSeriesNavigator called in handleIntent
-        val baseTitle = if (nav != null && nav.seriesTitle != null) {
-            nav.seriesTitle
-        } else {
-            p.title
-        }
-
-        val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
-        val displayTitle = if (playlistItems.isNotEmpty() && baseTitle?.contains(suffix) != true) {
-            "$baseTitle $suffix"
-        } else {
-            baseTitle
-        }
-
-        controlsViewModel.setTitle(displayTitle ?: "")
-
-        // Initialize player and start buffering
-        playVideo(url, null, startPaused = true)
-
-        // Start countdown
-        launchJob?.cancel()
-        launchJob = lifecycleScope.launch {
-            for (i in 5 downTo 1) {
-                controlsViewModel.setPrePlayCountdown(i)
-                kotlinx.coroutines.delay(1000)
-            }
-
-            // Countdown finished, hide overlay and start playback
-            FileLogger.i(TAG, "Pre-buffer countdown finished, revealing player")
-            isPreBuffering = false
-            controlsViewModel.setPrePlay(null)
-            play() // Ensure it starts playing
-        }
-    }
 
     private fun buildTrackList(): List<MpvTrack> {
         val json = try { MPVLib.getPropertyString("track-list") ?: return emptyList() }

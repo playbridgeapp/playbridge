@@ -225,8 +225,8 @@ fun CastSheet(
     mediaflowProxyPassword: String = "",
     mediaflowAutoSelect: Boolean = true,
     subtitleService: StremioSubtitleService = StremioSubtitleService(),
-    contentPayload: com.playbridge.shared.protocol.ContentPlayPayload? = null,
-    onContentClick: (com.playbridge.shared.protocol.ContentPlayPayload) -> Unit = {}
+    contentPayload: com.playbridge.shared.protocol.PlayPayload? = null,
+    onContentClick: (com.playbridge.shared.protocol.PlayPayload) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -712,7 +712,7 @@ fun CastSheet(
                                         Spacer(modifier = Modifier.height(8.dp))
 
                                         AsyncImage(
-                                            model = contentPayload.backdropUrl ?: contentPayload.posterUrl,
+                                            model = contentPayload.visualMetadata?.backdropUrl ?: contentPayload.visualMetadata?.posterUrl,
                                             contentDescription = null,
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -724,24 +724,29 @@ fun CastSheet(
                                         Spacer(modifier = Modifier.height(8.dp))
 
                                         Text(
-                                            text = contentPayload.title,
+                                            text = contentPayload.title ?: "",
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.Medium
                                         )
 
-                                        if (contentPayload.contentType == "series" && contentPayload.season != null && contentPayload.episode != null) {
-                                            Text(
-                                                text = "S${contentPayload.season} E${contentPayload.episode}${if (contentPayload.episodeTitle != null) " - ${contentPayload.episodeTitle}" else ""}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                        if (contentPayload.contentType == "series" && contentPayload.visualMetadata != null) {
+                                            val meta = contentPayload.visualMetadata!!
+                                            if (meta.season != null && meta.episode != null) {
+                                                Text(
+                                                    text = "S${meta.season} E${meta.episode}${if (meta.episodeTitle != null) " - ${meta.episodeTitle}" else ""}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
 
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = "ID: ${contentPayload.contentId}",
+                                            text = "URL: ${contentPayload.url}",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.outline
+                                            color = MaterialTheme.colorScheme.outline,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                 }

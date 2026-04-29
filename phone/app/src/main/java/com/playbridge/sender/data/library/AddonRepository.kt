@@ -320,6 +320,10 @@ class AddonRepository(
                     return@withContext emptyList()
                 }
                 val body = response.body?.string() ?: return@withContext emptyList()
+                Log.d(TAG, "Catalog response body length: ${body.length}")
+                if (body.length < 500) {
+                    Log.d(TAG, "Catalog response body: $body")
+                }
                 val parsed = json.decodeFromString<StremioMetasResponse>(body)
                 val items = parsed.metas ?: emptyList()
                 catalogCache[cacheKey] = Pair(System.currentTimeMillis(), items)

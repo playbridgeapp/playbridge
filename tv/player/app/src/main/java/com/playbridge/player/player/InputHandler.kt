@@ -85,21 +85,62 @@ class InputHandler(
         // Only handle ACTION_DOWN
         if (event?.action != KeyEvent.ACTION_DOWN) return false
 
+        val state = controls.controlsState.value
+        val isExtVisible = isExternalOverlayVisible()
+
         // --- Full controls overlay or external overlay is visible ---
-        if (controls.controlsState.value.isVisible || isExternalOverlayVisible()) {
+        if (state.isVisible || isExtVisible) {
             return when (keyCode) {
-                // Up/Down: let system handle focus navigation in overlay
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> false
-                // Left/Right: let system do focus navigation between buttons
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> false
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    if (!state.isFullControlsVisible && !isExtVisible) {
+                        adjustVolume(AudioManager.ADJUST_RAISE)
+                        true
+                    } else {
+                        // Let system handle focus navigation in full overlay
+                        false
+                    }
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (!state.isFullControlsVisible && !isExtVisible) {
+                        adjustVolume(AudioManager.ADJUST_LOWER)
+                        true
+                    } else {
+                        // Let system handle focus navigation in full overlay
+                        false
+                    }
+                }
+                // Left/Right: let system do focus navigation between buttons if full,
+                // BUT if light seek mode, they should handle scrubbing.
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    if (!state.isFullControlsVisible && !isExtVisible) {
+                        val repeatCount = event.repeatCount
+                        val multiplier = if (repeatCount > 10) 5 else 1
+                        controls.handleScrubbing(-10000L * multiplier)
+                        controls.showSeekUI()
+                        true
+                    } else {
+                        false
+                    }
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (!state.isFullControlsVisible && !isExtVisible) {
+                        val repeatCount = event.repeatCount
+                        val multiplier = if (repeatCount > 10) 5 else 1
+                        controls.handleScrubbing(10000L * multiplier)
+                        controls.showSeekUI()
+                        true
+                    } else {
+                        false
+                    }
+                }
                 // Center/Enter: if in seek UI (not full), pause and show full controls.
                 // Otherwise, let system deliver click to focused button.
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                     // If an external overlay (PrePlayScreen, StreamPicker, etc.) is visible,
                     // let Compose handle the enter key so it reaches chips/buttons.
-                    if (isExternalOverlayVisible()) return false
+                    if (isExtVisible) return false
 
-                    if (!controls.controlsState.value.isFullControlsVisible) {
+                    if (!state.isFullControlsVisible) {
                         controls.commitSeek() // Ensure any pending scrub is committed
                         if (engine.isPlaying) {
                             engine.pause()
@@ -112,14 +153,10 @@ class InputHandler(
                 }
                 // Back: hide overlay or controls if visible, otherwise let system handle (exits player)
                 KeyEvent.KEYCODE_BACK -> {
-                    val state = controls.controlsState.value
                     if (state.activeOverlay != ActiveOverlay.NONE) {
                         controls.hideOverlay()
                         true
                     } else {
-                        // For non-sub-overlay (just seek UI or main controls),
-                        // decide if we should hide them or let back fall through.
-                        // Usually on TV, hit Back while controls are up should hide controls.
                         if (state.isVisible) {
                             controls.hideControls()
                             true
@@ -165,19 +202,11 @@ class InputHandler(
                 true
             }
             KeyEvent.KEYCODE_DPAD_UP -> {
-                audioManager.adjustStreamVolume(
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.ADJUST_RAISE,
-                    AudioManager.FLAG_SHOW_UI
-                )
+                adjustVolume(AudioManager.ADJUST_RAISE)
                 true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                audioManager.adjustStreamVolume(
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.ADJUST_LOWER,
-                    AudioManager.FLAG_SHOW_UI
-                )
+                adjustVolume(AudioManager.ADJUST_LOWER)
                 true
             }
             KeyEvent.KEYCODE_MEDIA_STOP -> {
@@ -187,5 +216,13 @@ class InputHandler(
             // Back: let system handle (exits player)
             else -> false
         }
+    }
+
+    private fun adjustVolume(direction: Int) {
+        audioManager.adjustStreamVolume(
+            AudioManager.STREAM_MUSIC,
+            direction,
+            AudioManager.FLAG_SHOW_UI
+        )
     }
 }

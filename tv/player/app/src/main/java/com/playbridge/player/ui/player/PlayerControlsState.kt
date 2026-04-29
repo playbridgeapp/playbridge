@@ -7,7 +7,7 @@ enum class SettingsTab {
 }
 
 enum class ActiveOverlay {
-    NONE, SETTINGS, STREAM_PICKER, VIDEO_FILTER, PLAYLIST_PICKER, SWITCH_PLAYER
+    NONE, SETTINGS, VIDEO_FILTER, PLAYLIST_PICKER, SWITCH_PLAYER
 }
 
 @Immutable
@@ -36,9 +36,8 @@ data class PlayerControlsState(
     val hdrFormat: String? = null,
     val isLooping: Boolean = false,
     val hasPlaylist: Boolean = false,
-    val hasMultipleStreams: Boolean = false,
     val engineType: String = "",
-    val prePlayPayload: com.playbridge.shared.protocol.ContentPlayPayload? = null,
+    val prePlayMetadata: com.playbridge.shared.protocol.VisualMetadata? = null,
     val prePlayCountdown: Int = 0,
     val isPrePlayLaunching: Boolean = false,
     
@@ -52,14 +51,6 @@ data class PlayerControlsState(
     val videoTracks: List<UnifiedTrack> = emptyList(),
     val playbackSpeed: Float = 1.0f,
     val videoScalingMode: String = "Fit",
-
-    // Stream Selection Data
-    val availableStreams: List<com.playbridge.shared.stremio.ScoredStremioStream> = emptyList(),
-    val currentStreamUrl: String? = null,
-    val isLoadingStreams: Boolean = false,
-    val preferredQuality: String? = null,
-    val preferredAddonName: String? = null,
-    val preferredSourceTypeKeys: List<String>? = null,
     
     // Playlist Data
     val playlistItems: List<com.playbridge.shared.protocol.PlayPayload> = emptyList(),

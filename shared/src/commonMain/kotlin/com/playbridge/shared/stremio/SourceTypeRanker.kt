@@ -7,7 +7,7 @@ package com.playbridge.shared.stremio
  * best stream.
  *
  * The keys are what the phone sends over the wire via
- * `ContentPlayPayload.preferredSourceTypes` / `PlayPayload.preferredSourceTypes`
+ * `PlayPayload.preferredSourceTypes`
  * and must stay in sync with the phone enum's `SourceTypeFilter.key` values.
  *
  * REMUX is ordered before BLURAY on purpose: a title like "BluRay Remux" classifies

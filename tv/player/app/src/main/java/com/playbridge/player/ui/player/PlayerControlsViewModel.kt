@@ -97,9 +97,6 @@ class PlayerControlsViewModel : ViewModel() {
         _controlsState.update { it.copy(hasPlaylist = visible) }
     }
 
-    fun setStreamsVisible(visible: Boolean) {
-        _controlsState.update { it.copy(hasMultipleStreams = visible) }
-    }
     
     fun setNavigationVisible(visible: Boolean) {
         // In current Compose impl, navigation buttons are shown if hasPlaylist is true
@@ -115,8 +112,8 @@ class PlayerControlsViewModel : ViewModel() {
         _controlsState.update { it.copy(isBuffering = isBuffering) }
     }
     
-    fun setPrePlay(payload: com.playbridge.shared.protocol.ContentPlayPayload?) {
-        _controlsState.update { it.copy(prePlayPayload = payload) }
+    fun setPrePlay(metadata: com.playbridge.shared.protocol.VisualMetadata?) {
+        _controlsState.update { it.copy(prePlayMetadata = metadata) }
     }
     
     fun setPrePlayCountdown(seconds: Int) {
@@ -206,34 +203,6 @@ class PlayerControlsViewModel : ViewModel() {
         hideOverlay()
     }
 
-    fun setAvailableStreams(streams: List<com.playbridge.shared.stremio.ScoredStremioStream>) {
-        _controlsState.update { it.copy(availableStreams = streams, isLoadingStreams = false) }
-    }
-
-    fun setLoadingStreams(loading: Boolean) {
-        _controlsState.update { it.copy(isLoadingStreams = loading) }
-    }
-
-    fun setStreamPreferences(quality: String?, addon: String?, sourceTypes: List<String>?) {
-        _controlsState.update {
-            it.copy(
-                preferredQuality = quality,
-                preferredAddonName = addon,
-                preferredSourceTypeKeys = sourceTypes
-            )
-        }
-    }
-
-    fun showStreamPicker(streams: List<com.playbridge.shared.stremio.ScoredStremioStream>? = null, currentUrl: String? = null) {
-        _controlsState.update { 
-            it.copy(
-                availableStreams = streams ?: it.availableStreams,
-                currentStreamUrl = currentUrl ?: it.currentStreamUrl,
-                isLoadingStreams = if (streams != null) false else it.isLoadingStreams
-            )
-        }
-        showOverlay(ActiveOverlay.STREAM_PICKER)
-    }
 
     fun showVideoFilter(
         filter: com.playbridge.shared.player.VideoFilter,

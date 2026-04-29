@@ -91,6 +91,7 @@ fun InstalledAddonEntity.parsedCatalogEntries(): List<StremioCatalogEntry> {
             ignoreUnknownKeys = true
         }.decodeFromString<List<StremioCatalogEntry>>(catalogsJson)
     } catch (e: Exception) {
+        android.util.Log.e("AddonModels", "Failed to parse catalogsJson for $name: ${e.message}\nJSON: $catalogsJson")
         emptyList()
     }
 }

@@ -278,11 +278,6 @@ class WebSocketServer(
                                 FileLogger.i(TAG, "Raw JSON body: $text")
                                 _commands.emit(command)
                             }
-                            is Command.PlayContent -> {
-                                FileLogger.i(TAG, "PlayContent command parsed - ContentId: ${command.payload.contentId}, Title: ${command.payload.title}")
-                                FileLogger.i(TAG, "Raw JSON body: $text")
-                                _commands.emit(command)
-                            }
                             else -> {
                                 _commands.emit(command)
                             }
