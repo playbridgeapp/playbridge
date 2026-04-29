@@ -108,7 +108,7 @@ PlayBridge/
 ---
 
 ## Hub Architecture
-👉 [Integrated Smart Hub Architecture](hub/README.md)
+👉 [Integrated Smart Hub Architecture](hub/ARCHITECTURE.md)
 
 ---
 
