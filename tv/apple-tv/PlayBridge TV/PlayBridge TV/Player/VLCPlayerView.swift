@@ -396,8 +396,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             if playbackState.scrubMultiplier == 0 {
                 playbackState.scrubMultiplier = dir
             } else if (playbackState.scrubMultiplier > 0 && forward) || (playbackState.scrubMultiplier < 0 && !forward) {
-                // Increment magnitude up to 4x
-                let magnitude = min(abs(playbackState.scrubMultiplier) + 1, 4)
+                // Increment magnitude up to 8x
+                let magnitude = min(abs(playbackState.scrubMultiplier) + 1, 8)
                 playbackState.scrubMultiplier = magnitude * dir
             } else {
                 // Changing directions resets
