@@ -15,15 +15,18 @@ import UIKit
 
 struct ContentView: View {
     @StateObject private var historyStore = HistoryStore()
+    @StateObject private var playlistStore = PlaylistStore()
     @StateObject private var server: WebSocketServer
     @State private var currentScreen: AppScreen = .pairing
     @State private var time = 0.0
     let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     init() {
-        let store = HistoryStore()
-        _historyStore = StateObject(wrappedValue: store)
-        _server = StateObject(wrappedValue: WebSocketServer(historyStore: store))
+        let hStore = HistoryStore()
+        let pStore = PlaylistStore()
+        _historyStore = StateObject(wrappedValue: hStore)
+        _playlistStore = StateObject(wrappedValue: pStore)
+        _server = StateObject(wrappedValue: WebSocketServer(historyStore: hStore, playlistStore: pStore))
     }
 
     var body: some View {
@@ -88,6 +91,7 @@ struct ContentView: View {
         }
         .onAppear { server.start() }
         .environmentObject(historyStore)
+        .environmentObject(playlistStore)
         .environmentObject(server)
     }
 }

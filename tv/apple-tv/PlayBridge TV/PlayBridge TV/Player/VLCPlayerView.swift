@@ -94,6 +94,9 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 onSwitchEngine: { [weak self] in
                     guard let self = self else { return }
                     self.onSwitch?(self.playbackState.currentTime)
+                },
+                onTogglePlaylist: {
+                    NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
                 })
             let hosting = UIHostingController(rootView: overlay)
             hosting.view.backgroundColor = .clear

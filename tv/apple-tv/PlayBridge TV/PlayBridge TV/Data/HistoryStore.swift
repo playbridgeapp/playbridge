@@ -5,7 +5,27 @@ import Combine
 
 struct PlayRequest: Equatable {
     let url: URL
+    let title: String?
     let headers: [String: String]?
+    let subtitles: [String]?
+    let preferredAudioLanguage: String?
+    let preferredSubtitleLanguage: String?
+    
+    init(
+        url: URL,
+        title: String? = nil,
+        headers: [String: String]? = nil,
+        subtitles: [String]? = nil,
+        preferredAudioLanguage: String? = nil,
+        preferredSubtitleLanguage: String? = nil
+    ) {
+        self.url = url
+        self.title = title
+        self.headers = headers
+        self.subtitles = subtitles
+        self.preferredAudioLanguage = preferredAudioLanguage
+        self.preferredSubtitleLanguage = preferredSubtitleLanguage
+    }
 }
 
 struct PlaybackHistoryItem: Identifiable, Codable, Equatable {

@@ -59,7 +59,14 @@ struct NativePlayerView: UIViewControllerRepresentable {
             coordinator?.invokeSwitch()
         }
         
-        controller.transportBarCustomMenuItems = [loopAction, switchAction]
+        let playlistAction = UIAction(
+            title: "Playlist",
+            image: UIImage(systemName: "list.bullet")
+        ) { _ in
+            NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
+        }
+        
+        controller.transportBarCustomMenuItems = [loopAction, switchAction, playlistAction]
 
         player.play()
         return controller

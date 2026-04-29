@@ -3,8 +3,11 @@ import SwiftUI
 struct PlayerView: View {
     let request: PlayRequest
     let onDismiss: () -> Void
+    @EnvironmentObject var historyStore: HistoryStore
+    @EnvironmentObject var playlistStore: PlaylistStore
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
     @State private var resumeTime: Double = 0.0
+    @State private var showPlaylist: Bool = false
 
     // 1. Define focus state
     @FocusState private var isPlayerFocused: Bool
@@ -13,36 +16,72 @@ struct PlayerView: View {
         resumeTime = currentTime
         preferredPlayer = preferredPlayer == "vlc" ? "avplayer" : "vlc"
     }
+    
+    private func handleNext() {
+        if let nextRequest = playlistStore.next() {
+            historyStore.addToHistory(url: nextRequest.url, title: nextRequest.title, headers: nextRequest.headers)
+            resumeTime = 0
+        } else {
+            onDismiss()
+        }
+    }
+    
+    private func handleJump(to index: Int) {
+        if let jumpRequest = playlistStore.jumpTo(index: index) {
+            historyStore.addToHistory(url: jumpRequest.url, title: jumpRequest.title, headers: jumpRequest.headers)
+            resumeTime = 0
+            withAnimation { showPlaylist = false }
+        }
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
+            let currentRequest = playlistStore.currentItem ?? request
+            let _ = print("PlayerView: Rendering with URL: \(currentRequest.url)")
             if preferredPlayer == "vlc" {
                 VLCPlayerView(
-                    url: request.url,
-                    headers: request.headers,
+                    url: currentRequest.url,
+                    headers: currentRequest.headers,
                     initialTime: resumeTime,
-                    onDismiss: onDismiss,
+                    onDismiss: handleNext,
                     onSwitch: handleSwitch
                 )
                 .ignoresSafeArea()
                 .focused($isPlayerFocused)
+                .id(currentRequest.url)
             } else {
                 NativePlayerView(
-                    url: request.url,
-                    headers: request.headers,
+                    url: currentRequest.url,
+                    headers: currentRequest.headers,
                     initialTime: resumeTime,
-                    onDismiss: onDismiss,
+                    onDismiss: handleNext,
                     onSwitch: handleSwitch
                 )
                 .ignoresSafeArea()
                 .focused($isPlayerFocused)
+                .id(currentRequest.url)
                 .onExitCommand { onDismiss() }
+            }
+
+            if showPlaylist {
+                PlaylistOverlay(
+                    onItemSelected: { index in
+                        handleJump(to: index)
+                    },
+                    onDismiss: {
+                        withAnimation { showPlaylist = false }
+                    }
+                )
+                .zIndex(20)
             }
         }
         .onAppear {
             isPlayerFocused = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TogglePlaylist"))) { _ in
+            withAnimation { showPlaylist.toggle() }
         }
     }
 }

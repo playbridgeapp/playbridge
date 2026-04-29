@@ -111,6 +111,7 @@ struct VLCControlsOverlay: View {
     let onSelectAudio: (Int) -> Void
     let onTogglePlayPause: () -> Void
     let onSwitchEngine: () -> Void
+    let onTogglePlaylist: () -> Void
 
     var body: some View {
         ZStack {
@@ -248,6 +249,18 @@ struct VLCControlsOverlay: View {
                                         Image(systemName: "arrow.triangle.2.circlepath")
                                             .font(.system(size: 26))
                                         Text("Switch")
+                                            .font(.system(size: 16, weight: .medium))
+                                    }
+                                    .frame(width: 100, height: 70)
+                                }
+                                .buttonStyle(.card)
+                                
+                                // Playlist button
+                                Button(action: { onTogglePlaylist() }) {
+                                    VStack(spacing: 6) {
+                                        Image(systemName: "list.bullet")
+                                            .font(.system(size: 26))
+                                        Text("Playlist")
                                             .font(.system(size: 16, weight: .medium))
                                     }
                                     .frame(width: 100, height: 70)
