@@ -19,6 +19,7 @@ struct ContentView: View {
     @StateObject private var server: WebSocketServer
     @State private var currentScreen: AppScreen = .pairing
     @State private var time = 0.0
+    @State private var showingPrePlay: Bool = false
     let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     init() {
@@ -80,16 +81,41 @@ struct ContentView: View {
             .disabled(server.currentPlayRequest != nil)
 
             if let request = server.currentPlayRequest {
-                // Using the fixed PlayerView
-                PlayerView(request: request) {
-                    withAnimation { server.currentPlayRequest = nil }
+                ZStack {
+                    // Using the fixed PlayerView
+                    PlayerView(request: request, isPreBuffering: showingPrePlay) {
+                        withAnimation { server.currentPlayRequest = nil }
+                    }
+                    .id(request.url)  // Forces re-init if URL changes
+                    .zIndex(5)
+                    .edgesIgnoringSafeArea(.all)
+                    .opacity(showingPrePlay ? 0 : 1) // Keep it invisible during pre-buffering
+                    
+                    if showingPrePlay, let metadata = request.visualMetadata {
+                        PrePlayView(
+                            metadata: metadata,
+                            onStart: {
+                                withAnimation { showingPrePlay = false }
+                            },
+                            onBack: {
+                                withAnimation { server.currentPlayRequest = nil }
+                            }
+                        )
+                        .zIndex(10)
+                    }
                 }
-                .id(request.url)  // Forces re-init if URL changes
-                .zIndex(10)
-                .edgesIgnoringSafeArea(.all)
             }
         }
         .onAppear { server.start() }
+        .onReceive(server.$currentPlayRequest) { request in
+            if let request = request {
+                if request.visualMetadata != nil {
+                    showingPrePlay = true
+                } else {
+                    showingPrePlay = false
+                }
+            }
+        }
         .environmentObject(historyStore)
         .environmentObject(playlistStore)
         .environmentObject(server)

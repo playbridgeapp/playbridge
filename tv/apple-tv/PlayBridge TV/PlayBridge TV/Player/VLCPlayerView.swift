@@ -7,6 +7,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
     let initialTime: Double
+    let isPreBuffering: Bool
     let onDismiss: () -> Void
     let onSwitch: (Double) -> Void
 
@@ -15,12 +16,15 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         controller.url = url
         controller.headers = headers
         controller.initialTime = initialTime
+        controller.isPreBuffering = isPreBuffering
         controller.onDismiss = onDismiss
         controller.onSwitch = onSwitch
         return controller
     }
 
-    func updateUIViewController(_ uiViewController: VLCViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: VLCViewController, context: Context) {
+        uiViewController.isPreBuffering = isPreBuffering
+    }
 
     class VLCViewController: UIViewController, VLCMediaPlayerDelegate {
         var mediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
@@ -29,6 +33,14 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         var initialTime: Double = 0.0
         var onDismiss: (() -> Void)?
         var onSwitch: ((Double) -> Void)?
+        
+        var isPreBuffering: Bool = false {
+            didSet {
+                if isPreBuffering != oldValue {
+                    applyPreBufferingState()
+                }
+            }
+        }
         
         private var initialTimeApplied: Bool = false
         private var ignoreTimeUpdatesUntil: Date = Date.distantPast
@@ -188,7 +200,18 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 }
 
                 mediaPlayer.media = media
+                applyPreBufferingState()
                 mediaPlayer.play()
+            }
+        }
+        
+        private func applyPreBufferingState() {
+            mediaPlayer.audio?.isMuted = isPreBuffering
+            if isPreBuffering {
+                playbackState.showUI = false
+                hideControlsTimer?.invalidate()
+            } else {
+                showUI(autoHide: true)
             }
         }
 

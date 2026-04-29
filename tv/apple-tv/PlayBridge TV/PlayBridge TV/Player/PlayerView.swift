@@ -8,6 +8,13 @@ struct PlayerView: View {
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
     @State private var resumeTime: Double = 0.0
     @State private var showPlaylist: Bool = false
+    let isPreBuffering: Bool
+
+    init(request: PlayRequest, isPreBuffering: Bool, onDismiss: @escaping () -> Void) {
+        self.request = request
+        self.isPreBuffering = isPreBuffering
+        self.onDismiss = onDismiss
+    }
 
     // 1. Define focus state
     @FocusState private var isPlayerFocused: Bool
@@ -45,6 +52,7 @@ struct PlayerView: View {
                     url: currentRequest.url,
                     headers: currentRequest.headers,
                     initialTime: resumeTime,
+                    isPreBuffering: isPreBuffering,
                     onDismiss: handleNext,
                     onSwitch: handleSwitch
                 )
@@ -56,6 +64,7 @@ struct PlayerView: View {
                     url: currentRequest.url,
                     headers: currentRequest.headers,
                     initialTime: resumeTime,
+                    isPreBuffering: isPreBuffering,
                     onDismiss: handleNext,
                     onSwitch: handleSwitch
                 )

@@ -262,7 +262,25 @@ class WebSocketServer: ObservableObject {
             headers: payload["headers"] as? [String: String],
             subtitles: payload["subtitles"] as? [String],
             preferredAudioLanguage: payload["preferredAudioLanguage"] as? String,
-            preferredSubtitleLanguage: payload["preferredSubtitleLanguage"] as? String
+            preferredSubtitleLanguage: payload["preferredSubtitleLanguage"] as? String,
+            visualMetadata: parseVisualMetadata(payload["visualMetadata"] as? [String: Any])
+        )
+    }
+
+    private func parseVisualMetadata(_ dict: [String: Any]?) -> VisualMetadata? {
+        guard let dict = dict, let title = dict["title"] as? String else { return nil }
+        return VisualMetadata(
+            title: title,
+            overview: dict["overview"] as? String,
+            posterUrl: dict["posterUrl"] as? String,
+            backdropUrl: dict["backdropUrl"] as? String,
+            logoUrl: dict["logoUrl"] as? String,
+            year: dict["year"] as? String,
+            rating: dict["rating"] as? String,
+            runtime: dict["runtime"] as? String,
+            season: dict["season"] as? Int,
+            episode: dict["episode"] as? Int,
+            episodeTitle: dict["episodeTitle"] as? String
         )
     }
 

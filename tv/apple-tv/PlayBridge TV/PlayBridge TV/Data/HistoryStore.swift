@@ -3,6 +3,46 @@ import Combine
 
 // MARK: - Models
 
+struct VisualMetadata: Codable, Equatable {
+    let title: String
+    let overview: String?
+    let posterUrl: String?
+    let backdropUrl: String?
+    let logoUrl: String?
+    let year: String?
+    let rating: String?
+    let runtime: String?
+    let season: Int?
+    let episode: Int?
+    let episodeTitle: String?
+    
+    init(
+        title: String,
+        overview: String? = nil,
+        posterUrl: String? = nil,
+        backdropUrl: String? = nil,
+        logoUrl: String? = nil,
+        year: String? = nil,
+        rating: String? = nil,
+        runtime: String? = nil,
+        season: Int? = nil,
+        episode: Int? = nil,
+        episodeTitle: String? = nil
+    ) {
+        self.title = title
+        self.overview = overview
+        self.posterUrl = posterUrl
+        self.backdropUrl = backdropUrl
+        self.logoUrl = logoUrl
+        self.year = year
+        self.rating = rating
+        self.runtime = runtime
+        self.season = season
+        self.episode = episode
+        self.episodeTitle = episodeTitle
+    }
+}
+
 struct PlayRequest: Equatable {
     let url: URL
     let title: String?
@@ -10,6 +50,7 @@ struct PlayRequest: Equatable {
     let subtitles: [String]?
     let preferredAudioLanguage: String?
     let preferredSubtitleLanguage: String?
+    let visualMetadata: VisualMetadata?
     
     init(
         url: URL,
@@ -17,7 +58,8 @@ struct PlayRequest: Equatable {
         headers: [String: String]? = nil,
         subtitles: [String]? = nil,
         preferredAudioLanguage: String? = nil,
-        preferredSubtitleLanguage: String? = nil
+        preferredSubtitleLanguage: String? = nil,
+        visualMetadata: VisualMetadata? = nil
     ) {
         self.url = url
         self.title = title
@@ -25,6 +67,7 @@ struct PlayRequest: Equatable {
         self.subtitles = subtitles
         self.preferredAudioLanguage = preferredAudioLanguage
         self.preferredSubtitleLanguage = preferredSubtitleLanguage
+        self.visualMetadata = visualMetadata
     }
 }
 

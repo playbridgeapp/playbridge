@@ -6,6 +6,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
     let initialTime: Double
+    let isPreBuffering: Bool
     let onDismiss: () -> Void
     let onSwitch: (Double) -> Void
 
@@ -67,12 +68,20 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
         
         controller.transportBarCustomMenuItems = [loopAction, switchAction, playlistAction]
-
+        
+        player.isMuted = isPreBuffering
         player.play()
         return controller
     }
 
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        uiViewController.player?.isMuted = isPreBuffering
+        if isPreBuffering {
+            uiViewController.showsPlaybackControls = false
+        } else {
+            uiViewController.showsPlaybackControls = true
+        }
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onDismiss: onDismiss, onSwitch: onSwitch)
