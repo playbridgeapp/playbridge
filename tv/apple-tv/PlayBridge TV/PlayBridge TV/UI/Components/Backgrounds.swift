@@ -2,12 +2,23 @@ import SwiftUI
 
 struct BrandingView: View {
     var body: some View {
-        HStack(spacing: 0) {
-            Image(systemName: "play.tv.fill").foregroundColor(Theme.accent).font(.title)
-                .padding(.trailing, 10)
-            Text("PLAY").font(.system(size: 28, weight: .black))
-            Text("BRIDGE").font(.system(size: 28, weight: .light))
-        }.foregroundColor(.white)
+        HStack(spacing: 12) {
+            Image("Logo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 60, height: 60)
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+            
+            VStack(alignment: .leading, spacing: -4) {
+                Text("PLAY")
+                    .font(.system(size: 32, weight: .black))
+                Text("BRIDGE")
+                    .font(.system(size: 32, weight: .light))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+        .foregroundColor(.white)
     }
 }
 
