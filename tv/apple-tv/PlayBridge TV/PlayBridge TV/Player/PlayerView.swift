@@ -53,7 +53,8 @@ struct PlayerView: View {
                     headers: currentRequest.headers,
                     initialTime: resumeTime,
                     isPreBuffering: isPreBuffering,
-                    onDismiss: handleNext,
+                    onDismiss: handleNext,  // end-of-video → try next item
+                    onExit: onDismiss,      // back button → always go home
                     onSwitch: handleSwitch
                 )
                 .ignoresSafeArea()
@@ -65,7 +66,8 @@ struct PlayerView: View {
                     headers: currentRequest.headers,
                     initialTime: resumeTime,
                     isPreBuffering: isPreBuffering,
-                    onDismiss: handleNext,
+                    onDismiss: handleNext,  // end-of-video → try next item
+                    onExit: onDismiss,      // back button → always go home
                     onSwitch: handleSwitch
                 )
                 .ignoresSafeArea()

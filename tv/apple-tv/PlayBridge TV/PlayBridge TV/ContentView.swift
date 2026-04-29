@@ -82,26 +82,28 @@ struct ContentView: View {
 
             if let request = server.currentPlayRequest {
                 ZStack {
-                    // Using the fixed PlayerView
-                    PlayerView(request: request, isPreBuffering: showingPrePlay) {
-                        withAnimation { server.currentPlayRequest = nil }
-                    }
-                    .id(request.url)  // Forces re-init if URL changes
-                    .zIndex(5)
-                    .edgesIgnoringSafeArea(.all)
-                    .opacity(showingPrePlay ? 0 : 1) // Keep it invisible during pre-buffering
-                    
                     if showingPrePlay, let metadata = request.visualMetadata {
+                        // Pre-play screen owns the screen; PlayerView hasn't started yet
                         PrePlayView(
                             metadata: metadata,
                             onStart: {
                                 withAnimation { showingPrePlay = false }
                             },
                             onBack: {
-                                withAnimation { server.currentPlayRequest = nil }
+                                server.currentPlayRequest = nil
+                                showingPrePlay = false
                             }
                         )
                         .zIndex(10)
+                        .edgesIgnoringSafeArea(.all)
+                    } else {
+                        // Pre-play is done — hand off to the player
+                        PlayerView(request: request, isPreBuffering: false) {
+                            withAnimation { server.currentPlayRequest = nil }
+                        }
+                        .id(request.url)
+                        .zIndex(5)
+                        .edgesIgnoringSafeArea(.all)
                     }
                 }
             }

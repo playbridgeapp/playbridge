@@ -7,7 +7,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let headers: [String: String]?
     let initialTime: Double
     let isPreBuffering: Bool
-    let onDismiss: () -> Void
+    let onDismiss: () -> Void  // end-of-video: advance playlist or quit
+    let onExit: () -> Void      // user pressed back: always quit
     let onSwitch: (Double) -> Void
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
@@ -84,17 +85,19 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onDismiss: onDismiss, onSwitch: onSwitch)
+        Coordinator(onDismiss: onDismiss, onExit: onExit, onSwitch: onSwitch)
     }
 
     class Coordinator: NSObject, AVPlayerViewControllerDelegate {
         var isLooping = false
         weak var player: AVPlayer?
         let onDismiss: () -> Void
+        let onExit: () -> Void
         let onSwitch: (Double) -> Void
         
-        init(onDismiss: @escaping () -> Void, onSwitch: @escaping (Double) -> Void) {
+        init(onDismiss: @escaping () -> Void, onExit: @escaping () -> Void, onSwitch: @escaping (Double) -> Void) {
             self.onDismiss = onDismiss
+            self.onExit = onExit
             self.onSwitch = onSwitch
             super.init()
             
@@ -128,6 +131,14 @@ struct NativePlayerView: UIViewControllerRepresentable {
             } else {
                 onDismiss()
             }
+        }
+        
+        func playerViewController(
+            _ playerViewController: AVPlayerViewController,
+            willEndFullScreenPresentation interactivelyDismissed: Bool
+        ) {
+            // User pressed Menu/Back on the Siri Remote
+            onExit()
         }
     }
 }

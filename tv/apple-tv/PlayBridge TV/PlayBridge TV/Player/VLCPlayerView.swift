@@ -8,7 +8,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
     let headers: [String: String]?
     let initialTime: Double
     let isPreBuffering: Bool
-    let onDismiss: () -> Void
+    let onDismiss: () -> Void  // end-of-video: advance playlist or quit
+    let onExit: () -> Void      // user pressed back: always quit
     let onSwitch: (Double) -> Void
 
     func makeUIViewController(context: Context) -> VLCViewController {
@@ -18,6 +19,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         controller.initialTime = initialTime
         controller.isPreBuffering = isPreBuffering
         controller.onDismiss = onDismiss
+        controller.onExit = onExit
         controller.onSwitch = onSwitch
         return controller
     }
@@ -32,6 +34,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         var headers: [String: String]?
         var initialTime: Double = 0.0
         var onDismiss: (() -> Void)?
+        var onExit: (() -> Void)?
         var onSwitch: ((Double) -> Void)?
         
         var isPreBuffering: Bool = false {
@@ -288,14 +291,19 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                     playbackState.showAudioMenu = false
                     return
                 }
-                if !mediaPlayer.isPlaying && playbackState.showUI {
-                    // If paused with controls visible, resume playback first
-                    togglePlayPause()
+                if playbackState.isVirtualScrubbing {
+                    // Abort scrub: cancel the tick timer and restore original position
+                    virtualScrubTickTimer?.invalidate()
+                    virtualScrubTickTimer = nil
+                    playbackState.isVirtualScrubbing = false
+                    playbackState.scrubMultiplier = 0
+                    mediaPlayer.play()
+                    showUI(autoHide: true)
                     return
                 }
                 
-                // If nothing else caught it, exit the video entirely
-                onDismiss?()
+                // Exit the video
+                onExit?()
                 return
             }
 
