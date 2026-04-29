@@ -83,9 +83,19 @@ class WebSocketServer: ObservableObject {
     }
 
     private func handleNewConnection(_ connection: NWConnection) {
+        connection.viabilityUpdateHandler = { [weak self] isViable in
+            if !isViable {
+                print("WebSocket connection (\(connection.endpoint)) is no longer viable.")
+                self?.removeConnection(connection)
+            }
+        }
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .failed, .cancelled: self?.removeConnection(connection)
+            case .failed(let error):
+                print("WebSocket connection (\(connection.endpoint)) failed: \(error)")
+                self?.removeConnection(connection)
+            case .cancelled:
+                self?.removeConnection(connection)
             default: break
             }
         }
@@ -103,7 +113,8 @@ class WebSocketServer: ObservableObject {
 
     private func receiveMessages(from connection: NWConnection) {
         connection.receiveMessage { [weak self] content, _, _, error in
-            if error != nil {
+            if let error = error {
+                print("WebSocket Receive Error (\(connection.endpoint)): \(error)")
                 self?.removeConnection(connection)
                 return
             }
