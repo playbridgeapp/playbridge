@@ -19,7 +19,7 @@ struct ContentView: View {
     @StateObject private var server: WebSocketServer
     @State private var currentScreen: AppScreen = .pairing
     @State private var time = 0.0
-    @State private var showingPrePlay: Bool = false
+    @State private var playerStarted: Bool = false
     let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     init() {
@@ -80,43 +80,48 @@ struct ContentView: View {
             }
             .disabled(server.currentPlayRequest != nil)
 
+            // Instant black curtain — covers home screen the moment a request arrives,
+            // in the same render pass, before PrePlayView has a chance to composite.
+            if server.currentPlayRequest != nil {
+                Color.black
+                    .ignoresSafeArea()
+                    .zIndex(4)
+            }
+
             if let request = server.currentPlayRequest {
+                let isPreBuffering = !playerStarted && request.visualMetadata != nil
                 ZStack {
-                    if showingPrePlay, let metadata = request.visualMetadata {
-                        // Pre-play screen owns the screen; PlayerView hasn't started yet
+                    // PlayerView always renders so it can buffer in the background.
+                    // isPreBuffering=true keeps it muted and UI-hidden during preplay.
+                    PlayerView(request: request, isPreBuffering: isPreBuffering) {
+                        withAnimation { server.currentPlayRequest = nil }
+                    }
+                    .id(request.url)
+                    .zIndex(5)
+                    .edgesIgnoringSafeArea(.all)
+
+                    if isPreBuffering, let metadata = request.visualMetadata {
                         PrePlayView(
                             metadata: metadata,
                             onStart: {
-                                withAnimation { showingPrePlay = false }
+                                withAnimation { playerStarted = true }
                             },
                             onBack: {
                                 server.currentPlayRequest = nil
-                                showingPrePlay = false
+                                playerStarted = false
                             }
                         )
                         .zIndex(10)
                         .edgesIgnoringSafeArea(.all)
-                    } else {
-                        // Pre-play is done — hand off to the player
-                        PlayerView(request: request, isPreBuffering: false) {
-                            withAnimation { server.currentPlayRequest = nil }
-                        }
-                        .id(request.url)
-                        .zIndex(5)
-                        .edgesIgnoringSafeArea(.all)
                     }
                 }
+                .zIndex(5)
             }
         }
         .onAppear { server.start() }
         .onReceive(server.$currentPlayRequest) { request in
-            if let request = request {
-                if request.visualMetadata != nil {
-                    showingPrePlay = true
-                } else {
-                    showingPrePlay = false
-                }
-            }
+            // Reset playerStarted for every new incoming request
+            playerStarted = false
         }
         .environmentObject(historyStore)
         .environmentObject(playlistStore)

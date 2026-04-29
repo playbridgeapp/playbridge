@@ -276,6 +276,12 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         private var virtualScrubTickTimer: Timer?
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            // During pre-buffering, PrePlayView owns all input — pass everything through.
+            if isPreBuffering {
+                super.pressesBegan(presses, with: event)
+                return
+            }
+
             guard let type = presses.first?.type else {
                 super.pressesBegan(presses, with: event)
                 return

@@ -71,46 +71,82 @@ struct PrePlayView: View {
     let onBack: () -> Void
 
     private let totalCountdown = 7
+    private let maxLoadWait: UInt64 = 3_000_000_000  // 3 seconds
 
     @State private var isAnimating = false
+    @State private var isReady = false
+    @State private var backdropLoaded = false
     @State private var posterLoaded = false
     @State private var countdown = 7
     @State private var timerTask: Task<Void, Never>? = nil
+    @State private var readinessTask: Task<Void, Never>? = nil
+
+    /// True as soon as all expected images are loaded (or URLs are absent).
+    private var imagesReady: Bool {
+        let needsBackdrop = (metadata.backdropUrl ?? metadata.posterUrl) != nil
+        let needsPoster   = metadata.posterUrl != nil
+        let backdropOk    = !needsBackdrop || backdropLoaded
+        let posterOk      = !needsPoster   || posterLoaded
+        return backdropOk && posterOk
+    }
 
     var body: some View {
         ZStack {
+            // Black base — visible while images load
+            Color.black.ignoresSafeArea()
+
             // ── Layer 1: Full-bleed backdrop ──────────────────────────────
             backdrop
 
             // ── Layer 2: Cinematic gradient scrim ─────────────────────────
-            scrim
+            if isReady { scrim }
 
             // ── Layer 3: Main content ─────────────────────────────────────
-            HStack(alignment: .center, spacing: 0) {
-                contentColumn
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(isAnimating ? 1 : 0)
-                    .offset(x: isAnimating ? 0 : -60)
+            if isReady {
+                HStack(alignment: .center, spacing: 0) {
+                    contentColumn
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .opacity(isAnimating ? 1 : 0)
+                        .offset(x: isAnimating ? 0 : -60)
 
-                posterColumn
-                    .opacity(isAnimating ? 1 : 0)
-                    .offset(x: isAnimating ? 0 : 60)
+                    posterColumn
+                        .opacity(isAnimating ? 1 : 0)
+                        .offset(x: isAnimating ? 0 : 60)
+                }
             }
         }
         .ignoresSafeArea()
         .onAppear {
-            withAnimation(.spring(response: 0.9, dampingFraction: 0.8)) {
-                isAnimating = true
+            // Fallback: reveal after maxLoadWait regardless of image state
+            readinessTask = Task {
+                try? await Task.sleep(nanoseconds: maxLoadWait)
+                if !Task.isCancelled {
+                    await MainActor.run { markReady() }
+                }
             }
-            startCountdown()
+        }
+        .onChange(of: imagesReady) { ready in
+            if ready { markReady() }
         }
         .onDisappear {
             timerTask?.cancel()
             timerTask = nil
+            readinessTask?.cancel()
+            readinessTask = nil
         }
         .onExitCommand {
             onBack()
         }
+    }
+
+    private func markReady() {
+        guard !isReady else { return }
+        isReady = true
+        readinessTask?.cancel()
+        withAnimation(.spring(response: 0.9, dampingFraction: 0.8)) {
+            isAnimating = true
+        }
+        startCountdown()
     }
 
     // MARK: - Backdrop
@@ -130,13 +166,18 @@ struct PrePlayView: View {
                             .clipped()
                             .blur(radius: 2)
                             .saturation(1.15)
-                            .transition(.opacity.animation(.easeIn(duration: 0.6)))
+                            .onAppear { backdropLoaded = true }
                     default:
                         Color.black
+                            .onAppear {
+                                // failure or empty — don't block on this image
+                                if case .failure(_) = phase { backdropLoaded = true }
+                            }
                     }
                 }
             } else {
                 Color.black
+                    .onAppear { backdropLoaded = true }
             }
         }
         .ignoresSafeArea()
@@ -297,14 +338,9 @@ struct PrePlayView: View {
         HStack(spacing: 20) {
             CountdownRing(total: totalCountdown, remaining: countdown)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Playing in \(countdown)s")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.white)
-                Text("Press Menu to go back")
-                    .font(.system(size: 23))
-                    .foregroundStyle(.white.opacity(0.45))
-            }
+            Text("Playing in \(countdown)s")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.white)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -333,10 +369,14 @@ struct PrePlayView: View {
                             RoundedRectangle(cornerRadius: 20)
                                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
                         )
+                        .onAppear { posterLoaded = true }
                 default:
                     RoundedRectangle(cornerRadius: 20)
                         .fill(Color.white.opacity(0.05))
                         .frame(width: 360, height: 540)
+                        .onAppear {
+                            if case .failure(_) = phase { posterLoaded = true }
+                        }
                 }
             }
             .padding(.trailing, 90)
