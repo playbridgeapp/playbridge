@@ -11,7 +11,7 @@ com.playbridge.browser/
 ├── GeckoViewEngine.kt
 ├── PlayBridgeBrowserApplication.kt
 ├── SystemWebViewEngine.kt
-└── logging
+└── logging/
     └── FileLogger.kt
 ```
 
@@ -21,50 +21,57 @@ com.playbridge.player/
 ├── BootReceiver.kt
 ├── MainActivity.kt
 ├── PlayBridgeApplication.kt
-├── data
+├── data/
+│   ├── HistoryResumeStore.kt
 │   └── HistoryStore.kt
-├── logging
+├── logging/
 │   └── FileLogger.kt
-├── model
+├── model/
 │   └── PairedDevice.kt
-├── pairing
+├── pairing/
 │   └── PairingStore.kt
-├── player
+├── player/
 │   ├── BufferSeekBar.kt
 │   ├── ContentSniffer.kt
 │   ├── ExoPlayerActivity.kt
 │   ├── InputHandler.kt
-│   ├── MpvControlsManager.kt
 │   ├── MpvPlayerActivity.kt
-│   ├── MpvTrackSelectionDialog.kt
 │   ├── PlayerActivity.kt
-│   ├── PlayerControlsManager.kt
+│   ├── PlayerEngineAdapter.kt
 │   ├── PlaylistPickerDialog.kt
 │   ├── PlaylistStore.kt
 │   ├── ProgressManager.kt
-│   ├── StreamSelectionDialog.kt
 │   ├── SubtitleManager.kt
 │   ├── SwitchPlayerDialog.kt
-│   ├── TrackSelectionDialog.kt
-│   ├── VideoFilter.kt
 │   ├── VideoFilterDialog.kt
-│   ├── VlcControlsManager.kt
-│   ├── VlcPlayerActivity.kt
-│   └── VlcTrackSelectionDialog.kt
-├── server
+│   └── VlcPlayerActivity.kt
+├── preplay/
+│   ├── PrePlayActivity.kt
+│   └── PrePlayScreen.kt
+├── server/
 │   ├── BluetoothServer.kt
 │   ├── OverlayWindowHelper.kt
 │   ├── ServerService.kt
 │   └── WebSocketServer.kt
-├── preplay
-│   ├── PrePlayActivity.kt
-│   └── PrePlayScreen.kt
-└── ui
+└── ui/
+    ├── FavoritesScreen.kt
+    ├── HistoryScreen.kt
     ├── HomeScreen.kt
-    ├── LibraryScreen.kt
     ├── PairingScreen.kt
     ├── SettingsScreen.kt
-    └── theme
+    ├── components/
+    │   ├── HistoryItemCard.kt
+    │   ├── Sidebar.kt
+    │   └── StaticAuroraBackground.kt
+    ├── player/
+    │   ├── ControlActionButtons.kt
+    │   ├── MediaSettingsPanel.kt
+    │   ├── PlaybackMetadata.kt
+    │   ├── PlayerControlsOverlay.kt
+    │   ├── PlayerControlsState.kt
+    │   ├── PlayerControlsViewModel.kt
+    │   └── PlayerSeekbar.kt
+    └── theme/
         ├── Color.kt
         ├── Theme.kt
         └── Type.kt

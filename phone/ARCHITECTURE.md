@@ -4,7 +4,7 @@
 ```
 com.playbridge.sender/
 ├── PlayBridgeApplication.kt
-├── browser
+├── browser/
 │   ├── AddonInstallDialog.kt
 │   ├── AddonSettingsScreen.kt
 │   ├── AppearanceSettingsScreen.kt
@@ -50,9 +50,9 @@ com.playbridge.sender/
 │   ├── SessionObserverSetup.kt
 │   ├── SettingsScreen.kt
 │   ├── SiteInfoSheet.kt
-│   ├── StreamingSettingsScreen.kt
 │   ├── StreamPickerSheet.kt
 │   ├── StreamSelector.kt
+│   ├── StreamingSettingsScreen.kt
 │   ├── SubtitlePreferences.kt
 │   ├── TVSettingsScreen.kt
 │   ├── TabManager.kt
@@ -60,25 +60,25 @@ com.playbridge.sender/
 │   ├── TrackingSheet.kt
 │   ├── VideoDetector.kt
 │   └── VideoPreviewSheet.kt
-├── connection
+├── connection/
 │   ├── BluetoothClient.kt
 │   ├── ConnectionStore.kt
 │   ├── ConnectionViewModel.kt
 │   ├── NsdHelper.kt
 │   └── WebSocketClient.kt
-├── data
-│   ├── backup
+├── data/
+│   ├── backup/
 │   │   ├── BackupManager.kt
 │   │   ├── BackupTrigger.kt
 │   │   └── BackupUtils.kt
-│   ├── debrid
+│   ├── debrid/
 │   │   ├── AllDebridClient.kt
 │   │   ├── DebridModels.kt
 │   │   ├── DebridProvider.kt
 │   │   ├── DebridRepository.kt
 │   │   ├── PremiumizeClient.kt
 │   │   └── RealDebridClient.kt
-│   ├── history
+│   ├── history/
 │   │   ├── BookmarkDao.kt
 │   │   ├── BookmarkEntity.kt
 │   │   ├── CommandHistoryDao.kt
@@ -91,7 +91,7 @@ com.playbridge.sender/
 │   │   ├── SearchHistoryEntity.kt
 │   │   ├── TabDao.kt
 │   │   └── TabEntity.kt
-│   └── library
+│   └── library/
 │       ├── AddonDao.kt
 │       ├── AddonModels.kt
 │       ├── AddonRepository.kt
@@ -105,12 +105,12 @@ com.playbridge.sender/
 │       ├── WatchlistDao.kt
 │       ├── WatchlistEntity.kt
 │       └── WatchlistStatus.kt
-├── model
+├── model/
 │   └── TvDevice.kt
-└── ui
+└── ui/
     ├── ConnectionScreen.kt
     ├── HomeScreen.kt
-    └── theme
+    └── theme/
         ├── Color.kt
         ├── Theme.kt
         └── Type.kt

@@ -5,17 +5,93 @@ The `shared/` module is a Kotlin Multiplatform (KMP) library that serves as the 
 ## Package Structure
 ```
 shared/src/
-├── commonMain/kotlin/com/playbridge/shared/
-│   ├── io/                (Cloud backup, S3 clients, file utilities)
-│   ├── logging/           (Unified logging interface)
-│   ├── network/           (Shared Ktor HTTP clients)
-│   ├── player/            (Shared player ViewModels, M3U parser, playback settings)
-│   ├── protocol/          (Message classes, JSON serialization, Binary protocol)
-│   ├── resume/            (Playback resume logic)
-│   └── stremio/           (Addon resolution, quality ranking, series navigation)
 ├── androidMain/           (Android-specific player engines: ExoPlayer, LibVLC, MPV)
+│   ├── assets/
+│   │   └── shaders/
+│   │       ├── color_matrix_fragment.glsl
+│   │       └── color_matrix_vertex.glsl
+│   └── kotlin/
+│       └── com/
+│           └── playbridge/
+│               └── shared/
+│                   ├── SharedContext.kt
+│                   ├── io/                (Cloud backup, S3 clients, file utilities)
+│                   │   ├── FileSystem.kt
+│                   │   └── Paths.android.kt
+│                   ├── logging/           (Unified logging interface)
+│                   │   └── Logger.android.kt
+│                   ├── network/           (Shared Ktor HTTP clients)
+│                   │   └── SharedHttpClient.android.kt
+│                   └── player/            (Shared player ViewModels, M3U parser, playback settings)
+│                       ├── AndroidBufferConfig.kt
+│                       ├── ColorMatrixEffect.kt
+│                       ├── ExoPlayerEngine.kt
+│                       ├── MpvPlayerEngine.kt
+│                       ├── VideoFilterExtensions.kt
+│                       ├── VideoFilterManager.kt
+│                       └── VlcPlayerEngine.kt
 ├── appleMain/             (Apple-specific player engines: AVPlayer, LibVLC)
+│   └── kotlin/
+│       └── com/
+│           └── playbridge/
+│               └── shared/
+│                   ├── io/                (Cloud backup, S3 clients, file utilities)
+│                   │   ├── FileSystem.kt
+│                   │   └── Paths.apple.kt
+│                   ├── logging/           (Unified logging interface)
+│                   │   └── Logger.apple.kt
+│                   ├── network/           (Shared Ktor HTTP clients)
+│                   │   └── SharedHttpClient.apple.kt
+│                   └── player/            (Shared player ViewModels, M3U parser, playback settings)
+│                       └── AVPlayerEngine.kt
+├── commonMain/
+│   └── kotlin/
+│       └── com/
+│           └── playbridge/
+│               └── shared/
+│                   ├── io/                (Cloud backup, S3 clients, file utilities)
+│                   │   ├── FileSystem.kt
+│                   │   └── Paths.kt
+│                   ├── logging/           (Unified logging interface)
+│                   │   └── Logger.kt
+│                   ├── network/           (Shared Ktor HTTP clients)
+│                   │   └── SharedHttpClient.kt
+│                   ├── player/            (Shared player ViewModels, M3U parser, playback settings)
+│                   │   ├── M3uParser.kt
+│                   │   ├── PlaybackEngine.kt
+│                   │   ├── PlaybackSettings.kt
+│                   │   ├── PlayerUiState.kt
+│                   │   └── PlayerViewModel.kt
+│                   ├── protocol/          (Message classes, JSON serialization, Binary protocol)
+│                   │   ├── BinaryProtocol.kt
+│                   │   ├── BluetoothConstants.kt
+│                   │   ├── Config.kt
+│                   │   ├── Message.kt
+│                   │   └── NsdConstants.kt
+│                   ├── resume/            (Playback resume logic)
+│                   │   └── ResumeStore.kt
+│                   └── stremio/           (Addon resolution, quality ranking, series navigation)
+│                       ├── QualityRanker.kt
+│                       └── SourceTypeRanker.kt
+├── commonTest/
+│   └── kotlin/
+│       └── com/
+│           └── playbridge/
+│               └── shared/
+│                   └── player/
+│                       ├── PlaybackEngineTest.kt
+│                       ├── PlayerViewModelTest.kt
+│                       └── TestDoubles.kt
+├── nativeInterop/
+│   └── cinterop/
+│       └── TVVLCKit.def
 └── tvosMain/              (tvOS-specific player engines and native interop)
+    └── kotlin/
+        └── com/
+            └── playbridge/
+                └── shared/
+                    └── player/
+                        └── TVVLCKitEngine.kt
 ```
 
 ## Key Components
