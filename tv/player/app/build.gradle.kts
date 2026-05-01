@@ -132,4 +132,13 @@ dependencies {
 
     // MPV
     implementation(files("libs/mpv-android.aar"))
+
+    // ExoPlayer Extensions (Software Decoders)
+    implementation(files("libs/lib-decoder-ffmpeg-release.aar"))
+    implementation(files("libs/lib-decoder-av1-release.aar"))
+    implementation(files("libs/lib-decoder-iamf-release.aar"))
+    implementation(files("libs/lib-decoder-mpegh-release.aar"))
+
+    // Advanced Metadata
+    implementation(files("libs/nextlib-mediainfo-local.aar"))
 }

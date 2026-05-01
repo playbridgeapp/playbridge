@@ -29,7 +29,7 @@ object AndroidBufferConfig {
             availMb >= 1_500 -> BufferConfig( 90_000, 800 * 1024 * 1024, "256MiB", "64MiB", true)
             availMb >=   800 -> BufferConfig( 60_000, 400 * 1024 * 1024, "192MiB", "48MiB", true)
             availMb >=   400 -> BufferConfig( 45_000, 200 * 1024 * 1024, "128MiB", "32MiB", true)
-            else             -> BufferConfig( 30_000, 100 * 1024 * 1024,  "64MiB", "16MiB", false)
+            else             -> BufferConfig( 30_000, 128 * 1024 * 1024,  "64MiB", "16MiB", false)
         }
     }
 }

@@ -8,14 +8,18 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
-import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import com.playbridge.shared.network.IPv4FirstDns
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import java.util.concurrent.TimeUnit
 import com.playbridge.shared.logging.logger
 import com.playbridge.shared.protocol.PlayPayload
 import kotlinx.coroutines.CoroutineScope
@@ -85,38 +89,31 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         val bufCfg = AndroidBufferConfig.compute(context)
         logger.i(TAG, "Initializing player with buffer config: maxBufferMs=${bufCfg.maxBufferMs}, targetBytes=${bufCfg.targetBytes}")
 
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, bufCfg.maxBufferMs, 1000, 2500)
-            .setTargetBufferBytes(bufCfg.targetBytes)
-            .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
-            .setBackBuffer(0, false)
-            .build()
-
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            override fun buildTextRenderers(
-                context: Context,
-                output: androidx.media3.exoplayer.text.TextOutput,
-                outputLooper: android.os.Looper,
-                extensionRendererMode: Int,
-                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
-            ) {
-                super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, out)
-                out.forEach {
-                    if (it is androidx.media3.exoplayer.text.TextRenderer) {
-                        it.experimentalSetLegacyDecodingEnabled(true)
-                    }
-                }
-            }
-        }
-
-        // 1. Prepare Headers
+        // 1. Extract credentials and prepare Headers
+        var finalUrl = payload.url
         val requestProperties = HashMap<String, String>()
+        
         payload.headers?.forEach { (key, value) ->
             if (!key.equals("Range", ignoreCase = true) && !key.equals("Accept-Encoding", ignoreCase = true)) {
                 requestProperties[key] = value
-            } else {
-                logger.i(TAG, "Stripping header to prevent ExoPlayer buffering issues: $key: $value")
             }
+        }
+
+        try {
+            val uri = java.net.URI(finalUrl)
+            val userInfo = uri.userInfo
+            if (!userInfo.isNullOrBlank() && !requestProperties.any { it.key.equals("Authorization", ignoreCase = true) }) {
+                val encoded = android.util.Base64.encodeToString(
+                    userInfo.toByteArray(Charsets.UTF_8),
+                    android.util.Base64.NO_WRAP
+                )
+                requestProperties["Authorization"] = "Basic $encoded"
+                val cleanUri = java.net.URI(uri.scheme, null, uri.host, uri.port, uri.path, uri.query, uri.fragment)
+                finalUrl = cleanUri.toString()
+                logger.i(TAG, "Extracted credentials from URL into Basic Auth header")
+            }
+        } catch (e: Exception) {
+            logger.w(TAG, "Failed to parse URL for Basic Auth extraction", e)
         }
 
         if (!requestProperties.containsKey("Referer")) {
@@ -139,20 +136,76 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         }
 
         val userAgent = payload.headers?.get("User-Agent")
-            ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, ignoreCase = true) Chrome/120.0.0.0 Safari/537.36"
         requestProperties["User-Agent"] = userAgent
 
         logger.i(TAG, "Final Request Headers: $requestProperties")
 
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent(userAgent)
-            .setDefaultRequestProperties(requestProperties)
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(20_000)
-            .setReadTimeoutMs(20_000)
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                15_000, 
+                bufCfg.maxBufferMs, 
+                2_500, 
+                5_000 
+            )
+            .setTargetBufferBytes(bufCfg.targetBytes)
+            .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
+            .setBackBuffer(0, false)
+            .build()
+
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            init {
+                setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
+            }
+
+            override fun buildTextRenderers(
+                context: Context,
+                output: androidx.media3.exoplayer.text.TextOutput,
+                outputLooper: android.os.Looper,
+                extensionRendererMode: Int,
+                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
+            ) {
+                super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, out)
+                out.forEach {
+                    if (it is androidx.media3.exoplayer.text.TextRenderer) {
+                        it.experimentalSetLegacyDecodingEnabled(true)
+                    }
+                }
+            }
+        }
+
+        // Determine which network stack to use: 
+        // 1. Browser-captured streams (detectedBy is not null) use the legacy DefaultHttpDataSource for live stream compatibility.
+        // 2. Direct Hub/Debrid streams use OkHttp with IPv4-First DNS for performance.
+        val isBrowserStream = !payload.detectedBy.isNullOrEmpty()
+
+        val httpDataSourceFactory = if (isBrowserStream) {
+            logger.i(TAG, "Using Legacy Network Stack (DefaultHttpDataSource) for browser-captured stream: ${payload.detectedBy}")
+            DefaultHttpDataSource.Factory()
+                .setUserAgent(userAgent)
+                .setDefaultRequestProperties(requestProperties)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(20_000)
+                .setReadTimeoutMs(20_000)
+        } else {
+            logger.i(TAG, "Using Modern Network Stack (OkHttp) with IPv4-First DNS")
+            val okHttpClient = OkHttpClient.Builder()
+                .dns(IPv4FirstDns())
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .retryOnConnectionFailure(true)
+                .build()
+
+            OkHttpDataSource.Factory(okHttpClient)
+                .setUserAgent(userAgent)
+                .setDefaultRequestProperties(requestProperties)
+        }
 
         val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-        val useTunneling = prefs.getBoolean("tunneled_playback", false)
+        // Enable tunneling by default for a smoother A/V sync on Android TV hardware
+        val useTunneling = prefs.getBoolean("tunneled_playback", true)
 
         // 2. Track Selector
         trackSelector = DefaultTrackSelector(context).apply {
@@ -216,6 +269,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             logger.i(TAG, "Using DefaultMediaSourceFactory")
             val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
                 .setConstantBitrateSeekingEnabled(true)
+                .setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
             DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
                 .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
         }
@@ -226,13 +280,14 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             .setTrackSelector(trackSelector!!)
             .setMediaSourceFactory(mediaSourceFactory)
             .setSeekForwardIncrementMs(10_000)
+            .setReleaseTimeoutMs(3_000) // Prevent hanging during engine transitions
             .build()
             .also { exoPlayer ->
                 logger.i(TAG, "ExoPlayer instance created")
                 exoPlayer.addListener(playerListener)
                 videoFilterManager.setPlayer(exoPlayer)
 
-                val builder = MediaItem.Builder().setUri(payload.url)
+                val builder = MediaItem.Builder().setUri(finalUrl)
                 if (payload.title != null) {
                     builder.setMediaId(payload.title)
                 }
