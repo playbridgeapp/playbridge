@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import android.util.Log
+import com.playbridge.player.player.SubtitleManager
 
 class PlayerControlsViewModel : ViewModel() {
     private val _controlsState = MutableStateFlow(PlayerControlsState())
@@ -18,6 +19,7 @@ class PlayerControlsViewModel : ViewModel() {
     private var autoHideJob: Job? = null
     private var progressUpdateJob: Job? = null
     private var engine: PlayerEngineAdapter? = null
+    private var subtitleManager: SubtitleManager? = null
 
     fun setEngine(playerEngine: PlayerEngineAdapter, engineType: String) {
         this.engine = playerEngine
@@ -91,6 +93,7 @@ class PlayerControlsViewModel : ViewModel() {
     fun adjustSubtitleDelay(deltaMs: Long) {
         val newDelay = _controlsState.value.subtitleDelayMs + deltaMs
         engine?.setSubtitleDelay(newDelay)
+        subtitleManager?.setOffset(newDelay)
         setSubtitleDelay(newDelay)
     }
 
@@ -286,6 +289,22 @@ class PlayerControlsViewModel : ViewModel() {
     
     fun setVideoScaling(mode: String) {
         _controlsState.update { it.copy(videoScalingMode = mode) }
+    }
+
+    fun loadExternalSubtitle(url: String, headers: Map<String, String>? = null) {
+        if (subtitleManager == null) {
+            subtitleManager = SubtitleManager(viewModelScope) { text ->
+                _controlsState.update { it.copy(currentSubtitleText = text) }
+            }
+        }
+        subtitleManager?.setPlayer { engine?.currentPosition ?: 0L }
+        subtitleManager?.setOffset(_controlsState.value.subtitleDelayMs)
+        subtitleManager?.loadSubtitle(url, headers)
+    }
+
+    fun clearSubtitle() {
+        subtitleManager?.disable()
+        _controlsState.update { it.copy(currentSubtitleText = null) }
     }
 
     fun detach() {

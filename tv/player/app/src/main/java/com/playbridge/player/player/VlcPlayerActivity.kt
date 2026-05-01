@@ -484,7 +484,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                                 }
                                 "external_sub" -> {
                                     engine?.setSubtitleTrack(null)
-                                    subtitleUrl = track.id
+                                    currentSubtitleUrl = track.id
+                                    controlsViewModel.loadExternalSubtitle(track.id, currentHeaders)
                                 }
                             }
                             updateUnifiedTracks() // Refresh selection state
@@ -1010,6 +1011,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     }
 
     private suspend fun playVideoInternal(url: String, headers: Map<String, String>?, resumeTime: Long? = null, startPaused: Boolean = false, subtitles: ArrayList<String>? = null) {
+        controlsViewModel.clearSubtitle()
         val historyItem = try {
             progressManager.restoreProgress(url)
         } catch (e: Exception) {
@@ -1046,6 +1048,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 null
             }
         } else null
+
+        if (historyItem?.externalSubtitleUrl != null) {
+            currentSubtitleUrl = historyItem.externalSubtitleUrl
+        } else if (!subtitles.isNullOrEmpty()) {
+            currentSubtitleUrl = subtitles[0]
+        } else {
+            currentSubtitleUrl = null
+        }
 
         progressManager.setCurrentMedia(
             url = url,
@@ -1088,14 +1098,12 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             if (historyItem?.externalSubtitleUrl != null) {
                 currentSubtitleUrl = historyItem.externalSubtitleUrl
                 val subUrl = historyItem.externalSubtitleUrl
-                runOnUiThread {
-                    lifecycleScope.launch { e.attachExternalSubtitle(subUrl, null) }
-                }
+                controlsViewModel.loadExternalSubtitle(subUrl, headers)
+                e.setSubtitleTrack(null) // Disable internal native subs
             } else {
                 currentSubtitleUrl?.let { subUrl ->
-                    runOnUiThread {
-                        lifecycleScope.launch { e.attachExternalSubtitle(subUrl, null) }
-                    }
+                    controlsViewModel.loadExternalSubtitle(subUrl, headers)
+                    e.setSubtitleTrack(null) // Disable internal native subs
                 }
             }
 

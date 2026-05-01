@@ -130,7 +130,6 @@ class ExoPlayerActivity : PlayerActivity() {
     private lateinit var inputHandler: InputHandler
 
     @OptIn(UnstableApi::class)
-    private lateinit var subtitleManager: SubtitleManager
     private var subtitleUrls: List<String> = emptyList()
 
     // Playlist queue for auto-advancing through episodes
@@ -355,11 +354,6 @@ class ExoPlayerActivity : PlayerActivity() {
         }
         val titleText = "" // temporary to avoid compile error if used later as String
 
-        // Initialize SubtitleManager
-        val subtitleTextView = findViewById<android.widget.TextView>(com.playbridge.player.R.id.subtitle_view)
-        subtitleManager = SubtitleManager(subtitleTextView, lifecycleScope)
-        subtitleManager.setPlayer { engine?.getExoPlayer()?.currentPosition ?: 0L }
-
         // Initialize VideoFilterManager
         videoFilterManager = VideoFilterManager()
 
@@ -397,7 +391,7 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             override fun setSubtitleDelay(delayMs: Long) {
-                subtitleManager.setOffset(delayMs)
+                // Now handled internally by controlsViewModel.subtitleManager
             }
 
             override fun setPlaybackSpeed(speed: Float) {
@@ -711,16 +705,16 @@ class ExoPlayerActivity : PlayerActivity() {
                 exoPlayer.playWhenReady = true
             }
 
-            // Handle manual subtitles
+            // Handle manual subtitles (Nuvio-style Compose rendering)
             this@ExoPlayerActivity.subtitleUrls = subtitles ?: emptyList()
             if (subtitleUrls.isNotEmpty()) {
                 val subUrl = subtitleUrls[0]
                 currentSubtitleUrl = subUrl
-                subtitleManager.loadSubtitle(subUrl)
+                controlsViewModel.loadExternalSubtitle(subUrl, intentHeaders)
                 engine?.setSubtitleTrack(null) // Disable internal
             } else {
                 currentSubtitleUrl = null
-                subtitleManager.disable()
+                controlsViewModel.clearSubtitle()
             }
 
             startPlaybackWatchdog("internal_exo")

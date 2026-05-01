@@ -303,9 +303,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                                 "external_sub" -> {
                                     engine?.setSubtitleTrack(null)
                                     currentSubtitleUrl = track.id
-                                    lifecycleScope.launch {
-                                        engine?.attachExternalSubtitle(track.id, null)
-                                    }
+                                    controlsViewModel.loadExternalSubtitle(track.id, currentHeaders)
                                 }
                             }
                             updateUnifiedTracks()
@@ -858,6 +856,16 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             // Apply saved external subtitle URL; takes priority over any session-carried sub
             if (historyItem.externalSubtitleUrl != null) {
                 currentSubtitleUrl = historyItem.externalSubtitleUrl
+            } else if (!subtitles.isNullOrEmpty()) {
+                currentSubtitleUrl = subtitles[0]
+            } else {
+                currentSubtitleUrl = null
+            }
+        } else {
+            if (!subtitles.isNullOrEmpty()) {
+                currentSubtitleUrl = subtitles[0]
+            } else {
+                currentSubtitleUrl = null
             }
         }
 
@@ -925,9 +933,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         val payload = com.playbridge.shared.protocol.PlayPayload(url = url, headers = headers)
         engine?.load(payload)
 
-        // Re-apply external subtitle if present.
+        // Re-apply external subtitle if present via SubtitleManager
         currentSubtitleUrl?.let { subUrl ->
-            engine?.attachExternalSubtitle(subUrl, null)
+            controlsViewModel.loadExternalSubtitle(subUrl, headers)
+            engine?.setSubtitleTrack(null) // Disable internal native subs to avoid double rendering
         }
 
         if (!startPaused) play()
@@ -938,6 +947,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Guard against MPV_EVENT_END_FILE from a prior stop() or a failed first HTTP attempt
         // triggering finish() before the new stream has loaded.
         isLoadingNewStream = true
+        controlsViewModel.clearSubtitle()
         engine?.isTransitioning = true
 
         playJob?.cancel()

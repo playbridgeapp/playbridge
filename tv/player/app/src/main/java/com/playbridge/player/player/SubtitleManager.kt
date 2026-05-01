@@ -1,29 +1,20 @@
 package com.playbridge.player.player
 
-import android.os.Handler
-import android.os.Looper
-import android.text.Html
 import android.util.Log
-import android.widget.TextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.URL
 import okhttp3.Request
 import java.io.IOException
 import java.util.Collections
-import java.util.TreeMap
 import java.util.regex.Pattern
 
 class SubtitleManager(
-    private val textView: TextView,
-    private val coroutineScope: CoroutineScope
+    private val coroutineScope: CoroutineScope,
+    private val onCueChanged: (String?) -> Unit
 ) {
     private val TAG = "SubtitleManager"
     private var subtitleJob: Job? = null
@@ -47,21 +38,20 @@ class SubtitleManager(
         this.offsetMs = offsetMs
     }
 
-    fun loadSubtitle(url: String) {
+    fun loadSubtitle(url: String, headers: Map<String, String>? = null) {
         Log.i(TAG, "Loading subtitle from: $url")
         subtitleJob?.cancel()
         syncJob?.cancel()
         lastCueText = null
-
-        textView.post {
-            textView.text = ""
-            textView.visibility = android.view.View.GONE
-        }
+        onCueChanged(null)
         cues.clear()
 
         subtitleJob = coroutineScope.launch(Dispatchers.IO) {
             try {
-                val content = downloadUrl(url)
+                val bytes = downloadUrlBytes(url, headers)
+                // Simple encoding detection
+                val content = detectEncodingAndDecode(bytes)
+                
                 val parsedCues = if (url.endsWith(".vtt", true)) {
                     parseVtt(content)
                 } else {
@@ -85,7 +75,8 @@ class SubtitleManager(
             while (isActive) {
                 val currentPos = getPlayerPosition?.invoke() ?: 0L
                 updateSubtitle(currentPos)
-                delay(200) // Update every 200ms
+                // High precision sync: 32ms (approx 30fps) for crisp transitions
+                delay(32) 
             }
         }
     }
@@ -100,32 +91,65 @@ class SubtitleManager(
         if (activeCue != null) {
             if (lastCueText != activeCue.text) {
                 lastCueText = activeCue.text
-                val html = activeCue.text.replace("\n", "<br>")
-                @Suppress("DEPRECATION")
-                textView.text = Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY)
-                textView.visibility = android.view.View.VISIBLE
+                // Strip HTML tags for clean Compose rendering
+                val cleanText = stripHtml(activeCue.text)
+                onCueChanged(cleanText)
             }
         } else {
             if (lastCueText != null) {
                 lastCueText = null
-                textView.text = ""
-                textView.visibility = android.view.View.GONE
+                onCueChanged(null)
             }
         }
     }
 
-    private fun downloadUrl(urlString: String): String {
+    private fun downloadUrlBytes(urlString: String, headers: Map<String, String>? = null): ByteArray {
         val sniffer = ContentSniffer()
         val client = sniffer.getOkHttpClient(trustAllCerts = sniffer.isLocalUrl(urlString))
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(urlString)
             .header("User-Agent", "Mozilla/5.0")
-            .build()
+            
+        headers?.forEach { (key, value) ->
+            // Prevent overriding the URL host if a custom Host header is passed maliciously
+            if (!key.equals("Host", ignoreCase = true)) {
+                requestBuilder.header(key, value)
+            }
+        }
+            
+        val request = requestBuilder.build()
 
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("Unexpected HTTP code: " + response.code)
-            return response.body?.string() ?: ""
+            return response.body?.bytes() ?: ByteArray(0)
         }
+    }
+
+    private fun detectEncodingAndDecode(bytes: ByteArray): String {
+        if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
+            return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+        }
+        // Very basic heuristic: if it contains many nulls, it's probably UTF-16
+        if (bytes.size >= 2) {
+            if (bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+            if (bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()) return String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+        }
+        
+        // Default to UTF-8 but fallback to Windows-1252 if it looks like typical western encoding
+        // In a full Nuvio impl, we would use juniversalchardet here.
+        return try {
+            val utf8 = String(bytes, Charsets.UTF_8)
+            // If it contains "replacement characters", it likely wasn't UTF-8
+            if (utf8.contains("\uFFFD")) throw Exception("Invalid UTF-8")
+            utf8
+        } catch (e: Exception) {
+            String(bytes, java.nio.charset.Charset.forName("Windows-1252"))
+        }
+    }
+
+    private fun stripHtml(text: String): String {
+        // Simple regex to remove tags like <b>, <i>, <font color="...">
+        return text.replace(Regex("<[^>]*>"), "").trim()
     }
 
     private fun parseSrt(content: String): List<Cue> {
@@ -134,7 +158,6 @@ class SubtitleManager(
         var currentEnd = -1L
         val currentText = StringBuilder()
         
-        // Use lineSequence() for O(1) memory parsing
         val iterator = content.lineSequence().iterator()
         while (iterator.hasNext()) {
             val rawLine = iterator.next()
@@ -154,11 +177,9 @@ class SubtitleManager(
                     currentEnd = parseTimestamp(times[1].trim().replace(',', '.').substringBefore(' '))
                 }
             } else if (currentStart != -1L) {
-                // If we have a start time, any subsequent non-empty line is part of the text
                 currentText.append(rawLine).append("\n")
             }
         }
-        // Add final cue if file doesn't end with blank line
         if (currentStart != -1L && currentEnd != -1L && currentText.isNotEmpty()) {
             parsedCues.add(Cue(currentStart, currentEnd, currentText.toString().trimEnd()))
         }
@@ -167,8 +188,6 @@ class SubtitleManager(
 
     private fun parseVtt(content: String): List<Cue> {
         val parsedCues = ArrayList<Cue>()
-
-        // Use lineSequence() for O(1) memory parsing
         val iterator = content.lineSequence().iterator()
         while (iterator.hasNext()) {
             val line = iterator.next().trim()
@@ -197,7 +216,6 @@ class SubtitleManager(
 
     private fun parseTimestamp(timestamp: String): Long {
         try {
-            // HH:MM:SS.ms or MM:SS.ms
             val parts = timestamp.split(':')
             var hours = 0L
             var minutes = 0L
@@ -206,7 +224,6 @@ class SubtitleManager(
             if (parts.size == 3) {
                 hours = parts[0].toLong()
                 minutes = parts[1].toLong()
-                // Handle comma or dot for decimal seaparator if not handled correctly before
                 seconds = parts[2].replace(',', '.').toDouble()
             } else if (parts.size == 2) {
                 minutes = parts[0].toLong()
@@ -220,43 +237,11 @@ class SubtitleManager(
             return -1
         }
     }
-    
-    suspend fun getPreview(url: String): String? = withContext(Dispatchers.IO) {
-        try {
-            val sniffer = ContentSniffer()
-            val client = sniffer.getOkHttpClient(trustAllCerts = sniffer.isLocalUrl(url))
-            val request = Request.Builder()
-                .url(url)
-                .header("Range", "bytes=0-4096") // Fetch first 4KB
-                .header("User-Agent", "Mozilla/5.0")
-                .build()
-
-            val content = client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) throw IOException("Unexpected HTTP code: " + response.code)
-                response.body?.string() ?: ""
-            }
-            
-            val cues = if (url.endsWith(".vtt", true)) {
-                parseVtt(content)
-            } else {
-                parseSrt(content)
-            }
-            
-            // Return first 3 non-empty cues
-            cues.take(3).joinToString("\n\n") { it.text }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch preview", e)
-            null
-        }
-    }
 
     fun disable() {
         subtitleJob?.cancel()
         syncJob?.cancel()
         lastCueText = null
-        textView.post {
-            textView.visibility = android.view.View.GONE
-            textView.text = ""
-        }
+        onCueChanged(null)
     }
 }

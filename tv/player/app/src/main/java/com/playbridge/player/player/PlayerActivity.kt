@@ -34,9 +34,9 @@ abstract class PlayerActivity : ComponentActivity() {
     protected fun startPlaybackWatchdog(currentEngineId: String) {
         watchdogJob?.cancel()
         watchdogJob = lifecycleScope.launch {
-            delay(10000) // 10 seconds timeout for failover
+            delay(30000) // 30 seconds timeout for failover
             if (!isFinishing) {
-                FileLogger.w("PlayerActivity", "Watchdog: Playback failed to start within 10s. Swapping engine.")
+                FileLogger.w("PlayerActivity", "Watchdog: Playback failed to start within 30s. Swapping engine.")
                 val alternative = if (currentEngineId == "internal_mpv") "internal_exo" else "internal_mpv"
                 switchPlayer(alternative)
             }

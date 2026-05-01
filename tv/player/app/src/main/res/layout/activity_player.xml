@@ -13,28 +13,6 @@
         app:use_controller="false"
         app:surface_type="surface_view" />
 
-    <!-- Custom Subtitle View -->
-    <TextView
-        android:id="@+id/subtitle_view"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_alignParentBottom="true"
-        android:layout_centerHorizontal="true"
-        android:layout_marginBottom="96dp"
-        android:layout_marginStart="40dp"
-        android:layout_marginEnd="40dp"
-        android:padding="8dp"
-        android:gravity="center"
-        android:textColor="@android:color/white"
-        android:textSize="24sp"
-        android:textStyle="bold"
-        android:maxLines="3"
-        android:lineSpacingExtra="4dp"
-        android:shadowColor="@android:color/black"
-        android:shadowDx="2"
-        android:shadowDy="2"
-        android:shadowRadius="10"
-        android:visibility="gone" />
 
     <androidx.compose.ui.platform.ComposeView
         android:id="@+id/modern_controls_view"

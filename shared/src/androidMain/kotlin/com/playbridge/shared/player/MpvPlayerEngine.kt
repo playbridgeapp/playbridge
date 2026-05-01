@@ -86,10 +86,19 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             MPVLib.setOptionString("ytdl", "yes") // Support non-direct URLs if encountered
             MPVLib.setOptionString("hls-bitrate", "max") // Prefer highest quality for HLS
 
-            // Subtitles
+            // Subtitles (Nuvio-style styling for premium look)
             MPVLib.setOptionString("sub-fonts-dir", File(filesDir, "fonts").absolutePath)
             MPVLib.setOptionString("sub-font", "Roboto")
+            MPVLib.setOptionString("sub-font-size", "45")
+            MPVLib.setOptionString("sub-color", "#FFFFFF")
+            MPVLib.setOptionString("sub-border-size", "2.0")
+            MPVLib.setOptionString("sub-border-color", "#000000")
+            MPVLib.setOptionString("sub-shadow-offset", "1.0")
+            MPVLib.setOptionString("sub-shadow-color", "#000000")
+            MPVLib.setOptionString("sub-margin-y", "36")
             MPVLib.setOptionString("sub-visibility", "yes")
+            // Ensure external subtitles take precedence over embedded ones if explicitly added
+            MPVLib.setOptionString("sub-auto", "fuzzy") 
 
             MPVLib.init()
             MPVLib.addObserver(this)

@@ -65,5 +65,6 @@ data class PlayerControlsState(
 
     // High Performance Features
     val subtitleDelayMs: Long = 0,
-    val isAudioBoostEnabled: Boolean = false
+    val isAudioBoostEnabled: Boolean = false,
+    val currentSubtitleText: String? = null
 )

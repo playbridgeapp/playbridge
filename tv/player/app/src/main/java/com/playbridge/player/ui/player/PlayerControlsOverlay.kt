@@ -11,6 +11,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Text
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
 import com.playbridge.player.player.VideoFilterDialog
 import com.playbridge.player.player.PlaylistPickerDialog
 import com.playbridge.player.player.SwitchPlayerDialog
@@ -227,5 +231,44 @@ fun PlayerControlsOverlay(
                 strokeWidth = 4.dp
             )
         }
+
+        // Subtitle Overlay (Manual Parser)
+        if (state.currentSubtitleText != null) {
+            SubtitleOverlay(
+                text = state.currentSubtitleText,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SubtitleOverlay(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(bottom = 64.dp)
+            .padding(horizontal = 48.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = androidx.compose.ui.text.TextStyle(
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                shadow = androidx.compose.ui.graphics.Shadow(
+                    color = Color.Black.copy(alpha = 0.9f),
+                    offset = androidx.compose.ui.geometry.Offset(3f, 3f),
+                    blurRadius = 8f
+                )
+            ),
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        )
     }
 }
