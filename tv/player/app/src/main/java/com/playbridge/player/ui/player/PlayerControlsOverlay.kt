@@ -250,9 +250,9 @@ private fun SubtitleOverlay(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = 64.dp)
-            .padding(horizontal = 48.dp),
-        contentAlignment = Alignment.Center
+            .padding(bottom = 72.dp) // Lifted slightly higher for better multi-line clearance
+            .padding(horizontal = 64.dp),
+        contentAlignment = Alignment.BottomCenter
     ) {
         Text(
             text = text,
@@ -265,8 +265,11 @@ private fun SubtitleOverlay(
                     color = Color.Black.copy(alpha = 0.9f),
                     offset = androidx.compose.ui.geometry.Offset(3f, 3f),
                     blurRadius = 8f
-                )
+                ),
+                lineHeight = 34.sp // Explicit line height for 28sp text
             ),
+            softWrap = true,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Visible,
             modifier = Modifier
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         )

@@ -83,16 +83,17 @@ class SubtitleManager(
 
     private fun updateSubtitle(currentPos: Long) {
         val adjustedPos = currentPos + offsetMs
-        // Find the active cue
-        val activeCue = synchronized(cues) {
-            cues.find { adjustedPos >= it.startTime && adjustedPos <= it.endTime }
+        // Find all active cues (some subtitles have multiple overlapping cues for different screen positions)
+        val activeCues = synchronized(cues) {
+            cues.filter { adjustedPos >= it.startTime && adjustedPos <= it.endTime }
         }
 
-        if (activeCue != null) {
-            if (lastCueText != activeCue.text) {
-                lastCueText = activeCue.text
+        if (activeCues.isNotEmpty()) {
+            val combinedText = activeCues.joinToString("\n") { it.text }
+            if (lastCueText != combinedText) {
+                lastCueText = combinedText
                 // Strip HTML tags for clean Compose rendering
-                val cleanText = stripHtml(activeCue.text)
+                val cleanText = stripHtml(combinedText)
                 onCueChanged(cleanText)
             }
         } else {
