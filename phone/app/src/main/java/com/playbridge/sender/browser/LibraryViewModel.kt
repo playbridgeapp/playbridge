@@ -728,3 +728,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 }
+
+/**
+ * UI state for the playlist synced from the TV
+ */
+data class PlaylistUiState(
+    val currentIndex: Int = 0,
+    val totalCount: Int = 0
+)

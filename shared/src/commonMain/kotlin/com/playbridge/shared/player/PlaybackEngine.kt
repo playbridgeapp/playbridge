@@ -12,6 +12,7 @@ interface PlaybackEngine {
     val duration: StateFlow<Long>     // ms, -1 if unknown
     val audioTracks: StateFlow<List<Track>>
     val subtitleTracks: StateFlow<List<Track>>
+    var isTransitioning: Boolean
 
     suspend fun load(payload: PlayPayload)
     fun play()

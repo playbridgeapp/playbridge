@@ -31,6 +31,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private val _duration = MutableStateFlow(-1L)
     override val duration: StateFlow<Long> = _duration.asStateFlow()
 
+    override var isTransitioning = false
+
+
     private val _audioTracks = MutableStateFlow<List<Track>>(emptyList())
     override val audioTracks: StateFlow<List<Track>> = _audioTracks.asStateFlow()
 
@@ -166,7 +169,13 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             MPVLib.MpvEvent.MPV_EVENT_START_FILE -> _state.value = PlaybackState.Buffering
             MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> _state.value = PlaybackState.Ready
             MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> _state.value = PlaybackState.Playing
-            MPVLib.MpvEvent.MPV_EVENT_END_FILE -> _state.value = PlaybackState.Ended
+            MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
+                if (!isTransitioning) {
+                    _state.value = PlaybackState.Ended
+                } else {
+                    logger.d(TAG, "Ignoring END_FILE state change while isTransitioning=true")
+                }
+            }
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> _state.value = PlaybackState.Idle
         }
     }

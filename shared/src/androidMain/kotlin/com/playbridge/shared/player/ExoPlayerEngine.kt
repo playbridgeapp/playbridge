@@ -62,6 +62,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     private val _subtitleTracks = MutableStateFlow<List<Track>>(emptyList())
     override val subtitleTracks: StateFlow<List<Track>> = _subtitleTracks.asStateFlow()
 
+    override var isTransitioning = false
+
     private var progressJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
@@ -264,7 +266,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 Player.STATE_IDLE -> PlaybackState.Idle
                 Player.STATE_BUFFERING -> PlaybackState.Buffering
                 Player.STATE_READY -> if (player?.playWhenReady == true) PlaybackState.Playing else PlaybackState.Ready
-                Player.STATE_ENDED -> PlaybackState.Ended
+                Player.STATE_ENDED -> if (isTransitioning) PlaybackState.Buffering else PlaybackState.Ended
                 else -> PlaybackState.Idle
             }
             _duration.value = player?.duration ?: -1L

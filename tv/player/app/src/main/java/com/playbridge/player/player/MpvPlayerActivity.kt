@@ -28,7 +28,9 @@ import com.playbridge.player.logging.FileLogger
 import androidx.annotation.OptIn
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlin.coroutines.coroutineContext
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
@@ -170,11 +172,14 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         launchJob?.cancel()
         playJob?.cancel()
         isLoadingNewStream = true
+        engine?.isTransitioning = true
         pendingStops++
         engine?.stop()
         runOnUiThread {
             controlsViewModel.hideControls()
-            surfaceView.visibility = android.view.View.INVISIBLE
+            // Do NOT set surfaceView.visibility = INVISIBLE here.
+            // That triggers surfaceDestroyed → engine.detachSurface(), causing
+            // black screen on the next load. The old frame clears when MPV stops.
         }
     }
 
@@ -605,6 +610,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 pendingStops = 0
                 runOnUiThread {
                     controlsViewModel.setBuffering(false)
+                    engine?.isTransitioning = false
+                    // Restore the surface that stopPlayback() hid for the transition
+                    surfaceView.visibility = android.view.View.VISIBLE
                     
                     // Trigger cinematic countdown only after we are connected and ready
                     if (controlsViewModel.controlsState.value.prePlayMetadata != null) {
@@ -633,15 +641,27 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
                 // Fired when playback resumes after buffering or seek
                 seekHandler.removeCallbacks(seekTimeoutRunnable)
-                runOnUiThread { controlsViewModel.setBuffering(false) }
+                runOnUiThread {
+                    controlsViewModel.setBuffering(false)
+                    // Ensure surface is visible (safety net for transition flows)
+                    surfaceView.visibility = android.view.View.VISIBLE
+                }
             }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
-                isLoadingNewStream = false
                 if (pendingStops > 0) {
                     pendingStops--
                     runOnUiThread { controlsViewModel.setBuffering(false) }
                     return
                 }
+                
+                // If we are currently transitioning to a new stream (e.g. sniffing or loading),
+                // ignore any END_FILE events from aborted previous streams to prevent
+                // "Next" loops/skipping.
+                if (isLoadingNewStream || engine?.isTransitioning == true) {
+                    FileLogger.d(TAG, "Ignoring END_FILE while transitioning (isLoadingNewStream=$isLoadingNewStream, isTransitioning=${engine?.isTransitioning})")
+                    return
+                }
+
                 runOnUiThread {
                     controlsViewModel.setBuffering(false)
                     if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
@@ -840,8 +860,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             pendingResumePositionMs = startPos
         }
 
-        pendingStops++
-        engine?.stop()
+        // Only stop/reset the engine if it's currently doing something, to avoid redundant
+        // END_FILE events during rapid transitions.
+        if (engine?.state?.value != com.playbridge.shared.player.PlaybackState.Idle) {
+            pendingStops++
+            engine?.stop()
+        }
 
         if (startPaused) {
             engine?.pause()
@@ -852,8 +876,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         // Wait for sniffing and surface transition
         val sniffedType = contentSniffer.sniffContent(url, headers)
-        
-        // Wait for sniffing
+        coroutineContext.ensureActive() // Stop if the playJob was cancelled (e.g. user clicked "Next" again)
         
         // Wait for surfaceCreated to fire before we call load
         try {
@@ -863,6 +886,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         } catch (e: Exception) {
             FileLogger.w(TAG, "Surface took too long to become ready, proceeding anyway...")
         }
+        coroutineContext.ensureActive()
 
         if (sniffedType != null) {
             FileLogger.i(TAG, "Pre-flight sniff detected: $sniffedType")
@@ -889,6 +913,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Guard against MPV_EVENT_END_FILE from a prior stop() or a failed first HTTP attempt
         // triggering finish() before the new stream has loaded.
         isLoadingNewStream = true
+        engine?.isTransitioning = true
 
         playJob?.cancel()
         playJob = lifecycleScope.launch {

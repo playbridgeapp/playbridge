@@ -1815,19 +1815,11 @@ class BrowserActivity : ComponentActivity() {
                                                     )
                                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createQueueAddCommandJson(itemWithPrefs))
                                                 },
-                                                onPlaylistJump = { index ->
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistJumpCommandJson(index))
-                                                },
                                                 onNowPlayingStarted = { tmdbId, season, startEp ->
                                                     nowPlayingTvId = tmdbId
                                                     nowPlayingSeason = season
                                                     nowPlayingEpisodeStart = startEp
                                                 },
-                                                highlightSeason = if (screenNumericId == nowPlayingTvId) nowPlayingSeason else null,
-                                                highlightEpisode = if (screenNumericId == nowPlayingTvId) {
-                                                    tvPlaylistState?.let { nowPlayingEpisodeStart + it.currentIndex }
-                                                } else null,
-                                                playlistState = tvPlaylistState,
                                                 onBack = { currentScreen = Screen.Library },
                                                 onShare = { title, imdbId ->
                                                     val shareText = if (imdbId != null && imdbId.startsWith("tt")) {

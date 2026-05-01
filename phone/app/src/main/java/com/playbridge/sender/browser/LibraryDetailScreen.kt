@@ -86,11 +86,7 @@ fun LibraryDetailScreen(
     onPlayPlaylistToTv: (com.playbridge.shared.protocol.PlaylistPayload) -> Unit = {},
     onPlayTrailer: ((String) -> Unit)? = null,
     onQueueAdd: (com.playbridge.shared.protocol.PlayPayload) -> Unit = {},
-    onPlaylistJump: (Int) -> Unit = {},
-    playlistState: PlaylistUiState? = null,
     onNowPlayingStarted: (tmdbId: Int, season: Int, startEpisode: Int) -> Unit = { _, _, _ -> },
-    highlightSeason: Int? = null,
-    highlightEpisode: Int? = null,
     viewModel: LibraryViewModel,
     tvName: String? = null,
     isTvConnected: Boolean = false,
@@ -117,7 +113,7 @@ fun LibraryDetailScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var trailerUrl by remember { mutableStateOf<String?>(null) }
     var hasAddons by remember { mutableStateOf(false) }
-    var selectedSeason by remember { mutableIntStateOf(highlightSeason ?: 1) }
+    var selectedSeason by remember { mutableIntStateOf(1) }
     /** Name of the addon that supplied [addonMeta], e.g. "Cinemeta" or "Kitsu". Null until loaded. */
     var addonMetaSource by remember { mutableStateOf<String?>(null) }
 
@@ -207,13 +203,12 @@ fun LibraryDetailScreen(
             ?: kotlinx.coroutines.flow.flowOf(null)
     }.collectAsState(initial = null)
 
-    // Season initialization (after tracked is set)
     LaunchedEffect(addonMeta, tracked) {
         if (addonMeta == null) return@LaunchedEffect
         val trackedStatusValue = tracked?.status ?: ""
         val trackedSeason = if (trackedStatusValue == WatchlistStatus.WATCHING.value) tracked?.seasonProgress else null
         val firstAddonSeason = addonMeta?.videos?.mapNotNull { it.season }?.filter { it > 0 }?.minOrNull()
-        selectedSeason = trackedSeason ?: highlightSeason ?: firstAddonSeason ?: 1
+        selectedSeason = trackedSeason ?: firstAddonSeason ?: 1
     }
 
     // Derived display values (pure Hub metadata)
@@ -884,24 +879,9 @@ fun LibraryDetailScreen(
                     if (isSeries && hasEpisodes) {
                         val episodes = (addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList())
                             .let { if (episodesAscending) it else it.reversed() }
-                        val isActivePlaylistSeason = highlightSeason != null &&
-                                selectedSeason == highlightSeason &&
-                                playlistState != null
-                        val startEpisodeNumber = if (highlightEpisode != null && playlistState != null) {
-                            highlightEpisode - playlistState.currentIndex
-                        } else null
                         items(episodes.size) { index ->
                             val episode = episodes[index]
                             val epNum = episode.episode ?: 0
-                            val epPlaylistIndex = if (startEpisodeNumber != null) {
-                                epNum - startEpisodeNumber
-                            } else -1
-                            val isEpPlaying = isActivePlaylistSeason &&
-                                    epPlaylistIndex == playlistState?.currentIndex
-                            val isEpQueued = isActivePlaylistSeason &&
-                                    epPlaylistIndex >= 0 &&
-                                    epPlaylistIndex < (playlistState?.totalCount ?: 0) &&
-                                    !isEpPlaying
                             val isEpWatched = tracked?.let { entity ->
                                 if (entity.status != WatchlistStatus.WATCHING.value &&
                                     entity.status != WatchlistStatus.COMPLETED.value) return@let false
@@ -916,20 +896,14 @@ fun LibraryDetailScreen(
                             EpisodeItem(
                                 episode = episode,
                                 hasAddon = canResolveStreams,
-                                isPlaying = isEpPlaying,
                                 isResolving = resolutionState.isResolving && resolutionState.episodeId == epNum,
-                                isInActivePlaylist = isEpQueued,
                                 isWatched = isEpWatched,
                                 onClick = {
                                     if (canResolveStreams) {
-                                        if (isEpPlaying || isEpQueued) {
-                                            onPlaylistJump(epPlaylistIndex)
-                                        } else {
-                                            val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
-                                            val streamType = if (resolvedImdbId != null) "series" else addonType
-                                            val title = "$displayTitle S${selectedSeason}E${epNum}"
-                                            triggerWatch(streamId, streamType, title, !watchOnTv, false, episode)
-                                        }
+                                        val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
+                                        val streamType = if (resolvedImdbId != null) "series" else addonType
+                                        val title = "$displayTitle S${selectedSeason}E${epNum}"
+                                        triggerWatch(streamId, streamType, title, !watchOnTv, false, episode)
                                     }
                                 },
                                 onLongClick = {
@@ -1743,9 +1717,7 @@ private fun ActionButtons(
 private fun EpisodeItem(
     episode: StremioVideo,
     hasAddon: Boolean = false,
-    isPlaying: Boolean = false,
     isResolving: Boolean = false,
-    isInActivePlaylist: Boolean = false,
     isWatched: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -1753,11 +1725,7 @@ private fun EpisodeItem(
     themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
     val haptic = LocalHapticFeedback.current
-    val containerColor = when {
-        isPlaying -> themeColor.copy(alpha = 0.15f)
-        isInActivePlaylist -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-        else -> Color.Transparent
-    }
+    val containerColor = Color.Transparent
 
     val offsetX = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -1850,22 +1818,17 @@ private fun EpisodeItem(
                     )
                 }
 
-                if (isPlaying || isResolving) {
+                if (isResolving) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(Color.Black.copy(alpha = 0.4f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (isResolving) {
-                            CircularProgressIndicator(
+                        CircularProgressIndicator(
                                 modifier = Modifier.size(32.dp),
                                 color = Color.White,
-                                strokeWidth = 3.dp
-                            )
-                        } else {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Playing", tint = Color.White, modifier = Modifier.size(32.dp))
-                        }
+                        )
                     }
                 }
             }
@@ -2001,14 +1964,6 @@ data class ResolutionState(
 )
 
 // ==================== Playlist Data Classes ====================
-
-/**
- * UI state for the playlist synced from the TV
- */
-data class PlaylistUiState(
-    val currentIndex: Int = 0,
-    val totalCount: Int = 0
-)
 
 @Composable
 fun TranslucentBackground(backdropUrl: String?, dominantColor: Color? = null) {

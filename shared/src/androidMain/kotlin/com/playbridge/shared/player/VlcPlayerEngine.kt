@@ -39,6 +39,8 @@ class VlcPlayerEngine(private val context: Context) : PlaybackEngine {
     private val _subtitleTracks = MutableStateFlow<List<Track>>(emptyList())
     override val subtitleTracks: StateFlow<List<Track>> = _subtitleTracks.asStateFlow()
 
+    override var isTransitioning = false
+
     init {
         logger.i(TAG, "Initializing VlcPlayerEngine")
         val args = ArrayList<String>().apply {
@@ -66,7 +68,11 @@ class VlcPlayerEngine(private val context: Context) : PlaybackEngine {
                 }
                 MediaPlayer.Event.EndReached -> {
                     logger.d(TAG, "Event: EndReached")
-                    _state.value = PlaybackState.Ended
+                    if (!isTransitioning) {
+                        _state.value = PlaybackState.Ended
+                    } else {
+                        logger.d(TAG, "Ignoring EndReached while transitioning")
+                    }
                 }
                 MediaPlayer.Event.Buffering -> {
                     if (event.buffering < 100f) {
