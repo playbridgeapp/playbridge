@@ -228,7 +228,9 @@ fun SessionObserverSetup(
                     originalNavDelegate = existingNav
 
                     originalMediaDelegate = gs.mediaSessionDelegate
-                    gs.mediaSessionDelegate = MediaSessionDelegate(context)
+                    selectedTab?.id?.let { tid ->
+                        gs.mediaSessionDelegate = MediaSessionDelegate(context, tid, tabManager)
+                    }
 
                     val popupPrefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
 

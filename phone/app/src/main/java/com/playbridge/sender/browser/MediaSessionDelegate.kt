@@ -10,7 +10,9 @@ import org.mozilla.geckoview.MediaSession
  * Bridges GeckoView MediaSession events to our MediaPlaybackService.
  */
 class MediaSessionDelegate(
-    private val context: Context
+    private val context: Context,
+    private val tabId: String,
+    private val tabManager: TabManager
 ) : MediaSession.Delegate {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -18,8 +20,9 @@ class MediaSessionDelegate(
     private var isActive = false
 
     override fun onActivated(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onActivated")
+        Log.d(TAG, "onActivated (tabId=$tabId)")
         isActive = true
+        tabManager.playingTabIds[tabId] = true
         MediaPlaybackService.start(context)
         
         controlJob?.cancel()
@@ -41,8 +44,9 @@ class MediaSessionDelegate(
     }
 
     override fun onDeactivated(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onDeactivated")
+        Log.d(TAG, "onDeactivated (tabId=$tabId)")
         isActive = false
+        tabManager.playingTabIds.remove(tabId)
         controlJob?.cancel()
         controlJob = null
         MediaPlaybackService.stop(context)

@@ -70,6 +70,51 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Tab Management",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+
+            var maxTabs by remember { mutableFloatStateOf(prefs.getInt("max_alive_tabs", 5).toFloat()) }
+
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Active Tab Limit", style = MaterialTheme.typography.bodyLarge)
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "${maxTabs.toInt()} tabs",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+                Slider(
+                    value = maxTabs,
+                    onValueChange = { maxTabs = it },
+                    onValueChangeFinished = {
+                        prefs.edit().putInt("max_alive_tabs", maxTabs.toInt()).apply()
+                    },
+                    valueRange = 1f..15f,
+                    steps = 13
+                )
+                Text(
+                    text = "Controls how many tabs are kept loaded in memory. Higher values allow faster switching between tabs but increase memory usage and risk of crashes on low-end devices.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

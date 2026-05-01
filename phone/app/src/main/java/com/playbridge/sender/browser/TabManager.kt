@@ -31,10 +31,13 @@ class TabManager {
 
 
     /** The maximum number of EngineSessions to keep alive to prevent OOM errors. */
-    private val MAX_ALIVE_SESSIONS = 5
+    var maxAliveSessions = 5
 
     /** LRU tracker for recently active tab IDs. */
     private val recentlyActiveTabIds = linkedSetOf<String>()
+
+    /** Set of tab IDs currently playing media (audio/video). Observable by Compose. */
+    val playingTabIds = mutableStateMapOf<String, Boolean>()
 
     // ── Tab operations ───────────────────────────────────────────────
 
@@ -124,10 +127,20 @@ class TabManager {
         // 2. Cull the LRU tracker
         // Remove any tabs that were closed by the user
         recentlyActiveTabIds.retainAll(allValidTabIds)
-        // If we exceed our live limit, remove the oldest (least recently used) tabs from the front
-        while (recentlyActiveTabIds.size > MAX_ALIVE_SESSIONS) {
-            val oldest = recentlyActiveTabIds.first()
-            recentlyActiveTabIds.remove(oldest)
+
+        // If we exceed our live limit, remove the oldest (least recently used) tabs that are NOT playing media.
+        // This ensures playing tabs are always kept alive if possible.
+        while (recentlyActiveTabIds.size > maxAliveSessions) {
+            val oldestNonPlaying = recentlyActiveTabIds.find { id ->
+                id != selectedTabId && (playingTabIds[id] != true)
+            }
+            if (oldestNonPlaying != null) {
+                recentlyActiveTabIds.remove(oldestNonPlaying)
+            } else {
+                // If all tabs in the LRU are either the selected tab or playing media,
+                // we stop culling to satisfy the "always alive" requirement for media.
+                break
+            }
         }
 
         // The intersection of our tracking limit and the currently available tabs
@@ -181,6 +194,7 @@ class TabManager {
                 }
             }
             sessions.remove(id)
+            playingTabIds.remove(id)
             // Clean up detected videos for this tab
             VideoDetector.clearTab(id)
         }

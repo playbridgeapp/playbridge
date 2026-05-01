@@ -397,6 +397,21 @@ class BrowserActivity : ComponentActivity() {
 
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+
+            // Sync tab manager settings from prefs
+            DisposableEffect(prefs) {
+                tabManager.maxAliveSessions = prefs.getInt("max_alive_tabs", 5)
+                val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
+                    if (key == "max_alive_tabs") {
+                        tabManager.maxAliveSessions = p.getInt(key, 5)
+                        Log.d("TabManager", "Updated maxAliveSessions to ${tabManager.maxAliveSessions} from prefs")
+                    }
+                }
+                prefs.registerOnSharedPreferenceChangeListener(listener)
+                onDispose {
+                    prefs.unregisterOnSharedPreferenceChangeListener(listener)
+                }
+            }
             
             val browserSettings = remember { getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
 
@@ -631,21 +646,28 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
+            // Auto-reconnect to TV when opening the cast sheet
+            LaunchedEffect(showVideoSheet) {
+                if (showVideoSheet && connectionState is WebSocketClient.ConnectionState.Disconnected) {
+                    tvDevice?.let { device ->
+                        Log.d("BrowserActivity", "Cast sheet opened while disconnected. Retrying connection to ${device.name}")
+                        connectionViewModel.connect(device)
+                    }
+                }
+            }
+
             // Link context menu
             LinkContextMenu(
                 url = contextMenuUrl,
                 isConnected = connectionState is WebSocketClient.ConnectionState.Connected,
                 onPlayOnTv = { linkUrl ->
-                    val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
+                    val video = DetectedVideo(
                         url = linkUrl,
-                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
-                        preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                        preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                        maxBitrateCapMbps = maxBitrateCapMbps
+                        tabId = -1,
+                        detectedBy = "link_menu"
                     )
-                    connectionViewModel.sendCommandAndRecord(cmd, "play", linkUrl, "Video Link")
-                    Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                    forcedVideos = listOf(video)
+                    showVideoSheet = true
                     contextMenuUrl = null
                     contextMenuUrlState.value = null
                 },
@@ -2038,17 +2060,17 @@ class BrowserActivity : ComponentActivity() {
                         if (download.userAgent != null) headers["User-Agent"] = download.userAgent
                         if (download.referer != null) headers["Referer"] = download.referer
                         if (download.cookie != null) headers["Cookie"] = download.cookie
-                        when (val state = connectionState) {
-                            is WebSocketClient.ConnectionState.Connected -> {
-                                val commandJson = com.playbridge.shared.protocol.createPlayCommandJson(url = download.url, title = selectedTab?.content?.title ?: download.fileName ?: "Video from browser", headers = headers, contentType = download.contentType, subtitles = null, detectedBy = "download", playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }, preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() }, preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() }, defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }, maxBitrateCapMbps = maxBitrateCapMbps)
-                                connectionViewModel.sendCommandAndRecord(commandJson, "play", download.url, selectedTab?.content?.title ?: download.fileName ?: "Video from browser")
-                                if (connectionViewModel.webSocketClient.send(commandJson)) {
-                                    tvActiveContext = "player"
-                                    Toast.makeText(this@BrowserActivity, "Playing on ${state.serverName}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                            else -> { Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show() }
-                        }
+
+                        val video = DetectedVideo(
+                            url = download.url,
+                            tabId = -1,
+                            contentType = download.contentType,
+                            detectedBy = "download",
+                            headers = headers
+                        )
+
+                        forcedVideos = listOf(video)
+                        showVideoSheet = true
                         pendingDownload = null
                         pendingDownloadState.value = null
                     },

@@ -11,7 +11,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -58,12 +60,12 @@ fun TabsScreen(
         // Header
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "${tabs.size} Open Tabs",
-                style = MaterialTheme.typography.titleMedium
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f)
             )
             
             FilledTonalButton(
@@ -72,6 +74,31 @@ fun TabsScreen(
                 Icon(Icons.Default.Add, "New Tab", modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("New Tab")
+            }
+
+            Spacer(Modifier.width(4.dp))
+
+            var menuExpanded by remember { mutableStateOf(false) }
+            val playingTabIds = Components.tabManager?.playingTabIds ?: emptyMap<String, Boolean>()
+            
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(Icons.Default.MoreVert, "More options")
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Navigate to playing tab") },
+                        onClick = {
+                            menuExpanded = false
+                            playingTabIds.keys.firstOrNull()?.let { onTabSelected(it) }
+                        },
+                        leadingIcon = { Icon(Icons.Default.VolumeUp, null) },
+                        enabled = playingTabIds.isNotEmpty()
+                    )
+                }
             }
         }
         
@@ -108,6 +135,7 @@ fun TabsScreen(
                 }
             }
         } else {
+            val playingTabIds = Components.tabManager?.playingTabIds ?: emptyMap<String, Boolean>()
             LazyColumn(
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -117,7 +145,8 @@ fun TabsScreen(
                         tab = tab,
                         onSelect = { onTabSelected(tab.id) },
                         onClose = { onTabClosed(tab.id) },
-                        isSelected = tab.id == state.selectedTabId
+                        isSelected = tab.id == state.selectedTabId,
+                        isPlaying = playingTabIds[tab.id] == true
                     )
                 }
             }
@@ -130,7 +159,8 @@ private fun TabCard(
     tab: TabSessionState,
     onSelect: () -> Unit,
     onClose: () -> Unit,
-    isSelected: Boolean
+    isSelected: Boolean,
+    isPlaying: Boolean = false
 ) {
     Card(
         modifier = Modifier
@@ -167,12 +197,24 @@ private fun TabCard(
             
             // Tab info
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = tab.content.title.ifEmpty { "Untitled" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = tab.content.title.ifEmpty { "Untitled" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (isPlaying) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.VolumeUp,
+                            contentDescription = "Playing audio/video",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
                 Text(
                     text = tab.content.url,
                     style = MaterialTheme.typography.bodySmall,
