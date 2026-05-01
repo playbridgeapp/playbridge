@@ -143,13 +143,35 @@ console.log('[VideoDetector Content] Loaded');
     const bridgeScript = document.createElement('script');
     bridgeScript.textContent = `
         (function() {
-            if (window.playbridge) return;
+            if (window.playbridge_injected) return;
+            window.playbridge_injected = true;
             window.playbridge = {
                 cast: function(payload) {
                     window.dispatchEvent(new CustomEvent('PlayBridgeCast', { detail: payload }));
                 }
             };
-            console.log('[PlayBridge JS Bridge] Shim injected');
+            
+            // --- BACKGROUND PLAYBACK FIX ---
+            // Override visibility state so sites like YouTube don't pause when backgrounded
+            try {
+                Object.defineProperty(document, 'visibilityState', { 
+                    get: function() { return 'visible'; },
+                    configurable: true 
+                });
+                Object.defineProperty(document, 'hidden', { 
+                    get: function() { return false; },
+                    configurable: true
+                });
+                
+                // Also override the visibilitychange event
+                window.addEventListener('visibilitychange', function(e) {
+                    e.stopImmediatePropagation();
+                }, true);
+                
+                console.log('[PlayBridge JS Bridge] Shim + Background Fix injected');
+            } catch (e) {
+                console.warn('[PlayBridge JS Bridge] Failed to inject background fix', e);
+            }
         })();
     `;
     (document.head || document.documentElement).appendChild(bridgeScript);

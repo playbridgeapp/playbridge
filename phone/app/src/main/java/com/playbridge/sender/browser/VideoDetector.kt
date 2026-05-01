@@ -11,6 +11,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -139,6 +141,8 @@ object VideoDetector {
 
     /** Must be called from the main thread after updating any video's sort-relevant fields. */
     private fun notifyVideoUpdated() { processingVersion++ }
+
+    private val thumbnailMutex = Mutex()
 
     /**
      * Get the observable video list for a specific tab.
@@ -546,29 +550,54 @@ object VideoDetector {
         if (video.url.startsWith("data:", ignoreCase = true)) return null
         synchronized(thumbnailCache) { thumbnailCache[video.url]?.let { return it } }
 
-        return withContext(Dispatchers.IO) {
-            val isHls = video.url.contains(".m3u8", ignoreCase = true) ||
-                        video.contentType?.contains("mpegurl", ignoreCase = true) == true
-            val bmp: Bitmap? = if (isHls && appContext != null) {
-                fetchHlsThumbnail(video)
-            } else {
-                fetchMmrThumbnail(video)
+        return thumbnailMutex.withLock {
+            // Check cache again after acquiring lock in case another coroutine fetched it
+            synchronized(thumbnailCache) { thumbnailCache[video.url]?.let { return@withLock it } }
+
+            withContext(Dispatchers.IO) {
+                val isHls = video.url.contains(".m3u8", ignoreCase = true) ||
+                            video.contentType?.contains("mpegurl", ignoreCase = true) == true
+                val bmp: Bitmap? = if (isHls && appContext != null) {
+                    fetchHlsThumbnail(video)
+                } else if (appContext != null) {
+                    fetchProgressiveThumbnail(video)
+                } else {
+                    null
+                }
+                if (bmp != null) {
+                    video.isPlayable = true
+                    synchronized(thumbnailCache) { thumbnailCache[video.url] = bmp }
+                }
+                withContext(Dispatchers.Main) { notifyVideoUpdated() }
+                bmp
             }
-            if (bmp != null) {
-                video.isPlayable = true
-                synchronized(thumbnailCache) { thumbnailCache[video.url] = bmp }
-            }
-            withContext(Dispatchers.Main) { notifyVideoUpdated() }
-            bmp
         }
     }
 
     /**
-     * Direct MMR thumbnail for progressive video files (MP4, MKV, WebM, etc.).
-     * Runs on a raw Thread because MediaMetadataRetriever.setDataSource is a JNI blocking call
-     * that cannot be interrupted by coroutine cancellation.
+     * Progressive thumbnail extraction:
+     * 1. Download the first 2 MB of the file to a temp file.
+     * 2. Run MMR on the local file.
      */
-    private fun fetchMmrThumbnail(video: DetectedVideo): Bitmap? {
+    private fun fetchProgressiveThumbnail(video: DetectedVideo): Bitmap? {
+        val ctx = appContext ?: return null
+        val tempFile = File.createTempFile("playbridge_prog_thumb_", ".tmp", ctx.cacheDir)
+        return try {
+            // Download first 2MB
+            if (!downloadSegmentToFile(video.url, video.headers, tempFile, maxBytes = 2 * 1024 * 1024)) {
+                Log.w(TAG, "Progressive thumbnail: download failed for ${video.url.take(60)}")
+                return null
+            }
+            extractThumbnailFromFile(tempFile, video.url)
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    /**
+     * Runs MediaMetadataRetriever on a local file.
+     */
+    private fun extractThumbnailFromFile(file: File, originalUrl: String): Bitmap? {
         var result: Bitmap? = null
         var exception: Exception? = null
         val latch = CountDownLatch(1)
@@ -576,17 +605,13 @@ object VideoDetector {
             try {
                 val retriever = MediaMetadataRetriever()
                 try {
-                    retriever.setDataSource(video.url, mediaHeaders(video))
+                    retriever.setDataSource(file.absolutePath)
                     val durationMs = retriever
                         .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                         ?.toLongOrNull() ?: 0L
-                    val seekUs = if (durationMs > 8_000L) {
-                        val windowStartUs = (durationMs * 0.25).toLong() * 1_000L
-                        val windowEndUs   = (durationMs * 0.75).toLong() * 1_000L
-                        windowStartUs + (Math.random() * (windowEndUs - windowStartUs)).toLong()
-                    } else {
-                        1_000_000L
-                    }
+                    
+                    // For short clips, seek to 0.5s. For others, seek to 1s (safe within 2MB chunk).
+                    val seekUs = if (durationMs > 2_000L) 1_000_000L else 500_000L
                     result = retriever.getFrameAtTime(seekUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 } finally {
                     retriever.release()
@@ -597,21 +622,17 @@ object VideoDetector {
             latch.countDown()
         }.start()
 
-        val completed = latch.await(12L, TimeUnit.SECONDS)
+        val completed = latch.await(10L, TimeUnit.SECONDS)
         return when {
             !completed -> {
-                Log.w(TAG, "MMR thumbnail timed out for ${video.url.take(60)}")
+                Log.w(TAG, "MMR extraction timed out for ${originalUrl.take(60)}")
                 null
             }
             exception != null -> {
-                Log.w(TAG, "MMR thumbnail failed for ${video.url.take(60)}: ${exception!!.message}")
-                video.isPlayable = false
+                Log.w(TAG, "MMR extraction failed for ${originalUrl.take(60)}: ${exception!!.message}")
                 null
             }
-            else -> {
-                if (result != null) Log.d(TAG, "MMR thumbnail fetched for ${video.url.take(60)}")
-                result
-            }
+            else -> result
         }
     }
 
@@ -652,33 +673,7 @@ object VideoDetector {
                 Log.w(TAG, "HLS thumbnail: segment download failed")
                 return null
             }
-
-            var result: Bitmap? = null
-            val latch = CountDownLatch(1)
-            Thread {
-                try {
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        retriever.setDataSource(tempFile.absolutePath)
-                        val durationMs = retriever
-                            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                            ?.toLongOrNull() ?: 0L
-                        val seekUs = if (durationMs > 2_000L) (durationMs / 2 * 1_000L) else 500_000L
-                        result = retriever.getFrameAtTime(seekUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                    } finally {
-                        retriever.release()
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "HLS segment MMR failed: ${e.message}")
-                }
-                latch.countDown()
-            }.start()
-
-            if (!latch.await(10L, TimeUnit.SECONDS)) {
-                Log.w(TAG, "HLS segment thumbnail timed out")
-            }
-            if (result != null) Log.d(TAG, "HLS thumbnail fetched for ${video.url.take(60)}")
-            result
+            extractThumbnailFromFile(tempFile, video.url)
         } finally {
             tempFile.delete()
         }

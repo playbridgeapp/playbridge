@@ -118,16 +118,8 @@ class TabManager {
         // Yield to allow UI to draw first frame
         delay(10)
 
-        // 1b. Pause media in all background sessions now that we know the new selected tab.
-        // Background GeckoSessions stay alive within MAX_ALIVE_SESSIONS and would otherwise
-        // keep playing video/audio after the user switches away.
-        if (selectedTabId != null) {
-            sessions.forEach { (tabId, session) ->
-                if (tabId != selectedTabId) {
-                    pauseMedia(session)
-                }
-            }
-        }
+        // 1b. Background media pausing removed per user request to allow background playback
+        // across tab switches.
 
         // 2. Cull the LRU tracker
         // Remove any tabs that were closed by the user

@@ -204,6 +204,13 @@ class BrowserActivity : ComponentActivity() {
         }
         VideoDetector.init(applicationContext)
 
+        // Request notification permission for media controls on Android 13+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        }
+
         // Set tabManager reference for resolving Kotlin tab IDs from extension messages
         Components.tabManager = tabManager
 
@@ -508,15 +515,25 @@ class BrowserActivity : ComponentActivity() {
 
             // Eagerly parse HLS/DASH qualities and fetch thumbnails for the current tab's videos
             // so results are ready before the user opens the sheet.
-            LaunchedEffect(selectedTabId, detectedVideos.size) {
+            LaunchedEffect(selectedTabId) {
                 val tabId = selectedTabId ?: return@LaunchedEffect
-                for (video in detectedVideos) {
-                    if (video.isSubtitle) continue
-                    if (!video.qualitiesChecked) {
-                        launch { VideoDetector.fetchHlsQualities(video, tabId) }
-                    }
-                    if (!VideoDetector.hasThumbnail(video.url)) {
-                        launch { VideoDetector.fetchThumbnail(video) }
+                val processedUrls = mutableSetOf<String>()
+                // Use snapshotFlow to observe additions to the tab's video list without
+                // restarting this LaunchedEffect (which would cancel pending background tasks).
+                snapshotFlow { VideoDetector.getVideosForTab(tabId) }.collect { videos ->
+                    for (video in videos) {
+                        if (video.isSubtitle) continue
+                        if (processedUrls.contains(video.url)) continue
+
+                        if (!video.qualitiesChecked || !VideoDetector.hasThumbnail(video.url)) {
+                            processedUrls.add(video.url)
+                            if (!video.qualitiesChecked) {
+                                launch { VideoDetector.fetchHlsQualities(video, tabId) }
+                            }
+                            if (!VideoDetector.hasThumbnail(video.url)) {
+                                launch { VideoDetector.fetchThumbnail(video) }
+                            }
+                        }
                     }
                 }
             }

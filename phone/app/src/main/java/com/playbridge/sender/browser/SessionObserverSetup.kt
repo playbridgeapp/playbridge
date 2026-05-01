@@ -24,6 +24,7 @@ import mozilla.components.concept.engine.EngineSession
 import mozilla.components.concept.fetch.Response
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.MediaSession
 import com.playbridge.sender.data.history.HistoryDao
 import com.playbridge.sender.data.history.HistoryEntity
 import androidx.compose.runtime.LaunchedEffect
@@ -211,6 +212,7 @@ fun SessionObserverSetup(
         var originalContentDelegate: GeckoSession.ContentDelegate? = null
         var originalPermissionDelegate: GeckoSession.PermissionDelegate? = null
         var originalPromptDelegate: GeckoSession.PromptDelegate? = null
+        var originalMediaDelegate: MediaSession.Delegate? = null
         var geckoSessionInstance: GeckoSession? = null
 
         if (geckoEngineSession != null) {
@@ -224,6 +226,9 @@ fun SessionObserverSetup(
                     // NavigationDelegate proxy for onNewSession (open in new tab)
                     val existingNav = gs.navigationDelegate
                     originalNavDelegate = existingNav
+
+                    originalMediaDelegate = gs.mediaSessionDelegate
+                    gs.mediaSessionDelegate = MediaSessionDelegate(context)
 
                     val popupPrefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
 
@@ -587,6 +592,7 @@ fun SessionObserverSetup(
                 if (originalContentDelegate != null) gs.contentDelegate = originalContentDelegate
                 if (originalPermissionDelegate != null) gs.permissionDelegate = originalPermissionDelegate
                 gs.promptDelegate = originalPromptDelegate
+                gs.mediaSessionDelegate = originalMediaDelegate
             }
         }
     }

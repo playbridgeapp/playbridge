@@ -16,6 +16,9 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" />
 
     <application
@@ -55,6 +58,10 @@
             android:name=".browser.HlsExportService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".browser.MediaPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <!-- FileProvider for sharing downloaded files with external players -->
         <provider
