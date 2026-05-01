@@ -40,6 +40,8 @@ fun PlayerControlsOverlay(
     onCustomFilterChanged: (brightness: Float, contrast: Float, saturation: Float) -> Unit = {_,_,_ ->},
     onPlaylistItemPicked: (Int) -> Unit = {},
     onPlayerSwitched: (String) -> Unit = {},
+    onToggleAudioBoost: () -> Unit = {},
+    onAdjustSubtitleDelay: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -79,6 +81,8 @@ fun PlayerControlsOverlay(
                         onTrackSelected = onTrackSelected,
                         onSpeedSelected = onSpeedSelected,
                         onScalingSelected = onScalingSelected,
+                        onToggleAudioBoost = onToggleAudioBoost,
+                        onAdjustSubtitleDelay = onAdjustSubtitleDelay,
                         onDismiss = onSettingsDismiss
                     )
                 }

@@ -25,6 +25,30 @@ import com.playbridge.player.ui.player.PlayerControlsViewModel
 abstract class PlayerActivity : ComponentActivity() {
 
     protected var launchJob: Job? = null
+    protected var watchdogJob: Job? = null
+
+    /**
+     * Starts a timer to detect if playback fails to start.
+     * If no frame is rendered within the timeout, we switch engines.
+     */
+    protected fun startPlaybackWatchdog(currentEngineId: String) {
+        watchdogJob?.cancel()
+        watchdogJob = lifecycleScope.launch {
+            delay(10000) // 10 seconds timeout for failover
+            if (!isFinishing) {
+                FileLogger.w("PlayerActivity", "Watchdog: Playback failed to start within 10s. Swapping engine.")
+                val alternative = if (currentEngineId == "internal_mpv") "internal_exo" else "internal_mpv"
+                switchPlayer(alternative)
+            }
+        }
+    }
+
+    protected fun cancelPlaybackWatchdog() {
+        if (watchdogJob?.isActive == true) {
+            FileLogger.i("PlayerActivity", "Watchdog cancelled — playback started successfully.")
+        }
+        watchdogJob?.cancel()
+    }
 
     // Common abstract properties and functions for player controls
     abstract fun play()

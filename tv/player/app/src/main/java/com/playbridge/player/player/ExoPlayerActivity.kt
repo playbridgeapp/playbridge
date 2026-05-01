@@ -325,7 +325,9 @@ class ExoPlayerActivity : PlayerActivity() {
                         onPlayerSwitched = { playerId ->
                             controlsViewModel.hideOverlay()
                             switchPlayer(playerId)
-                        }
+                        },
+                        onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
+                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) }
                     )
                 }
             }
@@ -392,6 +394,14 @@ class ExoPlayerActivity : PlayerActivity() {
                     loudnessEnhancer?.enabled = false
                     FileLogger.i(TAG, "Loudness Enhancer disabled")
                 }
+            }
+
+            override fun setSubtitleDelay(delayMs: Long) {
+                subtitleManager.setOffset(delayMs)
+            }
+
+            override fun setPlaybackSpeed(speed: Float) {
+                engine?.getExoPlayer()?.setPlaybackSpeed(speed)
             }
 
             override fun play() { engine?.getExoPlayer()?.play() }
@@ -712,8 +722,10 @@ class ExoPlayerActivity : PlayerActivity() {
                 currentSubtitleUrl = null
                 subtitleManager.disable()
             }
+
+            startPlaybackWatchdog("internal_exo")
         }
-        }
+    }
 
         private fun createPlayerListener() = object : androidx.media3.common.Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -732,6 +744,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     FileLogger.i(TAG, "Playback ready")
                     controlsViewModel.setBuffering(false)
                     stuckBufferHandler.removeCallbacksAndMessages(null)
+                    cancelPlaybackWatchdog()
                     
                     // Trigger cinematic countdown only after we are connected and ready
                     if (controlsViewModel.controlsState.value.prePlayMetadata != null) {
@@ -789,6 +802,7 @@ class ExoPlayerActivity : PlayerActivity() {
         }
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            cancelPlaybackWatchdog()
             handlePlaybackError(error)
         }
 
@@ -798,6 +812,15 @@ class ExoPlayerActivity : PlayerActivity() {
 
         private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
             val player = engine?.getExoPlayer() ?: return
+            FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
+            
+            // Immediate failover for common fatal startup errors
+            if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED) {
+                FileLogger.w(TAG, "Fatal Decoder Error detected — immediate failover to MPV")
+                switchPlayer("internal_mpv")
+                return
+            }
             // Live stream fell behind the available DVR window — seek back to the live edge and resume.
             // Without this, the error falls through to the playlist-skip logic and drops the channel.
             if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {

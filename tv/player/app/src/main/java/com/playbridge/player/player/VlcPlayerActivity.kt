@@ -166,6 +166,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     runOnUiThread { player.time = resumeAt }
                 }
                 runOnUiThread { applyPreferredLanguages() }
+                cancelPlaybackWatchdog()
                 
                 // Trigger cinematic countdown only after we are connected and ready
                 if (controlsViewModel.controlsState.value.prePlayMetadata != null) {
@@ -200,6 +201,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             MediaPlayer.Event.EncounteredError -> {
                 FileLogger.e(TAG, "VLC encountered an error (url=${originalM3u8Url ?: "(unknown)"})")
                 isLoadingNewStream = false
+                cancelPlaybackWatchdog()
                 handleVlcError()
             }
 
@@ -502,7 +504,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         onPlayerSwitched = { playerId ->
                             controlsViewModel.hideOverlay()
                             switchPlayer(playerId)
-                        }
+                        },
+                        onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
+                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) }
                     )
                 }
             }
@@ -531,6 +535,15 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
             override fun setLoudnessEnhancer(enabled: Boolean) {
                 engine?.getMediaPlayer()?.volume = if (enabled) 150 else 100
+            }
+
+            override fun setSubtitleDelay(delayMs: Long) {
+                // VLC handles this via spu-delay (ms)
+                engine?.getMediaPlayer()?.setSpuDelay(delayMs)
+            }
+
+            override fun setPlaybackSpeed(speed: Float) {
+                engine?.getMediaPlayer()?.rate = speed
             }
 
             override fun play() { engine?.getMediaPlayer()?.play() }
@@ -663,7 +676,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         originalM3u8Url = url
         currentHeaders = headers
 
-        playVideo(url, headers, subtitles = subtitles)
+        startPlaybackWatchdog("internal_vlc")
+        synchronized(playerLock) {
+            playVideo(url, headers, subtitles = subtitles)
+        }
     }
 
     private fun playNextInPlaylist() {

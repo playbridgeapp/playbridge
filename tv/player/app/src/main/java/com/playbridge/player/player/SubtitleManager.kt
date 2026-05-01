@@ -31,6 +31,7 @@ class SubtitleManager(
     private val cues = Collections.synchronizedList(ArrayList<Cue>())
     private var getPlayerPosition: (() -> Long)? = null
     private var lastCueText: String? = null
+    private var offsetMs: Long = 0L
 
     data class Cue(val startTime: Long, val endTime: Long, val text: String) : Comparable<Cue> {
         override fun compareTo(other: Cue): Int {
@@ -40,6 +41,10 @@ class SubtitleManager(
 
     fun setPlayer(getPlayerPosition: () -> Long) {
         this.getPlayerPosition = getPlayerPosition
+    }
+
+    fun setOffset(offsetMs: Long) {
+        this.offsetMs = offsetMs
     }
 
     fun loadSubtitle(url: String) {
@@ -86,9 +91,10 @@ class SubtitleManager(
     }
 
     private fun updateSubtitle(currentPos: Long) {
+        val adjustedPos = currentPos + offsetMs
         // Find the active cue
         val activeCue = synchronized(cues) {
-            cues.find { currentPos >= it.startTime && currentPos <= it.endTime }
+            cues.find { adjustedPos >= it.startTime && adjustedPos <= it.endTime }
         }
 
         if (activeCue != null) {

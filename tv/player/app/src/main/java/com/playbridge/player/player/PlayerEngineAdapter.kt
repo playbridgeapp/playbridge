@@ -27,6 +27,8 @@ interface PlayerEngineAdapter {
     val hdrFormat: String?
 
     fun setLoudnessEnhancer(enabled: Boolean)
+    fun setSubtitleDelay(delayMs: Long)
+    fun setPlaybackSpeed(speed: Float)
 
     /** Start/resume playback. */
     fun play()

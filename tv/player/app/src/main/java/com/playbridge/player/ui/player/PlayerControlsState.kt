@@ -61,5 +61,9 @@ data class PlayerControlsState(
     val customBrightness: Float = 0f,
     val customContrast: Float = 1f,
     val customSaturation: Float = 1f,
-    val previewFrame: android.graphics.Bitmap? = null
+    val previewFrame: android.graphics.Bitmap? = null,
+
+    // High Performance Features
+    val subtitleDelayMs: Long = 0,
+    val isAudioBoostEnabled: Boolean = false
 )

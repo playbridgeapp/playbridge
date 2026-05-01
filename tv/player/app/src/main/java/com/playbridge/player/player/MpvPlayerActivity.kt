@@ -114,6 +114,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private var videoBitrateBps: Long = 0L
     private var audioCodecRaw: String = ""
     private var audioChannels: String = ""
+    private var subtitleDelayMs: Long = 0L
+    private var isAudioBoostEnabled: Boolean = false
 
     // Position to seek to once MPV_EVENT_FILE_LOADED fires
     private var pendingResumePositionMs: Long = 0L
@@ -323,7 +325,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         onPlayerSwitched = { playerId ->
                             controlsViewModel.hideOverlay()
                             switchPlayer(playerId)
-                        }
+                        },
+                        onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
+                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) }
                     )
                 }
             }
@@ -390,12 +394,17 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             override val hdrFormat: String? get() = null // MPV doesn't expose this easily via a simple property string here
 
             override fun setLoudnessEnhancer(enabled: Boolean) {
-                // MPV logic for boost
-                if (enabled) {
-                    MPVLib.setPropertyString("af", "loudnorm")
-                } else {
-                    MPVLib.setPropertyString("af", "")
-                }
+                // 'loudnorm' is too CPU intensive for many TVs.
+                // Using 'acompressor' provides similar dialogue boosting with much lower overhead.
+                val filter = if (enabled) "lavfi=[acompressor=threshold=-21dB:ratio=9:attack=5:release=50:makeup=8dB]" else ""
+                MPVLib.setPropertyString("af", filter)
+                isAudioBoostEnabled = enabled
+            }
+            override fun setSubtitleDelay(delayMs: Long) {
+                MPVLib.setPropertyDouble("sub-delay", delayMs / 1000.0)
+            }
+            override fun setPlaybackSpeed(speed: Float) {
+                MPVLib.setPropertyDouble("speed", speed.toDouble())
             }
 
             override fun play() { engine?.play() }
@@ -427,6 +436,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         MPVLib.observeProperty("audio-channels",      1) // String e.g. "stereo", "5.1"
         MPVLib.observeProperty("demuxer-cache-time",  5) // Double (seconds buffered ahead)
         MPVLib.observeProperty("container-fps",       5) // Double (fps)
+        MPVLib.observeProperty("sub-delay",           5) // Double (seconds)
 
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
@@ -584,6 +594,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             "container-fps" -> {
                 containerFps = value
             }
+            "sub-delay" -> {
+                subtitleDelayMs = (value * 1000).toLong()
+                runOnUiThread {
+                    controlsViewModel.setSubtitleDelay(subtitleDelayMs)
+                }
+            }
         }
     }
 
@@ -625,8 +641,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     }
 
                     // Apply Loudness Enhancer if enabled
-                    if (isLoudnessEnhancerEnabled) {
-                        MPVLib.setPropertyString("af", "loudnorm")
+                    if (isAudioBoostEnabled) {
+                        val filter = "lavfi=[acompressor=threshold=-21dB:ratio=9:attack=5:release=50:makeup=8dB]"
+                        MPVLib.setPropertyString("af", filter)
                     }
 
                     if (containerFps > 0.0) {
@@ -636,6 +653,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         engine?.seek(pendingResumePositionMs)
                         pendingResumePositionMs = 0
                     }
+                    cancelPlaybackWatchdog()
                 }
             }
             MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
@@ -667,7 +685,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
                         playNextInPlaylist()
                     } else {
-                        finish()
+                        // If it ended very quickly without playing anything, it might be a load error
+                        if (positionMs == 0L && durationMs == 0L) {
+                            FileLogger.w(TAG, "MPV ended file immediately — likely a load error. Failing over to ExoPlayer.")
+                            switchPlayer("internal_exo")
+                        } else {
+                            finish()
+                        }
                     }
                 }
             }
@@ -907,6 +931,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
 
         if (!startPaused) play()
+        startPlaybackWatchdog("internal_mpv")
     }
 
     private fun playVideo(url: String, headers: Map<String, String>?, startPaused: Boolean = false, subtitles: ArrayList<String>? = null) {
@@ -1131,12 +1156,39 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             val arr = org.json.JSONArray(json)
             (0 until arr.length()).mapNotNull { i ->
                 val obj = arr.getJSONObject(i)
+                val id = obj.getInt("id")
+                val type = obj.getString("type")
+                val lang = obj.optString("lang", null)
+                val codec = obj.optString("codec", null)
+                
+                // Build a descriptive title
+                val rawTitle = obj.optString("title", "")
+                val descriptiveTitle = buildString {
+                    if (rawTitle.isNotEmpty()) {
+                        append(rawTitle)
+                    } else if (lang != null) {
+                        append(java.util.Locale(lang).displayLanguage)
+                    } else {
+                        append("Track $id")
+                    }
+                    
+                    if (codec != null || (type == "audio" && obj.has("audio-channels"))) {
+                        append(" (")
+                        codec?.let { append(it.uppercase()) }
+                        if (type == "audio" && obj.has("audio-channels")) {
+                            if (codec != null) append(" ")
+                            append(obj.getString("audio-channels"))
+                        }
+                        append(")")
+                    }
+                }
+
                 MpvTrack(
-                    id = obj.getInt("id"),
-                    type = obj.getString("type"),
-                    title = obj.optString("title", "Track ${obj.getInt("id")}"),
-                    lang = if (obj.has("lang")) obj.getString("lang") else null,
-                    codec = if (obj.has("codec")) obj.getString("codec") else null,
+                    id = id,
+                    type = type,
+                    title = descriptiveTitle,
+                    lang = lang,
+                    codec = codec,
                     isSelected = obj.optBoolean("selected", false)
                 )
             }

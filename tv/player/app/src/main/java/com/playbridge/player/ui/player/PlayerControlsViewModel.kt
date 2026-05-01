@@ -84,6 +84,22 @@ class PlayerControlsViewModel : ViewModel() {
         _controlsState.update { it.copy(isPlaying = playing) }
     }
 
+    fun setSubtitleDelay(delayMs: Long) {
+        _controlsState.update { it.copy(subtitleDelayMs = delayMs) }
+    }
+
+    fun adjustSubtitleDelay(deltaMs: Long) {
+        val newDelay = _controlsState.value.subtitleDelayMs + deltaMs
+        engine?.setSubtitleDelay(newDelay)
+        setSubtitleDelay(newDelay)
+    }
+
+    fun toggleAudioBoost() {
+        val newState = !_controlsState.value.isAudioBoostEnabled
+        engine?.setLoudnessEnhancer(newState)
+        _controlsState.update { it.copy(isAudioBoostEnabled = newState) }
+    }
+
     fun setPendingSeekTime(time: Long) {
         // This can be used to show a preview value on the seekbar
         _controlsState.update { it.copy(currentPosition = time) }
@@ -264,6 +280,7 @@ class PlayerControlsViewModel : ViewModel() {
     }
     
     fun setPlaybackSpeed(speed: Float) {
+        engine?.setPlaybackSpeed(speed)
         _controlsState.update { it.copy(playbackSpeed = speed) }
     }
     
