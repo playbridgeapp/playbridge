@@ -356,7 +356,6 @@ fun LibraryDetailScreen(
                                 visualMetadata = buildVisualMetadata(episode)
                             )
                             onPlayPayloadToTv(payload)
-                            Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
@@ -423,7 +422,6 @@ fun LibraryDetailScreen(
             if (isSeries && episode != null) {
                 onNowPlayingStarted(resolvedTmdbId ?: 0, selectedSeason, episode.episode ?: 1)
             }
-            Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -453,7 +451,6 @@ fun LibraryDetailScreen(
                             openInExternalPlayer(context, hubUrl, null, null)
                         } else {
                             onPlayPlaylistToTv(playlist)
-                            Toast.makeText(context, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
                         }
                         return@triggerWatch
                     }
@@ -470,7 +467,6 @@ fun LibraryDetailScreen(
                             detectedBy = "library",
                             visualMetadata = buildVisualMetadata(null)
                         ))
-                        Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
                     }
                     return@triggerWatch
                 }
@@ -525,7 +521,6 @@ fun LibraryDetailScreen(
                         visualMetadata = buildVisualMetadata(currentEpisodeSelection)
                     )
                     onPlayPayloadToTv(payload)
-                    Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show()
                 }
             },
             onRefresh = {

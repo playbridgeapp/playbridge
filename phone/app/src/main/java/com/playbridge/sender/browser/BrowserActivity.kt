@@ -16,10 +16,15 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,8 +32,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.*
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
@@ -49,7 +57,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import mozilla.components.browser.engine.gecko.GeckoEngine
 import mozilla.components.browser.engine.gecko.GeckoEngineView
 import mozilla.components.browser.engine.gecko.GeckoEngineSession
@@ -90,6 +100,7 @@ import androidx.activity.viewModels
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.shared.protocol.createPlayCommandJson
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun AnimatedMenuItem(
     index: Int,
@@ -143,6 +154,7 @@ fun AnimatedMenuItem(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 class BrowserActivity : ComponentActivity() {
 
     companion object {
@@ -417,6 +429,7 @@ class BrowserActivity : ComponentActivity() {
 
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+            var autoSwitchToRemote by remember { mutableStateOf(prefs.getBoolean("auto_switch_to_remote", false)) }
 
             // Sync tab manager settings from prefs
             DisposableEffect(prefs) {
@@ -425,6 +438,8 @@ class BrowserActivity : ComponentActivity() {
                     if (key == "max_alive_tabs") {
                         tabManager.maxAliveSessions = p.getInt(key, 5)
                         Log.d("TabManager", "Updated maxAliveSessions to ${tabManager.maxAliveSessions} from prefs")
+                    } else if (key == "auto_switch_to_remote") {
+                        autoSwitchToRemote = p.getBoolean(key, false)
                     }
                 }
                 prefs.registerOnSharedPreferenceChangeListener(listener)
@@ -442,7 +457,7 @@ class BrowserActivity : ComponentActivity() {
 
             // Persist the active main screen so it survives app restarts and Settings navigation
             LaunchedEffect(currentScreen) {
-                if (currentScreen == Screen.Browser || currentScreen == Screen.Library || currentScreen == Screen.DebridLibrary) {
+                if (currentScreen is Screen.Browser || currentScreen is Screen.Library || currentScreen is Screen.DebridLibrary || currentScreen is Screen.LibraryDetail) {
                     lastMainScreen = currentScreen
                     prefs.edit().putString("last_main_screen", when (currentScreen) {
                         Screen.Library -> "library"
@@ -533,6 +548,15 @@ class BrowserActivity : ComponentActivity() {
             var castSheetInitialMode by remember { mutableStateOf("play") }
             var castSheetBrowseOverride by remember { mutableStateOf<String?>(null) }
             var pendingContentPayload by remember { mutableStateOf<com.playbridge.shared.protocol.PlayPayload?>(null) }
+
+            // TV active context - updated via WebSocket messages from TV
+            var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
+            // TV playlist state - updated via playlist_status messages from TV
+            var tvPlaylistState by remember { mutableStateOf<PlaylistUiState?>(null) }
+            // Now Playing context - set when a playlist play starts from LibraryDetailScreen
+            var nowPlayingTvId by remember { mutableStateOf<Int?>(null) }
+            var nowPlayingSeason by remember { mutableStateOf<Int?>(null) }
+            var nowPlayingEpisodeStart by remember { mutableStateOf<Int>(1) } // episode number of playlist index 0
             val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
                 derivedStateOf {
                     // Read processingVersion so this re-derives whenever any video's
@@ -546,6 +570,136 @@ class BrowserActivity : ComponentActivity() {
             }
             val videoCount by remember(selectedTabId) {
                 derivedStateOf { detectedVideos.count { !it.isSubtitle } }
+            }
+
+            val haptic = LocalHapticFeedback.current
+
+            fun performQuickCast() {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                scope.launch {
+                    if (connectionState !is WebSocketClient.ConnectionState.Connected) {
+                        tvDevice?.let { device ->
+                            Toast.makeText(this@BrowserActivity, "Connecting to ${device.name}...", Toast.LENGTH_SHORT).show()
+                            connectionViewModel.connect(device)
+                            withTimeoutOrNull(5000) {
+                                while (connectionState !is WebSocketClient.ConnectionState.Connected) {
+                                    delay(250)
+                                }
+                            }
+                        }
+                    }
+
+                    val connection = connectionState as? WebSocketClient.ConnectionState.Connected
+                    if (connection == null) {
+                        Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+
+                    // Give a small buffer for the connection to fully stabilize
+                    delay(300)
+
+                    // 1. Check Library Content (highest priority)
+                    val content = pendingContentPayload
+                    if (content != null && videoCount == 0) {
+                        val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
+                            url = content.url,
+                            title = content.title,
+                            contentType = content.contentType,
+                            detectedBy = content.detectedBy,
+                            playerMode = sheetPlayerMode.takeIf { it != "tv" },
+                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                            maxBitrateCapMbps = maxBitrateCapMbps,
+                            visualMetadata = content.visualMetadata
+                        )
+                        if (connectionViewModel.webSocketClient.send(cmd)) {
+                            tvActiveContext = "player"
+                            if (autoSwitchToRemote) {
+                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                currentScreen = Screen.Remote
+                            }
+                            Toast.makeText(this@BrowserActivity, "Playing ${content.title}", Toast.LENGTH_SHORT).show()
+                        }
+                        return@launch
+                    }
+
+                    // 2. Check detected videos
+                    val playable = detectedVideos.filter { !it.isSubtitle }
+                        .sortedWith(
+                            compareByDescending<DetectedVideo> { video ->
+                                val hasMaster = video.url.contains("master", ignoreCase = true)
+                                val base = when {
+                                    video.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
+                                    video.isPlayable == true && (video.url.contains(".m3u8", ignoreCase = true) || video.url.contains(".mpd", ignoreCase = true)) -> 4
+                                    video.isPlayable == false -> 1
+                                    else -> 2
+                                }
+                                if (hasMaster) base + 1 else base
+                            }.thenByDescending { it.timestamp }
+                        )
+
+                    if (playable.isNotEmpty()) {
+                        val video = playable.first()
+                        if (video.playlistPayload != null) {
+                            val cmd = com.playbridge.shared.protocol.createPlaylistCommandJson(
+                                payload = com.playbridge.shared.protocol.PlaylistPayload(items = video.playlistPayload!!)
+                            )
+                            if (connectionViewModel.webSocketClient.send(cmd)) {
+                                tvActiveContext = "player"
+                                if (autoSwitchToRemote) {
+                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                    currentScreen = Screen.Remote
+                                }
+                                Toast.makeText(this@BrowserActivity, "Playlist sent to ${connection.serverName}", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            val headers = VideoDetector.mediaHeaders(video)
+                            if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
+                                headers["Referer"] = video.originUrl
+                            }
+                            val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
+                            val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
+                                url = video.url,
+                                title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                headers = headers,
+                                contentType = video.contentType,
+                                detectedBy = video.detectedBy,
+                                playerMode = sheetPlayerMode.takeIf { it != "tv" },
+                                preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                defaultVideoQuality = effectiveQuality,
+                                maxBitrateCapMbps = maxBitrateCapMbps
+                            )
+                            connectionViewModel.sendCommandAndRecord(cmd, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
+                            if (connectionViewModel.webSocketClient.send(cmd)) {
+                                tvActiveContext = "player"
+                                session?.let { tabManager.pauseMedia(it) }
+                                if (autoSwitchToRemote) {
+                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                    currentScreen = Screen.Remote
+                                }
+                                Toast.makeText(this@BrowserActivity, "Playing on ${connection.serverName}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        return@launch
+                    }
+
+                    // 3. Fallback to Browse
+                    val effectiveUrl = currentUrl
+                    val cmd = com.playbridge.shared.protocol.createBrowserCommandJson(
+                        effectiveUrl,
+                        browserMode = sheetPlayerMode.takeIf { it != "tv" },
+                        desktopMode = isDesktopMode.takeIf { it }
+                    )
+                    connectionViewModel.sendCommandAndRecord(cmd, "browser", effectiveUrl, "Browser Page")
+                    if (autoSwitchToRemote) {
+                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                        currentScreen = Screen.Remote
+                    }
+                    Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                }
             }
 
             // Eagerly parse HLS/DASH qualities and fetch thumbnails for the current tab's videos
@@ -573,15 +727,6 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            // TV active context - updated via WebSocket messages from TV
-            var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
-
-            // TV playlist state - updated via playlist_status messages from TV
-            var tvPlaylistState by remember { mutableStateOf<PlaylistUiState?>(null) }
-            // Now Playing context - set when a playlist play starts from LibraryDetailScreen
-            var nowPlayingTvId by remember { mutableStateOf<Int?>(null) }
-            var nowPlayingSeason by remember { mutableStateOf<Int?>(null) }
-            var nowPlayingEpisodeStart by remember { mutableStateOf<Int>(1) } // episode number of playlist index 0
 
             // Find in Page state
             var showFindBar by remember { mutableStateOf(false) }
@@ -1483,15 +1628,23 @@ class BrowserActivity : ComponentActivity() {
 
                                                 val tabUrl = selectedTab?.content?.url.orEmpty()
                                                 if (!isEditing && tabUrl.isNotEmpty() && tabUrl != "about:blank") {
-                                                    FloatingActionButton(
-                                                        onClick = { showVideoSheet = true },
-                                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                    Surface(
+                                                        color = MaterialTheme.colorScheme.primaryContainer,
                                                         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                                                         shape = CircleShape,
+                                                        tonalElevation = 6.dp,
+                                                        shadowElevation = 6.dp,
                                                         modifier = Modifier
                                                             .align(Alignment.BottomEnd)
                                                             .padding(24.dp)
                                                             .offset(x = fabOffsetX.dp, y = fabOffsetY.dp)
+                                                            .size(56.dp)
+                                                            .pointerInput(Unit) {
+                                                                detectTapGestures(
+                                                                    onTap = { showVideoSheet = true },
+                                                                    onLongPress = { performQuickCast() }
+                                                                )
+                                                            }
                                                             .pointerInput(Unit) {
                                                                 detectDragGestures { change, dragAmount ->
                                                                     change.consume()
@@ -1500,19 +1653,21 @@ class BrowserActivity : ComponentActivity() {
                                                                 }
                                                             }
                                                     ) {
-                                                        BadgedBox(
-                                                            badge = {
-                                                                if (videoCount > 0) {
-                                                                    Badge(
-                                                                        containerColor = MaterialTheme.colorScheme.error,
-                                                                        contentColor = MaterialTheme.colorScheme.onError
-                                                                    ) {
-                                                                        Text(videoCount.toString())
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            BadgedBox(
+                                                                badge = {
+                                                                    if (videoCount > 0) {
+                                                                        Badge(
+                                                                            containerColor = MaterialTheme.colorScheme.error,
+                                                                            contentColor = MaterialTheme.colorScheme.onError
+                                                                        ) {
+                                                                            Text(videoCount.toString())
+                                                                        }
                                                                     }
                                                                 }
+                                                            ) {
+                                                                Icon(Icons.Default.PlayArrow, "Open TV sheet")
                                                             }
-                                                        ) {
-                                                            Icon(Icons.Default.PlayArrow, "Open TV sheet")
                                                         }
                                                     }
                                                 }
@@ -1530,7 +1685,7 @@ class BrowserActivity : ComponentActivity() {
                                                         historyDao.clear()
                                                     }
                                                 },
-                                                onBack = { currentScreen = Screen.Browser }
+                                                onBack = { currentScreen = lastMainScreen }
                                             )
                                         }
                                         Screen.CastHistory -> {
@@ -1556,11 +1711,11 @@ class BrowserActivity : ComponentActivity() {
                                                 onClearHistory = {
                                                     lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { db.commandHistoryDao().clear() }
                                                 },
-                                                onBack = { currentScreen = Screen.Browser }
+                                                onBack = { currentScreen = lastMainScreen }
                                             )
                                         }
                                         Screen.Tabs -> {
-                                            BackHandler { currentScreen = Screen.Browser }
+                                            BackHandler { currentScreen = lastMainScreen }
                                             TabsScreen(
                                                 onTabSelected = { tabId ->
                                                     tabManager.selectTab(tabId, store)
@@ -1576,10 +1731,10 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Extensions -> {
-                                            BackHandler { currentScreen = Screen.Browser }
+                                            BackHandler { currentScreen = lastMainScreen }
                                             ExtensionsScreen(
                                                 session = session,
-                                                onBack = { currentScreen = Screen.Browser },
+                                                onBack = { currentScreen = lastMainScreen },
                                                 onAddExtension = {
                                                     tabManager.createTab("https://addons.mozilla.org/android/", store)
                                                     currentScreen = Screen.Browser
@@ -1587,7 +1742,7 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Connection -> {
-                                            BackHandler { currentScreen = Screen.Browser }
+                                            BackHandler { currentScreen = lastMainScreen }
                                             ConnectionScreen(
                                                 viewModel = connectionViewModel,
                                                 onMenuClick = { scope.launch { drawerState.open() } },
@@ -1600,9 +1755,9 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Downloads -> {
-                                            BackHandler { currentScreen = Screen.Browser }
+                                            BackHandler { currentScreen = lastMainScreen }
                                             DownloadsScreen(
-                                                onBack = { currentScreen = Screen.Browser }
+                                                onBack = { currentScreen = lastMainScreen }
                                             )
                                         }
                                         Screen.Settings -> {
@@ -1615,14 +1770,14 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Bookmarks -> {
-                                            BackHandler { currentScreen = Screen.Browser }
+                                            BackHandler { currentScreen = lastMainScreen }
                                             BookmarksScreen(
                                                 bookmarkDao = bookmarkDao,
                                                 onNavigate = { url ->
                                                     session.loadUrl(url)
                                                     currentScreen = Screen.Browser
                                                 },
-                                                onBack = { currentScreen = Screen.Browser }
+                                                onBack = { currentScreen = lastMainScreen }
                                             )
                                         }
                                         Screen.Remote -> {
@@ -1663,7 +1818,7 @@ class BrowserActivity : ComponentActivity() {
 
                                             BackHandler {
                                                 connectionViewModel.bluetoothClient.disconnect()
-                                                currentScreen = Screen.Browser
+                                                currentScreen = lastMainScreen
                                             }
                                             RemoteControlScreen(
                                                 isMediaPlaying = tvActiveContext == "player",
@@ -1677,7 +1832,7 @@ class BrowserActivity : ComponentActivity() {
                                                 },
                                                 onBack = {
                                                     connectionViewModel.bluetoothClient.disconnect()
-                                                    currentScreen = Screen.Browser
+                                                    currentScreen = lastMainScreen
                                                 },
                                                 onRemoteKey = { key ->
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
@@ -1795,13 +1950,19 @@ class BrowserActivity : ComponentActivity() {
                                                         maxBitrateCapMbps = maxBitrateCapMbps,
                                                         visualMetadata = payload.visualMetadata
                                                     )
-                                                    connectionViewModel.webSocketClient.send(cmd)
-                                                    if (payload.contentType == "series") {
-                                                        nowPlayingTvId = payload.visualMetadata?.tmdbId?.toIntOrNull()
-                                                        nowPlayingSeason = payload.visualMetadata?.season
-                                                        nowPlayingEpisodeStart = payload.visualMetadata?.episode ?: 1
+                                                    if (connectionViewModel.webSocketClient.send(cmd)) {
+                                                        if (payload.contentType == "series") {
+                                                            nowPlayingTvId = payload.visualMetadata?.tmdbId?.toIntOrNull()
+                                                            nowPlayingSeason = payload.visualMetadata?.season
+                                                            nowPlayingEpisodeStart = payload.visualMetadata?.episode ?: 1
+                                                        }
+                                                        tvActiveContext = "player"
+                                                        if (autoSwitchToRemote) {
+                                                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                            currentScreen = Screen.Remote
+                                                        }
+                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                     }
-                                                    Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                                                 },
                                                 onPlayStream = { url, title ->
                                                     val mainVideo = DetectedVideo(
@@ -1834,7 +1995,14 @@ class BrowserActivity : ComponentActivity() {
                                                         defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
                                                         maxBitrateCapMbps = maxBitrateCapMbps
                                                     )
-                                                    connectionViewModel.webSocketClient.send(cmd)
+                                                    if (connectionViewModel.webSocketClient.send(cmd)) {
+                                                        tvActiveContext = "player"
+                                                        if (autoSwitchToRemote) {
+                                                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                            currentScreen = Screen.Remote
+                                                        }
+                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                                                    }
                                                 },
                                                 onPlayPlaylistToTv = { playlist ->
                                                     val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
@@ -1848,11 +2016,18 @@ class BrowserActivity : ComponentActivity() {
                                                         )
                                                     }
                                                     val finalPlaylist = playlist.copy(items = itemsWithPrefs)
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))
-                                                    
-                                                    nowPlayingTvId = screenNumericId
-                                                    nowPlayingSeason = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.season ?: 1
-                                                    nowPlayingEpisodeStart = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.episode ?: 1
+                                                    if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))) {
+                                                        nowPlayingTvId = screenNumericId
+                                                        nowPlayingSeason = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.season ?: 1
+                                                        nowPlayingEpisodeStart = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.episode ?: 1
+ 
+                                                        tvActiveContext = "player"
+                                                        if (autoSwitchToRemote) {
+                                                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                            currentScreen = Screen.Remote
+                                                        }
+                                                        Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
+                                                    }
                                                 },
                                                 onQueueAdd = { item ->
                                                     val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
@@ -1934,13 +2109,19 @@ class BrowserActivity : ComponentActivity() {
                                  maxBitrateCapMbps = maxBitrateCapMbps,
                                  visualMetadata = payload.visualMetadata
                              )
-                            connectionViewModel.webSocketClient.send(cmd)
-                            if (payload.contentType == "series") {
-                                nowPlayingTvId = payload.visualMetadata?.tmdbId?.toIntOrNull()
-                                nowPlayingSeason = payload.visualMetadata?.season
-                                nowPlayingEpisodeStart = payload.visualMetadata?.episode ?: 1
+                            if (connectionViewModel.webSocketClient.send(cmd)) {
+                                if (payload.contentType == "series") {
+                                    nowPlayingTvId = payload.visualMetadata?.tmdbId?.toIntOrNull()
+                                    nowPlayingSeason = payload.visualMetadata?.season
+                                    nowPlayingEpisodeStart = payload.visualMetadata?.episode ?: 1
+                                }
+                                tvActiveContext = "player"
+                                if (autoSwitchToRemote) {
+                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                    currentScreen = Screen.Remote
+                                }
+                                Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                             }
-                            Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
                             showVideoSheet = false
                             pendingContentPayload = null
                         },
@@ -1968,6 +2149,10 @@ class BrowserActivity : ComponentActivity() {
                                         )
                                         if (connectionViewModel.webSocketClient.send(cmd)) {
                                             tvActiveContext = "player"
+                                            if (autoSwitchToRemote) {
+                                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                currentScreen = Screen.Remote
+                                            }
                                             Toast.makeText(this@BrowserActivity, "Playlist sent to ${state.serverName}", Toast.LENGTH_SHORT).show()
                                         }
                                     } else {
@@ -1993,6 +2178,10 @@ class BrowserActivity : ComponentActivity() {
                                         if (connectionViewModel.webSocketClient.send(commandJson)) {
                                             tvActiveContext = "player"
                                             session?.let { tabManager.pauseMedia(it) }
+                                            if (autoSwitchToRemote) {
+                                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                currentScreen = Screen.Remote
+                                            }
                                             Toast.makeText(this@BrowserActivity, "Playing on ${state.serverName}", Toast.LENGTH_SHORT).show()
                                         }
                                     }
@@ -2020,6 +2209,14 @@ class BrowserActivity : ComponentActivity() {
                             forcePlaylistSheet = null
                             castSheetInitialMode = "play"
                             castSheetBrowseOverride = null
+
+                            // Automatically open remote control after browsing
+                            if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                if (autoSwitchToRemote) {
+                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                    currentScreen = Screen.Remote
+                                }
+                            }
                         },
                         onOpenNewTab = { url ->
                             tabManager.createTab(url, Components.store)

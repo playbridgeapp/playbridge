@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -166,6 +167,28 @@ fun TVSettingsScreen(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Auto-switch to Remote
+            var autoSwitchToRemote by remember {
+                mutableStateOf(prefs.getBoolean("auto_switch_to_remote", false))
+            }
+            ListItem(
+                headlineContent = { Text("Auto Switch to Remote") },
+                supportingContent = { Text("Automatically open remote control after casting content") },
+                trailingContent = {
+                    Switch(
+                        checked = autoSwitchToRemote,
+                        onCheckedChange = {
+                            autoSwitchToRemote = it
+                            prefs.edit().putBoolean("auto_switch_to_remote", it).apply()
+                        }
+                    )
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier.padding(horizontal = 0.dp)
+            )
 
             Spacer(modifier = Modifier.height(12.dp))
 
