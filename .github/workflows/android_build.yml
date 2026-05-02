@@ -364,7 +364,7 @@ jobs:
 
       - name: Publish Phone to Play Store (alpha)
         if: needs.build-phone.outputs.skipped == 'false'
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.sender
@@ -374,7 +374,7 @@ jobs:
 
       - name: Publish TV Player to Play Store (alpha)
         if: needs.build-tv-player.outputs.skipped == 'false'
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.player
@@ -384,7 +384,7 @@ jobs:
 
       - name: Publish TV Browser to Play Store (alpha)
         if: needs.build-tv-browser.outputs.skipped == 'false'
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.browser
