@@ -219,6 +219,7 @@ class SystemWebViewEngine(
         webView.apply {
             isFocusable = true
             isFocusableInTouchMode = true
+            setBackgroundColor(android.graphics.Color.BLACK)
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT

@@ -121,11 +121,14 @@ class BrowserActivity : ComponentActivity() {
         // Use the singleton AdBlocker
         adBlocker = AdBlocker.getInstance(applicationContext)
 
-        // Create root container layout
-        rootContainer = FrameLayout(this)
+        // Create root container layout with dark background
+        rootContainer = FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+        }
 
-        // Create content container (for Browser Engine)
+        // Create content container (for Browser Engine) with dark background
         contentContainer = FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT

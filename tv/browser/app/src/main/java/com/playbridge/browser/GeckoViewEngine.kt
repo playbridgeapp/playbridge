@@ -148,6 +148,8 @@ class GeckoViewEngine(
     private fun setupGeckoView() {
         geckoView.isFocusable = true
         geckoView.isFocusableInTouchMode = true
+        // Set background to black immediately to prevent the white waiting screen
+        geckoView.setBackgroundColor(android.graphics.Color.BLACK)
         
         session.open(runtime)
         geckoView.setSession(session)
@@ -162,19 +164,8 @@ class GeckoViewEngine(
             }
         }
 
-        // Install uBlock Origin from bundled assets
-        runtime.webExtensionController.ensureBuiltIn(
-            "resource://android/assets/extensions/ublock_origin/",
-            "uBlock0@raymondhill.net"
-        ).accept(
-            { _ ->
-                Log.i(TAG, "Successfully installed uBlock Origin extension")
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    android.widget.Toast.makeText(context, "uBlock Origin Protected", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            },
-            { e -> Log.e(TAG, "Failed to install uBlock Origin extension", e) }
-        )
+        // PB Bridge extension is required for JS evaluation.
+        // uBlock is handled globally in PlayBridgeBrowserApplication.
 
         runtime.webExtensionController.ensureBuiltIn(
             "resource://android/assets/extensions/pb_bridge/",
