@@ -77,6 +77,14 @@ jobs:
         mv app/build/outputs/bundle/release/app-release.aab \
            app/build/outputs/bundle/release/playbridge-phone-${{ steps.version.outputs.version }}.aab
 
+    - name: List outputs (Debug)
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        echo "APK outputs:"
+        find app/build/outputs/apk/release -maxdepth 2
+        echo "Bundle outputs:"
+        find app/build/outputs/bundle/release -maxdepth 2
+
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
       env:
@@ -160,6 +168,14 @@ jobs:
         mv app/build/outputs/bundle/release/app-release.aab \
            app/build/outputs/bundle/release/playbridge-tv-player-${{ steps.version.outputs.version }}.aab
 
+    - name: List outputs (Debug)
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        echo "APK outputs:"
+        find app/build/outputs/apk/release -maxdepth 2
+        echo "Bundle outputs:"
+        find app/build/outputs/bundle/release -maxdepth 2
+
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
       env:
@@ -237,11 +253,22 @@ jobs:
     - name: Rename outputs
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
+        # Rename APKs
         find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-tv-browser-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
-        mv app/build/outputs/bundle/release/app-release.aab \
-           app/build/outputs/bundle/release/playbridge-tv-browser-${{ steps.version.outputs.version }}.aab
+        # Rename Bundles (AABs) - using find to be safer
+        find app/build/outputs/bundle/release -name "*.aab" -type f | while read f; do
+          mv "$f" "$(dirname "$f")/playbridge-tv-browser-${{ steps.version.outputs.version }}.aab"
+        done
+
+    - name: List outputs (Debug)
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        echo "APK outputs:"
+        find app/build/outputs/apk/release -maxdepth 2
+        echo "Bundle outputs:"
+        find app/build/outputs/bundle/release -maxdepth 2
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -259,7 +286,14 @@ jobs:
 
   release:
     needs: [build-phone, build-tv-player, build-tv-browser]
-    if: always() && (needs.build-phone.outputs.skipped == 'false' || needs.build-tv-player.outputs.skipped == 'false' || needs.build-tv-browser.outputs.skipped == 'false')
+    if: |
+      (success() || always()) &&
+      (needs.build-phone.outputs.skipped == 'false' || 
+       needs.build-tv-player.outputs.skipped == 'false' || 
+       needs.build-tv-browser.outputs.skipped == 'false') &&
+      (needs.build-phone.result != 'failure' && 
+       needs.build-tv-player.result != 'failure' && 
+       needs.build-tv-browser.result != 'failure')
     runs-on: ubuntu-latest
     permissions:
       contents: write
