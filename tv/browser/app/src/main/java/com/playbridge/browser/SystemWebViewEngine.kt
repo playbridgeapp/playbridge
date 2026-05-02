@@ -35,6 +35,10 @@ class SystemWebViewEngine(
     private val webView: WebView = WebView(context)
     private var canGoBack = false
     private var currentUrl: String? = null
+    
+    // Accumulators for fractional scroll deltas to prevent loss of small movements
+    private var scrollAccumulatorX = 0f
+    private var scrollAccumulatorY = 0f
 
     init {
         setupWebView()
@@ -69,8 +73,18 @@ class SystemWebViewEngine(
 
 
 
-    override fun scrollBy(dx: Int, dy: Int) {
-        webView.scrollBy(dx, dy)
+    override fun scrollBy(dx: Float, dy: Float) {
+        scrollAccumulatorX += dx
+        scrollAccumulatorY += dy
+        
+        val scrollX = scrollAccumulatorX.toInt()
+        val scrollY = scrollAccumulatorY.toInt()
+        
+        if (scrollX != 0 || scrollY != 0) {
+            webView.scrollBy(scrollX, scrollY)
+            scrollAccumulatorX -= scrollX
+            scrollAccumulatorY -= scrollY
+        }
     }
 
     override fun simulateClick(x: Float, y: Float) {

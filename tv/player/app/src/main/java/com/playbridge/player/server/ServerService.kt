@@ -502,17 +502,28 @@ class ServerService : Service() {
                     putExtra(EXTRA_MOUSE_EVENT, command.event)
                     putExtra(EXTRA_MOUSE_DX, command.dx)
                     putExtra(EXTRA_MOUSE_DY, command.dy)
-                    setPackage(packageName)
                 }
-                sendBroadcast(intent)
-                // Also broadcast to browser app
-                val browserIntent = Intent(ACTION_MOUSE).apply {
-                    putExtra(EXTRA_MOUSE_EVENT, command.event)
-                    putExtra(EXTRA_MOUSE_DX, command.dx)
-                    putExtra(EXTRA_MOUSE_DY, command.dy)
-                    setPackage("com.playbridge.browser")
+                
+                // Only broadcast mouse events to the active context to reduce IPC overhead 
+                // and avoid waking up background apps unnecessarily.
+                when (activeContext) {
+                    "browser" -> {
+                        intent.setPackage("com.playbridge.browser")
+                        sendBroadcast(intent)
+                    }
+                    "player" -> {
+                        intent.setPackage(packageName)
+                        sendBroadcast(intent)
+                    }
+                    else -> {
+                        // Fallback: send to both if context is unknown or idle
+                        intent.setPackage(packageName)
+                        sendBroadcast(intent)
+                        
+                        val browserIntent = Intent(intent).setPackage("com.playbridge.browser")
+                        sendBroadcast(browserIntent)
+                    }
                 }
-                sendBroadcast(browserIntent)
             }
             is Command.BrowserControl -> {
                 FileLogger.i(TAG, "Browser control: ${command.action}")

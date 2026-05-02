@@ -175,18 +175,20 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun saveTabs() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val state = Components.store.state
-            val tabs = state.tabs
-            val selectedId = state.selectedTabId
+        val state = Components.store.state
+        val tabs = state.tabs
+        val selectedId = state.selectedTabId
+        val allStates = tabManager.captureAllStates()
 
+        lifecycleScope.launch(Dispatchers.IO) {
             val entities = tabs.map { tab ->
                 TabEntity(
                     id = tab.id,
                     url = tab.content.url,
                     title = tab.content.title,
                     parentId = tab.parentId,
-                    isSelected = (tab.id == selectedId)
+                    isSelected = (tab.id == selectedId),
+                    sessionState = allStates[tab.id]
                 )
             }
             database.tabDao().updateTabs(entities)
@@ -244,7 +246,12 @@ class BrowserActivity : ComponentActivity() {
                     val selectedId = savedTabs.find { it.isSelected }?.id
                     Log.d("PB_STARTUP", "Restoring ${sessionTabs.size} tabs to store, selectedId=$selectedId")
                     withContext(Dispatchers.Main) {
-                        Log.d("PB_STARTUP", "Calling restoreTabs on Main thread")
+                        Log.d("PB_STARTUP", "Populating savedStates and calling restoreTabs on Main thread")
+                        savedTabs.forEach { entity ->
+                            entity.sessionState?.let { bytes ->
+                                tabManager.savedStates[entity.id] = bytes
+                            }
+                        }
                         tabManager.restoreTabs(sessionTabs, selectedId, Components.store)
                         Log.d("PB_STARTUP", "restoreTabs done — store now has ${Components.store.state.tabs.size} tabs, selectedTabId=${Components.store.state.selectedTabId}")
                     }
@@ -1679,35 +1686,35 @@ class BrowserActivity : ComponentActivity() {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("move", dx, dy)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("move", dx, dy))
+                                                        connectionViewModel.webSocketClient.sendMouseCommand("move", dx, dy)
                                                     }
                                                 },
                                                 onMouseClick = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("click", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("click", 0f, 0f))
+                                                        connectionViewModel.webSocketClient.sendMouseCommand("click", 0f, 0f)
                                                     }
                                                 },
                                                 onMouseScroll = { dx, dy ->
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("scroll", dx, dy)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("scroll", dx, dy))
+                                                        connectionViewModel.webSocketClient.sendMouseCommand("scroll", dx, dy)
                                                     }
                                                 },
                                                 onMouseDown = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("down", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("down", 0f, 0f))
+                                                        connectionViewModel.webSocketClient.sendMouseCommand("down", 0f, 0f)
                                                     }
                                                 },
                                                 onMouseUp = {
                                                     if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
                                                         connectionViewModel.bluetoothClient.sendMouseCommand("up", 0f, 0f)
                                                     } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.MousePacket.pack("up", 0f, 0f))
+                                                        connectionViewModel.webSocketClient.sendMouseCommand("up", 0f, 0f)
                                                     }
                                                 },
                                                 onBrowserControl = { action ->

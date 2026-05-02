@@ -411,7 +411,7 @@ class BrowserActivity : ComponentActivity() {
                 cursorView?.animateClick()
             }
             "scroll" -> {
-                engine?.scrollBy(dx.toInt(), dy.toInt())
+                engine?.scrollBy(dx, dy)
             }
             "down" -> {
                 // Start a click-drag: send ACTION_DOWN and remember the time
@@ -481,7 +481,7 @@ class BrowserActivity : ComponentActivity() {
             "dpad_up" -> {
                 showCursorAndResetTimer()
                 if (cursorY <= cursorStepY) {
-                    engine?.scrollBy(0, -scrollStep)
+                    engine?.scrollBy(0f, -scrollStep.toFloat())
                 } else {
                     cursorY -= cursorStepY
                     cursorView?.updatePosition(cursorX, cursorY)
@@ -491,7 +491,7 @@ class BrowserActivity : ComponentActivity() {
                 showCursorAndResetTimer()
                 val screenHeight = resources.displayMetrics.heightPixels.toFloat()
                 if (cursorY >= screenHeight - cursorStepY) {
-                    engine?.scrollBy(0, scrollStep)
+                    engine?.scrollBy(0f, scrollStep.toFloat())
                 } else {
                     cursorY += cursorStepY
                     cursorView?.updatePosition(cursorX, cursorY)
@@ -500,7 +500,7 @@ class BrowserActivity : ComponentActivity() {
             "dpad_left" -> {
                 showCursorAndResetTimer()
                 if (cursorX <= cursorStepX) {
-                    engine?.scrollBy(-scrollStep, 0)
+                    engine?.scrollBy(-scrollStep.toFloat(), 0f)
                 } else {
                     cursorX -= cursorStepX
                     cursorView?.updatePosition(cursorX, cursorY)
@@ -510,7 +510,7 @@ class BrowserActivity : ComponentActivity() {
                 showCursorAndResetTimer()
                 val screenWidth = resources.displayMetrics.widthPixels.toFloat()
                 if (cursorX >= screenWidth - cursorStepX) {
-                    engine?.scrollBy(scrollStep, 0)
+                    engine?.scrollBy(scrollStep.toFloat(), 0f)
                 } else {
                     cursorX += cursorStepX
                     cursorView?.updatePosition(cursorX, cursorY)

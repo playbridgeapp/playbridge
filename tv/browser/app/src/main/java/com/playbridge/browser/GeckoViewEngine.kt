@@ -86,7 +86,7 @@ class GeckoViewEngine(
         session.close()
     }
 
-    override fun scrollBy(dx: Int, dy: Int) {
+    override fun scrollBy(dx: Float, dy: Float) {
         evaluateJavascript("window.scrollBy($dx, $dy)", null)
     }
 

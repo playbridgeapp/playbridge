@@ -44,7 +44,7 @@ interface BrowserEngine {
     /**
      * Simulate a scroll event
      */
-    fun scrollBy(dx: Int, dy: Int)
+    fun scrollBy(dx: Float, dy: Float)
 
     /**
      * Simulate a click event at the given coordinates relative to the view

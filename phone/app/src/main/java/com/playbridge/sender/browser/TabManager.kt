@@ -39,6 +39,12 @@ class TabManager {
     /** Set of tab IDs currently playing media (audio/video). Observable by Compose. */
     val playingTabIds = mutableStateMapOf<String, Boolean>()
 
+    /** Serialized GeckoSession state for hibernated tabs (or tabs loaded from DB). */
+    val savedStates = mutableMapOf<String, ByteArray>()
+
+    /** Latest EngineSessionState received from observers for each tab. */
+    internal val engineStates = mutableMapOf<String, mozilla.components.concept.engine.EngineSessionState>()
+
     // ── Tab operations ───────────────────────────────────────────────
 
     /** Ensure [store] always has at least one tab. */
@@ -164,9 +170,29 @@ class TabManager {
 
                 sessions[tab.id] = newSession
                 createdCount++
-                Log.d(TAG, "Created/Restored EngineSession for tab ${tab.id} url=$url")
-                if (url != "about:blank") {
-                    newSession.loadUrl(url)
+                
+                // Restore saved state if available (history, backstack, etc.)
+                val savedBytes = savedStates[tab.id]
+                
+                if (savedBytes != null) {
+                    Log.d(TAG, "Restoring GeckoSession state for tab ${tab.id} (bytes=${savedBytes.size})")
+                    try {
+                        val geckoState = bytesToGeckoState(savedBytes)
+                        if (geckoState != null) {
+                            val engineState = wrapGeckoState(geckoState)
+                            if (engineState != null) {
+                                newSession.restoreState(engineState)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to restore state for tab ${tab.id}", e)
+                        if (url != "about:blank") newSession.loadUrl(url)
+                    }
+                } else {
+                    Log.d(TAG, "Created/Restored EngineSession for tab ${tab.id} url=$url (no saved state)")
+                    if (url != "about:blank") {
+                        newSession.loadUrl(url)
+                    }
                 }
             }
         }
@@ -183,9 +209,16 @@ class TabManager {
                     // Close the internal GeckoSession via reflection so media stops immediately and memory is freed
                     val geckoEngineSession = session as? GeckoEngineSession
                     if (geckoEngineSession != null) {
-                        val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
-                        field.isAccessible = true
-                        val internalSession = field.get(geckoEngineSession) as? GeckoSession
+                        // Capture latest state from engineStates map (populated via onStateUpdated in SessionObserverSetup)
+                        val engineState = engineStates[id]
+                        val geckoState = getGeckoState(engineState)
+                        val bytes = geckoStateToBytes(geckoState)
+                        if (bytes != null) {
+                            savedStates[id] = bytes
+                            Log.d(TAG, "Saved GeckoSession state for hibernated tab $id (bytes=${bytes.size})")
+                        }
+                        
+                        val internalSession = getGeckoSession(geckoEngineSession)
                         internalSession?.close()
                         Log.d(TAG, "Closed/Hibernated GeckoSession for tab $id")
                     }
@@ -263,5 +296,71 @@ class TabManager {
     /** Clear find-in-page highlights. */
     fun clearFind(session: EngineSession?) {
         getGeckoSession(session)?.finder?.clear()
+    }
+
+    /** Capture current state of all active sessions and merge with hibernated states. */
+    fun captureAllStates(): Map<String, ByteArray> {
+        val allStates = savedStates.toMutableMap()
+        sessions.forEach { (id, _) ->
+            val engineState = engineStates[id]
+            val geckoState = getGeckoState(engineState)
+            val bytes = geckoStateToBytes(geckoState)
+            if (bytes != null) {
+                allStates[id] = bytes
+            }
+        }
+        return allStates
+    }
+
+    // ── Serialization helpers ────────────────────────────────────────
+
+    private fun getGeckoState(engineState: mozilla.components.concept.engine.EngineSessionState?): GeckoSession.SessionState? {
+        if (engineState == null) return null
+        return try {
+            // GeckoEngineSessionState wraps GeckoSession.SessionState. We use reflection to get the actual state
+            // since the getter is internal to the browser-engine-gecko module.
+            val method = engineState.javaClass.getDeclaredMethod("getActualState\$browser_engine_gecko_release")
+            method.isAccessible = true
+            method.invoke(engineState) as? GeckoSession.SessionState
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract GeckoSession.SessionState from EngineSessionState", e)
+            null
+        }
+    }
+
+    private fun wrapGeckoState(geckoState: GeckoSession.SessionState): mozilla.components.concept.engine.EngineSessionState? {
+        return try {
+            // The GeckoEngineSessionState constructor is internal, so we use reflection to instantiate it.
+            val clazz = Class.forName("mozilla.components.browser.engine.gecko.GeckoEngineSessionState")
+            val constructor = clazz.getDeclaredConstructor(GeckoSession.SessionState::class.java)
+            constructor.isAccessible = true
+            constructor.newInstance(geckoState) as? mozilla.components.concept.engine.EngineSessionState
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to wrap GeckoSession.SessionState in GeckoEngineSessionState", e)
+            null
+        }
+    }
+
+    private fun geckoStateToBytes(state: GeckoSession.SessionState?): ByteArray? {
+        if (state == null) return null
+        val parcel = android.os.Parcel.obtain()
+        return try {
+            state.writeToParcel(parcel, 0)
+            parcel.marshall()
+        } finally {
+            parcel.recycle()
+        }
+    }
+
+    private fun bytesToGeckoState(bytes: ByteArray?): GeckoSession.SessionState? {
+        if (bytes == null) return null
+        val parcel = android.os.Parcel.obtain()
+        return try {
+            parcel.unmarshall(bytes, 0, bytes.size)
+            parcel.setDataPosition(0)
+            GeckoSession.SessionState.CREATOR.createFromParcel(parcel)
+        } finally {
+            parcel.recycle()
+        }
     }
 }

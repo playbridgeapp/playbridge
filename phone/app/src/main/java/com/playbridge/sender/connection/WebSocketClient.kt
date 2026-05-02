@@ -46,6 +46,23 @@ class WebSocketClient {
     private val RETRY_DELAY_MS = com.playbridge.shared.protocol.Config.RETRY_DELAY_MS
     private var targetConnection: TvConnectionInfo? = null
     private var isUserDisconnect = false
+    
+    // Mouse delta accumulation — collapses rapid pointer events into one packet per flush
+    // interval so we're not flooding the TV with a packet per display frame (especially at 120Hz).
+    private var pendingDx = 0f
+    private var pendingDy = 0f
+    private var mouseFlushScheduled = false
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val mouseFlushRunnable = Runnable {
+        mouseFlushScheduled = false
+        val dx = pendingDx
+        val dy = pendingDy
+        pendingDx = 0f
+        pendingDy = 0f
+        if (dx != 0f || dy != 0f) {
+            send(com.playbridge.shared.protocol.MousePacket.pack("move", dx, dy))
+        }
+    }
 
     private data class TvConnectionInfo(val ip: String, val port: Int, val token: String, val serverName: String)
 
@@ -229,8 +246,29 @@ class WebSocketClient {
     fun sendPing(): Boolean {
         return send(createPingJson())
     }
+
+    /**
+     * Sends a mouse command, with automatic batching/throttling for high-frequency "move" events.
+     */
+    fun sendMouseCommand(event: String, dx: Float = 0f, dy: Float = 0f) {
+        if (event == "move") {
+            pendingDx += dx
+            pendingDy += dy
+            if (!mouseFlushScheduled) {
+                mouseFlushScheduled = true
+                mainHandler.postDelayed(mouseFlushRunnable, 16L) // ~60Hz
+            }
+            return
+        }
+        // Immediate send for clicks, scrolls, and up/down events
+        send(com.playbridge.shared.protocol.MousePacket.pack(event, dx, dy))
+    }
     
     fun disconnect() {
+        mainHandler.removeCallbacks(mouseFlushRunnable)
+        mouseFlushScheduled = false
+        pendingDx = 0f
+        pendingDy = 0f
         isUserDisconnect = true
         webSocket?.close(1000, "User disconnect")
         webSocket = null

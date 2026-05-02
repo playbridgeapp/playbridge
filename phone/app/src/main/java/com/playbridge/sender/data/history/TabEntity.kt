@@ -11,5 +11,6 @@ data class TabEntity(
     val title: String?,
     val parentId: String?,
     val isSelected: Boolean,
-    val lastAccessTime: Long = System.currentTimeMillis()
+    val lastAccessTime: Long = System.currentTimeMillis(),
+    val sessionState: ByteArray? = null
 )

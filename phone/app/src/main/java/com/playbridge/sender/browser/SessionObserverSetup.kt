@@ -202,6 +202,12 @@ fun SessionObserverSetup(
                     }
                 }
             }
+
+            override fun onStateUpdated(state: mozilla.components.concept.engine.EngineSessionState) {
+                if (selectedTab != null) {
+                    tabManager.engineStates[selectedTab.id] = state
+                }
+            }
         }
         session.register(observer)
 
