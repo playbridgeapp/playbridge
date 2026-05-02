@@ -47,8 +47,6 @@ fun SessionObserverSetup(
     scope: CoroutineScope,
     currentUrl: MutableState<String>,
     isLoading: MutableState<Boolean>,
-    browserCanGoBack: MutableState<Boolean>,
-    browserCanGoForward: MutableState<Boolean>,
     contextMenuUrl: MutableState<String?>,
     previousUrl: MutableState<String>,
     historyDao: HistoryDao,
@@ -129,11 +127,6 @@ fun SessionObserverSetup(
 
             override fun onLoadingStateChange(loading: Boolean) {
                 isLoading.value = loading
-            }
-
-            override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
-                canGoBack?.let { browserCanGoBack.value = it }
-                canGoForward?.let { browserCanGoForward.value = it }
             }
 
             // Detect video count from page title [PlayBridge:X] marker

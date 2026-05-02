@@ -14,6 +14,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 
+/** Data class representing the navigation capabilities of a tab. */
+data class TabNavigationState(
+    val canGoBack: Boolean = false,
+    val canGoForward: Boolean = false
+)
+
 /**
  * Manages browser tab lifecycle and engine sessions.
  *
@@ -44,6 +50,9 @@ class TabManager {
 
     /** Latest EngineSessionState received from observers for each tab. */
     internal val engineStates = mutableMapOf<String, mozilla.components.concept.engine.EngineSessionState>()
+
+    /** Navigation capabilities (back/forward) for each tab ID. Observable by Compose. */
+    val navigationStates = mutableStateMapOf<String, TabNavigationState>()
 
     // ── Tab operations ───────────────────────────────────────────────
 
@@ -179,10 +188,23 @@ class TabManager {
                     try {
                         val geckoState = bytesToGeckoState(savedBytes)
                         if (geckoState != null) {
+                            // Pre-calculate navigation state from history backstack metadata
+                            val canGoBack = geckoState.currentIndex > 0
+                            val canGoForward = geckoState.currentIndex < geckoState.size - 1
+                            navigationStates[tab.id] = TabNavigationState(canGoBack, canGoForward)
+                            Log.d(TAG, "Restored initial nav state for tab ${tab.id}: back=$canGoBack, fwd=$canGoForward (size=${geckoState.size}, index=${geckoState.currentIndex})")
+
                             val engineState = wrapGeckoState(geckoState)
                             if (engineState != null) {
                                 newSession.restoreState(engineState)
+                                Log.d(TAG, "Successfully called restoreState for tab ${tab.id}")
+                            } else {
+                                Log.e(TAG, "Failed to wrap GeckoState for tab ${tab.id}")
+                                if (url != "about:blank") newSession.loadUrl(url)
                             }
+                        } else {
+                            Log.e(TAG, "Failed to deserialize GeckoState for tab ${tab.id}")
+                            if (url != "about:blank") newSession.loadUrl(url)
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to restore state for tab ${tab.id}", e)
@@ -194,6 +216,19 @@ class TabManager {
                         newSession.loadUrl(url)
                     }
                 }
+
+                // Attach a permanent observer to track navigation state in TabManager
+                // We do this AFTER restoreState to avoid initial false-clobbering
+                newSession.register(object : EngineSession.Observer {
+                    override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
+                        val current = navigationStates[tab.id] ?: TabNavigationState()
+                        navigationStates[tab.id] = current.copy(
+                            canGoBack = canGoBack ?: current.canGoBack,
+                            canGoForward = canGoForward ?: current.canGoForward
+                        )
+                        Log.d(TAG, "Navigation state updated for tab ${tab.id}: canGoBack=${canGoBack ?: "null(preserved)"}, canGoForward=${canGoForward ?: "null(preserved)"} -> final=(${navigationStates[tab.id]?.canGoBack}, ${navigationStates[tab.id]?.canGoForward})")
+                    }
+                })
             }
         }
         Log.d(TAG, "syncSessions: created $createdCount new sessions, total sessions=${sessions.size}")
@@ -209,10 +244,8 @@ class TabManager {
                     // Close the internal GeckoSession via reflection so media stops immediately and memory is freed
                     val geckoEngineSession = session as? GeckoEngineSession
                     if (geckoEngineSession != null) {
-                        // Capture latest state from engineStates map (populated via onStateUpdated in SessionObserverSetup)
-                        val engineState = engineStates[id]
-                        val geckoState = getGeckoState(engineState)
-                        val bytes = geckoStateToBytes(geckoState)
+                        // Capture latest state aggressively before closing
+                        val bytes = captureSessionState(id, session)
                         if (bytes != null) {
                             savedStates[id] = bytes
                             Log.d(TAG, "Saved GeckoSession state for hibernated tab $id (bytes=${bytes.size})")
@@ -228,6 +261,9 @@ class TabManager {
             }
             sessions.remove(id)
             playingTabIds.remove(id)
+            // Note: We deliberately DO NOT remove from navigationStates here 
+            // so the UI can still show the last known back/forward buttons for hibernated tabs.
+            
             // Clean up detected videos for this tab
             VideoDetector.clearTab(id)
         }
@@ -301,15 +337,49 @@ class TabManager {
     /** Capture current state of all active sessions and merge with hibernated states. */
     fun captureAllStates(): Map<String, ByteArray> {
         val allStates = savedStates.toMutableMap()
-        sessions.forEach { (id, _) ->
-            val engineState = engineStates[id]
-            val geckoState = getGeckoState(engineState)
-            val bytes = geckoStateToBytes(geckoState)
+        sessions.forEach { (id, session) ->
+            val bytes = captureSessionState(id, session)
             if (bytes != null) {
                 allStates[id] = bytes
             }
         }
+        Log.d(TAG, "captureAllStates: returning ${allStates.size} states")
         return allStates
+    }
+
+    /** Capture the state of a specific [session] and return as bytes, or null on failure. */
+    private fun captureSessionState(id: String, session: EngineSession): ByteArray? {
+        return try {
+            val geckoSession = getGeckoSession(session)
+            if (geckoSession != null) {
+                // Force GeckoSession to flush its state to the internal cache
+                geckoSession.flushSessionState()
+                
+                // Access the private mStateCache field via reflection
+                val field = GeckoSession::class.java.getDeclaredField("mStateCache")
+                field.isAccessible = true
+                val geckoState = field.get(geckoSession) as? GeckoSession.SessionState
+                
+                val bytes = geckoStateToBytes(geckoState)
+                if (bytes != null) {
+                    Log.d(TAG, "captured active state for tab $id (bytes=${bytes.size})")
+                    return bytes
+                }
+            }
+
+            // Fallback to the last received state from onStateUpdated
+            val engineState = engineStates[id]
+            val geckoState = getGeckoState(engineState)
+            val bytes = geckoStateToBytes(geckoState)
+            if (bytes != null) {
+                Log.d(TAG, "captured fallback state for tab $id (bytes=${bytes.size})")
+                return bytes
+            }
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to capture state for tab $id", e)
+            null
+        }
     }
 
     // ── Serialization helpers ────────────────────────────────────────
@@ -343,24 +413,23 @@ class TabManager {
 
     private fun geckoStateToBytes(state: GeckoSession.SessionState?): ByteArray? {
         if (state == null) return null
-        val parcel = android.os.Parcel.obtain()
         return try {
-            state.writeToParcel(parcel, 0)
-            parcel.marshall()
-        } finally {
-            parcel.recycle()
+            // GeckoSession.SessionState.toString() returns the state as a JSON string
+            state.toString().toByteArray(Charsets.UTF_8)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to serialize GeckoState to string", e)
+            null
         }
     }
 
     private fun bytesToGeckoState(bytes: ByteArray?): GeckoSession.SessionState? {
         if (bytes == null) return null
-        val parcel = android.os.Parcel.obtain()
         return try {
-            parcel.unmarshall(bytes, 0, bytes.size)
-            parcel.setDataPosition(0)
-            GeckoSession.SessionState.CREATOR.createFromParcel(parcel)
-        } finally {
-            parcel.recycle()
+            val json = String(bytes, Charsets.UTF_8)
+            GeckoSession.SessionState.fromString(json)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to deserialize GeckoState from string", e)
+            null
         }
     }
 }

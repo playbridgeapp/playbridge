@@ -179,19 +179,27 @@ class BrowserActivity : ComponentActivity() {
         val tabs = state.tabs
         val selectedId = state.selectedTabId
         val allStates = tabManager.captureAllStates()
+        
+        Log.d(TAG, "saveTabs: starting save for ${tabs.size} tabs, captured ${allStates.size} session states")
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            val entities = tabs.map { tab ->
-                TabEntity(
-                    id = tab.id,
-                    url = tab.content.url,
-                    title = tab.content.title,
-                    parentId = tab.parentId,
-                    isSelected = (tab.id == selectedId),
-                    sessionState = allStates[tab.id]
-                )
+        // Use a more robust scope for saving to ensure it completes even if activity is pausing
+        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+            try {
+                val entities = tabs.map { tab ->
+                    TabEntity(
+                        id = tab.id,
+                        url = tab.content.url,
+                        title = tab.content.title,
+                        parentId = tab.parentId,
+                        isSelected = (tab.id == selectedId),
+                        sessionState = allStates[tab.id]
+                    )
+                }
+                database.tabDao().updateTabs(entities)
+                Log.d(TAG, "saveTabs: successfully updated DB with ${entities.size} tabs")
+            } catch (e: Exception) {
+                Log.e(TAG, "saveTabs: failed to update DB", e)
             }
-            database.tabDao().updateTabs(entities)
         }
     }
 
@@ -395,11 +403,16 @@ class BrowserActivity : ComponentActivity() {
                 return@setContent
             }
 
-            // Existing state variables
-            var currentUrl by remember { mutableStateOf("about:blank") }
-            var isLoading by remember { mutableStateOf(false) }
-            var browserCanGoBack by remember { mutableStateOf(false) }
-            var browserCanGoForward by remember { mutableStateOf(false) }
+            // UI state variables — keyed to selectedTabId so they reset when switching tabs
+            var currentUrl by remember(selectedTabId) { mutableStateOf(selectedTab?.content?.url ?: "about:blank") }
+            var isLoading by remember(selectedTabId) { mutableStateOf(false) }
+            
+            // Back/Forward states are now read from tabManager.navigationStates
+            val navState = tabManager.navigationStates[selectedTabId] ?: TabNavigationState()
+            val browserCanGoBack = navState.canGoBack
+            val browserCanGoForward = navState.canGoForward
+
+            var previousUrl by remember(selectedTabId) { mutableStateOf(selectedTab?.content?.url ?: "") }
             var menuExpanded by remember { mutableStateOf(false) }
 
             // User preferences
@@ -612,30 +625,23 @@ class BrowserActivity : ComponentActivity() {
                 // Token listening is now handled in ConnectionViewModel
             }
 
-            // Track previous URL to avoid clearing on hash changes
-            var previousUrl by remember { mutableStateOf("") }
-
             // Context menu state for "Open in new tab"
-            var contextMenuUrl by remember { mutableStateOf<String?>(null) }
+            var contextMenuUrl by remember(selectedTabId) { mutableStateOf<String?>(null) }
 
-            // Mutable state wrappers for SessionObserverSetup
-            val currentUrlState = remember { mutableStateOf(currentUrl) }
-            val isLoadingState = remember { mutableStateOf(isLoading) }
-            val canGoBackState = remember { mutableStateOf(browserCanGoBack) }
-            val canGoForwardState = remember { mutableStateOf(browserCanGoForward) }
-            val contextMenuUrlState = remember { mutableStateOf(contextMenuUrl) }
-            val previousUrlState = remember { mutableStateOf(previousUrl) }
-            val pendingDownloadState = remember { mutableStateOf(pendingDownload) }
-            val isSecureConnectionState = remember { mutableStateOf(isSecureConnection) }
-            val siteSecurityInfoState = remember { mutableStateOf(siteSecurityInfo) }
+            // Mutable state wrappers for SessionObserverSetup — keyed to selectedTabId
+            val currentUrlState = remember(selectedTabId) { mutableStateOf(currentUrl) }
+            val isLoadingState = remember(selectedTabId) { mutableStateOf(false) }
+            val contextMenuUrlState = remember(selectedTabId) { mutableStateOf(contextMenuUrl) }
+            val previousUrlState = remember(selectedTabId) { mutableStateOf(previousUrl) }
+            val pendingDownloadState = remember(selectedTabId) { mutableStateOf(pendingDownload) }
+            val isSecureConnectionState = remember(selectedTabId) { mutableStateOf(isSecureConnection) }
+            val siteSecurityInfoState = remember(selectedTabId) { mutableStateOf(siteSecurityInfo) }
 
-            val pendingPopupState = remember { mutableStateOf(pendingPopup) }
+            val pendingPopupState = remember(selectedTabId) { mutableStateOf(pendingPopup) }
 
             // Sync wrapper states back to local vars
             currentUrl = currentUrlState.value
             isLoading = isLoadingState.value
-            browserCanGoBack = canGoBackState.value
-            browserCanGoForward = canGoForwardState.value
             contextMenuUrl = contextMenuUrlState.value
             previousUrl = previousUrlState.value
             pendingDownload = pendingDownloadState.value
@@ -711,8 +717,6 @@ class BrowserActivity : ComponentActivity() {
                 scope = scope,
                 currentUrl = currentUrlState,
                 isLoading = isLoadingState,
-                browserCanGoBack = canGoBackState,
-                browserCanGoForward = canGoForwardState,
                 contextMenuUrl = contextMenuUrlState,
                 previousUrl = previousUrlState,
                 historyDao = historyDao,
@@ -2112,11 +2116,13 @@ class BrowserActivity : ComponentActivity() {
 
     @Composable
     fun BrowserView(session: EngineSession, onLongPressLink: (String) -> Unit) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context -> GeckoEngineView(context).apply { render(session) } },
-            update = { view -> view.render(session) }
-        )
+        key(session) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context -> GeckoEngineView(context).apply { render(session) } },
+                update = { view -> view.render(session) }
+            )
+        }
     }
 }
 
