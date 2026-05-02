@@ -298,6 +298,7 @@ jobs:
             > `.aab` files are for Play Store. `.apk` files are for sideloading.
           files: output/phone-release-*/*
           generate_release_notes: true
+          draft: true
 
       - name: Create TV Player release
         if: needs.build-tv-player.outputs.skipped == 'false'
@@ -311,6 +312,7 @@ jobs:
             > `.aab` files are for Play Store. `.apk` files are for sideloading.
           files: output/tv-player-release-*/*
           generate_release_notes: true
+          draft: true
 
       - name: Create TV Browser release
         if: needs.build-tv-browser.outputs.skipped == 'false'
@@ -324,6 +326,7 @@ jobs:
             > `.aab` files are for Play Store. `.apk` files are for sideloading.
           files: output/tv-browser-release-*/*
           generate_release_notes: true
+          draft: true
 
       - name: Publish Phone to Play Store (alpha)
         if: needs.build-phone.outputs.skipped == 'false'
@@ -333,7 +336,7 @@ jobs:
           packageName: com.playbridge.sender
           releaseFiles: output/phone-release-aab/*.aab
           track: alpha
-          status: completed
+          status: draft
 
       - name: Publish TV Player to Play Store (alpha)
         if: needs.build-tv-player.outputs.skipped == 'false'
@@ -343,7 +346,7 @@ jobs:
           packageName: com.playbridge.player
           releaseFiles: output/tv-player-release-aab/*.aab
           track: alpha
-          status: completed
+          status: draft
 
       - name: Publish TV Browser to Play Store (alpha)
         if: needs.build-tv-browser.outputs.skipped == 'false'
@@ -353,7 +356,7 @@ jobs:
           packageName: com.playbridge.browser
           releaseFiles: output/tv-browser-release-aab/*.aab
           track: alpha
-          status: completed
+          status: draft
 
       - name: Clean up R2 after release
         if: always()
