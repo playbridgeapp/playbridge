@@ -230,15 +230,6 @@ fun CastSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
-    var sheetMode by remember { mutableStateOf(initialMode) } // "play" or "browse"
-
-    // If we have content metadata but no videos, default to play mode
-    LaunchedEffect(contentPayload) {
-        if (contentPayload != null && videos.isEmpty()) {
-            sheetMode = "play"
-        }
-    }
-
     // Separate distinct videos and subtitles, and sort videos by priority
     val playableVideos = remember(videos) {
         videos.filter { !it.isSubtitle }
@@ -259,6 +250,20 @@ fun CastSheet(
                       if (hasMaster) base + 1 else base
                   }.thenByDescending { it.timestamp }
               )
+    }
+
+    var sheetMode by remember(playableVideos, contentPayload) {
+        mutableStateOf(
+            if (playableVideos.isEmpty() && contentPayload == null) "browse" else initialMode
+        )
+    }
+
+    // If we have content metadata but no browser-detected videos, ensure we stay in play mode
+    // (since the video URL will come from the contentPayload/library resource).
+    LaunchedEffect(contentPayload) {
+        if (contentPayload != null && playableVideos.isEmpty()) {
+            sheetMode = "play"
+        }
     }
     val allSubtitles = remember(videos) { videos.filter { it.isSubtitle } }
 

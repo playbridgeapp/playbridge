@@ -8,6 +8,7 @@ import org.json.JSONObject
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.ScreenLength
 import org.mozilla.geckoview.WebExtension
 
 class GeckoViewEngine(
@@ -87,7 +88,14 @@ class GeckoViewEngine(
     }
 
     override fun scrollBy(dx: Float, dy: Float) {
-        evaluateJavascript("window.scrollBy($dx, $dy)", null)
+        // Apply a 3x multiplier to make scrolling feel more responsive on TV.
+        // GeckoView supports sub-pixel scrolling via PanZoomController, so we
+        // can pass the raw double values directly for maximum smoothness.
+        val multiplier = 3.0
+        geckoView.panZoomController.scrollBy(
+            ScreenLength.fromPixels(dx.toDouble() * multiplier),
+            ScreenLength.fromPixels(dy.toDouble() * multiplier)
+        )
     }
 
     override fun simulateClick(x: Float, y: Float) {
@@ -138,6 +146,9 @@ class GeckoViewEngine(
     }
 
     private fun setupGeckoView() {
+        geckoView.isFocusable = true
+        geckoView.isFocusableInTouchMode = true
+        
         session.open(runtime)
         geckoView.setSession(session)
 
