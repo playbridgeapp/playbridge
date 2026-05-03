@@ -280,7 +280,14 @@ fun AddonSettingsScreen(
                         cm.setPrimaryClip(ClipData.newPlainText("Addon URL", addon.manifestUrl))
                         Toast.makeText(context, "URL copied", Toast.LENGTH_SHORT).show()
                     },
-                    onOpenUrl = { onOpenUrl(addon.manifestUrl) },
+                    onOpenUrl = {
+                        scope.launch {
+                            val manifestUrl = addon.manifestUrl
+                            val configureUrl = manifestUrl.removeSuffix("/manifest.json").removeSuffix("/") + "/configure"
+                            val reachable = addonRepository.isUrlReachable(configureUrl)
+                            onOpenUrl(if (reachable) configureUrl else manifestUrl)
+                        }
+                    },
                     onConfigure = { isEnabled, disabled ->
                         scope.launch { addonRepository.configureAddon(addon, isEnabled, disabled) }
                     },
@@ -451,7 +458,7 @@ private fun AddonCard(
                 ) {
                     // Copy URL
                     DropdownMenuItem(
-                        text = { Text("Copy URL") },
+                        text = { Text("Copy Manifest URL") },
                         leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
                         onClick = {
                             menuExpanded = false
@@ -461,7 +468,7 @@ private fun AddonCard(
 
                     // Open in browser
                     DropdownMenuItem(
-                        text = { Text("Open in Browser") },
+                        text = { Text("Configure") },
                         leadingIcon = { Icon(Icons.Default.OpenInBrowser, null) },
                         onClick = {
                             menuExpanded = false
@@ -473,7 +480,7 @@ private fun AddonCard(
 
                     // Configure features
                     DropdownMenuItem(
-                        text = { Text("Configure") },
+                        text = { Text("Addon Features") },
                         leadingIcon = { Icon(Icons.Default.Tune, null) },
                         onClick = {
                             menuExpanded = false
@@ -685,7 +692,7 @@ private fun AddonConfigureDialog(
         title = {
             Column {
                 Text(
-                    text = "Configure",
+                    text = "Addon Features",
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(

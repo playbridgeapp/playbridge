@@ -120,6 +120,22 @@ class AddonRepository(
         .followRedirects(true)
         .build()
 
+    /**
+     * Check if a URL returns a successful response (2xx).
+     * Uses a HEAD request for efficiency.
+     */
+    suspend fun isUrlReachable(url: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder().url(url).head().build()
+                val response = client.newCall(request).execute()
+                response.isSuccessful
+            } catch (e: Exception) {
+                false
+            }
+        }
+    }
+
     // ==================== Addon Installation ====================
 
     /**
