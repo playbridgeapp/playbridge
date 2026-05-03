@@ -178,18 +178,36 @@ console.log('[VideoDetector Content] Loaded');
     bridgeScript.remove();
 })();
 
-// Listen for the event from the page world
 window.addEventListener('PlayBridgeCast', (event) => {
     const payload = event.detail;
-    if (!payload || !payload.url) return;
+    if (!payload) return;
     
-    console.log('[VideoDetector Content] Bridge Cast Request:', payload.url.substring(0, 50));
+    // Normalize to items array
+    let items = [];
+    let startIndex = payload.startIndex || 0;
+    let metadata = payload.metadata || null;
+
+    if (Array.isArray(payload)) {
+        items = payload;
+    } else if (payload.items && Array.isArray(payload.items)) {
+        items = payload.items;
+        startIndex = payload.startIndex || 0;
+        metadata = payload.metadata || null;
+    } else if (payload.url) {
+        // If it's a single item with url/title/metadata, just wrap it
+        items = [payload];
+    }
+    
+    if (items.length === 0) return;
+    
+    console.log('[VideoDetector Content] Bridge Cast Request:', items.length, 'items, startIndex:', startIndex);
     
     // Forward to background script
     browser.runtime.sendMessage({
         type: 'cast',
-        url: payload.url,
-        title: payload.title
+        items: items,
+        startIndex: startIndex,
+        metadata: metadata
     }).catch(e => {
         // This might fail if the extension was reloaded or the tab is closing
     });

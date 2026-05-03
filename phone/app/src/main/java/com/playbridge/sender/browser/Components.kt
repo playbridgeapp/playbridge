@@ -11,7 +11,13 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.decodeFromJsonElement
+import com.playbridge.shared.protocol.VisualMetadata
+import com.playbridge.shared.protocol.PlayPayload
+import com.playbridge.shared.protocol.protocolJson
 import mozilla.components.browser.engine.gecko.GeckoEngine
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.webextension.WebExtension
@@ -39,7 +45,7 @@ object Components {
     
     // Reference to TabManager for resolving Kotlin tab IDs from extension messages
     var tabManager: TabManager? = null
-    var onBridgeCastRequest: ((url: String, title: String?) -> Unit)? = null
+    var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?) -> Unit)? = null
     
     val applicationContext: Context
         get() = appContext
@@ -351,11 +357,35 @@ object Components {
                         sessionToLoad?.loadUrl(ErrorPageUtils.generateErrorPage(url, statusCode))
                     }
                 } else if (type == "cast") {
-                    val url = jsonObject["url"]?.jsonPrimitive?.content
-                    val title = jsonObject["title"]?.jsonPrimitive?.content
-                    if (url != null) {
-                        Log.i(TAG, "CAST MESSAGE received via extension: $url ($title)")
-                        onBridgeCastRequest?.invoke(url, title)
+                    val itemsJson = jsonObject["items"]?.jsonArray
+                    val startIndex = jsonObject["startIndex"]?.jsonPrimitive?.int ?: 0
+                    val playlistMetadata = jsonObject["metadata"]?.let {
+                        try { protocolJson.decodeFromJsonElement<VisualMetadata>(it) } catch(e: Exception) { null }
+                    }
+                    if (itemsJson != null) {
+                        val items = itemsJson.mapNotNull { item ->
+                            val obj = item as? JsonObject ?: return@mapNotNull null
+                            val url = obj["url"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                            val title = obj["title"]?.jsonPrimitive?.content
+                            
+                            val metadata = obj["metadata"]?.let {
+                                try { protocolJson.decodeFromJsonElement<VisualMetadata>(it) } catch(e: Exception) { null }
+                            }
+                            
+                            PlayPayload(url = url, title = title, visualMetadata = metadata)
+                        }
+                        if (items.isNotEmpty()) {
+                            Log.i(TAG, "CAST MESSAGE received via extension: ${items.size} items, startIndex: $startIndex")
+                            onBridgeCastRequest?.invoke(items, startIndex, playlistMetadata)
+                        }
+                    } else {
+                        // Fallback for legacy single item
+                        val url = jsonObject["url"]?.jsonPrimitive?.content
+                        val title = jsonObject["title"]?.jsonPrimitive?.content
+                        if (url != null) {
+                            Log.i(TAG, "CAST MESSAGE received via extension (legacy): $url")
+                            onBridgeCastRequest?.invoke(listOf(PlayPayload(url = url, title = title)), 0, null)
+                        }
                     }
                 } else {
                     val kotlinTabId = resolveKotlinTabId(jsonObject)

@@ -92,6 +92,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.zIndex
 
+import kotlinx.coroutines.flow.first
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.withContext
 import com.playbridge.sender.data.history.TabEntity
@@ -99,6 +100,9 @@ import com.playbridge.sender.data.history.HistoryDatabase
 import androidx.activity.viewModels
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.shared.protocol.createPlayCommandJson
+import com.playbridge.shared.protocol.createPlaylistCommandJson
+import com.playbridge.shared.protocol.PlaylistPayload
+import com.playbridge.shared.protocol.PlayPayload
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -474,26 +478,44 @@ class BrowserActivity : ComponentActivity() {
 
             // Set up Bridge callback to handle Hub UI cast requests
             LaunchedEffect(connectionViewModel, preferredAudioLang, preferredSubLang, defaultVideoQuality, maxBitrateCapMbps) {
-                com.playbridge.sender.browser.Components.onBridgeCastRequest = { url, title ->
-                    Log.d("BrowserActivity", "Cast requested via Extension Bridge: $url ($title)")
-                    val currentMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                com.playbridge.sender.browser.Components.onBridgeCastRequest = { items, startIndex, playlistMetadata ->
+                    Log.d("BrowserActivity", "Cast requested via Extension Bridge: ${items.size} items, startIndex: $startIndex")
                     
-                    val cmd = createPlayCommandJson(
-                        url = url,
-                        title = title,
-                        playerMode = currentMode,
-                        preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                        preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                        maxBitrateCapMbps = maxBitrateCapMbps
-                    )
-                    
-                    connectionViewModel.sendCommandAndRecord(
-                        commandJson = cmd,
-                        type = "play",
-                        url = url,
-                        title = title
-                    )
+                    lifecycleScope.launch {
+                        // Reconnect attempt before sending — mirrors LibraryDetailScreen behavior
+                        val savedDevice = connectionViewModel.tvDevice.first()
+                        if (savedDevice != null && connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
+                            Log.i("BrowserActivity", "TV disconnected, attempting reconnection before bridge cast")
+                            connectionViewModel.connect(savedDevice!!)
+                        }
+
+                        val currentMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                        
+                        val playPayloads = items.map { item ->
+                            item.copy(
+                                playerMode = item.playerMode ?: currentMode,
+                                preferredAudioLanguage = item.preferredAudioLanguage ?: preferredAudioLang.takeIf { it.isNotEmpty() },
+                                preferredSubtitleLanguage = item.preferredSubtitleLanguage ?: preferredSubLang.takeIf { it.isNotEmpty() },
+                                defaultVideoQuality = item.defaultVideoQuality ?: defaultVideoQuality.takeIf { it != "Auto" },
+                                maxBitrateCapMbps = item.maxBitrateCapMbps ?: maxBitrateCapMbps
+                            )
+                        }
+
+                        if (playPayloads.isNotEmpty()) {
+                            val cmd = createPlaylistCommandJson(PlaylistPayload(
+                                items = playPayloads, 
+                                startIndex = startIndex,
+                                visualMetadata = playlistMetadata
+                            ))
+                            
+                            connectionViewModel.sendCommandAndRecord(
+                                commandJson = cmd,
+                                type = "playlist",
+                                url = playPayloads[startIndex.coerceIn(0, playPayloads.size - 1)].url,
+                                title = playPayloads[startIndex.coerceIn(0, playPayloads.size - 1)].title ?: "Playlist"
+                            )
+                        }
+                    }
                 }
             }
 
