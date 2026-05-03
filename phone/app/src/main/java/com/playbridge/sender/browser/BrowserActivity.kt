@@ -1951,7 +1951,7 @@ class BrowserActivity : ComponentActivity() {
                                                 },
                                                 onMovieClick = { movieId -> currentScreen = Screen.LibraryDetail(movieId.toString(), "movie") },
                                                 onTvShowClick = { tvId -> currentScreen = Screen.LibraryDetail(tvId.toString(), "tv") },
-                                                onAddonItemClick = { id, type -> currentScreen = Screen.LibraryDetail(id, type) }
+                                                onAddonItemClick = { id, type, source -> currentScreen = Screen.LibraryDetail(id, type, source) }
                                             )
                                         }
                                         is Screen.LibraryDetail -> {
@@ -1961,6 +1961,7 @@ class BrowserActivity : ComponentActivity() {
                                             LibraryDetailScreen(
                                                 id = screen.id,
                                                 type = screen.type,
+                                                forcedSource = screen.source,
                                                 addonRepository = addonRepository,
                                                 viewModel = libraryViewModel,
                                                 tvName = tvDevice?.name,
@@ -2424,5 +2425,5 @@ sealed class Screen {
     object Library : Screen()
     object DebridLibrary : Screen()
     object AddonSettings : Screen()
-    data class LibraryDetail(val id: String, val type: String) : Screen()
+    data class LibraryDetail(val id: String, val type: String, val source: String? = null) : Screen()
 }

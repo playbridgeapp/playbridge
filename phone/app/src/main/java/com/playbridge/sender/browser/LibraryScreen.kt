@@ -92,7 +92,7 @@ fun LibraryScreen(
     nowPlayingEpisode: Int? = null,
     onNowPlayingClick: () -> Unit = {},
     onRemoteClick: (() -> Unit)? = null,
-    onAddonItemClick: (id: String, type: String) -> Unit = { _, _ -> },
+    onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
     val browserPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
@@ -136,7 +136,7 @@ private fun LibraryScreenContent(
     nowPlayingEpisode: Int? = null,
     onNowPlayingClick: () -> Unit = {},
     onRemoteClick: (() -> Unit)? = null,
-    onAddonItemClick: (id: String, type: String) -> Unit = { _, _ -> },
+    onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -743,7 +743,8 @@ private fun LibraryScreenContent(
                         start = 8.dp,
                         end = 8.dp
                     ),
-                    onAddonItemClick = onAddonItemClick
+                    onAddonItemClick = onAddonItemClick,
+                    addonSearchGroups = addonSearchGroups
                 )
             }
         }
@@ -898,7 +899,7 @@ private fun LibraryScreenContent(
                                 AddonMediaRow(
                                     row = row,
                                     listState = viewModel.catalogRowScrollState(rowKey),
-                                    onItemClick = { item -> onAddonItemClick(item.id, item.type) },
+                                    onItemClick = { item -> onAddonItemClick(item.id, item.type, row.addonName) },
                                     onLoadMore = {
                                         viewModel.loadMoreAddonRow(row.addonBaseUrl, row.type, row.catalogId)
                                     }
@@ -1322,7 +1323,8 @@ private fun AddonSearchResultsList(
     listState: LazyListState,
     results: List<StremioMetaPreview>,
     contentPadding: PaddingValues,
-    onAddonItemClick: (id: String, type: String) -> Unit = { _, _ -> }
+    onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
+    addonSearchGroups: List<AddonSearchResultGroup> = emptyList()
 ) {
     val movies = results.filter { it.type == "movie" }
     val series = results.filter { it.type == "series" || it.type == "anime" }
@@ -1332,23 +1334,36 @@ private fun AddonSearchResultsList(
         state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(24.dp) // More breathing room between rows
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        if (movies.isNotEmpty()) {
-            item {
-                SearchSectionRow("Movies", movies, onAddonItemClick)
+        // If we have groups, we can show results attributed to their source
+        if (addonSearchGroups.isNotEmpty()) {
+            addonSearchGroups.forEach { group ->
+                val groupMovies = group.items.filter { it.type == "movie" }
+                val groupSeries = group.items.filter { it.type == "series" || it.type == "anime" }
+                
+                if (groupMovies.isNotEmpty()) {
+                    item {
+                        SearchSectionRow("${group.addonName} - Movies", groupMovies, group.addonName, onAddonItemClick)
+                    }
+                }
+                if (groupSeries.isNotEmpty()) {
+                    item {
+                        SearchSectionRow("${group.addonName} - Series", groupSeries, group.addonName, onAddonItemClick)
+                    }
+                }
             }
-        }
-
-        if (series.isNotEmpty()) {
-            item {
-                SearchSectionRow("Series", series, onAddonItemClick)
+        } else {
+            // Fallback to legacy flat list if no groups provided (e.g. from filteredAddon)
+            if (movies.isNotEmpty()) {
+                item {
+                    SearchSectionRow("Movies", movies, null, onAddonItemClick)
+                }
             }
-        }
-
-        if (others.isNotEmpty()) {
-            item {
-                SearchSectionRow("More Content", others, onAddonItemClick)
+            if (series.isNotEmpty()) {
+                item {
+                    SearchSectionRow("Series", series, null, onAddonItemClick)
+                }
             }
         }
     }
@@ -1358,7 +1373,8 @@ private fun AddonSearchResultsList(
 private fun SearchSectionRow(
     title: String,
     items: List<StremioMetaPreview>,
-    onAddonItemClick: (id: String, type: String) -> Unit
+    source: String?,
+    onAddonItemClick: (id: String, type: String, source: String?) -> Unit
 ) {
     Column {
         SearchSectionHeader(title)
@@ -1373,7 +1389,7 @@ private fun SearchSectionRow(
                     title = item.name,
                     year = "",
                     rating = "",
-                    onClick = { onAddonItemClick(item.id, item.type) }
+                    onClick = { onAddonItemClick(item.id, item.type, source) }
                 )
             }
         }

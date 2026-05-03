@@ -535,30 +535,53 @@ class AddonRepository(
         }
 
         return withContext(Dispatchers.IO) {
-            for (addon in addons) {
-                try {
-                    var url = "${addon.baseUrl}/meta/$type/$id.json"
-                    if (forcedSource != null && addon.baseUrl.contains("8080")) {
-                        url += "?src=${android.net.Uri.encode(forcedSource)}"
+            // 1. Try to find an addon that exactly matches the forcedSource name
+            if (forcedSource != null) {
+                val directAddon = addons.find { it.name.equals(forcedSource, ignoreCase = true) }
+                if (directAddon != null) {
+                    val result = fetchFromAddon(directAddon, type, id, null)
+                    if (result != null) {
+                        metaCache[cacheKey] = Triple(System.currentTimeMillis(), result, directAddon.name)
+                        return@withContext Pair(result, directAddon.name)
                     }
-                    Log.d(TAG, "Fetching meta from ${addon.name}: $url")
-                    val request = Request.Builder().url(url).get().build()
-                    val response = client.newCall(request).execute()
-                    if (response.isSuccessful) {
-                        val body = response.body?.string() ?: continue
-                        val parsed = json.decodeFromString<StremioMetaResponse>(body)
-                        val meta = parsed.meta
-                        if (meta != null) {
-                            metaCache[cacheKey] = Triple(System.currentTimeMillis(), meta, addon.name)
-                            return@withContext Pair(meta, addon.name)
-                        }
-                    } else {
-                        Log.e(TAG, "Meta fetch failed from ${addon.name}: ${response.code}")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error fetching meta from ${addon.name}", e)
                 }
             }
+
+            // 2. Try the rest of the addons
+            for (addon in addons) {
+                // Skip the one we already tried above
+                if (forcedSource != null && addon.name.equals(forcedSource, ignoreCase = true)) continue
+
+                val result = fetchFromAddon(addon, type, id, forcedSource)
+                if (result != null) {
+                    metaCache[cacheKey] = Triple(System.currentTimeMillis(), result, addon.name)
+                    return@withContext Pair(result, addon.name)
+                }
+            }
+            null
+        }
+    }
+
+    private suspend fun fetchFromAddon(addon: InstalledAddonEntity, type: String, id: String, forcedSource: String?): StremioMetaDetail? {
+        return try {
+            var url = "${addon.baseUrl}/meta/$type/$id.json"
+            // If this is the Hub (aggregating multiple sources), pass the 'src' parameter
+            if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.name.contains("Hub"))) {
+                url += "?src=${android.net.Uri.encode(forcedSource)}"
+            }
+            Log.d(TAG, "Fetching meta from ${addon.name}: $url")
+            val request = Request.Builder().url(url).get().build()
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string() ?: return null
+                val parsed = json.decodeFromString<StremioMetaResponse>(body)
+                parsed.meta
+            } else {
+                Log.e(TAG, "Meta fetch failed from ${addon.name}: ${response.code}")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching meta from ${addon.name}", e)
             null
         }
     }
@@ -833,7 +856,7 @@ class AddonRepository(
      * Internal: Resolve streams from all installed addons in parallel.
      * Returns a complete list (used by season play).
      */
-    private suspend fun resolveStreams(type: String, id: String): List<ResolvedStream> {
+    private suspend fun resolveStreams(type: String, id: String, forcedSource: String? = null): List<ResolvedStream> {
         val cacheKey = "$type:$id"
         val cached = streamCache[cacheKey]
         if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
@@ -859,7 +882,7 @@ class AddonRepository(
         return coroutineScope {
             val results = addons.map { addon ->
                 async(Dispatchers.IO) {
-                    fetchStreamsFromAddon(addon, type, id)
+                    fetchStreamsFromAddon(addon, type, id, forcedSource)
                 }
             }.awaitAll()
 
@@ -876,7 +899,7 @@ class AddonRepository(
      * Resolve streams incrementally — emits results from each addon as soon as it completes.
      * This allows the UI to show streams progressively.
      */
-    fun resolveStreamsFlow(type: String, id: String): kotlinx.coroutines.flow.Flow<List<ResolvedStream>> =
+    fun resolveStreamsFlow(type: String, id: String, forcedSource: String? = null): kotlinx.coroutines.flow.Flow<List<ResolvedStream>> =
         kotlinx.coroutines.flow.flow {
             val cacheKey = "$type:$id"
             val cached = streamCache[cacheKey]
@@ -911,7 +934,7 @@ class AddonRepository(
             coroutineScope {
                 addons.map { addon ->
                     async(Dispatchers.IO) {
-                        fetchStreamsFromAddon(addon, type, id)
+                        fetchStreamsFromAddon(addon, type, id, forcedSource)
                     }
                 }.forEach { deferred ->
                     val result = deferred.await()
@@ -954,7 +977,8 @@ class AddonRepository(
     private suspend fun fetchStreamsFromAddon(
         addon: InstalledAddonEntity,
         type: String,
-        id: String
+        id: String,
+        forcedSource: String? = null
     ): List<ResolvedStream> {
         val cacheKey = "${addon.baseUrl}:$type:$id"
         val cached = streamCache[cacheKey]
@@ -969,7 +993,11 @@ class AddonRepository(
 
         return withContext(Dispatchers.IO) {
             try {
-                val url = "${addon.baseUrl}/stream/$type/$id.json"
+                var url = "${addon.baseUrl}/stream/$type/$id.json"
+                // If this is the Hub, pass the 'src' parameter to help it resolve correctly
+                if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.name.contains("Hub"))) {
+                    url += "?src=${android.net.Uri.encode(forcedSource)}"
+                }
                 Log.d(TAG, "Fetching streams from ${addon.name}: $url")
 
                 val request = Request.Builder().url(url).get().build()

@@ -356,7 +356,7 @@ fun LibraryDetailScreen(
 
         resolutionJob?.cancel()
         resolutionJob = scope.launch {
-            addonRepository.resolveStreamsFlow(streamType, streamId).collect { latest ->
+            addonRepository.resolveStreamsFlow(streamType, streamId, forcedSource).collect { latest ->
                 resolvedStreams = latest
             }
             resolutionState = resolutionState.copy(isResolving = false)
@@ -419,7 +419,7 @@ fun LibraryDetailScreen(
 
         resolutionJob?.cancel()
         resolutionJob = scope.launch {
-            addonRepository.resolveStreamsFlow(streamType, streamId).collect { latest ->
+            addonRepository.resolveStreamsFlow(streamType, streamId, forcedSource).collect { latest ->
                 resolvedStreams = latest
             }
             resolutionState = resolutionState.copy(isResolving = false)
@@ -998,7 +998,8 @@ fun LibraryDetailScreen(
                                 }
 
                                 // Metadata source chip
-                                val sourceLabel = addonMetaSource?.let { "via $it" }
+                                 val displaySource = if (addonMetaSource == "PlayBridge Hub" && forcedSource != null) forcedSource else addonMetaSource
+                                 val sourceLabel = displaySource?.let { "via $it" }
                                 sourceLabel?.let { DetailInfoChip(label = "Source", value = it) }
                             }
                         }
