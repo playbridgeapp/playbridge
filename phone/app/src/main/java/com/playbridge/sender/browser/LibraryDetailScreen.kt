@@ -117,6 +117,10 @@ fun LibraryDetailScreen(
     /** Name of the addon that supplied [addonMeta], e.g. "Cinemeta" or "Kitsu". Null until loaded. */
     var addonMetaSource by remember { mutableStateOf<String?>(null) }
 
+    // ID resolution state
+    var resolvedImdbId by remember(id) { mutableStateOf(id.takeIf { it.startsWith("tt") }) }
+    var resolvedTmdbId by remember(id) { mutableStateOf(id.toIntOrNull()) }
+
     // Stream resolution state
     var resolvedStreams by remember { mutableStateOf<List<ResolvedStream>>(emptyList()) }
     var resolutionState by remember { mutableStateOf(ResolutionState()) }
@@ -172,11 +176,38 @@ fun LibraryDetailScreen(
         addonMeta = null
         addonMetaSource = null
 
-        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, id, forcedSource) }.getOrNull()
+        // 1. Resolve IDs if needed
+        // If we have a numeric ID (Discover), resolve to IMDb for addon lookups
+        if (resolvedTmdbId != null && resolvedImdbId == null) {
+            val imdb = if (type == "movie") {
+                viewModel.tmdb.getMovieDetails(resolvedTmdbId!!)?.imdbId
+            } else {
+                viewModel.tmdb.getTvDetails(resolvedTmdbId!!)?.imdbId
+            }
+            imdb?.let { resolvedImdbId = it }
+        } else if (resolvedImdbId != null && resolvedTmdbId == null) {
+            // If we have an IMDb ID (Addon item), resolve to TMDB for tracking
+            val findResponse = viewModel.tmdb.findByImdbId(resolvedImdbId!!)
+            resolvedTmdbId = if (type == "movie") {
+                findResponse?.movieResults?.firstOrNull()?.id
+            } else {
+                findResponse?.tvResults?.firstOrNull()?.id
+            }
+        }
+
+        val effectiveId = resolvedImdbId ?: id
+
+        // 2. Fetch unified metadata from Hub (using resolved ID if available)
+        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, effectiveId, forcedSource) }.getOrNull()
         if (metaResult != null) {
             addonMeta = metaResult.first
             addonMetaSource = metaResult.second
             trailerUrl = addonMeta?.trailer
+            
+            // Final fallback: if addon metadata has a TMDB ID, sync it to state
+            if (resolvedTmdbId == null && addonMeta?.tmdbId != null) {
+                resolvedTmdbId = addonMeta?.tmdbId
+            }
         }
 
         if (addonMeta == null) {
@@ -188,9 +219,7 @@ fun LibraryDetailScreen(
         hubAddon = addonRepository.getInstalledAddons().find { it.name == "PlayBridge Hub" }
     }
 
-    // IDs for tracking/streams (derived from metal)
-    val resolvedImdbId = addonMeta?.id?.takeIf { it.startsWith("tt") } ?: id.takeIf { it.startsWith("tt") }
-    val resolvedTmdbId = addonMeta?.tmdbId
+    // IDs for tracking/streams are now managed as state variables
 
     // Watchlist state (gated on resolvedTmdbId)
     val isWatchlisted by remember(resolvedTmdbId) {
@@ -251,6 +280,8 @@ fun LibraryDetailScreen(
 
     /** Helper to build visual metadata for the TV receiver. */
     fun buildVisualMetadata(episode: StremioVideo?): com.playbridge.shared.protocol.VisualMetadata {
+        val currentImdbId = resolvedImdbId
+        val currentTmdbId = resolvedTmdbId
         return com.playbridge.shared.protocol.VisualMetadata(
             title = displayTitle,
             year = displayYear,
@@ -263,8 +294,8 @@ fun LibraryDetailScreen(
             backdropUrl = displayBackdrop,
             posterUrl = addonMeta?.poster,
             logoUrl = displayLogo,
-            imdbId = resolvedImdbId,
-            tmdbId = resolvedTmdbId?.toString(),
+            imdbId = currentImdbId,
+            tmdbId = currentTmdbId?.toString(),
             season = if (isSeries) selectedSeason else null,
             episode = if (isSeries) episode?.episode else null,
             episodeTitle = if (isSeries) episode?.title else null
@@ -280,9 +311,10 @@ fun LibraryDetailScreen(
             ?.sortedWith(compareBy({ it.season }, { it.episode }))
             ?: return null
 
+        val currentImdbId = resolvedImdbId
         val items = videos.map { vid ->
-            val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${vid.season}:${vid.episode}" else vid.id
-            val streamType = if (resolvedImdbId != null) "series" else addonType
+            val streamId = if (currentImdbId != null) "$currentImdbId:${vid.season}:${vid.episode}" else vid.id
+            val streamType = if (currentImdbId != null) "series" else addonType
             com.playbridge.shared.protocol.PlayPayload(
                 url = "${hub.baseUrl}/api/play/$streamType/$streamId",
                 title = "$displayTitle S${vid.season}E${vid.episode}${if (vid.title.isNotBlank()) " - ${vid.title}" else ""}",
@@ -739,7 +771,8 @@ fun LibraryDetailScreen(
                     }
 
                     // Action buttons (watchlist, trailer) — only if TMDB resolved
-                    if (resolvedTmdbId != null) {
+                    val tmdbIdForActions = resolvedTmdbId
+                    if (tmdbIdForActions != null) {
                         item {
                             ActionButtons(
                                 isWatchlisted = isWatchlisted,
@@ -747,7 +780,7 @@ fun LibraryDetailScreen(
                                 onToggleWatchlist = {
                                     // Handled via pure Hub metadata extracts above
                                     viewModel.toggleWatchlist(
-                                        tmdbId = resolvedTmdbId,
+                                        tmdbId = tmdbIdForActions,
                                         mediaType = type,
                                         title = displayTitle,
                                         posterUrl = addonMeta?.poster,
@@ -910,22 +943,23 @@ fun LibraryDetailScreen(
                                     }
                                 },
                                 onToggleWatched = {
-                                if (resolvedTmdbId != null) {
-                                    if (isEpWatched) {
-                                        viewModel.setEpisodeProgress(resolvedTmdbId, selectedSeason, (epNum - 1).coerceAtLeast(0))
-                                    } else {
-                                        viewModel.upsertTracked(
-                                            tmdbId = resolvedTmdbId,
-                                            mediaType = "tv",
-                                            title = displayTitle,
-                                            posterUrl = addonMeta?.poster,
-                                            year = displayYear,
-                                            rating = displayRating,
-                                            status = WatchlistStatus.WATCHING,
-                                        )
-                                        viewModel.setEpisodeProgress(resolvedTmdbId, selectedSeason, epNum)
+                                    val currentTmdbId = resolvedTmdbId
+                                    if (currentTmdbId != null) {
+                                        if (isEpWatched) {
+                                            viewModel.setEpisodeProgress(currentTmdbId, selectedSeason, (epNum - 1).coerceAtLeast(0))
+                                        } else {
+                                            viewModel.upsertTracked(
+                                                tmdbId = currentTmdbId,
+                                                mediaType = "tv",
+                                                title = displayTitle,
+                                                posterUrl = addonMeta?.poster,
+                                                year = displayYear,
+                                                rating = displayRating,
+                                                status = WatchlistStatus.WATCHING,
+                                            )
+                                            viewModel.setEpisodeProgress(currentTmdbId, selectedSeason, epNum)
+                                        }
                                     }
-                                }
                                 },
                                 themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                             )

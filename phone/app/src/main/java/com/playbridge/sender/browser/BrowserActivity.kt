@@ -486,7 +486,24 @@ class BrowserActivity : ComponentActivity() {
                         val savedDevice = connectionViewModel.tvDevice.first()
                         if (savedDevice != null && connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
                             Log.i("BrowserActivity", "TV disconnected, attempting reconnection before bridge cast")
+                            runOnUiThread {
+                                Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show()
+                            }
                             connectionViewModel.connect(savedDevice!!)
+                            
+                            // Wait for connection with timeout (e.g. 8 seconds)
+                            // This allows the Hub UI to trigger a play even if the app was backgrounded and lost connection
+                            withTimeoutOrNull(8000) {
+                                connectionViewModel.connectionState.first { it is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected }
+                            }
+
+                            if (connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
+                                Log.w("BrowserActivity", "Wait for connection timed out or failed. Aborting cast.")
+                                runOnUiThread {
+                                    Toast.makeText(this@BrowserActivity, "Could not connect to TV", Toast.LENGTH_SHORT).show()
+                                }
+                                return@launch
+                            }
                         }
 
                         val currentMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
@@ -1959,31 +1976,46 @@ class BrowserActivity : ComponentActivity() {
                                                     showVideoSheet = true
                                                 },
                                                 onPlayPayloadToTv = { payload ->
-                                                    // Always send direct to TV
-                                                    val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
-                                                        url = payload.url,
-                                                        title = payload.title,
-                                                        contentType = payload.contentType,
-                                                        detectedBy = payload.detectedBy,
-                                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
-                                                        preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                                        preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                                                        maxBitrateCapMbps = maxBitrateCapMbps,
-                                                        visualMetadata = payload.visualMetadata
-                                                    )
-                                                    if (connectionViewModel.webSocketClient.send(cmd)) {
-                                                        if (payload.contentType == "series") {
-                                                            nowPlayingTvId = payload.visualMetadata?.tmdbId?.toIntOrNull()
-                                                            nowPlayingSeason = payload.visualMetadata?.season
-                                                            nowPlayingEpisodeStart = payload.visualMetadata?.episode ?: 1
+                                                    scope.launch {
+                                                        // Ensure connected before sending
+                                                        if (tvDevice != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                                            runOnUiThread { Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show() }
+                                                            connectionViewModel.connect(tvDevice!!)
+                                                            withTimeoutOrNull(8000) {
+                                                                connectionViewModel.connectionState.first { it is WebSocketClient.ConnectionState.Connected }
+                                                            }
                                                         }
-                                                        tvActiveContext = "player"
-                                                        if (autoSwitchToRemote) {
-                                                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                                            currentScreen = Screen.Remote
+
+                                                        if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                                            runOnUiThread { Toast.makeText(this@BrowserActivity, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
+                                                            return@launch
                                                         }
-                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+
+                                                        val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
+                                                            url = payload.url,
+                                                            title = payload.title,
+                                                            contentType = payload.contentType,
+                                                            detectedBy = payload.detectedBy,
+                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                                                            maxBitrateCapMbps = maxBitrateCapMbps,
+                                                            visualMetadata = payload.visualMetadata
+                                                        )
+                                                        if (connectionViewModel.webSocketClient.send(cmd)) {
+                                                            if (payload.contentType == "series") {
+                                                                nowPlayingTvId = payload.visualMetadata?.tmdbId?.toIntOrNull()
+                                                                nowPlayingSeason = payload.visualMetadata?.season
+                                                                nowPlayingEpisodeStart = payload.visualMetadata?.episode ?: 1
+                                                            }
+                                                            tvActiveContext = "player"
+                                                            if (autoSwitchToRemote) {
+                                                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                                currentScreen = Screen.Remote
+                                                            }
+                                                            Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                                                        }
                                                     }
                                                 },
                                                 onPlayStream = { url, title ->
@@ -2005,50 +2037,82 @@ class BrowserActivity : ComponentActivity() {
                                                 // straight to the TV as a `play` command (bypassing
                                                 // content-payload resolution on the TV).
                                                 onSendStreamToTv = { url, title, headers, contentType ->
-                                                    val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
-                                                        url = url,
-                                                        title = title,
-                                                        headers = headers,
-                                                        contentType = contentType,
-                                                        detectedBy = "library",
-                                                        playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
-                                                        preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                                        preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                                        defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                                                        maxBitrateCapMbps = maxBitrateCapMbps
-                                                    )
-                                                    if (connectionViewModel.webSocketClient.send(cmd)) {
-                                                        tvActiveContext = "player"
-                                                        if (autoSwitchToRemote) {
-                                                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                                            currentScreen = Screen.Remote
+                                                    scope.launch {
+                                                        // Ensure connected before sending
+                                                        if (tvDevice != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                                            runOnUiThread { Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show() }
+                                                            connectionViewModel.connect(tvDevice!!)
+                                                            withTimeoutOrNull(8000) {
+                                                                connectionViewModel.connectionState.first { it is WebSocketClient.ConnectionState.Connected }
+                                                            }
                                                         }
-                                                        Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+
+                                                        if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                                            runOnUiThread { Toast.makeText(this@BrowserActivity, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
+                                                            return@launch
+                                                        }
+
+                                                        val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
+                                                            url = url,
+                                                            title = title,
+                                                            headers = headers,
+                                                            contentType = contentType,
+                                                            detectedBy = "library",
+                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
+                                                            maxBitrateCapMbps = maxBitrateCapMbps
+                                                        )
+                                                        if (connectionViewModel.webSocketClient.send(cmd)) {
+                                                            tvActiveContext = "player"
+                                                            if (autoSwitchToRemote) {
+                                                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                                currentScreen = Screen.Remote
+                                                            }
+                                                            Toast.makeText(this@BrowserActivity, "Sent to TV", Toast.LENGTH_SHORT).show()
+                                                        }
                                                     }
                                                 },
                                                 onPlayPlaylistToTv = { playlist ->
-                                                    val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
-                                                    val itemsWithPrefs = playlist.items.map {
-                                                        it.copy(
-                                                            playerMode = playerMode,
-                                                            preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
-                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                                            defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" },
-                                                            maxBitrateCapMbps = maxBitrateCapMbps
-                                                        )
-                                                    }
-                                                    val finalPlaylist = playlist.copy(items = itemsWithPrefs)
-                                                    if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))) {
-                                                        nowPlayingTvId = screenNumericId
-                                                        nowPlayingSeason = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.season ?: 1
-                                                        nowPlayingEpisodeStart = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.episode ?: 1
- 
-                                                        tvActiveContext = "player"
-                                                        if (autoSwitchToRemote) {
-                                                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                                            currentScreen = Screen.Remote
+                                                    scope.launch {
+                                                        // Ensure connected before sending
+                                                        if (tvDevice != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                                            runOnUiThread { Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show() }
+                                                            connectionViewModel.connect(tvDevice!!)
+                                                            withTimeoutOrNull(8000) {
+                                                                connectionViewModel.connectionState.first { it is WebSocketClient.ConnectionState.Connected }
+                                                            }
                                                         }
-                                                        Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
+
+                                                        if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                                            runOnUiThread { Toast.makeText(this@BrowserActivity, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
+                                                            return@launch
+                                                        }
+
+                                                        val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
+                                                        val itemsWithPrefs = playlist.items.map {
+                                                            it.copy(
+                                                                playerMode = playerMode,
+                                                                preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
+                                                                preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
+                                                                defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" },
+                                                                maxBitrateCapMbps = maxBitrateCapMbps
+                                                            )
+                                                        }
+                                                        val finalPlaylist = playlist.copy(items = itemsWithPrefs)
+                                                        if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))) {
+                                                            nowPlayingTvId = screenNumericId
+                                                            nowPlayingSeason = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.season ?: 1
+                                                            nowPlayingEpisodeStart = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.episode ?: 1
+
+                                                            tvActiveContext = "player"
+                                                            if (autoSwitchToRemote) {
+                                                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                                currentScreen = Screen.Remote
+                                                            }
+                                                            Toast.makeText(this@BrowserActivity, "Playlist sent to TV", Toast.LENGTH_SHORT).show()
+                                                        }
                                                     }
                                                 },
                                                 onQueueAdd = { item ->

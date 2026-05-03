@@ -32,7 +32,7 @@ import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.library.WatchlistEntity
 import com.playbridge.sender.data.library.WatchlistStatus
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
-    private val tmdb = TmdbRepository(application)
+    val tmdb = TmdbRepository(application)
     private val database = DatabaseProvider.getDatabase(application)
     private val watchlistDao = database.watchlistDao()
     private val searchHistoryDao = database.searchHistoryDao()
@@ -130,6 +130,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val isLoadingMoreDiscoveredTvShows: StateFlow<Boolean> = _isLoadingMoreDiscoveredTvShows.asStateFlow()
     private val _hasMoreDiscoveredTvShows = MutableStateFlow(true)
     val hasMoreDiscoveredTvShows: StateFlow<Boolean> = _hasMoreDiscoveredTvShows.asStateFlow()
+    
+    private val _selectedLanguage = MutableStateFlow<String?>(null)
+    val selectedLanguage: StateFlow<String?> = _selectedLanguage.asStateFlow()
+
+    private val _selectedMinRating = MutableStateFlow(0.0)
+    val selectedMinRating: StateFlow<Double> = _selectedMinRating.asStateFlow()
 
     private val _isDiscoveryLoading = MutableStateFlow(false)
     val isDiscoveryLoading: StateFlow<Boolean> = _isDiscoveryLoading.asStateFlow()
@@ -461,10 +467,22 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         triggerDiscovery()
     }
 
+    fun setLanguage(code: String?) {
+        _selectedLanguage.value = code
+        triggerDiscovery()
+    }
+
+    fun setMinRating(rating: Double) {
+        _selectedMinRating.value = rating
+        triggerDiscovery()
+    }
+
     private fun triggerDiscovery() {
         val genres = _selectedGenres.value
         val mediaType = _selectedMediaType.value
         val year = _selectedYear.value
+        val language = _selectedLanguage.value
+        val minRating = _selectedMinRating.value.let { if (it > 0) it else null }
 
         viewModelScope.launch {
             _isDiscoveryLoading.value = true
@@ -480,7 +498,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 val yearParam = if (year.isNotBlank()) year else null
 
                 if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.MOVIE) {
-                    val movies = tmdb.discoverMovies(page = 1, withGenres = genreString, sortBy = sortBy, year = yearParam)
+                    val movies = tmdb.discoverMovies(
+                        page = 1,
+                        withGenres = genreString,
+                        sortBy = sortBy,
+                        year = yearParam,
+                        withOriginalLanguage = language,
+                        minRating = minRating
+                    )
                     _discoveredMovies.value = movies.results
                 } else {
                     _discoveredMovies.value = emptyList()
@@ -488,7 +513,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.TV_SHOW) {
-                    val tv = tmdb.discoverTvShows(page = 1, withGenres = genreString, sortBy = sortBy, year = yearParam)
+                    val tv = tmdb.discoverTvShows(
+                        page = 1,
+                        withGenres = genreString,
+                        sortBy = sortBy,
+                        year = yearParam,
+                        withOriginalLanguage = language,
+                        minRating = minRating
+                    )
                     _discoveredTvShows.value = tv.results
                 } else {
                     _discoveredTvShows.value = emptyList()
@@ -511,8 +543,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 val genreString = if (_selectedGenres.value.isNotEmpty()) _selectedGenres.value.joinToString(separator) else null
                 val sortBy = _selectedSortBy.value.apiValue
                 val yearParam = if (_selectedYear.value.isNotBlank()) _selectedYear.value else null
+                val language = _selectedLanguage.value
+                val minRating = _selectedMinRating.value.let { if (it > 0) it else null }
+
                 val nextPage = discoveredMoviesPage + 1
-                val newMovies = tmdb.discoverMovies(page = nextPage, withGenres = genreString, sortBy = sortBy, year = yearParam)
+                val newMovies = tmdb.discoverMovies(
+                    page = nextPage,
+                    withGenres = genreString,
+                    sortBy = sortBy,
+                    year = yearParam,
+                    withOriginalLanguage = language,
+                    minRating = minRating
+                )
                 if (newMovies.results.isNotEmpty()) {
                     _discoveredMovies.value = _discoveredMovies.value + newMovies.results
                     discoveredMoviesPage = nextPage
@@ -536,8 +578,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 val genreString = if (_selectedGenres.value.isNotEmpty()) _selectedGenres.value.joinToString(separator) else null
                 val sortBy = _selectedSortBy.value.apiValue
                 val yearParam = if (_selectedYear.value.isNotBlank()) _selectedYear.value else null
+                val language = _selectedLanguage.value
+                val minRating = _selectedMinRating.value.let { if (it > 0) it else null }
+
                 val nextPage = discoveredTvShowsPage + 1
-                val newTvShows = tmdb.discoverTvShows(page = nextPage, withGenres = genreString, sortBy = sortBy, year = yearParam)
+                val newTvShows = tmdb.discoverTvShows(
+                    page = nextPage,
+                    withGenres = genreString,
+                    sortBy = sortBy,
+                    year = yearParam,
+                    withOriginalLanguage = language,
+                    minRating = minRating
+                )
                 if (newTvShows.results.isNotEmpty()) {
                     _discoveredTvShows.value = _discoveredTvShows.value + newTvShows.results
                     discoveredTvShowsPage = nextPage

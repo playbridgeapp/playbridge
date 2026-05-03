@@ -173,6 +173,8 @@ private fun LibraryScreenContent(
     val selectedMediaType by viewModel.selectedMediaType.collectAsState()
     val selectedSortBy by viewModel.selectedSortBy.collectAsState()
     val selectedYear by viewModel.selectedYear.collectAsState()
+    val selectedLanguage by viewModel.selectedLanguage.collectAsState()
+    val selectedMinRating by viewModel.selectedMinRating.collectAsState()
 
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
 
@@ -209,10 +211,12 @@ private fun LibraryScreenContent(
     // New episode detection
     val newEpisodeTmdbIds by viewModel.newEpisodeTmdbIds.collectAsState()
 
-    // Type and Sort are now inline chips — badge only counts genres + year
+    // Type and Sort are now inline chips — badge only counts genres + year + language + rating
     val activeFilterCount = listOf(
         selectedGenres.isNotEmpty(),
-        selectedYear.isNotBlank()
+        selectedYear.isNotBlank(),
+        selectedLanguage != null,
+        selectedMinRating > 0.0
     ).count { it }
 
     // Debounce year input
@@ -357,6 +361,46 @@ private fun LibraryScreenContent(
                                     )
                                 }
                             } else null
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Language Filter
+                Text("Language", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedLanguage == null,
+                            onClick = { viewModel.setLanguage(null) },
+                            label = { Text("All") }
+                        )
+                    }
+                    items(TmdbLanguages.list) { language ->
+                        FilterChip(
+                            selected = selectedLanguage == language.code,
+                            onClick = { viewModel.setLanguage(language.code) },
+                            label = { Text(language.name) }
+                        )
+                    }
+                }
+
+                // Minimum Rating Filter
+                Text("Minimum Rating", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val ratings = listOf(0.0 to "Any", 5.0 to "5+", 6.0 to "6+", 7.0 to "7+", 8.0 to "8+")
+                    ratings.forEach { (valRating, label) ->
+                        FilterChip(
+                            selected = selectedMinRating == valRating,
+                            onClick = { viewModel.setMinRating(valRating) },
+                            label = { Text(label) }
                         )
                     }
                 }

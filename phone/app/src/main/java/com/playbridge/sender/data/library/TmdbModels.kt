@@ -381,3 +381,32 @@ data class TmdbFindResponse(
     @SerialName("movie_results") val movieResults: List<TmdbMovie> = emptyList(),
     @SerialName("tv_results") val tvResults: List<TmdbTvShow> = emptyList()
 )
+
+// ==================== Languages ====================
+
+data class TmdbLanguage(
+    val code: String,
+    val name: String
+)
+
+object TmdbLanguages {
+    val list = listOf(
+        TmdbLanguage("en", "English"),
+        TmdbLanguage("hi", "Hindi"),
+        TmdbLanguage("es", "Spanish"),
+        TmdbLanguage("fr", "French"),
+        TmdbLanguage("de", "German"),
+        TmdbLanguage("ja", "Japanese"),
+        TmdbLanguage("ko", "Korean"),
+        TmdbLanguage("zh", "Chinese"),
+        TmdbLanguage("it", "Italian"),
+        TmdbLanguage("pt", "Portuguese"),
+        TmdbLanguage("ru", "Russian"),
+        TmdbLanguage("te", "Telugu"),
+        TmdbLanguage("ta", "Tamil"),
+        TmdbLanguage("ml", "Malayalam"),
+        TmdbLanguage("kn", "Kannada"),
+        TmdbLanguage("pa", "Punjabi"),
+        TmdbLanguage("bn", "Bengali")
+    )
+}

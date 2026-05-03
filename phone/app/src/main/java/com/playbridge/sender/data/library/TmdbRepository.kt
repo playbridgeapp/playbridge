@@ -48,9 +48,18 @@ class TmdbRepository(private val context: Context) {
 
     // ==================== Movies ====================
 
-    suspend fun discoverMovies(page: Int = 1, withGenres: String? = null, sortBy: String = "popularity.desc", year: String? = null): TmdbPagedResponse<TmdbMovie> {
+    suspend fun discoverMovies(
+        page: Int = 1,
+        withGenres: String? = null,
+        sortBy: String = "popularity.desc",
+        year: String? = null,
+        withOriginalLanguage: String? = null,
+        minRating: Double? = null
+    ): TmdbPagedResponse<TmdbMovie> {
         val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
         val yearParam = year?.let { "&primary_release_year=$it" } ?: ""
+        val languageParam = withOriginalLanguage?.let { "&with_original_language=$it" } ?: ""
+        val ratingParam = minRating?.let { "&vote_average.gte=$it" } ?: ""
         
         // Stremio-style curation: Capping to today and adding relevance thresholds for newest
         val relevanceParams = if (sortBy.contains("primary_release_date")) {
@@ -58,7 +67,7 @@ class TmdbRepository(private val context: Context) {
             "&primary_release_date.lte=$today&vote_count.gte=10"
         } else ""
 
-        return fetchPaged("$BASE_URL/discover/movie?language=en-US&page=$page&sort_by=$sortBy$genresParam$yearParam$relevanceParams&include_video=false&include_adult=false&with_runtime.gte=60")
+        return fetchPaged("$BASE_URL/discover/movie?language=en-US&page=$page&sort_by=$sortBy$genresParam$yearParam$languageParam$ratingParam$relevanceParams&include_video=false&include_adult=false&with_runtime.gte=60")
     }
 
     suspend fun getPopularMovies(page: Int = 1): TmdbPagedResponse<TmdbMovie> {
@@ -84,9 +93,18 @@ class TmdbRepository(private val context: Context) {
 
 
 
-    suspend fun discoverTvShows(page: Int = 1, withGenres: String? = null, sortBy: String = "popularity.desc", year: String? = null): TmdbPagedResponse<TmdbTvShow> {
+    suspend fun discoverTvShows(
+        page: Int = 1,
+        withGenres: String? = null,
+        sortBy: String = "popularity.desc",
+        year: String? = null,
+        withOriginalLanguage: String? = null,
+        minRating: Double? = null
+    ): TmdbPagedResponse<TmdbTvShow> {
         val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
         val yearParam = year?.let { "&first_air_date_year=$it" } ?: ""
+        val languageParam = withOriginalLanguage?.let { "&with_original_language=$it" } ?: ""
+        val ratingParam = minRating?.let { "&vote_average.gte=$it" } ?: ""
         val tvSortBy = if (sortBy == "primary_release_date.desc") "first_air_date.desc" else sortBy
         
         // Stremio-style curation: Capping to today and adding relevance thresholds
@@ -95,7 +113,7 @@ class TmdbRepository(private val context: Context) {
             "&first_air_date.lte=$today&vote_count.gte=5"
         } else ""
 
-        return fetchPaged("$BASE_URL/discover/tv?language=en-US&page=$page&sort_by=$tvSortBy$genresParam$yearParam$relevanceParams&include_video=false&include_adult=false")
+        return fetchPaged("$BASE_URL/discover/tv?language=en-US&page=$page&sort_by=$tvSortBy$genresParam$yearParam$languageParam$ratingParam$relevanceParams&include_video=false&include_adult=false")
     }
 
     suspend fun getPopularTvShows(page: Int = 1): TmdbPagedResponse<TmdbTvShow> {
