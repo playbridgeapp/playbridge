@@ -1,0 +1,15 @@
+info:
+  name: Remove Addon
+  type: http
+  seq: 5
+
+http:
+  method: delete
+  url: "{{baseUrl}}/api/addons?url=https://example.com/manifest.json"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

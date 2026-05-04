@@ -1,0 +1,15 @@
+info:
+  name: Get Cache Config
+  type: http
+  seq: 12
+
+http:
+  method: get
+  url: "{{baseUrl}}/api/config/cache"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

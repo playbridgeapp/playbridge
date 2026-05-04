@@ -1,0 +1,15 @@
+info:
+  name: Play - Series
+  type: http
+  seq: 10
+
+http:
+  method: get
+  url: "{{baseUrl}}/api/play/series/tt6741278:1:1"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 30000
+  followRedirects: false
+  maxRedirects: 0

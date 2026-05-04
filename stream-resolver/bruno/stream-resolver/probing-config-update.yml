@@ -1,0 +1,26 @@
+info:
+  name: Update Probing Config
+  type: http
+  seq: 15
+
+http:
+  method: put
+  url: "{{baseUrl}}/api/config/probing"
+  headers:
+    - name: Content-Type
+      value: application/json
+  body:
+    type: json
+    data: |-
+      {
+        "enabled": true,
+        "max_attempts": 5,
+        "timeout_ms": 5000
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

@@ -1,0 +1,15 @@
+info:
+  name: Get Probing Config
+  type: http
+  seq: 14
+
+http:
+  method: get
+  url: "{{baseUrl}}/api/config/probing"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

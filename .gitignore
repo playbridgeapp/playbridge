@@ -76,3 +76,9 @@ hub/server/server.exe
 hub/server/cache/
 hub/server/*.db
 hub/server/config.json
+
+# Stream Resolver (Go)
+stream-resolver/config.json
+stream-resolver/cache/
+stream-resolver/playbridge-stream-resolver
+stream-resolver/*.exe

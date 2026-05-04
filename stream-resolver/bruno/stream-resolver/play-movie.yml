@@ -1,0 +1,15 @@
+info:
+  name: Play - Movie
+  type: http
+  seq: 8
+
+http:
+  method: get
+  url: "{{baseUrl}}/api/play/movie/tt16431404"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 30000
+  followRedirects: false
+  maxRedirects: 0

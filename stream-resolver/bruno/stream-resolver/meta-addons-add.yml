@@ -1,0 +1,26 @@
+info:
+  name: Add Meta Addon
+  type: http
+  seq: 17
+
+http:
+  method: post
+  url: "{{baseUrl}}/api/meta-addons"
+  headers:
+    - name: Content-Type
+      value: application/json
+  body:
+    type: json
+    data: |-
+      {
+        "url": "https://v3-cinemeta.strem.io",
+        "name": "Cinemeta",
+        "timeout_ms": 5000
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

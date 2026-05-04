@@ -1,0 +1,15 @@
+info:
+  name: List Addons
+  type: http
+  seq: 3
+
+http:
+  method: get
+  url: "{{baseUrl}}/api/addons"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

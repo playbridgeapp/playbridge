@@ -1,0 +1,15 @@
+info:
+  name: Remove Meta Addon
+  type: http
+  seq: 18
+
+http:
+  method: delete
+  url: "{{baseUrl}}/api/meta-addons?url=https%3A%2F%2Fv3-cinemeta.strem.io"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

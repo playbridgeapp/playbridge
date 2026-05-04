@@ -1,0 +1,15 @@
+info:
+  name: Stream - Series
+  type: http
+  seq: 7
+
+http:
+  method: get
+  url: "{{baseUrl}}/stream/series/tt6741278:1:1"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 30000
+  followRedirects: true
+  maxRedirects: 5

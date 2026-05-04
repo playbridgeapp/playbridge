@@ -1,0 +1,285 @@
+# Stream Resolver Addon — Plan
+
+A standalone Go-based Stremio stream addon that aggregates streams from multiple
+source addons, merges and ranks them, and exposes two endpoints: one standard
+Stremio stream endpoint for client-side picking, and one headless play endpoint
+that probes candidates and redirects to the first verified working stream.
+
+---
+
+## Problem Statement
+
+AIOStreams returns a ranked list of debrid/torrent streams but:
+- Does not cover direct HTTP stream addons (HDHub, etc.)
+- Cannot guarantee a stream actually works — links can be stale, debrid content
+  unavailable, or files mis-matched
+- Has no runtime/duration validation
+
+The Go hub currently handles probing but its stream filtering logic duplicates
+what AIOStreams already does better, and the hub is being refactored into a
+PlayBridge state server.
+
+The stream resolver addon fills this gap as a dedicated, self-contained service.
+
+---
+
+## Role in the Stack
+
+```
+Source addons
+  ├── AIOStreams          (debrid/torrent, pre-ranked by AIOStreams pipeline)
+  ├── HDHub              (direct HTTP streams)
+  └── Any stream addon   (any Stremio-compatible stream endpoint)
+            │
+            ▼
+  Stream Resolver Addon  (this service)
+  ├── /stream/:type/:id.json   ← Stremio-compatible, for phone stream picker
+  └── /api/play/:type/:id      ← Probes, redirects to first working stream
+            │
+    ┌───────┴────────┐
+    │                │
+  TV app          Phone app
+  (api/play)      (stream endpoint)
+```
+
+The hub (PlayBridge state server) stores the resolver addon URL as part of the
+user's installed addons config. It does not call the resolver directly.
+
+---
+
+## Endpoints
+
+### 1. `GET /stream/:type/:id.json`
+
+Standard Stremio stream resource endpoint. Used by the phone app's stream picker
+to display all available streams for manual selection.
+
+**Behaviour:**
+- Fan out to all configured source addons in parallel
+- Merge results into a single ranked list (see Ranking)
+- Return immediately — no probing, optimised for low latency
+- Response is valid Stremio `StreamResponse` JSON
+
+**Response shape:**
+```json
+{
+  "streams": [
+    {
+      "name": "[RD] 4K REMUX",
+      "description": "...",
+      "url": "https://resolver/api/play/movie/tt1234567?src=0",
+      "behaviorHints": { "notWebReady": true }
+    }
+  ]
+}
+```
+
+> Each stream's URL points back to `/api/play` with a `src` index hint so the
+> phone can deep-link to a specific stream without re-resolving.
+
+---
+
+### 2. `GET /api/play/:type/:id`
+
+Headless playback endpoint. Used by the TV app and Apple TV native client.
+Probes stream candidates in rank order and issues a `307` redirect to the first
+one that passes duration validation.
+
+**Query params:**
+| Param | Default | Description |
+|-------|---------|-------------|
+| `skip` | `0` | Start probing from this rank index (0-based). Allows the TV to retry with next candidate on failure without re-fetching the list. |
+
+**Behaviour:**
+1. Fetch merged stream list (uses cache if warm)
+2. Starting from `skip`, probe each candidate with ffprobe (5s timeout)
+3. Compare probed duration against expected runtime from meta (must be ≥ 50%)
+4. First candidate that passes → `307` redirect to its URL
+5. All candidates exhausted → `404`
+
+**Error responses:**
+```
+307  → stream URL (success)
+404  → no working stream found
+503  → all source addons failed to respond
+```
+
+---
+
+## Source Addon Configuration
+
+Configured via a JSON file (or hub API if integrated). Each entry is a standard
+Stremio addon base URL. The resolver treats all of them uniformly — it calls
+`/stream/:type/:id.json` on each.
+
+```json
+{
+  "addons": [
+    {
+      "url": "https://aiostreams.example.com/stremio/UUID/ENCRYPTED",
+      "name": "AIOStreams",
+      "priority": 0,
+      "timeout_ms": 8000
+    },
+    {
+      "url": "https://hdhub.example.com",
+      "name": "HDHub",
+      "priority": 1,
+      "timeout_ms": 5000
+    }
+  ],
+  "probing": {
+    "enabled": true,
+    "max_attempts": 5,
+    "timeout_ms": 5000
+  },
+  "cache": {
+    "stream_list_ttl_seconds": 300,
+    "play_result_ttl_seconds": 3600
+  },
+  "meta": {
+    "omdb_key": ""
+  }
+}
+```
+
+**`priority`** controls merge order when scores are equal (lower = higher
+priority). AIOStreams should always be 0 since its list is already ranked
+internally.
+
+---
+
+## Stream Fetching
+
+All configured addons are called concurrently with individual timeouts. Slow or
+unresponsive addons do not block the response — their results are omitted for
+that request.
+
+```
+for each addon (parallel, individual timeout):
+    GET {addon.url}/stream/{type}/{id}.json
+    → collect streams[], tag each with source addon name + position
+```
+
+Streams carry their source and position-within-source as metadata used during
+ranking.
+
+---
+
+## Ranking / Merging
+
+AIOStreams' position in its own list is treated as a strong ranking signal —
+it already ran a full scoring pipeline. Direct HTTP addon streams are scored
+independently.
+
+**Merge algorithm:**
+
+1. Assign each stream a base score:
+   - AIOStreams streams: `1000 - (position * 10)` — preserves AIOStreams ordering
+   - Other addon streams: score by resolution string (2160p=100, 1080p=80,
+     720p=60, unknown=40) + size bonus if available
+
+2. Apply source priority tie-breaker (addon `priority` field)
+
+3. Sort descending by final score
+
+4. Deduplicate by URL
+
+The merged list passed to `/api/play` starts with AIOStreams' top picks, meaning
+probing attempts the most likely candidates first and minimises ffprobe calls.
+
+---
+
+## Probing (api/play only)
+
+Reused from the existing hub aggregator with minor changes:
+
+- Uses `ffprobe` via PATH or known fallback paths
+- 5s timeout per probe (configurable)
+- Duration check: `probed_mins >= expected_mins * 0.5`
+- `expected_mins` fetched from OMDB/meta on first request, cached
+- `max_attempts` cap (default 5) to bound worst-case latency
+- Skips probing for streams with no direct URL (magnet-only, etc.)
+
+If `ffprobe` is not available, probing is skipped and position 0 is returned
+directly (degraded mode, logged as warning).
+
+---
+
+## Caching
+
+Two independent caches, both on-disk JSON (same pattern as existing hub):
+
+| Cache | Key | TTL |
+|-------|-----|-----|
+| Stream list | `{type}_{id}` | 5 min (configurable) |
+| Resolved play result | `{type}_{id}_{prefs_hash}` | 1h (configurable) |
+
+Stream list cache is shared between `/stream` and `/api/play` — the stream
+endpoint warms it for free.
+
+In-flight deduplication (same pattern as hub's `sync.Map`) prevents redundant
+concurrent resolutions for the same item.
+
+---
+
+## Protocol Changes (PlayBridge)
+
+One addition needed to `Message.kt` to enable the phone's automatic stream
+picker on TV playback failure:
+
+```kotlin
+@Serializable
+data class StatusMessage(
+    val type: String = "status",
+    val state: String = "",        // add "error" as a valid value
+    val position: Long = 0,
+    val duration: Long = 0,
+    val title: String? = null,
+    val errorReason: String? = null  // "playback_error", "not_found", etc.
+)
+```
+
+**TV side (`ExoPlayerActivity`):** broadcast `state = "error"` with reason when
+`Player.STATE_IDLE` is reached with a non-null `playerError`.
+
+**Phone side (`RemoteControlScreen`):** observe status flow; when `state ==
+"error"` and context is `player`, auto-open `StreamPickerSheet` for the current
+item's stremio ID.
+
+The phone then sends either `PlayCommand` (direct URL override) or
+`PlaylistJumpCommand` (skip to next ranked candidate) depending on user action.
+
+---
+
+## Hub Refactor (out of scope for this addon)
+
+The following is removed from `aggregator.go` when the hub becomes a state
+server:
+
+- `GetUnifiedStreams`
+- `ResolveBestStream`
+- `probeDuration`
+- `checkPreferred`
+- `StreamingPreferences` struct
+- `/api/play/` route in `main.go`
+- Play result cache under `cache/play/`
+
+What stays in the hub:
+- Continue watching tracking
+- Installed addon registry
+- User preferences store
+- Meta/catalog proxying (GetUnifiedMeta, GetProxyCatalog)
+- Home feed aggregation
+
+---
+
+## Open Questions
+
+- **Apple TV client:** Does the native tvOS app call `/api/play` directly, or
+  does it receive a `PlaylistPayload` via WebSocket from the phone? Both paths
+  are valid — `/api/play` is the simpler starting point.
+- **Auth:** Should `/api/play` require a token, or is security-by-obscurity
+  (unguessable IDs) acceptable for local network deployment?
+- **ffprobe availability:** Docker image for the addon should bundle ffprobe to
+  avoid the degraded-mode fallback in hosted deployments.

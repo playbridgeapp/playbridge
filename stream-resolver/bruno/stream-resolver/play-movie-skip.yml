@@ -1,0 +1,19 @@
+info:
+  name: Play - Movie (skip=1)
+  type: http
+  seq: 9
+
+http:
+  method: get
+  url: "{{baseUrl}}/api/play/movie/tt16431404?skip=1"
+  params:
+    - name: skip
+      value: "1"
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 30000
+  followRedirects: false
+  maxRedirects: 0
