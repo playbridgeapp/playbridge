@@ -1,18 +1,30 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'discovery.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'server.dart';
+import 'shader_background.dart';
+import 'tray_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  await windowManager.ensureInitialized();
+
+  // setPreventClose must run after the native window exists; calling it from
+  // main() before the first frame is silently ignored on some platforms.
+  windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
+    await windowManager.setPreventClose(true);
+  });
+
   final store = await PairingStore.load();
   runApp(ReceiverApp(store: store));
 }
@@ -26,11 +38,13 @@ class ReceiverApp extends StatefulWidget {
   State<ReceiverApp> createState() => _ReceiverAppState();
 }
 
-class _ReceiverAppState extends State<ReceiverApp> {
+class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final PlayerController _player;
   late final VideoController _video;
   late final ReceiverServer _server;
   late final DiscoveryPublisher _discovery;
+  late final TrayController _tray;
+  bool _hadMedia = false;
 
   String _hostInfo = 'starting...';
   String? _serverError;
@@ -69,9 +83,52 @@ class _ReceiverAppState extends State<ReceiverApp> {
       port: kDefaultPort,
       deviceId: widget.store.deviceId,
     );
+    _tray = TrayController(player: _player, server: _server, store: widget.store);
+
+    windowManager.addListener(this);
+    _player.addListener(_handlePlayerChange);
+
     _bootServer();
     _bootDiscovery();
     _resolveHost();
+    _initTrayAndWindow();
+  }
+
+  Future<void> _initTrayAndWindow() async {
+    await _tray.init();
+    // Hide the window at launch only if we already have a paired device
+    // — first-run users need to see the PIN screen.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    if (widget.store.hasPairedClient) {
+      await windowManager.hide();
+    } else {
+      await windowManager.show();
+      await windowManager.focus();
+    }
+  }
+
+  /// Show the window when playback starts (rising edge: queue empty → not).
+  void _handlePlayerChange() {
+    final hasMedia = _player.queue.isNotEmpty;
+    if (hasMedia && !_hadMedia) {
+      unawaited(_revealWindow());
+    }
+    _hadMedia = hasMedia;
+  }
+
+  Future<void> _revealWindow() async {
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  @override
+  void onWindowClose() async {
+    // User clicked the close button — hide instead of quit.
+    final prevented = await windowManager.isPreventClose();
+    if (prevented) {
+      await windowManager.hide();
+    }
   }
 
   Future<void> _bootServer() async {
@@ -111,6 +168,9 @@ class _ReceiverAppState extends State<ReceiverApp> {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    windowManager.removeListener(this);
+    _player.removeListener(_handlePlayerChange);
+    _tray.dispose();
     _discovery.stop();
     _server.stop();
     _player.dispose();
@@ -122,20 +182,49 @@ class _ReceiverAppState extends State<ReceiverApp> {
     return MaterialApp(
       title: 'PlayBridge Desktop',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true),
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        // Transparent everywhere so the native NSVisualEffectView shows through.
+        scaffoldBackgroundColor: Colors.transparent,
+        canvasColor: Colors.transparent,
+      ),
       home: Scaffold(
+        backgroundColor: Colors.transparent,
         body: AnimatedBuilder(
           animation: Listenable.merge([_server, _player]),
           builder: (context, _) {
-            // Show the pairing screen until a client authenticates,
-            // OR whenever the phone explicitly asks (request_pairing).
-            final showPairing = _server.phase != PairingPhase.authenticated;
+            // Show the pairing screen until a client authenticates — but
+            // never cover an active playback session. If the phone disconnects
+            // mid-video, the user keeps watching; pairing is reachable via the
+            // tray menu when they want it.
+            final hasActiveMedia = _player.queue.isNotEmpty;
+            final showPairing = _server.phase != PairingPhase.authenticated &&
+                !hasActiveMedia;
             final hasQueue = _player.queue.length > 1;
             final hasMedia = _player.queue.isNotEmpty;
+            const titleBarHeight = 28.0;
             return Stack(
               children: [
+                // Shader background only when no video is rendering — saves
+                // GPU when the mpv texture covers the whole window anyway.
+                if (!hasMedia) const Positioned.fill(child: AuroraBackground()),
                 Column(
                   children: [
+                    // Transparent draggable strip across the top — leaves room
+                    // for the macOS traffic lights, which sit above this region
+                    // and stay clickable because the native window draws them.
+                    SizedBox(
+                      height: titleBarHeight,
+                      child: DragToMoveArea(
+                        child: Row(
+                          children: [
+                            // Reserve ~78px on the left for traffic lights so
+                            // the user can't drag from there (macOS handles it).
+                            const SizedBox(width: 78),
+                            Expanded(child: Container(color: Colors.transparent)),
+                          ],
+                        ),
+                      ),
+                    ),
                     Expanded(
                       child: MouseRegion(
                         onEnter: (_) => _markActive(),
@@ -143,11 +232,15 @@ class _ReceiverAppState extends State<ReceiverApp> {
                         onHover: (_) => _markActive(),
                         child: Stack(
                           children: [
+                            // Transparent when nothing's playing so the native
+                            // window blur shows through; the mpv texture is
+                            // opaque on its own once a video is loaded.
                             Container(
-                              color: Colors.black,
+                              color: hasMedia ? Colors.black : Colors.transparent,
                               child: Video(
                                 controller: _video,
                                 controls: NoVideoControls,
+                                fill: Colors.transparent,
                               ),
                             ),
                             if (hasMedia && !showPairing)
@@ -230,14 +323,16 @@ class PairingOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final highlight = phase == PairingPhase.awaitingPin;
-    return Container(
-      color: Colors.black.withValues(alpha: 0.96),
-      alignment: Alignment.center,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
-        child: Padding(
-          padding: const EdgeInsets.all(40),
-          child: Column(
+    return BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.28),
+        alignment: Alignment.center,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: Padding(
+            padding: const EdgeInsets.all(40),
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -267,7 +362,8 @@ class PairingOverlay extends StatelessWidget {
                 value: discoveryError == null ? '_playbridge._tcp.' : 'failed: $discoveryError',
                 error: discoveryError != null,
               ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -287,21 +383,26 @@ class _PinDisplay extends StatelessWidget {
         for (final ch in pin.split(''))
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: Container(
-              width: 64,
-              height: 80,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: Colors.white10,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white24),
-              ),
-              child: Text(
-                ch,
-                style: const TextStyle(
-                  fontSize: 44,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 2,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                child: Container(
+                  width: 64,
+                  height: 80,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                  ),
+                  child: Text(
+                    ch,
+                    style: const TextStyle(
+                      fontSize: 44,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 2,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -369,34 +470,44 @@ class _StatusBar extends StatelessWidget {
       PairingPhase.awaitingPin => 'pairing…',
       PairingPhase.authenticated => 'paired',
     };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: Colors.black87,
-      child: Row(
-        children: [
-          Icon(
-            serverError != null ? Icons.error_outline : Icons.cast_connected,
-            color: serverError != null ? Colors.redAccent : Colors.greenAccent,
-            size: 18,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              serverError != null
-                  ? 'Server failed: $serverError'
-                  : ':$kDefaultPort  ·  $hostInfo  ·  $phaseLabel  ·  ${player.state}'
-                      '${player.currentTitle != null ? '  ·  ${player.currentTitle}' : ''}'
-                      '${discoveryError != null ? '  ·  mDNS: $discoveryError' : ''}',
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.35),
+            border: Border(
+              top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
             ),
           ),
-          if (player.durationMs > 0)
-            Text(
-              '${_fmt(pos)} / ${_fmt(dur)}',
-              style: const TextStyle(fontSize: 12, color: Colors.white70),
-            ),
-        ],
+          child: Row(
+            children: [
+              Icon(
+                serverError != null ? Icons.error_outline : Icons.cast_connected,
+                color: serverError != null ? Colors.redAccent : Colors.greenAccent,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  serverError != null
+                      ? 'Server failed: $serverError'
+                      : ':$kDefaultPort  ·  $hostInfo  ·  $phaseLabel  ·  ${player.state}'
+                          '${player.currentTitle != null ? '  ·  ${player.currentTitle}' : ''}'
+                          '${discoveryError != null ? '  ·  mDNS: $discoveryError' : ''}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+              if (player.durationMs > 0)
+                Text(
+                  '${_fmt(pos)} / ${_fmt(dur)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.white70),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -449,19 +560,18 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 150),
         opacity: widget.visible ? 1 : 0.0,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 24, 12, 8),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.bottomCenter,
-              end: Alignment.topCenter,
-              colors: [
-                Colors.black.withValues(alpha: 0.9),
-                Colors.black.withValues(alpha: 0.0),
-              ],
-            ),
-          ),
-          child: Column(
+        child: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 18, 12, 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.4),
+                border: Border(
+                  top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                ),
+              ),
+              child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               // Scrubber row: position · slider · duration
@@ -557,6 +667,8 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                 ],
               ),
             ],
+          ),
+            ),
           ),
         ),
       ),
@@ -689,9 +801,12 @@ class _PlaylistDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.92),
-      child: Column(
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Material(
+          color: Colors.black.withValues(alpha: 0.45),
+          child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
@@ -751,6 +866,8 @@ class _PlaylistDrawer extends StatelessWidget {
             ),
           ),
         ],
+      ),
+        ),
       ),
     );
   }

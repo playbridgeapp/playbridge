@@ -16,11 +16,18 @@ class PlayerController extends ChangeNotifier {
   PlayerController() {
     _configureMpv();
     _subs.addAll([
-      player.stream.playing.listen((_) => _emit()),
+      player.stream.playing.listen((playing) {
+        debugPrint('[player] playing=$playing');
+        _emit();
+      }),
       player.stream.position.listen((_) => _emit()),
       player.stream.duration.listen((_) => _emit()),
-      player.stream.buffering.listen((_) => _emit()),
+      player.stream.buffering.listen((b) {
+        debugPrint('[player] buffering=$b');
+        _emit();
+      }),
       player.stream.completed.listen((done) {
+        debugPrint('[player] completed=$done');
         if (done) _onCompleted();
         _emit();
       }),
@@ -59,6 +66,10 @@ class PlayerController extends ChangeNotifier {
             'timeout=30000000,reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5';
         await native.setProperty('stream-lavf-o-add', lavf);
         await native.setProperty('demuxer-lavf-o-add', lavf);
+        // Don't auto-pause on minor cache underruns — try to keep playing.
+        await native.setProperty('cache-pause', 'no');
+        // Don't pause when buffer fills up momentarily.
+        await native.setProperty('cache-pause-wait', '1');
       } catch (e) {
         debugPrint('[player] failed to tune mpv: $e');
       }
@@ -143,7 +154,9 @@ class PlayerController extends ChangeNotifier {
   Future<void> _open(QueueItem item) async {
     _lastError = null;
     final media = Media(item.url, httpHeaders: item.headers);
-    await player.open(media);
+    // Pass `play: true` explicitly so playback always starts immediately
+    // regardless of whatever default media_kit ships on this platform.
+    await player.open(media, play: true);
 
     // Attach external subtitle tracks (if any) without auto-selecting them —
     // user picks from the subtitle menu. Uses mpv's `sub-add` directly so
@@ -161,6 +174,10 @@ class PlayerController extends ChangeNotifier {
         }
       }
     }
+
+    // Belt-and-suspenders: some upstreams arrive paused after open() returns;
+    // an explicit play() once subtitles are attached guarantees we're rolling.
+    await player.play();
     _emit();
   }
 

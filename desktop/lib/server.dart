@@ -98,7 +98,9 @@ class ReceiverServer extends ChangeNotifier {
         }
       },
       onDone: () {
-        debugPrint('[server] client disconnected');
+        // Playback intentionally continues — disconnect only removes the
+        // channel from broadcast sets, never touches the player.
+        debugPrint('[server] client disconnected (player state=${player.state}, queue=${player.queue.length})');
         _all.remove(channel);
         _authed.remove(channel);
         _awaitingPin.remove(channel);
@@ -130,11 +132,13 @@ class ReceiverServer extends ChangeNotifier {
       case AuthCmd(:final pin, :final token):
         if (token != null && token == store.authToken) {
           channel.sink.add(authResponseJson(success: true));
+          unawaited(store.markPaired());
           return true;
         }
         if (pin != null && pin.toUpperCase() == store.pin) {
           // PIN match — return the long-lived token so the phone can cache it.
           channel.sink.add(authResponseJson(success: true, token: store.authToken));
+          unawaited(store.markPaired());
           return true;
         }
         channel.sink.add(authResponseJson(success: false));
@@ -191,13 +195,16 @@ class ReceiverServer extends ChangeNotifier {
           ));
         }
       case ControlCmd(:final command):
+        debugPrint('[server] control: $command (queue=${player.queue.length}, state=${player.state})');
         switch (command) {
           case 'play':
             unawaited(player.resume());
           case 'pause':
             unawaited(player.pause());
           case 'stop':
-            unawaited(player.stop());
+            // Don't tear down the queue on a remote stop — keeps playback
+            // controllable from the desktop side if the phone has gone away.
+            unawaited(player.pause());
         }
       case UnknownCmd(:final type):
         debugPrint('[server] unknown command: $type');

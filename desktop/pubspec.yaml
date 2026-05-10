@@ -26,6 +26,12 @@ dependencies:
   shared_preferences: ^2.3.3
   uuid: ^4.5.1
 
+  # Service-like behavior: tray icon + programmatic window control.
+  # Launch-at-login is implemented in lib/auto_launch.dart (no plugin).
+  tray_manager: ^0.5.1
+  window_manager: ^0.4.3
+  path_provider: ^2.1.5
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -33,3 +39,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/tray_icon.png
+  shaders:
+    - shaders/aurora.frag
