@@ -41,6 +41,10 @@ class ReceiverServer extends ChangeNotifier {
   final Set<WebSocketChannel> _authed = {};
   final Set<WebSocketChannel> _awaitingPin = {};
 
+  // Dedupe rapid-fire duplicate play commands from the phone.
+  String? _lastPlayUrl;
+  DateTime _lastPlayAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   PairingPhase get phase {
     if (_authed.isNotEmpty) return PairingPhase.authenticated;
     if (_awaitingPin.isNotEmpty) return PairingPhase.awaitingPin;
@@ -75,6 +79,16 @@ class ReceiverServer extends ChangeNotifier {
     await _http?.close(force: true);
   }
 
+  int get connectedClientCount => _all.length;
+  int get authedClientCount => _authed.length;
+
+  /// Disconnect all authenticated clients (forces re-auth / pairing).
+  Future<void> kickAll() async {
+    for (final c in _authed.toList()) {
+      await c.sink.close();
+    }
+  }
+
   void _onClient(WebSocketChannel channel, String? subprotocol) {
     debugPrint('[server] client connected');
     _all.add(channel);
@@ -98,7 +112,9 @@ class ReceiverServer extends ChangeNotifier {
         }
       },
       onDone: () {
-        debugPrint('[server] client disconnected');
+        // Playback intentionally continues — disconnect only removes the
+        // channel from broadcast sets, never touches the player.
+        debugPrint('[server] client disconnected (player state=${player.state}, queue=${player.queue.length})');
         _all.remove(channel);
         _authed.remove(channel);
         _awaitingPin.remove(channel);
@@ -130,11 +146,13 @@ class ReceiverServer extends ChangeNotifier {
       case AuthCmd(:final pin, :final token):
         if (token != null && token == store.authToken) {
           channel.sink.add(authResponseJson(success: true));
+          unawaited(store.markPaired());
           return true;
         }
         if (pin != null && pin.toUpperCase() == store.pin) {
           // PIN match — return the long-lived token so the phone can cache it.
           channel.sink.add(authResponseJson(success: true, token: store.authToken));
+          unawaited(store.markPaired());
           return true;
         }
         channel.sink.add(authResponseJson(success: false));
@@ -159,6 +177,17 @@ class ReceiverServer extends ChangeNotifier {
       case ContextQueryCmd():
         channel.sink.add(contextJson(player.state == 'idle' ? 'idle' : 'player'));
       case PlayCmd(:final url, :final title, :final headers, :final subtitles):
+        // Phones sometimes fire the same play command twice within ms (double
+        // tap, retry on slow ack). Each replay tears down whatever buffer mpv
+        // has accumulated, so swallow exact duplicates within a short window.
+        final now = DateTime.now();
+        if (url == _lastPlayUrl &&
+            now.difference(_lastPlayAt) < const Duration(seconds: 2)) {
+          debugPrint('[server] dropping duplicate play for $url');
+          break;
+        }
+        _lastPlayUrl = url;
+        _lastPlayAt = now;
         unawaited(player.playUrl(
           url,
           title: title,
@@ -191,13 +220,16 @@ class ReceiverServer extends ChangeNotifier {
           ));
         }
       case ControlCmd(:final command):
+        debugPrint('[server] control: $command (queue=${player.queue.length}, state=${player.state})');
         switch (command) {
           case 'play':
             unawaited(player.resume());
           case 'pause':
             unawaited(player.pause());
           case 'stop':
-            unawaited(player.stop());
+            // Don't tear down the queue on a remote stop — keeps playback
+            // controllable from the desktop side if the phone has gone away.
+            unawaited(player.pause());
         }
       case UnknownCmd(:final type):
         debugPrint('[server] unknown command: $type');

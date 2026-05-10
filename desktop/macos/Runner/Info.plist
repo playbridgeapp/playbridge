@@ -28,6 +28,8 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>PlayBridge advertises itself on your local network so the phone app can find this Mac.</string>
 	<key>NSBonjourServices</key>

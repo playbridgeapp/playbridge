@@ -16,6 +16,7 @@ class PairingStore {
   static const _kAuthToken = 'pb.auth_token';
   static const _kDeviceId = 'pb.device_id';
   static const _kDeviceName = 'pb.device_name';
+  static const _kHasPaired = 'pb.has_paired';
 
   final SharedPreferences _prefs;
 
@@ -56,6 +57,12 @@ class PairingStore {
   Future<void> regenerateToken() async {
     await _prefs.setString(_kAuthToken, const Uuid().v4());
   }
+
+  /// True once any client has successfully paired (PIN or token). Used to
+  /// decide whether to show the window at launch.
+  bool get hasPairedClient => _prefs.getBool(_kHasPaired) ?? false;
+
+  Future<void> markPaired() => _prefs.setBool(_kHasPaired, true);
 
   static String _defaultName() {
     try {

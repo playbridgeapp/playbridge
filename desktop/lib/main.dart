@@ -1,43 +1,78 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'discovery.dart';
+import 'favorites_screen.dart';
+import 'history_screen.dart';
+import 'history_store.dart';
 import 'pairing_store.dart';
+import 'pair_screen.dart';
 import 'player_controller.dart';
 import 'server.dart';
+import 'settings_screen.dart';
+import 'shader_background.dart';
+import 'tray_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  final store = await PairingStore.load();
-  runApp(ReceiverApp(store: store));
+  await windowManager.ensureInitialized();
+
+  windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
+    await windowManager.setPreventClose(true);
+  });
+
+  final results = await Future.wait([
+    PairingStore.load(),
+    HistoryStore.load(),
+  ]);
+  runApp(ReceiverApp(
+    store: results[0] as PairingStore,
+    history: results[1] as HistoryStore,
+  ));
 }
 
+// Navigation destinations — nowPlaying is a mode, not a persistent screen.
+enum _Dest { cast, history, favorites, settings }
+
 class ReceiverApp extends StatefulWidget {
-  const ReceiverApp({super.key, required this.store});
+  const ReceiverApp({super.key, required this.store, required this.history});
 
   final PairingStore store;
+  final HistoryStore history;
 
   @override
   State<ReceiverApp> createState() => _ReceiverAppState();
 }
 
-class _ReceiverAppState extends State<ReceiverApp> {
+class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final PlayerController _player;
   late final VideoController _video;
   late final ReceiverServer _server;
   late final DiscoveryPublisher _discovery;
+  late final TrayController _tray;
 
-  String _hostInfo = 'starting...';
+  bool _hadMedia = false;
+  String? _lastTrackedUrl;
+
+  String _hostInfo = 'starting…';
   String? _serverError;
   String? _discoveryError;
-  bool _playlistDrawerOpen = false;
+
+  _Dest _dest = _Dest.cast;
+  bool _showingVideo = false;
+  bool _isFullScreen = false;
+
+  // Controls visibility for the video overlay
   bool _videoHovered = false;
   int _menusOpen = 0;
+  bool _playlistDrawerOpen = false;
   Timer? _hideTimer;
   static const _autoHide = Duration(seconds: 2);
 
@@ -46,7 +81,6 @@ class _ReceiverAppState extends State<ReceiverApp> {
     _hideTimer?.cancel();
     _hideTimer = Timer(_autoHide, () {
       if (!mounted) return;
-      // Don't hide while a menu/drawer is keeping the bar pinned.
       if (_menusOpen > 0 || _playlistDrawerOpen) return;
       setState(() => _videoHovered = false);
     });
@@ -69,9 +103,78 @@ class _ReceiverAppState extends State<ReceiverApp> {
       port: kDefaultPort,
       deviceId: widget.store.deviceId,
     );
+    _tray = TrayController(player: _player, server: _server, store: widget.store);
+
+    windowManager.addListener(this);
+    _player.addListener(_handlePlayerChange);
+
     _bootServer();
     _bootDiscovery();
     _resolveHost();
+    _initTrayAndWindow();
+  }
+
+  Future<void> _initTrayAndWindow() async {
+    await _tray.init();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  void _handlePlayerChange() {
+    final hasMedia = _player.queue.isNotEmpty;
+
+    // Rising edge: new playback session started → switch to video view.
+    if (hasMedia && !_hadMedia) {
+      unawaited(_revealWindow());
+      setState(() => _showingVideo = true);
+    }
+
+    // Falling edge: playback ended → leave video view.
+    if (!hasMedia && _hadMedia) {
+      setState(() => _showingVideo = false);
+    }
+
+    _hadMedia = hasMedia;
+
+    // Record history when the active track changes.
+    if (hasMedia) {
+      final idx = _player.currentIndex;
+      if (idx >= 0 && idx < _player.queue.length) {
+        final item = _player.queue[idx];
+        if (item.url != _lastTrackedUrl) {
+          _lastTrackedUrl = item.url;
+          unawaited(widget.history.addOrBump(item.url, item.title));
+        }
+      }
+    }
+  }
+
+  Future<void> _revealWindow() async {
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  @override
+  void onWindowClose() async {
+    final prevented = await windowManager.isPreventClose();
+    if (prevented) await windowManager.hide();
+  }
+
+  @override
+  void onWindowEnterFullScreen() {
+    if (mounted) setState(() => _isFullScreen = true);
+  }
+
+  @override
+  void onWindowLeaveFullScreen() {
+    if (mounted) setState(() => _isFullScreen = false);
+  }
+
+  Future<void> _toggleFullScreen() async {
+    final isFs = await windowManager.isFullScreen();
+    await windowManager.setFullScreen(!isFs);
   }
 
   Future<void> _bootServer() async {
@@ -111,6 +214,9 @@ class _ReceiverAppState extends State<ReceiverApp> {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    windowManager.removeListener(this);
+    _player.removeListener(_handlePlayerChange);
+    _tray.dispose();
     _discovery.stop();
     _server.stop();
     _player.dispose();
@@ -122,84 +228,166 @@ class _ReceiverAppState extends State<ReceiverApp> {
     return MaterialApp(
       title: 'PlayBridge Desktop',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true),
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        scaffoldBackgroundColor: Colors.transparent,
+        canvasColor: Colors.transparent,
+      ),
       home: Scaffold(
+        backgroundColor: Colors.transparent,
         body: AnimatedBuilder(
           animation: Listenable.merge([_server, _player]),
           builder: (context, _) {
-            // Show the pairing screen until a client authenticates,
-            // OR whenever the phone explicitly asks (request_pairing).
-            final showPairing = _server.phase != PairingPhase.authenticated;
-            final hasQueue = _player.queue.length > 1;
             final hasMedia = _player.queue.isNotEmpty;
+            final hasQueue = _player.queue.length > 1;
+            const titleBarHeight = 28.0;
+            // Hide every piece of chrome (title bar, sidebar, status bar)
+            // when the user is watching video in full-screen — the video
+            // should fill the entire monitor, not be framed by panels.
+            final hideChrome = _isFullScreen && _showingVideo && hasMedia;
+
             return Stack(
+              fit: StackFit.expand,
               children: [
+                // Aurora background — only rendered when the user is NOT
+                // watching video. Six-octave FBM + domain warping is expensive,
+                // and during playback the video texture covers most of it
+                // anyway, so leaving it running just steals GPU from mpv.
+                if (!_showingVideo)
+                  const Positioned.fill(child: AuroraBackground()),
+
                 Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: MouseRegion(
-                        onEnter: (_) => _markActive(),
-                        onExit: (_) => _markInactive(),
-                        onHover: (_) => _markActive(),
-                        child: Stack(
-                          children: [
-                            Container(
-                              color: Colors.black,
-                              child: Video(
-                                controller: _video,
-                                controls: NoVideoControls,
+                    if (!hideChrome)
+                      SizedBox(
+                        height: titleBarHeight,
+                        child: ClipRect(
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                            child: DragToMoveArea(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Colors.white.withValues(alpha: 0.10),
+                                      Colors.black.withValues(alpha: 0.20),
+                                    ],
+                                  ),
+                                  border: Border(
+                                    bottom: BorderSide(
+                                      color: Colors.white.withValues(alpha: 0.08),
+                                    ),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const SizedBox(width: 78),
+                                    Expanded(
+                                      child: Container(color: Colors.transparent),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                            if (hasMedia && !showPairing)
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                child: _PlayerControlsBar(
-                                  player: _player,
-                                  visible: _videoHovered || _playlistDrawerOpen || _menusOpen > 0,
-                                  showQueueControls: hasQueue,
-                                  onTogglePlaylist: () => setState(
-                                    () => _playlistDrawerOpen = !_playlistDrawerOpen,
-                                  ),
-                                  playlistOpen: _playlistDrawerOpen,
-                                  onMenuOpened: () => setState(() => _menusOpen++),
-                                  onMenuClosed: () => setState(() => _menusOpen = (_menusOpen - 1).clamp(0, 99)),
-                                ),
-                              ),
-                            if (hasQueue && _playlistDrawerOpen && !showPairing)
-                              Positioned(
-                                right: 0,
-                                top: 0,
-                                bottom: 0,
-                                width: 360,
-                                child: _PlaylistDrawer(
-                                  player: _player,
-                                  onClose: () => setState(() => _playlistDrawerOpen = false),
-                                ),
-                              ),
-                          ],
+                          ),
                         ),
                       ),
+                    Expanded(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (!hideChrome)
+                            _NavSidebar(
+                              dest: _dest,
+                              showingVideo: _showingVideo,
+                              hasMedia: hasMedia,
+                              playerState: _player.state,
+                              onDestSelect: (d) => setState(() {
+                                _dest = d;
+                                _showingVideo = false;
+                              }),
+                              onShowVideo: () => setState(() => _showingVideo = true),
+                            ),
+                          Expanded(
+                            child: MouseRegion(
+                              onEnter: (_) => _markActive(),
+                              onExit: (_) => _markInactive(),
+                              onHover: (_) => _markActive(),
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  // Video is always in the tree (Offstage) so
+                                  // mpv is never torn down on screen switch.
+                                  Positioned.fill(
+                                    child: Offstage(
+                                      offstage: !_showingVideo || !hasMedia,
+                                      child: Container(
+                                        color: Colors.black,
+                                        child: Video(
+                                          controller: _video,
+                                          controls: NoVideoControls,
+                                          fill: Colors.transparent,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  if (!_showingVideo)
+                                    Positioned.fill(child: _buildScreen()),
+                                  if (_showingVideo && hasMedia)
+                                    Positioned(
+                                      left: 0,
+                                      right: 0,
+                                      bottom: 0,
+                                      child: _PlayerControlsBar(
+                                        player: _player,
+                                        visible: _videoHovered ||
+                                            _playlistDrawerOpen ||
+                                            _menusOpen > 0,
+                                        showQueueControls: hasQueue,
+                                        onTogglePlaylist: () => setState(
+                                          () => _playlistDrawerOpen = !_playlistDrawerOpen,
+                                        ),
+                                        playlistOpen: _playlistDrawerOpen,
+                                        onMenuOpened: () => setState(() => _menusOpen++),
+                                        onMenuClosed: () => setState(
+                                          () => _menusOpen = (_menusOpen - 1).clamp(0, 99),
+                                        ),
+                                        isFullScreen: _isFullScreen,
+                                        onToggleFullScreen: _toggleFullScreen,
+                                      ),
+                                    ),
+                                  if (_showingVideo && hasQueue && _playlistDrawerOpen)
+                                    Positioned(
+                                      right: 0,
+                                      top: 0,
+                                      bottom: 0,
+                                      width: 360,
+                                      child: _PlaylistDrawer(
+                                        player: _player,
+                                        onClose: () => setState(
+                                          () => _playlistDrawerOpen = false,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    _StatusBar(
-                      player: _player,
-                      hostInfo: _hostInfo,
-                      serverError: _serverError,
-                      discoveryError: _discoveryError,
-                      phase: _server.phase,
-                    ),
+                    if (!hideChrome)
+                      _StatusBar(
+                        player: _player,
+                        hostInfo: _hostInfo,
+                        serverError: _serverError,
+                        discoveryError: _discoveryError,
+                        phase: _server.phase,
+                      ),
                   ],
                 ),
-                if (showPairing)
-                  PairingOverlay(
-                    pin: widget.store.pin,
-                    deviceName: widget.store.deviceName,
-                    hostInfo: _hostInfo,
-                    port: kDefaultPort,
-                    phase: _server.phase,
-                    discoveryError: _discoveryError,
-                  ),
               ],
             );
           },
@@ -207,66 +395,152 @@ class _ReceiverAppState extends State<ReceiverApp> {
       ),
     );
   }
+
+  Widget _buildScreen() {
+    return switch (_dest) {
+      _Dest.cast => PairScreen(
+          pin: widget.store.pin,
+          deviceName: widget.store.deviceName,
+          hostInfo: _hostInfo,
+          port: kDefaultPort,
+          phase: _server.phase,
+          discoveryError: _discoveryError,
+        ),
+      _Dest.history => HistoryScreen(
+          store: widget.history,
+          player: _player,
+          onNavigateToNowPlaying: () => setState(() => _showingVideo = true),
+        ),
+      _Dest.favorites => FavoritesScreen(
+          store: widget.history,
+          player: _player,
+          onNavigateToNowPlaying: () => setState(() => _showingVideo = true),
+        ),
+      _Dest.settings => SettingsScreen(
+          server: _server,
+          store: widget.store,
+          onNavigateToCast: () => setState(() => _dest = _Dest.cast),
+        ),
+    };
+  }
 }
 
-class PairingOverlay extends StatelessWidget {
-  const PairingOverlay({
-    super.key,
-    required this.pin,
-    required this.deviceName,
-    required this.hostInfo,
-    required this.port,
-    required this.phase,
-    required this.discoveryError,
+// ─── Navigation sidebar ──────────────────────────────────────────────────────
+
+class _NavSidebar extends StatelessWidget {
+  const _NavSidebar({
+    required this.dest,
+    required this.showingVideo,
+    required this.hasMedia,
+    required this.playerState,
+    required this.onDestSelect,
+    required this.onShowVideo,
   });
 
-  final String pin;
-  final String deviceName;
-  final String hostInfo;
-  final int port;
-  final PairingPhase phase;
-  final String? discoveryError;
+  final _Dest dest;
+  final bool showingVideo;
+  final bool hasMedia;
+  final String playerState;
+  final ValueChanged<_Dest> onDestSelect;
+  final VoidCallback onShowVideo;
 
   @override
   Widget build(BuildContext context) {
-    final highlight = phase == PairingPhase.awaitingPin;
-    return Container(
-      color: Colors.black.withValues(alpha: 0.96),
-      alignment: Alignment.center,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
-        child: Padding(
-          padding: const EdgeInsets.all(40),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+        child: Container(
+          width: 196,
+          decoration: BoxDecoration(
+            // Subtle vertical gradient gives the sidebar a glassy, slightly
+            // brighter top-edge highlight — like Apple's NSVisualEffectView.
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white.withValues(alpha: 0.08),
+                Colors.black.withValues(alpha: 0.28),
+              ],
+            ),
+            border: Border(
+              right: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+            ),
+          ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(
-                highlight ? Icons.phonelink_ring : Icons.cast,
-                size: 56,
-                color: highlight ? Colors.tealAccent : Colors.white70,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                child: Row(
+                  children: [
+                    const Icon(Icons.cast_connected, size: 16, color: Colors.tealAccent),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'PlayBridge',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
-              Text(
-                highlight ? 'Phone is pairing…' : 'Pair with PlayBridge',
-                style: Theme.of(context).textTheme.headlineSmall,
+
+              if (hasMedia) ...[
+                _NavItem(
+                  icon: playerState == 'playing'
+                      ? Icons.play_circle
+                      : Icons.pause_circle_outline,
+                  label: 'Now Playing',
+                  selected: showingVideo,
+                  accent: true,
+                  onTap: onShowVideo,
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: Divider(
+                    height: 1,
+                    color: Colors.white.withValues(alpha: 0.08),
+                  ),
+                ),
+              ],
+
+              _NavItem(
+                icon: Icons.cast,
+                label: 'Cast',
+                selected: !showingVideo && dest == _Dest.cast,
+                onTap: () => onDestSelect(_Dest.cast),
               ),
-              const SizedBox(height: 8),
-              Text(
-                'On the phone, pick "$deviceName" then enter this PIN:',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70),
+              _NavItem(
+                icon: Icons.history,
+                label: 'History',
+                selected: !showingVideo && dest == _Dest.history,
+                onTap: () => onDestSelect(_Dest.history),
               ),
-              const SizedBox(height: 28),
-              _PinDisplay(pin: pin),
-              const SizedBox(height: 28),
-              _InfoLine(label: 'Device', value: deviceName),
-              _InfoLine(label: 'Address', value: '$hostInfo : $port'),
-              _InfoLine(
-                label: 'Discovery',
-                value: discoveryError == null ? '_playbridge._tcp.' : 'failed: $discoveryError',
-                error: discoveryError != null,
+              _NavItem(
+                icon: Icons.star_border,
+                label: 'Favorites',
+                selected: !showingVideo && dest == _Dest.favorites,
+                onTap: () => onDestSelect(_Dest.favorites),
               ),
+
+              const Spacer(),
+
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Divider(
+                  height: 1,
+                  color: Colors.white.withValues(alpha: 0.08),
+                ),
+              ),
+              _NavItem(
+                icon: Icons.settings,
+                label: 'Settings',
+                selected: !showingVideo && dest == _Dest.settings,
+                onTap: () => onDestSelect(_Dest.settings),
+              ),
+              const SizedBox(height: 12),
             ],
           ),
         ),
@@ -275,75 +549,67 @@ class PairingOverlay extends StatelessWidget {
   }
 }
 
-class _PinDisplay extends StatelessWidget {
-  const _PinDisplay({required this.pin});
-  final String pin;
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.accent = false,
+  });
 
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final ch in pin.split(''))
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: Container(
-              width: 64,
-              height: 80,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: Colors.white10,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white24),
-              ),
-              child: Text(
-                ch,
-                style: const TextStyle(
-                  fontSize: 44,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 2,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _InfoLine extends StatelessWidget {
-  const _InfoLine({required this.label, required this.value, this.error = false});
+  final IconData icon;
   final String label;
-  final String value;
-  final bool error;
+  final bool selected;
+  final VoidCallback onTap;
+  final bool accent;
 
   @override
   Widget build(BuildContext context) {
+    final fg = selected
+        ? (accent ? Colors.tealAccent : Colors.white)
+        : Colors.white54;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 90,
-            child: Text(
-              label,
-              style: const TextStyle(color: Colors.white54, fontSize: 13),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: selected
+                ? BoxDecoration(
+                    color: accent
+                        ? Colors.tealAccent.withValues(alpha: 0.12)
+                        : Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                  )
+                : null,
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: fg),
+                const SizedBox(width: 10),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: fg,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ],
             ),
           ),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 13,
-              color: error ? Colors.redAccent : Colors.white,
-              fontFamily: 'monospace',
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
+
+// ─── Status bar ──────────────────────────────────────────────────────────────
 
 class _StatusBar extends StatelessWidget {
   const _StatusBar({
@@ -369,34 +635,44 @@ class _StatusBar extends StatelessWidget {
       PairingPhase.awaitingPin => 'pairing…',
       PairingPhase.authenticated => 'paired',
     };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: Colors.black87,
-      child: Row(
-        children: [
-          Icon(
-            serverError != null ? Icons.error_outline : Icons.cast_connected,
-            color: serverError != null ? Colors.redAccent : Colors.greenAccent,
-            size: 18,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              serverError != null
-                  ? 'Server failed: $serverError'
-                  : ':$kDefaultPort  ·  $hostInfo  ·  $phaseLabel  ·  ${player.state}'
-                      '${player.currentTitle != null ? '  ·  ${player.currentTitle}' : ''}'
-                      '${discoveryError != null ? '  ·  mDNS: $discoveryError' : ''}',
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.35),
+            border: Border(
+              top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
             ),
           ),
-          if (player.durationMs > 0)
-            Text(
-              '${_fmt(pos)} / ${_fmt(dur)}',
-              style: const TextStyle(fontSize: 12, color: Colors.white70),
-            ),
-        ],
+          child: Row(
+            children: [
+              Icon(
+                serverError != null ? Icons.error_outline : Icons.cast_connected,
+                color: serverError != null ? Colors.redAccent : Colors.greenAccent,
+                size: 16,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  serverError != null
+                      ? 'Server failed: $serverError'
+                      : ':$kDefaultPort  ·  $hostInfo  ·  $phaseLabel  ·  ${player.state}'
+                          '${player.currentTitle != null ? '  ·  ${player.currentTitle}' : ''}'
+                          '${discoveryError != null ? '  ·  mDNS: $discoveryError' : ''}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, color: Colors.white54),
+                ),
+              ),
+              if (player.durationMs > 0)
+                Text(
+                  '${_fmt(pos)} / ${_fmt(dur)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.white38),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -409,6 +685,8 @@ class _StatusBar extends StatelessWidget {
   }
 }
 
+// ─── Player controls bar ─────────────────────────────────────────────────────
+
 class _PlayerControlsBar extends StatefulWidget {
   const _PlayerControlsBar({
     required this.player,
@@ -418,6 +696,8 @@ class _PlayerControlsBar extends StatefulWidget {
     required this.playlistOpen,
     required this.onMenuOpened,
     required this.onMenuClosed,
+    required this.isFullScreen,
+    required this.onToggleFullScreen,
   });
 
   final PlayerController player;
@@ -427,14 +707,14 @@ class _PlayerControlsBar extends StatefulWidget {
   final bool playlistOpen;
   final VoidCallback onMenuOpened;
   final VoidCallback onMenuClosed;
+  final bool isFullScreen;
+  final VoidCallback onToggleFullScreen;
 
   @override
   State<_PlayerControlsBar> createState() => _PlayerControlsBarState();
 }
 
 class _PlayerControlsBarState extends State<_PlayerControlsBar> {
-  // While the user is dragging the scrubber, we don't want to fight them with
-  // updates from the player's position stream. Track the in-flight value here.
   double? _dragValue;
 
   @override
@@ -448,115 +728,134 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
       ignoring: !widget.visible,
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 150),
-        opacity: widget.visible ? 1 : 0.0,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 24, 12, 8),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.bottomCenter,
-              end: Alignment.topCenter,
-              colors: [
-                Colors.black.withValues(alpha: 0.9),
-                Colors.black.withValues(alpha: 0.0),
-              ],
+        opacity: widget.visible ? 1.0 : 0.0,
+        child: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 18, 12, 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.4),
+                border: Border(
+                  top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Scrubber
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 56,
+                        child: Text(
+                          _fmt(Duration(milliseconds: pos.toInt())),
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        ),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 3,
+                            thumbShape:
+                                const RoundSliderThumbShape(enabledThumbRadius: 6),
+                            overlayShape:
+                                const RoundSliderOverlayShape(overlayRadius: 12),
+                          ),
+                          child: Slider(
+                            min: 0,
+                            max: hasDuration ? dur : 1,
+                            value: pos,
+                            onChanged: hasDuration
+                                ? (v) => setState(() => _dragValue = v)
+                                : null,
+                            onChangeEnd: hasDuration
+                                ? (v) {
+                                    p.seek(Duration(milliseconds: v.toInt()));
+                                    setState(() => _dragValue = null);
+                                  }
+                                : null,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 56,
+                        child: Text(
+                          _fmt(Duration(milliseconds: p.durationMs)),
+                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        ),
+                      ),
+                    ],
+                  ),
+                  // Buttons
+                  Row(
+                    children: [
+                      if (widget.showQueueControls)
+                        IconButton(
+                          tooltip: 'Previous',
+                          icon: const Icon(Icons.skip_previous),
+                          onPressed: p.hasPrevious ? () => p.previous() : null,
+                        ),
+                      IconButton(
+                        tooltip: p.state == 'playing' ? 'Pause' : 'Play',
+                        icon: Icon(
+                          p.state == 'playing' ? Icons.pause : Icons.play_arrow,
+                        ),
+                        onPressed: () =>
+                            p.state == 'playing' ? p.pause() : p.resume(),
+                      ),
+                      if (widget.showQueueControls)
+                        IconButton(
+                          tooltip: 'Next',
+                          icon: const Icon(Icons.skip_next),
+                          onPressed: p.hasNext ? () => p.next() : null,
+                        ),
+                      const SizedBox(width: 12),
+                      if (widget.showQueueControls)
+                        Text(
+                          '${p.currentIndex + 1} / ${p.queue.length}',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      const Spacer(),
+                      _AudioMenuButton(
+                        player: p,
+                        onOpened: widget.onMenuOpened,
+                        onClosed: widget.onMenuClosed,
+                      ),
+                      _SubtitleMenuButton(
+                        player: p,
+                        onOpened: widget.onMenuOpened,
+                        onClosed: widget.onMenuClosed,
+                      ),
+                      if (widget.showQueueControls)
+                        IconButton(
+                          tooltip: widget.playlistOpen
+                              ? 'Hide playlist'
+                              : 'Show playlist',
+                          icon: Icon(
+                            widget.playlistOpen
+                                ? Icons.playlist_remove
+                                : Icons.playlist_play,
+                          ),
+                          onPressed: widget.onTogglePlaylist,
+                        ),
+                      IconButton(
+                        tooltip: widget.isFullScreen
+                            ? 'Exit fullscreen'
+                            : 'Fullscreen',
+                        icon: Icon(
+                          widget.isFullScreen
+                              ? Icons.fullscreen_exit
+                              : Icons.fullscreen,
+                        ),
+                        onPressed: widget.onToggleFullScreen,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Scrubber row: position · slider · duration
-              Row(
-                children: [
-                  SizedBox(
-                    width: 56,
-                    child: Text(
-                      _fmt(Duration(milliseconds: pos.toInt())),
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(fontSize: 12, color: Colors.white70),
-                    ),
-                  ),
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 3,
-                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                      ),
-                      child: Slider(
-                        min: 0,
-                        max: hasDuration ? dur : 1,
-                        value: pos,
-                        onChanged: hasDuration
-                            ? (v) => setState(() => _dragValue = v)
-                            : null,
-                        onChangeEnd: hasDuration
-                            ? (v) {
-                                p.seek(Duration(milliseconds: v.toInt()));
-                                setState(() => _dragValue = null);
-                              }
-                            : null,
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 56,
-                    child: Text(
-                      _fmt(Duration(milliseconds: p.durationMs)),
-                      style: const TextStyle(fontSize: 12, color: Colors.white70),
-                    ),
-                  ),
-                ],
-              ),
-              // Buttons row
-              Row(
-                children: [
-                  if (widget.showQueueControls)
-                    IconButton(
-                      tooltip: 'Previous',
-                      icon: const Icon(Icons.skip_previous),
-                      onPressed: p.hasPrevious ? () => p.previous() : null,
-                    ),
-                  IconButton(
-                    tooltip: p.state == 'playing' ? 'Pause' : 'Play',
-                    icon: Icon(p.state == 'playing' ? Icons.pause : Icons.play_arrow),
-                    onPressed: () => p.state == 'playing' ? p.pause() : p.resume(),
-                  ),
-                  if (widget.showQueueControls)
-                    IconButton(
-                      tooltip: 'Next',
-                      icon: const Icon(Icons.skip_next),
-                      onPressed: p.hasNext ? () => p.next() : null,
-                    ),
-                  const SizedBox(width: 12),
-                  if (widget.showQueueControls)
-                    Text(
-                      '${p.currentIndex + 1} / ${p.queue.length}',
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                  const Spacer(),
-                  _AudioMenuButton(
-                    player: p,
-                    onOpened: widget.onMenuOpened,
-                    onClosed: widget.onMenuClosed,
-                  ),
-                  _SubtitleMenuButton(
-                    player: p,
-                    onOpened: widget.onMenuOpened,
-                    onClosed: widget.onMenuClosed,
-                  ),
-                  if (widget.showQueueControls)
-                    IconButton(
-                      tooltip: widget.playlistOpen ? 'Hide playlist' : 'Show playlist',
-                      icon: Icon(
-                        widget.playlistOpen
-                            ? Icons.playlist_remove
-                            : Icons.playlist_play,
-                      ),
-                      onPressed: widget.onTogglePlaylist,
-                    ),
-                ],
-              ),
-            ],
           ),
         ),
       ),
@@ -572,6 +871,8 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
   }
 }
 
+// ─── Audio track menu ─────────────────────────────────────────────────────────
+
 class _AudioMenuButton extends StatelessWidget {
   const _AudioMenuButton({
     required this.player,
@@ -585,17 +886,13 @@ class _AudioMenuButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tracks = player.tracks.audio;
-    // Filter out the synthetic 'no'/'auto' entries that mpv exposes; only show
-    // them as menu items when there's at least one real track.
-    final real = tracks
+    final real = player.tracks.audio
         .where((t) => t.id != 'no' && t.id != 'auto')
         .toList(growable: false);
-    final disabled = real.length < 2;
     return PopupMenuButton<AudioTrack>(
       tooltip: 'Audio track',
       icon: const Icon(Icons.audiotrack),
-      enabled: !disabled,
+      enabled: real.length >= 2,
       onOpened: onOpened,
       onCanceled: onClosed,
       onSelected: (t) {
@@ -609,21 +906,23 @@ class _AudioMenuButton extends StatelessWidget {
             CheckedPopupMenuItem<AudioTrack>(
               value: t,
               checked: t.id == current.id,
-              child: Text(_audioLabel(t)),
+              child: Text(_label(t.language, t.title, 'Track ${t.id}')),
             ),
         ];
       },
     );
   }
 
-  String _audioLabel(AudioTrack t) {
-    final parts = <String>[];
-    if (t.language != null && t.language!.isNotEmpty) parts.add(t.language!);
-    if (t.title != null && t.title!.isNotEmpty) parts.add(t.title!);
-    if (parts.isEmpty) parts.add('Track ${t.id}');
-    return parts.join(' · ');
+  static String _label(String? lang, String? title, String fallback) {
+    final parts = <String>[
+      if (lang != null && lang.isNotEmpty) lang,
+      if (title != null && title.isNotEmpty) title,
+    ];
+    return parts.isEmpty ? fallback : parts.join(' · ');
   }
 }
+
+// ─── Subtitle track menu ──────────────────────────────────────────────────────
 
 class _SubtitleMenuButton extends StatelessWidget {
   const _SubtitleMenuButton({
@@ -638,8 +937,7 @@ class _SubtitleMenuButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tracks = player.tracks.subtitle;
-    final real = tracks
+    final real = player.tracks.subtitle
         .where((t) => t.id != 'no' && t.id != 'auto')
         .toList(growable: false);
     return PopupMenuButton<SubtitleTrack>(
@@ -665,21 +963,23 @@ class _SubtitleMenuButton extends StatelessWidget {
             CheckedPopupMenuItem<SubtitleTrack>(
               value: t,
               checked: t.id == current.id,
-              child: Text(_subLabel(t)),
+              child: Text(_label(t.language, t.title, 'Track ${t.id}')),
             ),
         ];
       },
     );
   }
 
-  String _subLabel(SubtitleTrack t) {
-    final parts = <String>[];
-    if (t.language != null && t.language!.isNotEmpty) parts.add(t.language!);
-    if (t.title != null && t.title!.isNotEmpty) parts.add(t.title!);
-    if (parts.isEmpty) parts.add('Track ${t.id}');
-    return parts.join(' · ');
+  static String _label(String? lang, String? title, String fallback) {
+    final parts = <String>[
+      if (lang != null && lang.isNotEmpty) lang,
+      if (title != null && title.isNotEmpty) title,
+    ];
+    return parts.isEmpty ? fallback : parts.join(' · ');
   }
 }
+
+// ─── Playlist drawer ──────────────────────────────────────────────────────────
 
 class _PlaylistDrawer extends StatelessWidget {
   const _PlaylistDrawer({required this.player, required this.onClose});
@@ -689,68 +989,76 @@ class _PlaylistDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.92),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                const Icon(Icons.playlist_play, size: 20, color: Colors.white70),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Up next  ·  ${player.queue.length} item${player.queue.length == 1 ? '' : 's'}',
-                    style: const TextStyle(fontSize: 13, color: Colors.white70),
-                  ),
-                ),
-                IconButton(
-                  iconSize: 18,
-                  icon: const Icon(Icons.close),
-                  onPressed: onClose,
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, color: Colors.white12),
-          Expanded(
-            child: ListView.builder(
-              itemCount: player.queue.length,
-              itemBuilder: (context, i) {
-                final item = player.queue[i];
-                final active = i == player.currentIndex;
-                return ListTile(
-                  dense: true,
-                  selected: active,
-                  selectedTileColor: Colors.white10,
-                  leading: SizedBox(
-                    width: 28,
-                    child: active
-                        ? const Icon(Icons.equalizer, size: 18, color: Colors.tealAccent)
-                        : Text(
-                            '${i + 1}',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white54, fontSize: 12),
-                          ),
-                  ),
-                  title: Text(
-                    item.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: active ? Colors.tealAccent : Colors.white,
-                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Material(
+          color: Colors.black.withValues(alpha: 0.45),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.playlist_play, size: 20, color: Colors.white54),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Up next  ·  ${player.queue.length} item${player.queue.length == 1 ? '' : 's'}',
+                        style: const TextStyle(fontSize: 13, color: Colors.white70),
+                      ),
                     ),
-                  ),
-                  onTap: active ? null : () => player.jumpTo(i),
-                );
-              },
-            ),
+                    IconButton(
+                      iconSize: 18,
+                      icon: const Icon(Icons.close),
+                      onPressed: onClose,
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: Colors.white12),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: player.queue.length,
+                  itemBuilder: (context, i) {
+                    final item = player.queue[i];
+                    final active = i == player.currentIndex;
+                    return ListTile(
+                      dense: true,
+                      selected: active,
+                      selectedTileColor: Colors.white10,
+                      leading: SizedBox(
+                        width: 28,
+                        child: active
+                            ? const Icon(Icons.equalizer,
+                                size: 18, color: Colors.tealAccent)
+                            : Text(
+                                '${i + 1}',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: Colors.white54, fontSize: 12),
+                              ),
+                      ),
+                      title: Text(
+                        item.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: active ? Colors.tealAccent : Colors.white,
+                          fontWeight:
+                              active ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                      onTap: active ? null : () => player.jumpTo(i),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
