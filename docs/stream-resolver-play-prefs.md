@@ -25,7 +25,6 @@ to incorporate the active prefs in its key.
 | `minBitrate` | float | Mbps | Parsed from description text or computed from size + runtime; unknown size let through |
 | `maxBitrate` | float | Mbps | Same parsing as `minBitrate` |
 | `audioLang` | string | `en`, `multi`, `fr`, `es`, … | Substring search in name + description; `multi` matches dual/multilang streams |
-| `bingeGroup` | string | exact string | Match against `behaviorHints.bingeGroup`; used for series to lock a consistent release across episodes |
 | `noCache` | int | `0` (default), `1` | Bypass play result cache for this request |
 | `probe` | int | `1` (default), `0` | Override server probing config per-request |
 | `skip` | int | `0` (default) | Already implemented — start from rank index N |
@@ -44,9 +43,6 @@ http://resolver:7001/api/play/movie/tt1234567?quality=4K&source=AIOStreams&noCac
 
 # English audio only, bitrate cap for slow connection
 http://resolver:7001/api/play/movie/tt1234567?quality=1080p&audioLang=en&maxBitrate=10
-
-# Series — lock binge group from episode 1 for consistent release across episodes
-http://resolver:7001/api/play/series/tt1234567:1:2?bingeGroup=%7Caiostreams%7C1080p%7CWEB-DL%7CplayWEB
 
 # TV retry — next candidate, same prefs
 http://resolver:7001/api/play/movie/tt1234567?quality=1080p&maxSize=15&skip=1
@@ -170,34 +166,13 @@ don't embed language information.
 
 ---
 
-## BingeGroup Matching
-
-The `bingeGroup` param filters against `stream.BehaviorHints.BingeGroup`, which is
-already a field in the Go server's `BehaviorHints` struct.
-
-AIOStreams example value: `|1080p|WEB-DL|playWEB`
-
-Matching rules:
-
-- If `bingeGroup` param is set and the stream has a non-empty `BingeGroup`: exact string match required.
-- If the stream has **no** `BingeGroup` (nil or empty): the stream is **let through** — HDHub and
-  other direct-URL addons don't set this field, and we don't want to exclude them entirely when
-  a bingeGroup filter is active.
-
-Primary use case is **series binging**: the phone reads the `bingeGroup` from the
-stream selected for episode 1, then passes it as `?bingeGroup=...` (URL-encoded)
-for episodes 2–N. This ensures all episodes come from the same release group at the
-same quality, avoiding mid-season quality or language shifts.
-
----
-
 ## Play Cache Key
 
 The play result cache key must include active prefs so different preference combos
 don't collide. The stream list cache key is **unchanged** (`type/id`).
 
 ```
-play cache key = "{type}/{id}|q={quality}&st={sourceType}&src={source}&min={minSize}&max={maxSize}&minbr={minBitrate}&maxbr={maxBitrate}&lang={audioLang}&bg={bingeGroup}"
+play cache key = "{type}/{id}|q={quality}&st={sourceType}&src={source}&min={minSize}&max={maxSize}&minbr={minBitrate}&maxbr={maxBitrate}&lang={audioLang}"
 ```
 
 Only non-zero/non-empty prefs are appended. `noCache=1` bypasses the cache entirely.
@@ -299,8 +274,6 @@ data class StreamingPrefs(
     val maxBitrateMbps: Float = 0f,        // 0 = no limit
     val audioLang: String = "",            // "en", "multi", "fr", etc. — "" = any
 )
-// Note: bingeGroup is NOT stored here — it is ephemeral, captured from episode 1's
-// resolved stream and passed per-request during a binge session, then discarded.
 ```
 
 Persisted to DataStore under a `streaming_prefs` key. Shared across sessions.
@@ -320,7 +293,6 @@ fun buildPlayUrl(
     type: String,
     id: String,
     prefs: StreamingPrefs,
-    bingeGroup: String? = null   // ephemeral — passed for series ep 2+
 ): String? {
     val template = addon.playEndpoint.ifBlank { return null }
     val base = addon.baseUrl + template
@@ -334,27 +306,18 @@ fun buildPlayUrl(
         if (prefs.maxBitrateMbps > 0) add("maxBitrate=${prefs.maxBitrateMbps}")
         if (prefs.minBitrateMbps > 0) add("minBitrate=${prefs.minBitrateMbps}")
         if (prefs.audioLang.isNotBlank()) add("audioLang=${prefs.audioLang}")
-        if (!bingeGroup.isNullOrBlank()) add("bingeGroup=${Uri.encode(bingeGroup)}")
     }
     return if (params.isEmpty()) base else "$base?${params.joinToString("&")}"
 }
 ```
 
-#### 2.6 BingeGroup capture for series
-
-When the phone resolves episode 1 of a series via `/api/play` and the TV starts
-playing, read the `bingeGroup` from the stream that was selected (passed back via
-`StatusMessage` or resolved locally) and store it in transient session state.
-Pass it as `?bingeGroup=...` for episodes 2–N via `buildPlayUrl`. Clear it when
-the user navigates away from the series.
-
-#### 2.7 TV retry — pass `skip=N`
+#### 2.6 TV retry — pass `skip=N`
 
 When the TV signals playback failure (via `StatusMessage` with `state = "error"`),
 the phone increments `skip` and re-sends the same URL with `?skip=1`, `?skip=2`, etc.,
-preserving all other preference params including `bingeGroup`.
+preserving all other preference params.
 
-#### 2.8 Preferences UI — settings screen
+#### 2.7 Preferences UI — settings screen
 
 A new section in app settings (or within the stream picker sheet) exposing:
 
@@ -365,9 +328,6 @@ A new section in app settings (or within the stream picker sheet) exposing:
 - Min file size slider (0 = none)
 - Max bitrate slider in Mbps (0 = unlimited — useful for bandwidth-constrained connections)
 - Min bitrate slider in Mbps (0 = none — useful to avoid low-quality re-encodes)
-
-BingeGroup has no UI — it is captured automatically from the first episode's stream
-and applied silently for the remainder of the series.
 
 ---
 
@@ -380,8 +340,6 @@ and applied silently for the remainder of the series.
 3. **AddonModels + Room migration** (Phase 2.1–2.3) — schema change, needs careful
    migration version bump.
 4. **StreamingPrefs DataStore + play URL construction** (Phase 2.4–2.5) — core phone logic.
-5. **BingeGroup capture** (Phase 2.6) — depends on StatusMessage error state patch being
-   applied; can be wired up independently if stream selection happens on the phone side.
-6. **TV retry with skip** (Phase 2.7) — requires the `StatusMessage` error state from
+5. **TV retry with skip** (Phase 2.6) — requires the `StatusMessage` error state from
    the protocol pending patch to be applied first.
-7. **Preferences UI** (Phase 2.8) — can ship after the rest; defaults work without it.
+6. **Preferences UI** (Phase 2.7) — can ship after the rest; defaults work without it.

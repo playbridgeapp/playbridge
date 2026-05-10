@@ -117,6 +117,47 @@ func (s *Server) handleDeleteAddon(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleReorderAddons serves PUT /api/addons
+// Body: ["url1","url2",...] — full ordered list of addon URLs.
+// Resets priorities to match the new position (0 = first).
+func (s *Server) handleReorderAddons(w http.ResponseWriter, r *http.Request) {
+	var urls []string
+	if err := json.NewDecoder(r.Body).Decode(&urls); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	byURL := make(map[string]config.SourceAddon, len(s.cfg.Addons))
+	for _, a := range s.cfg.Addons {
+		byURL[a.URL] = a
+	}
+	reordered := make([]config.SourceAddon, 0, len(urls))
+	for i, u := range urls {
+		a, ok := byURL[u]
+		if !ok {
+			s.mu.Unlock()
+			http.Error(w, "unknown addon URL: "+u, http.StatusBadRequest)
+			return
+		}
+		a.Priority = i
+		reordered = append(reordered, a)
+	}
+	s.cfg.Addons = reordered
+	err := s.persistConfig()
+	s.mu.Unlock()
+
+	if err != nil {
+		log.Printf("[addons] failed to persist reorder: %v", err)
+		http.Error(w, "reordered but config could not be saved: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[addons] reordered — %d addons", len(reordered))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reordered)
+}
+
 // persistConfig writes the current in-memory config back to disk.
 // Must be called with s.mu held (write lock).
 func (s *Server) persistConfig() error {

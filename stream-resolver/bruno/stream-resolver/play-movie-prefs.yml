@@ -1,24 +1,20 @@
 info:
-  name: Play - Movie (skip=1)
+  name: Play - Movie (with prefs)
   type: http
-  seq: 9
+  seq: 11
 
 http:
   method: get
   url: "{{baseUrl}}/api/play/movie/tt16431404"
   params:
-    - name: skip
-      value: "1"
-      type: query
-      enabled: true
     - name: quality
       value: "1080p"
       type: query
-      enabled: false
+      enabled: true
     - name: sourceType
       value: "web-dl,remux"
       type: query
-      enabled: false
+      enabled: true
     - name: source
       value: "AIOStreams"
       type: query
@@ -30,7 +26,7 @@ http:
     - name: maxSize
       value: "20"
       type: query
-      enabled: false
+      enabled: true
     - name: minBitrate
       value: "4"
       type: query
@@ -41,6 +37,14 @@ http:
       enabled: false
     - name: audioLang
       value: "en"
+      type: query
+      enabled: true
+    - name: noCache
+      value: "1"
+      type: query
+      enabled: false
+    - name: probe
+      value: "0"
       type: query
       enabled: false
   auth: inherit

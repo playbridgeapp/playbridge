@@ -38,10 +38,6 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
         mutableStateOf(browserPrefs.getBoolean("auto_select_enabled", false))
     }
 
-    var autoMaxMbpsText by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_max_mbps", "") ?: "")
-    }
-
     val addonDao = remember {
         DatabaseProvider.getDatabase(context).addonDao()
     }
@@ -69,6 +65,19 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
         mutableStateOf(browserPrefs.getString("preferred_subtitle_lang", "") ?: "")
     }
     var subExpanded by remember { mutableStateOf(false) }
+
+    var minSizeText by remember {
+        mutableStateOf(browserPrefs.getString("auto_stream_min_gb", "") ?: "")
+    }
+    var maxSizeText by remember {
+        mutableStateOf(browserPrefs.getString("auto_stream_max_gb", "") ?: "")
+    }
+    var minBitrateText by remember {
+        mutableStateOf(browserPrefs.getString("auto_stream_min_mbps", "") ?: "")
+    }
+    var maxBitrateText by remember {
+        mutableStateOf(browserPrefs.getString("auto_stream_max_mbps", "") ?: "")
+    }
 
     Scaffold(
         topBar = {
@@ -152,21 +161,78 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                 }
             )
 
-            // Bitrate Constraint
-            OutlinedTextField(
-                value = autoMaxMbpsText,
-                onValueChange = { raw ->
-                    if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
-                        autoMaxMbpsText = raw
-                        browserPrefs.edit().putString("auto_stream_max_mbps", raw.trim()).apply()
-                    }
-                },
-                label = { Text("Max Bitrate (Mbps, optional)") },
-                placeholder = { Text("e.g. 20") },
-                supportingText = { Text("Ignore streams above this bitrate during auto-selection.") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.fillMaxWidth()
+            // Bitrate Constraints
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedTextField(
+                    value = minBitrateText,
+                    onValueChange = { raw ->
+                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
+                            minBitrateText = raw
+                            browserPrefs.edit().putString("auto_stream_min_mbps", raw.trim()).apply()
+                        }
+                    },
+                    label = { Text("Min Bitrate") },
+                    placeholder = { Text("Mbps") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                OutlinedTextField(
+                    value = maxBitrateText,
+                    onValueChange = { raw ->
+                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
+                            maxBitrateText = raw
+                            browserPrefs.edit().putString("auto_stream_max_mbps", raw.trim()).apply()
+                        }
+                    },
+                    label = { Text("Max Bitrate") },
+                    placeholder = { Text("Mbps") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+            }
+            Text(
+                "Filter streams by estimated bitrate. Leave empty for no limit.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Size Constraints
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedTextField(
+                    value = minSizeText,
+                    onValueChange = { raw ->
+                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
+                            minSizeText = raw
+                            browserPrefs.edit().putString("auto_stream_min_gb", raw.trim()).apply()
+                        }
+                    },
+                    label = { Text("Min Size") },
+                    placeholder = { Text("GB") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                OutlinedTextField(
+                    value = maxSizeText,
+                    onValueChange = { raw ->
+                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
+                            maxSizeText = raw
+                            browserPrefs.edit().putString("auto_stream_max_gb", raw.trim()).apply()
+                        }
+                    },
+                    label = { Text("Max Size") },
+                    placeholder = { Text("GB") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+            }
+            Text(
+                "Filter streams by file size. Leave empty for no limit.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             // Preferred Addon

@@ -113,6 +113,45 @@ func (s *Server) handleDeleteMetaAddon(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleReorderMetaAddons serves PUT /api/meta-addons
+// Body: ["url1","url2",...] — full ordered list of meta addon URLs.
+func (s *Server) handleReorderMetaAddons(w http.ResponseWriter, r *http.Request) {
+	var urls []string
+	if err := json.NewDecoder(r.Body).Decode(&urls); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	byURL := make(map[string]config.MetaAddon, len(s.cfg.MetaAddons))
+	for _, a := range s.cfg.MetaAddons {
+		byURL[a.URL] = a
+	}
+	reordered := make([]config.MetaAddon, 0, len(urls))
+	for _, u := range urls {
+		a, ok := byURL[u]
+		if !ok {
+			s.mu.Unlock()
+			http.Error(w, "unknown meta addon URL: "+u, http.StatusBadRequest)
+			return
+		}
+		reordered = append(reordered, a)
+	}
+	s.cfg.MetaAddons = reordered
+	err := s.persistConfig()
+	s.mu.Unlock()
+
+	if err != nil {
+		log.Printf("[meta-addons] failed to persist reorder: %v", err)
+		http.Error(w, "reordered but config could not be saved: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[meta-addons] reordered — %d addons", len(reordered))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reordered)
+}
+
 // fetchMetaManifest fetches and validates an addon manifest, confirming it
 // supports the "meta" resource. Returns the addon name on success.
 func fetchMetaManifest(addonURL string, timeoutMs int) (string, error) {

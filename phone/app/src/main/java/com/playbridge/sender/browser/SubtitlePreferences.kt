@@ -9,7 +9,8 @@ object SubtitlePreferences {
         "German" to "de",
         "Italian" to "it",
         "Japanese" to "ja",
-        "Korean" to "ko"
+        "Korean" to "ko",
+        "Multi" to "multi"
     )
 
     val subtitleLanguages = listOf(

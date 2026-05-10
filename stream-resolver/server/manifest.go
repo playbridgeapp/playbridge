@@ -18,6 +18,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		Catalogs:    []any{},
 		BehaviorHints: types.ManifestHints{
 			Configurable: true,
+			PlayEndpoint: "/api/play/{type}/{id}",
 		},
 	}
 

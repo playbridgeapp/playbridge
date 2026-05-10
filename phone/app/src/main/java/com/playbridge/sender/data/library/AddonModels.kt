@@ -24,6 +24,7 @@ data class InstalledAddonEntity(
     val name: String,
     val description: String = "",
     val baseUrl: String,       // e.g. https://torrentio.strem.fun/providers=yts|sort=qualitysize|debridoptions=nodownloadlinks|realdebrid=XXXX
+    val playEndpoint: String = "", // "/api/play/{type}/{id}" or empty = standard /stream only
     val version: String = "",
     val types: String = "",    // Comma-separated: "movie,series"
     val resources: String = "",      // JSON array of resource names, e.g. ["stream","catalog","meta","subtitles"]
@@ -135,7 +136,13 @@ data class StremioManifest(
     val version: String = "",
     val resources: List<StremioResource> = emptyList(),
     val types: List<String> = emptyList(),
-    val catalogs: List<StremioCatalogEntry> = emptyList()
+    val catalogs: List<StremioCatalogEntry> = emptyList(),
+    val behaviorHints: StremioManifestHints? = null
+)
+
+@Serializable
+data class StremioManifestHints(
+    val playEndpoint: String? = null
 )
 
 @Serializable(with = StremioResourceSerializer::class)

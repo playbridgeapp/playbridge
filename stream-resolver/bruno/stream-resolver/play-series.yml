@@ -6,6 +6,51 @@ info:
 http:
   method: get
   url: "{{baseUrl}}/api/play/series/tt6741278:1:1"
+  params:
+    - name: quality
+      value: 1080p
+      type: query
+      disabled: true
+    - name: sourceType
+      value: web-dl,remux
+      type: query
+      disabled: true
+    - name: source
+      value: AIOStreams
+      type: query
+      disabled: true
+    - name: minSize
+      value: "5"
+      type: query
+      disabled: true
+    - name: maxSize
+      value: "20"
+      type: query
+      disabled: true
+    - name: minBitrate
+      value: "4"
+      type: query
+      disabled: true
+    - name: maxBitrate
+      value: "15"
+      type: query
+      disabled: true
+    - name: audioLang
+      value: en
+      type: query
+      disabled: true
+    - name: skip
+      value: "0"
+      type: query
+      disabled: true
+    - name: noCache
+      value: "1"
+      type: query
+      disabled: true
+    - name: probe
+      value: "0"
+      type: query
+      disabled: true
   auth: inherit
 
 settings:

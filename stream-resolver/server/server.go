@@ -63,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	// Addon management REST API
 	mux.HandleFunc("GET /api/addons", s.handleGetAddons)
 	mux.HandleFunc("POST /api/addons", s.handleAddAddon)
+	mux.HandleFunc("PUT /api/addons", s.handleReorderAddons)
 	mux.HandleFunc("DELETE /api/addons", s.handleDeleteAddon)
 
 	// Cache management REST API
@@ -74,9 +75,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/config/probing", s.handleGetProbingConfig)
 	mux.HandleFunc("PUT /api/config/probing", s.handleUpdateProbingConfig)
 
+	// Streaming defaults REST API
+	mux.HandleFunc("GET /api/config/defaults", s.handleGetDefaults)
+	mux.HandleFunc("PUT /api/config/defaults", s.handleUpdateDefaults)
+
 	// Meta addon management REST API
 	mux.HandleFunc("GET /api/meta-addons", s.handleGetMetaAddons)
 	mux.HandleFunc("POST /api/meta-addons", s.handleAddMetaAddon)
+	mux.HandleFunc("PUT /api/meta-addons", s.handleReorderMetaAddons)
 	mux.HandleFunc("DELETE /api/meta-addons", s.handleDeleteMetaAddon)
 
 	return corsMiddleware(mux)

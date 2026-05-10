@@ -36,14 +36,29 @@ type CacheConfig struct {
 	MetaTTLSeconds       int `json:"meta_ttl_seconds"`        // runtime lookup cache, default 86400
 }
 
+// DefaultsConfig holds server-side streaming preference defaults applied when
+// a /api/play request omits the corresponding query parameter.
+// Explicit query params always take precedence over these defaults.
+type DefaultsConfig struct {
+	Quality    string   `json:"quality"`     // "Auto", "4K", "1080p", "720p", "480p" — empty = any
+	SourceType []string `json:"source_type"` // e.g. ["web-dl","remux"] — nil/empty = any
+	Source     string   `json:"source"`      // addon name substring — empty = any
+	AudioLang  string   `json:"audio_lang"`  // "en", "multi", etc. — empty = any
+	MinSize    float64  `json:"min_size"`    // GB — 0 = no limit
+	MaxSize    float64  `json:"max_size"`    // GB — 0 = no limit
+	MinBitrate float64  `json:"min_bitrate"` // Mbps — 0 = no limit
+	MaxBitrate float64  `json:"max_bitrate"` // Mbps — 0 = no limit
+}
+
 // Config is the top-level addon configuration.
 type Config struct {
-	Port       int           `json:"port"`        // HTTP listen port, default 7000
-	BaseURL    string        `json:"base_url"`    // public base URL e.g. http://localhost:7000
-	Addons     []SourceAddon `json:"addons"`
-	MetaAddons []MetaAddon   `json:"meta_addons"` // used to fetch runtime for probing validation
-	Probing    ProbingConfig `json:"probing"`
-	Cache      CacheConfig   `json:"cache"`
+	Port       int            `json:"port"`     // HTTP listen port, default 7000
+	BaseURL    string         `json:"base_url"` // public base URL e.g. http://localhost:7000
+	Addons     []SourceAddon  `json:"addons"`
+	MetaAddons []MetaAddon    `json:"meta_addons"` // used to fetch runtime for probing validation
+	Probing    ProbingConfig  `json:"probing"`
+	Cache      CacheConfig    `json:"cache"`
+	Defaults   DefaultsConfig `json:"defaults"` // server-side streaming preference defaults
 }
 
 // Load reads and parses the config file at the given path, applying defaults
@@ -93,7 +108,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Probing.MaxAttempts = 5
 	}
 	if cfg.Probing.TimeoutMs == 0 {
-		cfg.Probing.TimeoutMs = 5000
+		cfg.Probing.TimeoutMs = 15000 // debrid URLs involve multi-hop redirects; 5s was too tight
 	}
 
 	if cfg.Cache.StreamListTTLSeconds == 0 {

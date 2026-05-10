@@ -42,7 +42,8 @@ type Manifest struct {
 
 // ManifestHints carries addon-level behavior hints.
 type ManifestHints struct {
-	Configurable bool `json:"configurable,omitempty"`
+	Configurable bool   `json:"configurable,omitempty"`
+	PlayEndpoint string `json:"playEndpoint,omitempty"`
 }
 
 // RankedStream is a stream enriched with ranking metadata for internal use.

@@ -1,0 +1,15 @@
+info:
+  name: Get Streaming Defaults
+  type: http
+  seq: 16
+
+http:
+  method: get
+  url: "{{baseUrl}}/api/config/defaults"
+  auth: inherit
+
+settings:
+  encodeUrl: false
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

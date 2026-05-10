@@ -28,8 +28,21 @@ func ProbeDuration(url string, timeoutMs int) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
 
+	// -probesize / -analyzeduration: cap how much data ffprobe reads before
+	// deciding on the container format. Without these it defaults to 5 MB /
+	// unlimited, which causes multi-hop debrid URLs (AIOStreams → RealDebrid CDN)
+	// to time out before the header is even parsed.
+	//
+	// -timeout: HTTP/HTTPS socket timeout in microseconds. Set to 80% of the
+	// process timeout so ffprobe fails with a clean network error rather than
+	// waiting to be killed, which gives a more useful log message.
+	httpTimeoutUs := int64(timeoutMs) * 800 // 80 % of process timeout, in µs
+
 	cmd := exec.CommandContext(ctx, ffprobe,
 		"-v", "error",
+		"-probesize", "5000000",     // read at most 5 MB
+		"-analyzeduration", "5000000", // analyse at most 5 s of data (µs)
+		"-timeout", strconv.FormatInt(httpTimeoutUs, 10), // HTTP socket timeout (µs)
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",
 		url,

@@ -176,7 +176,8 @@ class AddonRepository(
                     types = manifest.types.joinToString(","),
                     resources = resourcesJson,
                     resourceDetailsJson = resourceDetailsJson,
-                    catalogsJson = catalogsJson
+                    catalogsJson = catalogsJson,
+                    playEndpoint = manifest.behaviorHints?.playEndpoint ?: ""
                 )
 
                 addonDao.insert(entity)
@@ -256,7 +257,8 @@ class AddonRepository(
                     types = manifest.types.joinToString(","),
                     resources = json.encodeToString(resourceNames),
                     resourceDetailsJson = resourceDetailsJson,
-                    catalogsJson = json.encodeToString(manifest.catalogs)
+                    catalogsJson = json.encodeToString(manifest.catalogs),
+                    playEndpoint = manifest.behaviorHints?.playEndpoint ?: ""
                 )
                 addonDao.update(updated)
                 Log.d(TAG, "Refreshed addon: ${updated.name}")

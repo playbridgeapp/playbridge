@@ -312,11 +312,16 @@ fun LibraryDetailScreen(
             ?: return null
 
         val currentImdbId = resolvedImdbId
-        val items = videos.map { vid ->
+        val items = videos.mapIndexed { index, vid ->
             val streamId = if (currentImdbId != null) "$currentImdbId:${vid.season}:${vid.episode}" else vid.id
             val streamType = if (currentImdbId != null) "series" else addonType
+            
+            val hubUrl = StreamingUtils.buildPlayUrl(
+                hub, streamType, streamId, context
+            )
+
             com.playbridge.shared.protocol.PlayPayload(
-                url = "${hub.baseUrl}/api/play/$streamType/$streamId",
+                url = hubUrl,
                 title = "$displayTitle S${vid.season}E${vid.episode}${if (vid.title.isNotBlank()) " - ${vid.title}" else ""}",
                 contentType = "series",
                 detectedBy = "library",
@@ -479,7 +484,7 @@ fun LibraryDetailScreen(
                     if (playlist != null) {
                         if (forPhone) {
                             // Phone doesn't support playlists yet, just play the current one
-                            val hubUrl = "${hubAddon!!.baseUrl}/api/play/$streamType/$streamId"
+                            val hubUrl = StreamingUtils.buildPlayUrl(hubAddon!!, streamType, streamId, context)
                             openInExternalPlayer(context, hubUrl, null, null)
                         } else {
                             onPlayPlaylistToTv(playlist)
@@ -488,7 +493,7 @@ fun LibraryDetailScreen(
                     }
                 } else {
                     // Movie: Send single play
-                    val hubUrl = "${hubAddon!!.baseUrl}/api/play/$streamType/$streamId"
+                    val hubUrl = StreamingUtils.buildPlayUrl(hubAddon!!, streamType, streamId, context)
                     if (forPhone) {
                         openInExternalPlayer(context, hubUrl, null, null)
                     } else {

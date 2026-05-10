@@ -82,3 +82,6 @@ stream-resolver/config.json
 stream-resolver/cache/
 stream-resolver/playbridge-stream-resolver
 stream-resolver/*.exe
+
+# Claude Code local settings
+.claude/
