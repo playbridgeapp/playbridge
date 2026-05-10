@@ -7,6 +7,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'auto_launch.dart';
 import 'discovery.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
@@ -55,6 +56,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   Timer? _hideTimer;
   static const _autoHide = Duration(seconds: 2);
 
+  // When true the pairing overlay is shown regardless of playback state,
+  // letting the user get back to it from the player controls settings button.
+  bool _forcePairing = false;
+
   void _markActive() {
     if (!_videoHovered) setState(() => _videoHovered = true);
     _hideTimer?.cancel();
@@ -96,16 +101,13 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   Future<void> _initTrayAndWindow() async {
     await _tray.init();
-    // Hide the window at launch only if we already have a paired device
-    // — first-run users need to see the PIN screen.
     await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
-    if (widget.store.hasPairedClient) {
-      await windowManager.hide();
-    } else {
-      await windowManager.show();
-      await windowManager.focus();
-    }
+    // Always show the window on launch so the user has a chance to see the
+    // pairing screen or the player. Auto-hide only happens when the user
+    // explicitly clicks the close button (onWindowClose below).
+    await windowManager.show();
+    await windowManager.focus();
   }
 
   /// Show the window when playback starts (rising edge: queue empty → not).
@@ -120,6 +122,20 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   Future<void> _revealWindow() async {
     await windowManager.show();
     await windowManager.focus();
+  }
+
+  void _openSettings(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => _SettingsDialog(
+        server: _server,
+        store: widget.store,
+        onShowPairing: () {
+          Navigator.of(context).pop();
+          setState(() => _forcePairing = true);
+        },
+      ),
+    );
   }
 
   @override
@@ -197,8 +213,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
             // mid-video, the user keeps watching; pairing is reachable via the
             // tray menu when they want it.
             final hasActiveMedia = _player.queue.isNotEmpty;
-            final showPairing = _server.phase != PairingPhase.authenticated &&
-                !hasActiveMedia;
+            final showPairing = (_server.phase != PairingPhase.authenticated &&
+                    !hasActiveMedia) ||
+                _forcePairing;
             final hasQueue = _player.queue.length > 1;
             final hasMedia = _player.queue.isNotEmpty;
             const titleBarHeight = 28.0;
@@ -258,6 +275,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                   playlistOpen: _playlistDrawerOpen,
                                   onMenuOpened: () => setState(() => _menusOpen++),
                                   onMenuClosed: () => setState(() => _menusOpen = (_menusOpen - 1).clamp(0, 99)),
+                                  onSettings: () => _openSettings(context),
                                 ),
                               ),
                             if (hasQueue && _playlistDrawerOpen && !showPairing)
@@ -292,6 +310,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                     port: kDefaultPort,
                     phase: _server.phase,
                     discoveryError: _discoveryError,
+                    onDismiss: _forcePairing
+                        ? () => setState(() => _forcePairing = false)
+                        : null,
                   ),
               ],
             );
@@ -311,6 +332,7 @@ class PairingOverlay extends StatelessWidget {
     required this.port,
     required this.phase,
     required this.discoveryError,
+    this.onDismiss,
   });
 
   final String pin;
@@ -319,6 +341,9 @@ class PairingOverlay extends StatelessWidget {
   final int port;
   final PairingPhase phase;
   final String? discoveryError;
+  /// Non-null when the overlay was opened manually from settings — shows an
+  /// X button so the user can return to the player without disconnecting.
+  final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -328,43 +353,57 @@ class PairingOverlay extends StatelessWidget {
       child: Container(
         color: Colors.black.withValues(alpha: 0.28),
         alignment: Alignment.center,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
-          child: Padding(
-            padding: const EdgeInsets.all(40),
-            child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Icon(
-                highlight ? Icons.phonelink_ring : Icons.cast,
-                size: 56,
-                color: highlight ? Colors.tealAccent : Colors.white70,
+        child: Stack(
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: Padding(
+                padding: const EdgeInsets.all(40),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Icon(
+                      highlight ? Icons.phonelink_ring : Icons.cast,
+                      size: 56,
+                      color: highlight ? Colors.tealAccent : Colors.white70,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      highlight ? 'Phone is pairing…' : 'Pair with PlayBridge',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'On the phone, pick "$deviceName" then enter this PIN:',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 28),
+                    _PinDisplay(pin: pin),
+                    const SizedBox(height: 28),
+                    _InfoLine(label: 'Device', value: deviceName),
+                    _InfoLine(label: 'Address', value: '$hostInfo : $port'),
+                    _InfoLine(
+                      label: 'Discovery',
+                      value: discoveryError == null ? '_playbridge._tcp.' : 'failed: $discoveryError',
+                      error: discoveryError != null,
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
-              Text(
-                highlight ? 'Phone is pairing…' : 'Pair with PlayBridge',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'On the phone, pick "$deviceName" then enter this PIN:',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70),
-              ),
-              const SizedBox(height: 28),
-              _PinDisplay(pin: pin),
-              const SizedBox(height: 28),
-              _InfoLine(label: 'Device', value: deviceName),
-              _InfoLine(label: 'Address', value: '$hostInfo : $port'),
-              _InfoLine(
-                label: 'Discovery',
-                value: discoveryError == null ? '_playbridge._tcp.' : 'failed: $discoveryError',
-                error: discoveryError != null,
-              ),
-              ],
             ),
-          ),
+            if (onDismiss != null)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: IconButton(
+                  tooltip: 'Back to player',
+                  icon: const Icon(Icons.close),
+                  onPressed: onDismiss,
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -529,6 +568,7 @@ class _PlayerControlsBar extends StatefulWidget {
     required this.playlistOpen,
     required this.onMenuOpened,
     required this.onMenuClosed,
+    required this.onSettings,
   });
 
   final PlayerController player;
@@ -538,6 +578,7 @@ class _PlayerControlsBar extends StatefulWidget {
   final bool playlistOpen;
   final VoidCallback onMenuOpened;
   final VoidCallback onMenuClosed;
+  final VoidCallback onSettings;
 
   @override
   State<_PlayerControlsBar> createState() => _PlayerControlsBarState();
@@ -664,6 +705,11 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                       ),
                       onPressed: widget.onTogglePlaylist,
                     ),
+                  IconButton(
+                    tooltip: 'Settings',
+                    icon: const Icon(Icons.settings),
+                    onPressed: widget.onSettings,
+                  ),
                 ],
               ),
             ],
@@ -790,6 +836,246 @@ class _SubtitleMenuButton extends StatelessWidget {
     if (t.title != null && t.title!.isNotEmpty) parts.add(t.title!);
     if (parts.isEmpty) parts.add('Track ${t.id}');
     return parts.join(' · ');
+  }
+}
+
+class _SettingsDialog extends StatefulWidget {
+  const _SettingsDialog({
+    required this.server,
+    required this.store,
+    required this.onShowPairing,
+  });
+
+  final ReceiverServer server;
+  final PairingStore store;
+  final VoidCallback onShowPairing;
+
+  @override
+  State<_SettingsDialog> createState() => _SettingsDialogState();
+}
+
+class _SettingsDialogState extends State<_SettingsDialog> {
+  bool? _autoLaunchEnabled;
+  bool _isSandboxed = false;
+  AutoLaunch? _autoLaunch;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAutoLaunch();
+  }
+
+  Future<void> _loadAutoLaunch() async {
+    final sandboxed = await AutoLaunch.isLikelySandboxed();
+    if (!Platform.isWindows) {
+      final execPath = await AutoLaunch.resolveExecutablePath();
+      final al = AutoLaunch(
+        bundleId: 'com.playbridge.desktop',
+        executablePath: execPath,
+      );
+      final enabled = await al.isEnabled();
+      if (mounted) {
+        setState(() {
+          _autoLaunch = al;
+          _autoLaunchEnabled = enabled;
+          _isSandboxed = sandboxed;
+        });
+      }
+    } else if (mounted) {
+      setState(() => _isSandboxed = false);
+    }
+  }
+
+  Future<void> _toggleAutoLaunch(bool value) async {
+    final al = _autoLaunch;
+    if (al == null) return;
+    if (value) {
+      await al.enable();
+    } else {
+      await al.disable();
+    }
+    setState(() => _autoLaunchEnabled = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: widget.server,
+      builder: (context, _) {
+        final authed = widget.server.authedClientCount;
+        final total = widget.server.connectedClientCount;
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+              child: Container(
+                width: 480,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Header
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 20, 8, 4),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.settings, size: 22, color: Colors.white70),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Settings',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            iconSize: 18,
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.of(context).pop(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1, color: Colors.white10),
+                    // Pairing section
+                    _SettingsSection(label: 'Pairing'),
+                    _SettingsTile(
+                      icon: Icons.phonelink,
+                      title: 'Device name',
+                      trailing: Text(
+                        widget.store.deviceName,
+                        style: const TextStyle(color: Colors.white54, fontSize: 13),
+                      ),
+                    ),
+                    _SettingsTile(
+                      icon: Icons.pin,
+                      title: 'Show pairing PIN',
+                      subtitle: 'Return to the pairing screen',
+                      onTap: widget.onShowPairing,
+                    ),
+                    _SettingsTile(
+                      icon: Icons.devices,
+                      title: 'Connected clients',
+                      trailing: Text(
+                        authed > 0 ? '$authed authenticated ($total total)' : 'none',
+                        style: TextStyle(
+                          color: authed > 0 ? Colors.tealAccent : Colors.white38,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    if (authed > 0)
+                      _SettingsTile(
+                        icon: Icons.logout,
+                        title: 'Disconnect all clients',
+                        subtitle: 'Forces re-authentication on next connection',
+                        onTap: () async {
+                          await widget.server.kickAll();
+                          if (context.mounted) Navigator.of(context).pop();
+                        },
+                        danger: true,
+                      ),
+                    // System section
+                    _SettingsSection(label: 'System'),
+                    if (!Platform.isWindows)
+                      _SettingsTile(
+                        icon: Icons.launch,
+                        title: 'Launch at login',
+                        subtitle: _isSandboxed
+                            ? 'Not available in sandboxed builds'
+                            : null,
+                        trailing: _autoLaunchEnabled == null
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Switch(
+                                value: _autoLaunchEnabled!,
+                                onChanged:
+                                    _isSandboxed ? null : _toggleAutoLaunch,
+                              ),
+                      ),
+                    // About section
+                    _SettingsSection(label: 'About'),
+                    _SettingsTile(
+                      icon: Icons.info_outline,
+                      title: 'PlayBridge Desktop',
+                      trailing: const Text(
+                        'v1.0.0  ·  port 8765',
+                        style: TextStyle(color: Colors.white38, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SettingsSection extends StatelessWidget {
+  const _SettingsSection({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          label.toUpperCase(),
+          style: const TextStyle(
+            fontSize: 11,
+            letterSpacing: 1.2,
+            color: Colors.white38,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  const _SettingsTile({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+    this.onTap,
+    this.danger = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = danger ? Colors.redAccent : Colors.white;
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, size: 20, color: danger ? Colors.redAccent : Colors.white70),
+      title: Text(title, style: TextStyle(color: color, fontSize: 14)),
+      subtitle: subtitle != null
+          ? Text(subtitle!, style: const TextStyle(color: Colors.white38, fontSize: 12))
+          : null,
+      trailing: trailing,
+      onTap: onTap,
+    );
   }
 }
 

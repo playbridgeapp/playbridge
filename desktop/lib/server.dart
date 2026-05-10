@@ -75,6 +75,16 @@ class ReceiverServer extends ChangeNotifier {
     await _http?.close(force: true);
   }
 
+  int get connectedClientCount => _all.length;
+  int get authedClientCount => _authed.length;
+
+  /// Disconnect all authenticated clients (forces re-auth / pairing).
+  Future<void> kickAll() async {
+    for (final c in _authed.toList()) {
+      await c.sink.close();
+    }
+  }
+
   void _onClient(WebSocketChannel channel, String? subprotocol) {
     debugPrint('[server] client connected');
     _all.add(channel);
