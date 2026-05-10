@@ -1,85 +1,69 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 
-/// Animated aurora background driven by a fragment shader. Sits behind all
-/// other UI; the video texture covers it during playback so it pays no
-/// rendering cost while the user is watching something.
-class AuroraBackground extends StatefulWidget {
+/// Static layered gradient background. Replaces the previous shader-driven
+/// aurora — those 6 octaves of FBM + domain warping looked great but ate GPU
+/// even when fully covered, which made mpv playback lag on lower-end machines.
+///
+/// The look is approximated with a base diagonal navy gradient and two soft
+/// radial highlights — costs essentially nothing per frame.
+class AuroraBackground extends StatelessWidget {
   const AuroraBackground({super.key});
 
   @override
-  State<AuroraBackground> createState() => _AuroraBackgroundState();
-}
-
-class _AuroraBackgroundState extends State<AuroraBackground>
-    with SingleTickerProviderStateMixin {
-  ui.FragmentShader? _shader;
-  late final Ticker _ticker;
-  Duration _elapsed = Duration.zero;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    _ticker = createTicker((d) {
-      setState(() => _elapsed = d);
-    });
-    _ticker.start();
-  }
-
-  Future<void> _load() async {
-    try {
-      final program =
-          await ui.FragmentProgram.fromAsset('shaders/aurora.frag');
-      if (!mounted) return;
-      setState(() => _shader = program.fragmentShader());
-    } catch (e) {
-      debugPrint('[shader] failed to load aurora.frag: $e');
-    }
-  }
-
-  @override
-  void dispose() {
-    _ticker.dispose();
-    _shader?.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final shader = _shader;
-    if (shader == null) {
-      // Fallback: a flat dark color while compiling, or if shader compile
-      // failed (logged but UI doesn't break).
-      return const ColoredBox(color: Color(0xFF0A0612));
-    }
-    return CustomPaint(
-      painter: _AuroraPainter(shader, _elapsed),
-      size: Size.infinite,
+    return const Stack(
+      children: [
+        // Base diagonal — deep navy with a brighter mid-band.
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFF03060F),
+                  Color(0xFF0C1A36),
+                  Color(0xFF050B1C),
+                ],
+                stops: [0.0, 0.55, 1.0],
+              ),
+            ),
+          ),
+        ),
+        // Soft cyan-blue glow off the upper-left — gives the sidebar's
+        // BackdropFilter something colorful to blur into.
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(-0.5, -0.7),
+                radius: 1.4,
+                colors: [
+                  Color(0x66294E8E),
+                  Color(0x00294E8E),
+                ],
+                stops: [0.0, 1.0],
+              ),
+            ),
+          ),
+        ),
+        // Subtler glow off the lower-right.
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0.7, 0.8),
+                radius: 1.0,
+                colors: [
+                  Color(0x44164080),
+                  Color(0x00164080),
+                ],
+                stops: [0.0, 1.0],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
-}
-
-class _AuroraPainter extends CustomPainter {
-  _AuroraPainter(this.shader, this.elapsed);
-
-  final ui.FragmentShader shader;
-  final Duration elapsed;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    shader
-      ..setFloat(0, size.width)
-      ..setFloat(1, size.height)
-      ..setFloat(2, elapsed.inMicroseconds / 1e6);
-    canvas.drawRect(
-      Offset.zero & size,
-      Paint()..shader = shader,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _AuroraPainter old) => true;
 }

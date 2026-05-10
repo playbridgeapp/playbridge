@@ -41,5 +41,3 @@ flutter:
   uses-material-design: true
   assets:
     - assets/tray_icon.png
-  shaders:
-    - shaders/aurora.frag

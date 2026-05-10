@@ -41,6 +41,10 @@ class ReceiverServer extends ChangeNotifier {
   final Set<WebSocketChannel> _authed = {};
   final Set<WebSocketChannel> _awaitingPin = {};
 
+  // Dedupe rapid-fire duplicate play commands from the phone.
+  String? _lastPlayUrl;
+  DateTime _lastPlayAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   PairingPhase get phase {
     if (_authed.isNotEmpty) return PairingPhase.authenticated;
     if (_awaitingPin.isNotEmpty) return PairingPhase.awaitingPin;
@@ -173,6 +177,17 @@ class ReceiverServer extends ChangeNotifier {
       case ContextQueryCmd():
         channel.sink.add(contextJson(player.state == 'idle' ? 'idle' : 'player'));
       case PlayCmd(:final url, :final title, :final headers, :final subtitles):
+        // Phones sometimes fire the same play command twice within ms (double
+        // tap, retry on slow ack). Each replay tears down whatever buffer mpv
+        // has accumulated, so swallow exact duplicates within a short window.
+        final now = DateTime.now();
+        if (url == _lastPlayUrl &&
+            now.difference(_lastPlayAt) < const Duration(seconds: 2)) {
+          debugPrint('[server] dropping duplicate play for $url');
+          break;
+        }
+        _lastPlayUrl = url;
+        _lastPlayAt = now;
         unawaited(player.playUrl(
           url,
           title: title,

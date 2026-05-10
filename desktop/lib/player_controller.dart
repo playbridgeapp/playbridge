@@ -20,7 +20,11 @@ class PlayerController extends ChangeNotifier {
         debugPrint('[player] playing=$playing');
         _emit();
       }),
-      player.stream.position.listen((_) => _emit()),
+      // Position events fire on every mpv frame — rebuilding the entire
+      // AnimatedBuilder tree (with its BackdropFilters) at 60 Hz starves the
+      // video texture of GPU. Throttle to 5 Hz; the scrubber/clock is plenty
+      // smooth at that rate.
+      player.stream.position.listen((_) => _emitThrottled()),
       player.stream.duration.listen((_) => _emit()),
       player.stream.buffering.listen((b) {
         debugPrint('[player] buffering=$b');
@@ -41,6 +45,16 @@ class PlayerController extends ChangeNotifier {
     ]);
   }
 
+  DateTime _lastPositionEmit = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _positionEmitInterval = Duration(milliseconds: 200);
+
+  void _emitThrottled() {
+    final now = DateTime.now();
+    if (now.difference(_lastPositionEmit) < _positionEmitInterval) return;
+    _lastPositionEmit = now;
+    notifyListeners();
+  }
+
   Tracks get tracks => player.state.tracks;
   Track get track => player.state.track;
 
@@ -57,23 +71,86 @@ class PlayerController extends ChangeNotifier {
     final native = player.platform;
     if (native is NativePlayer) {
       try {
-        // Overall network operation timeout (default 60s — be explicit).
+        // Hardware decoding — videotoolbox on macOS, d3d11va on Windows,
+        // vaapi/nvdec on Linux. Without this, h264/hevc 1080p+ pegs the CPU.
+        await native.setProperty('hwdec', 'auto-safe');
+
+        // — Network buffering ———————————————————————————————————————————————
+        // libmpv defaults to ~1 second of read-ahead. We crank everything up;
+        // whether it actually helps depends on whether the upstream allows
+        // buffering ahead of playback (some hosts rate-limit to realtime).
+        await native.setProperty('cache', 'yes');
+        await native.setProperty('cache-secs', '60');
+        await native.setProperty('demuxer-readahead-secs', '60');
+        await native.setProperty('demuxer-max-bytes', '314572800'); // 300 MiB
+        await native.setProperty('demuxer-max-back-bytes', '104857600'); // 100 MiB
+        await native.setProperty('stream-buffer-size', '8MiB');
+
         await native.setProperty('network-timeout', '120');
-        // ffmpeg/lavf options applied to both stream and demuxer layers:
-        //   timeout    — TCP/TLS connect & I/O timeout, in microseconds
-        //   reconnect* — auto-resume when the upstream drops mid-stream
         const lavf =
             'timeout=30000000,reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5';
         await native.setProperty('stream-lavf-o-add', lavf);
         await native.setProperty('demuxer-lavf-o-add', lavf);
-        // Don't auto-pause on minor cache underruns — try to keep playing.
+        // When the upstream rate-limits to realtime, pausing for cache just
+        // stutters worse — keep playing and tolerate the occasional drop.
         await native.setProperty('cache-pause', 'no');
-        // Don't pause when buffer fills up momentarily.
         await native.setProperty('cache-pause-wait', '1');
+
+        // Echo what mpv accepted, so we can tell if a setting was silently
+        // rejected (some are option-only, not runtime-tunable).
+        for (final p in const [
+          'demuxer-readahead-secs',
+          'demuxer-max-bytes',
+          'cache-secs',
+          'stream-buffer-size',
+        ]) {
+          try {
+            final v = await native.getProperty(p);
+            debugPrint('[player cfg] $p = $v');
+          } catch (e) {
+            debugPrint('[player cfg] $p — not readable ($e)');
+          }
+        }
       } catch (e) {
         debugPrint('[player] failed to tune mpv: $e');
       }
+      _startStatsLogger(native);
     }
+  }
+
+  Timer? _statsTimer;
+
+  /// Periodically dumps mpv's view of the world to the debug console so we
+  /// can tell whether playback lag is decoder-side (hwdec failing, frames
+  /// dropping) or compositor-side (mpv healthy but Flutter can't keep up).
+  void _startStatsLogger(NativePlayer native) {
+    _statsTimer?.cancel();
+    const fields = [
+      'hwdec-current',
+      'width',
+      'height',
+      'container-fps',
+      'frame-drop-count',
+      'vo-delayed-frame-count',
+      'video-bitrate',
+      'demuxer-cache-duration',
+      'paused-for-cache',
+      'cache-buffering-state',
+    ];
+    _statsTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      // Only spew when something is actually playing.
+      if (_currentIndex < 0) return;
+      final parts = <String>[];
+      for (final f in fields) {
+        try {
+          final v = await native.getProperty(f);
+          if (v.toString().isNotEmpty) parts.add('$f=$v');
+        } catch (_) {
+          // property not available on this build — silently skip
+        }
+      }
+      if (parts.isNotEmpty) debugPrint('[mpv stats] ${parts.join(' | ')}');
+    });
   }
 
   /// Fires whenever the active playlist index changes (jump, next, prev,
@@ -210,6 +287,7 @@ class PlayerController extends ChangeNotifier {
 
   @override
   Future<void> dispose() async {
+    _statsTimer?.cancel();
     for (final s in _subs) {
       await s.cancel();
     }

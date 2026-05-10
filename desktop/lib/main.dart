@@ -67,6 +67,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   _Dest _dest = _Dest.cast;
   bool _showingVideo = false;
+  bool _isFullScreen = false;
 
   // Controls visibility for the video overlay
   bool _videoHovered = false;
@@ -161,6 +162,21 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     if (prevented) await windowManager.hide();
   }
 
+  @override
+  void onWindowEnterFullScreen() {
+    if (mounted) setState(() => _isFullScreen = true);
+  }
+
+  @override
+  void onWindowLeaveFullScreen() {
+    if (mounted) setState(() => _isFullScreen = false);
+  }
+
+  Future<void> _toggleFullScreen() async {
+    final isFs = await windowManager.isFullScreen();
+    await windowManager.setFullScreen(!isFs);
+  }
+
   Future<void> _bootServer() async {
     try {
       await _server.start();
@@ -224,124 +240,153 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
             final hasMedia = _player.queue.isNotEmpty;
             final hasQueue = _player.queue.length > 1;
             const titleBarHeight = 28.0;
+            // Hide every piece of chrome (title bar, sidebar, status bar)
+            // when the user is watching video in full-screen — the video
+            // should fill the entire monitor, not be framed by panels.
+            final hideChrome = _isFullScreen && _showingVideo && hasMedia;
 
-            return Column(
+            return Stack(
+              fit: StackFit.expand,
               children: [
-                // Draggable title bar — spans full width above sidebar + content.
-                SizedBox(
-                  height: titleBarHeight,
-                  child: DragToMoveArea(
-                    child: Row(
-                      children: [
-                        const SizedBox(width: 78), // reserve macOS traffic lights
-                        Expanded(child: Container(color: Colors.transparent)),
-                      ],
-                    ),
-                  ),
-                ),
+                // Aurora background — only rendered when the user is NOT
+                // watching video. Six-octave FBM + domain warping is expensive,
+                // and during playback the video texture covers most of it
+                // anyway, so leaving it running just steals GPU from mpv.
+                if (!_showingVideo)
+                  const Positioned.fill(child: AuroraBackground()),
 
-                // Main body: sidebar + content area.
-                Expanded(
-                  child: Row(
-                    children: [
-                      _NavSidebar(
-                        dest: _dest,
-                        showingVideo: _showingVideo,
-                        hasMedia: hasMedia,
-                        playerState: _player.state,
-                        onDestSelect: (d) => setState(() {
-                          _dest = d;
-                          _showingVideo = false;
-                        }),
-                        onShowVideo: () => setState(() => _showingVideo = true),
-                      ),
-                      Expanded(
-                        child: MouseRegion(
-                          onEnter: (_) => _markActive(),
-                          onExit: (_) => _markInactive(),
-                          onHover: (_) => _markActive(),
-                          child: Stack(
-                            children: [
-                              // Aurora background — visible on all screens except video.
-                              if (!_showingVideo)
-                                const Positioned.fill(child: AuroraBackground()),
-
-                              // Video is always in the tree (Offstage) so the
-                              // mpv texture is never torn down mid-playback.
-                              Offstage(
-                                offstage: !_showingVideo || !hasMedia,
-                                child: Container(
-                                  color: Colors.black,
-                                  child: Video(
-                                    controller: _video,
-                                    controls: NoVideoControls,
-                                    fill: Colors.transparent,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!hideChrome)
+                      SizedBox(
+                        height: titleBarHeight,
+                        child: ClipRect(
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                            child: DragToMoveArea(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Colors.white.withValues(alpha: 0.10),
+                                      Colors.black.withValues(alpha: 0.20),
+                                    ],
                                   ),
+                                  border: Border(
+                                    bottom: BorderSide(
+                                      color: Colors.white.withValues(alpha: 0.08),
+                                    ),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const SizedBox(width: 78),
+                                    Expanded(
+                                      child: Container(color: Colors.transparent),
+                                    ),
+                                  ],
                                 ),
                               ),
-
-                              // Non-video screens.
-                              if (!_showingVideo)
-                                Positioned.fill(
-                                  child: _buildScreen(),
-                                ),
-
-                              // Player controls overlay (only when video is showing).
-                              if (_showingVideo && hasMedia)
-                                Positioned(
-                                  left: 0,
-                                  right: 0,
-                                  bottom: 0,
-                                  child: _PlayerControlsBar(
-                                    player: _player,
-                                    visible: _videoHovered ||
-                                        _playlistDrawerOpen ||
-                                        _menusOpen > 0,
-                                    showQueueControls: hasQueue,
-                                    onTogglePlaylist: () => setState(
-                                      () => _playlistDrawerOpen = !_playlistDrawerOpen,
-                                    ),
-                                    playlistOpen: _playlistDrawerOpen,
-                                    onMenuOpened: () =>
-                                        setState(() => _menusOpen++),
-                                    onMenuClosed: () => setState(
-                                      () => _menusOpen = (_menusOpen - 1).clamp(0, 99),
-                                    ),
-                                    onSettings: () => setState(() {
-                                      _dest = _Dest.settings;
-                                      _showingVideo = false;
-                                    }),
-                                  ),
-                                ),
-
-                              // Playlist drawer overlay.
-                              if (_showingVideo && hasQueue && _playlistDrawerOpen)
-                                Positioned(
-                                  right: 0,
-                                  top: 0,
-                                  bottom: 0,
-                                  width: 360,
-                                  child: _PlaylistDrawer(
-                                    player: _player,
-                                    onClose: () =>
-                                        setState(() => _playlistDrawerOpen = false),
-                                  ),
-                                ),
-                            ],
+                            ),
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-
-                // Status bar — spans full width.
-                _StatusBar(
-                  player: _player,
-                  hostInfo: _hostInfo,
-                  serverError: _serverError,
-                  discoveryError: _discoveryError,
-                  phase: _server.phase,
+                    Expanded(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (!hideChrome)
+                            _NavSidebar(
+                              dest: _dest,
+                              showingVideo: _showingVideo,
+                              hasMedia: hasMedia,
+                              playerState: _player.state,
+                              onDestSelect: (d) => setState(() {
+                                _dest = d;
+                                _showingVideo = false;
+                              }),
+                              onShowVideo: () => setState(() => _showingVideo = true),
+                            ),
+                          Expanded(
+                            child: MouseRegion(
+                              onEnter: (_) => _markActive(),
+                              onExit: (_) => _markInactive(),
+                              onHover: (_) => _markActive(),
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  // Video is always in the tree (Offstage) so
+                                  // mpv is never torn down on screen switch.
+                                  Positioned.fill(
+                                    child: Offstage(
+                                      offstage: !_showingVideo || !hasMedia,
+                                      child: Container(
+                                        color: Colors.black,
+                                        child: Video(
+                                          controller: _video,
+                                          controls: NoVideoControls,
+                                          fill: Colors.transparent,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  if (!_showingVideo)
+                                    Positioned.fill(child: _buildScreen()),
+                                  if (_showingVideo && hasMedia)
+                                    Positioned(
+                                      left: 0,
+                                      right: 0,
+                                      bottom: 0,
+                                      child: _PlayerControlsBar(
+                                        player: _player,
+                                        visible: _videoHovered ||
+                                            _playlistDrawerOpen ||
+                                            _menusOpen > 0,
+                                        showQueueControls: hasQueue,
+                                        onTogglePlaylist: () => setState(
+                                          () => _playlistDrawerOpen = !_playlistDrawerOpen,
+                                        ),
+                                        playlistOpen: _playlistDrawerOpen,
+                                        onMenuOpened: () => setState(() => _menusOpen++),
+                                        onMenuClosed: () => setState(
+                                          () => _menusOpen = (_menusOpen - 1).clamp(0, 99),
+                                        ),
+                                        isFullScreen: _isFullScreen,
+                                        onToggleFullScreen: _toggleFullScreen,
+                                      ),
+                                    ),
+                                  if (_showingVideo && hasQueue && _playlistDrawerOpen)
+                                    Positioned(
+                                      right: 0,
+                                      top: 0,
+                                      bottom: 0,
+                                      width: 360,
+                                      child: _PlaylistDrawer(
+                                        player: _player,
+                                        onClose: () => setState(
+                                          () => _playlistDrawerOpen = false,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!hideChrome)
+                      _StatusBar(
+                        player: _player,
+                        hostInfo: _hostInfo,
+                        serverError: _serverError,
+                        discoveryError: _discoveryError,
+                        phase: _server.phase,
+                      ),
+                  ],
                 ),
               ],
             );
@@ -403,13 +448,22 @@ class _NavSidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClipRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
         child: Container(
           width: 196,
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.4),
+            // Subtle vertical gradient gives the sidebar a glassy, slightly
+            // brighter top-edge highlight — like Apple's NSVisualEffectView.
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white.withValues(alpha: 0.08),
+                Colors.black.withValues(alpha: 0.28),
+              ],
+            ),
             border: Border(
-              right: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+              right: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
             ),
           ),
           child: Column(
@@ -642,7 +696,8 @@ class _PlayerControlsBar extends StatefulWidget {
     required this.playlistOpen,
     required this.onMenuOpened,
     required this.onMenuClosed,
-    required this.onSettings,
+    required this.isFullScreen,
+    required this.onToggleFullScreen,
   });
 
   final PlayerController player;
@@ -652,7 +707,8 @@ class _PlayerControlsBar extends StatefulWidget {
   final bool playlistOpen;
   final VoidCallback onMenuOpened;
   final VoidCallback onMenuClosed;
-  final VoidCallback onSettings;
+  final bool isFullScreen;
+  final VoidCallback onToggleFullScreen;
 
   @override
   State<_PlayerControlsBar> createState() => _PlayerControlsBarState();
@@ -785,9 +841,15 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                           onPressed: widget.onTogglePlaylist,
                         ),
                       IconButton(
-                        tooltip: 'Settings',
-                        icon: const Icon(Icons.settings),
-                        onPressed: widget.onSettings,
+                        tooltip: widget.isFullScreen
+                            ? 'Exit fullscreen'
+                            : 'Fullscreen',
+                        icon: Icon(
+                          widget.isFullScreen
+                              ? Icons.fullscreen_exit
+                              : Icons.fullscreen,
+                        ),
+                        onPressed: widget.onToggleFullScreen,
                       ),
                     ],
                   ),
