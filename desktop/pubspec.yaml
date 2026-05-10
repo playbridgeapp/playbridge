@@ -1,0 +1,35 @@
+name: playbridge_desktop
+description: "PlayBridge desktop receiver — accepts cast commands from the phone and plays via libmpv."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # WebSocket server (matches phone's expected port 8765, JSON envelope)
+  shelf: ^1.4.1
+  shelf_web_socket: ^2.0.0
+  web_socket_channel: ^3.0.1
+
+  # libmpv-backed player + video surface (cross-platform: macOS, Windows, Linux)
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
+
+  # mDNS service publishing (_playbridge._tcp.) + persistent pairing
+  bonsoir: ^5.1.10
+  shared_preferences: ^2.3.3
+  uuid: ^4.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
