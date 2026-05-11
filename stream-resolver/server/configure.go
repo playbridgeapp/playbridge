@@ -138,51 +138,31 @@ func configurePage(baseURL string) string {
     .ok  { color: #4caf50; }
     .err { color: #c0392b; }
 
-    /* ── Streaming defaults ── */
-    .def-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
-    .def-field { display: flex; flex-direction: column; gap: 0.25rem; }
-    .def-field.grow { flex: 1; min-width: 140px; }
-    .field-label { font-size: 0.75rem; color: #666; }
-    .def-select {
-      background: #0f0f0f; border: 1px solid #2a2a2a; color: #e0e0e0;
-      border-radius: 6px; padding: 0.45rem 0.7rem; font-size: 0.825rem;
-      outline: none; width: 100%;
+    /* ── Bucket rows ── */
+    .bucket-rows { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.75rem; }
+    .bucket-row {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #1a1a1a; border: 1px solid #242424; border-radius: 8px;
+      padding: 0.3rem 0.75rem;
     }
-    .def-select:focus { border-color: #444; }
-
-    /* Source type priority */
-    .source-order-list { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.5rem; }
-    .source-order-item {
-      display: flex; align-items: center; gap: 0.5rem;
-      background: #1a2e1a; border: 1px solid #2d6a2d; border-radius: 8px;
-      padding: 0.35rem 0.6rem; font-size: 0.85rem; color: #4caf50;
-      cursor: grab; user-select: none;
+    .bucket-row-label { font-size: 0.85rem; color: #bbb; flex: 1; }
+    .seg-group { display: flex; background: #111; border-radius: 5px; padding: 2px; gap: 2px; }
+    .seg-btn {
+      background: none; border: none; border-radius: 3px;
+      padding: 0.18rem 0.55rem; font-size: 0.72rem;
+      cursor: pointer; color: #444; transition: all 0.15s; white-space: nowrap;
     }
-    .source-order-item.dragging  { opacity: 0.35; }
-    .source-order-item.drag-over { border-color: #5cdf5c; background: #243a24; }
-    .order-num    { font-size: 0.7rem; color: #5a9a5a; min-width: 1rem; text-align: right; }
-    .order-label  { flex: 1; }
-    .order-remove {
-      background: none; border: none; color: #883322; cursor: pointer;
-      font-size: 1rem; padding: 0; line-height: 1; transition: color 0.15s;
-    }
-    .order-remove:hover { color: #c0392b; }
-    .pool-row { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.4rem; }
-    .pool-chip {
-      display: inline-flex; align-items: center;
-      background: #181818; border: 1px solid #282828; border-radius: 20px;
-      padding: 0.22rem 0.65rem; font-size: 0.775rem; color: #666;
-      cursor: pointer; user-select: none; transition: all 0.15s;
-    }
-    .pool-chip:hover { background: #202020; border-color: #3a3a3a; color: #aaa; }
-    .pool-chip.hidden { display: none; }
+    .seg-btn:not(.active):hover { color: #999; background: #1c1c1c; }
+    .seg-btn.active[data-val="preferred"] { background: #1a3a1a; color: #4caf50; }
+    .seg-btn.active[data-val="fallback"]  { background: #1e1e1e; color: #666; }
+    .seg-btn.active[data-val="excluded"]  { background: #3a1a1a; color: #c0392b; }
+    .bucket-empty { font-size: 0.8rem; color: #444; padding: 0.3rem 0; }
 
     /* Filter grid */
-    .filter-grid {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem;
-    }
+    .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
     .filter-field { display: flex; flex-direction: column; gap: 0.25rem; }
     .filter-field input[type="number"] { width: 100%; }
+    .field-label { font-size: 0.75rem; color: #666; }
 
     /* ── Cache & Probing ── */
     .ttl-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
@@ -206,6 +186,19 @@ func configurePage(baseURL string) string {
     .toggle input:checked + .toggle-slider { background: #2d6a2d; }
     .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: #4caf50; }
     .notice { font-size: 0.75rem; color: #555; margin-top: 0.4rem; }
+
+    /* Exclude word tags */
+    .exclude-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; min-height: 1.5rem; }
+    .exclude-tag {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      background: #2a1a1a; border: 1px solid #5a2a2a; border-radius: 20px;
+      padding: 0.2rem 0.55rem; font-size: 0.775rem; color: #c07070;
+    }
+    .exclude-tag button {
+      background: none; border: none; color: #883322; cursor: pointer;
+      font-size: 0.9rem; line-height: 1; padding: 0; transition: color 0.15s;
+    }
+    .exclude-tag button:hover { color: #c0392b; }
   </style>
 </head>
 <body>
@@ -257,59 +250,215 @@ func configurePage(baseURL string) string {
   <!-- Streaming Defaults -->
   <div class="card">
     <h2>Streaming Defaults</h2>
-    <p class="card-desc">Applied when <code>/api/play</code> is called without explicit query params. Per-request params always take precedence.</p>
+    <p class="card-desc">Preferred streams are tried first (pass 1). If all fail, fallback streams are tried (pass 2). Excluded streams are never used. Per-request query params override preferred/fallback but config exclusions always apply.</p>
 
-    <div class="section-label">Playback</div>
-    <div class="def-row">
-      <div class="def-field grow">
-        <span class="field-label">Quality</span>
-        <select id="def-quality" class="def-select">
-          <option value="">Any</option>
-          <option value="4K">4K</option>
-          <option value="1080p">1080p</option>
-          <option value="720p">720p</option>
-          <option value="480p">480p</option>
-        </select>
+    <div class="section-label">Quality</div>
+    <div class="bucket-rows" id="quality-rows">
+      <div class="bucket-row" data-dim="quality" data-key="4K">
+        <span class="bucket-row-label">4K</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
       </div>
-      <div class="def-field grow">
-        <span class="field-label">Audio Language</span>
-        <select id="def-audio-lang" class="def-select">
-          <option value="">Any</option>
-          <option value="en">English</option>
-          <option value="multi">Multi</option>
-          <option value="fr">French</option>
-          <option value="de">German</option>
-          <option value="es">Spanish</option>
-          <option value="pt">Portuguese</option>
-          <option value="it">Italian</option>
-          <option value="ja">Japanese</option>
-          <option value="ko">Korean</option>
-          <option value="zh">Chinese</option>
-          <option value="ru">Russian</option>
-          <option value="ar">Arabic</option>
-          <option value="hi">Hindi</option>
-        </select>
+      <div class="bucket-row" data-dim="quality" data-key="1080p">
+        <span class="bucket-row-label">1080p</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
       </div>
-      <div class="def-field grow">
-        <span class="field-label">Preferred Addon</span>
-        <select id="def-source" class="def-select">
-          <option value="">Any addon</option>
-        </select>
+      <div class="bucket-row" data-dim="quality" data-key="720p">
+        <span class="bucket-row-label">720p</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="quality" data-key="480p">
+        <span class="bucket-row-label">480p</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
       </div>
     </div>
 
-    <div class="section-label">Source Type Priority</div>
-    <div class="source-order-list" id="def-source-order"></div>
-    <div class="pool-row" id="def-source-pool">
-      <span class="pool-chip" data-key="remux"  data-label="Remux"  onclick="addToSourceOrder(this)">+ Remux</span>
-      <span class="pool-chip" data-key="bluray" data-label="BluRay" onclick="addToSourceOrder(this)">+ BluRay</span>
-      <span class="pool-chip" data-key="web-dl" data-label="WEB-DL" onclick="addToSourceOrder(this)">+ WEB-DL</span>
-      <span class="pool-chip" data-key="webrip" data-label="WEBRip" onclick="addToSourceOrder(this)">+ WEBRip</span>
-      <span class="pool-chip" data-key="hdtv"   data-label="HDTV"   onclick="addToSourceOrder(this)">+ HDTV</span>
-      <span class="pool-chip" data-key="dvd"    data-label="DVD"    onclick="addToSourceOrder(this)">+ DVD</span>
-      <span class="pool-chip" data-key="cam"    data-label="CAM/TS" onclick="addToSourceOrder(this)">+ CAM/TS</span>
+    <div class="section-label">Source Type</div>
+    <div class="bucket-rows" id="sourcetype-rows">
+      <div class="bucket-row" data-dim="source_type" data-key="remux">
+        <span class="bucket-row-label">Remux</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="source_type" data-key="bluray">
+        <span class="bucket-row-label">BluRay</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="source_type" data-key="web-dl">
+        <span class="bucket-row-label">WEB-DL</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="source_type" data-key="webrip">
+        <span class="bucket-row-label">WEBRip</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="source_type" data-key="hdtv">
+        <span class="bucket-row-label">HDTV</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="source_type" data-key="dvd">
+        <span class="bucket-row-label">DVD</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="source_type" data-key="cam">
+        <span class="bucket-row-label">CAM / TS</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
     </div>
-    <p class="notice">Fallback order (always automatic): your priority types → unclassified streams → any remaining stream. The server never fails just because a preferred type isn't available.</p>
+
+    <div class="section-label">Addon Source</div>
+    <div class="bucket-rows" id="source-rows"><p class="bucket-empty">Loading…</p></div>
+    <p class="notice" style="margin-bottom:0.75rem;">Populated from your configured source addons.</p>
+
+    <div class="section-label">Audio Language</div>
+    <div class="bucket-rows" id="audiolang-rows">
+      <div class="bucket-row" data-dim="audio_lang" data-key="en">
+        <span class="bucket-row-label">English</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="multi">
+        <span class="bucket-row-label">Multi</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="fr">
+        <span class="bucket-row-label">French</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="de">
+        <span class="bucket-row-label">German</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="es">
+        <span class="bucket-row-label">Spanish</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="pt">
+        <span class="bucket-row-label">Portuguese</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="it">
+        <span class="bucket-row-label">Italian</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="ja">
+        <span class="bucket-row-label">Japanese</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="ko">
+        <span class="bucket-row-label">Korean</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="zh">
+        <span class="bucket-row-label">Chinese</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="ru">
+        <span class="bucket-row-label">Russian</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="ar">
+        <span class="bucket-row-label">Arabic</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+      <div class="bucket-row" data-dim="audio_lang" data-key="hi">
+        <span class="bucket-row-label">Hindi</span>
+        <div class="seg-group">
+          <button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>
+          <button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>
+          <button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>
+        </div>
+      </div>
+    </div>
 
     <div class="section-label">Size &amp; Bitrate Filters</div>
     <div class="filter-grid">
@@ -329,6 +478,13 @@ func configurePage(baseURL string) string {
         <span class="field-label">Max Bitrate (Mbps)</span>
         <input type="number" id="def-max-bitrate" min="0" step="0.1" placeholder="0 = no limit" />
       </div>
+    </div>
+
+    <div class="section-label">Excluded Words</div>
+    <p class="card-desc" style="margin-bottom:0.5rem;">Streams whose name, title, or description contains any of these words (case-insensitive) are always skipped.</p>
+    <div class="exclude-tags" id="exclude-tags"></div>
+    <div class="form-row" style="margin-top:0.4rem;">
+      <input type="text" id="exclude-input" class="url-input" placeholder="Type a word and press Enter or comma…" onkeydown="excludeKeydown(event)" />
     </div>
 
     <div style="margin-top:1rem;">
@@ -474,18 +630,6 @@ func configurePage(baseURL string) string {
 
   // ── Source Addons ──────────────────────────────────────────────────────────
 
-  function _refreshAddonSelect(addons) {
-    const sel = document.getElementById('def-source');
-    const cur = sel.value;
-    while (sel.options.length > 1) sel.remove(1);
-    (addons || []).forEach(a => {
-      const opt = document.createElement('option');
-      opt.value = a.name; opt.textContent = a.name;
-      sel.appendChild(opt);
-    });
-    sel.value = cur;
-  }
-
   function _makeAddonRow(a) {
     const row = document.createElement('div');
     row.className = 'dnd-item';
@@ -514,7 +658,7 @@ func configurePage(baseURL string) string {
   async function loadAddons() {
     const res = await fetch(API);
     const addons = await res.json();
-    _refreshAddonSelect(addons);
+    _refreshSourceRows(addons);
     const el = document.getElementById('addon-list');
     if (!addons || addons.length === 0) {
       el.innerHTML = '<p class="empty">No source addons configured yet.</p>';
@@ -681,85 +825,97 @@ func configurePage(baseURL string) string {
     if (res.ok) loadProbingConfig();
   }
 
-  // ── Streaming Defaults — source type order ─────────────────────────────────
+  // ── Bucket rows ───────────────────────────────────────────────────────────
 
-  let _stDragSrc = null;
+  function segClick(btn) {
+    const group = btn.closest('.seg-group');
+    group.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
 
-  function _makeSourceOrderItem(key, label, idx) {
-    const item = document.createElement('div');
-    item.className = 'source-order-item';
-    item.draggable = true;
-    item.dataset.key = key;
-    item.innerHTML =
-      '<span class="dnd-handle">⠿</span>' +
-      '<span class="order-num">' + (idx + 1) + '</span>' +
-      '<span class="order-label">' + label + '</span>' +
-      '<button class="order-remove" title="Remove" onclick="removeFromSourceOrder(\'' + key + '\')">×</button>';
-
-    item.addEventListener('dragstart', e => {
-      _stDragSrc = item;
-      e.dataTransfer.effectAllowed = 'move';
-      setTimeout(() => item.classList.add('dragging'), 0);
+  function getBucket(dim) {
+    const preferred = [], excluded = [];
+    document.querySelectorAll('.bucket-row[data-dim="' + dim + '"]').forEach(row => {
+      const key = row.dataset.key;
+      const active = row.querySelector('.seg-btn.active');
+      const val = active ? active.dataset.val : 'fallback';
+      if (val === 'preferred') preferred.push(key);
+      else if (val === 'excluded') excluded.push(key);
     });
-    item.addEventListener('dragend', () => {
-      _stDragSrc = null;
-      item.classList.remove('dragging');
-      document.querySelectorAll('.source-order-item').forEach(i => i.classList.remove('drag-over'));
+    return { preferred, excluded };
+  }
+
+  function setBucket(dim, data) {
+    document.querySelectorAll('.bucket-row[data-dim="' + dim + '"]').forEach(row => {
+      const key = row.dataset.key;
+      let val = 'fallback';
+      if ((data.preferred || []).some(k => k.toLowerCase() === key.toLowerCase())) val = 'preferred';
+      else if ((data.excluded || []).some(k => k.toLowerCase() === key.toLowerCase())) val = 'excluded';
+      row.querySelectorAll('.seg-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.val === val);
+      });
     });
-    item.addEventListener('dragover', e => {
+  }
+
+  function _makeBucketRow(dim, key, label) {
+    const row = document.createElement('div');
+    row.className = 'bucket-row';
+    row.dataset.dim = dim;
+    row.dataset.key = key;
+    row.innerHTML =
+      '<span class="bucket-row-label">' + esc(label) + '</span>' +
+      '<div class="seg-group">' +
+        '<button class="seg-btn" data-val="preferred" onclick="segClick(this)">Prefer</button>' +
+        '<button class="seg-btn active" data-val="fallback" onclick="segClick(this)">—</button>' +
+        '<button class="seg-btn" data-val="excluded" onclick="segClick(this)">Exclude</button>' +
+      '</div>';
+    return row;
+  }
+
+  function _refreshSourceRows(addons) {
+    const el = document.getElementById('source-rows');
+    // Remember current state before rebuilding
+    const current = getBucket('source');
+    el.innerHTML = '';
+    if (!addons || addons.length === 0) {
+      el.innerHTML = '<p class="bucket-empty">No addons configured yet.</p>';
+      return;
+    }
+    addons.forEach(a => el.appendChild(_makeBucketRow('source', a.name, a.name)));
+    setBucket('source', current);
+  }
+
+  // ── Exclude words tag input ────────────────────────────────────────────────
+
+  function _addExcludeTag(word) {
+    word = word.trim();
+    if (!word) return;
+    const existing = [...document.querySelectorAll('#exclude-tags .exclude-tag')]
+      .map(t => t.dataset.word);
+    if (existing.includes(word.toLowerCase())) return;
+    const tag = document.createElement('span');
+    tag.className = 'exclude-tag';
+    tag.dataset.word = word.toLowerCase();
+    tag.innerHTML = esc(word) + '<button onclick="this.parentElement.remove()" title="Remove">×</button>';
+    document.getElementById('exclude-tags').appendChild(tag);
+  }
+
+  function excludeKeydown(e) {
+    if (e.key === 'Enter' || e.key === ',') {
       e.preventDefault();
-      if (_stDragSrc && item !== _stDragSrc) item.classList.add('drag-over');
-    });
-    item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
-    item.addEventListener('drop', e => {
-      e.preventDefault();
-      if (_stDragSrc && _stDragSrc !== item) {
-        const list = document.getElementById('def-source-order');
-        const all = [...list.querySelectorAll('.source-order-item')];
-        const si = all.indexOf(_stDragSrc), di = all.indexOf(item);
-        list.insertBefore(_stDragSrc, si < di ? item.nextSibling : item);
-        _renumberSourceOrder();
-      }
-      item.classList.remove('drag-over');
-    });
-    return item;
+      const val = e.target.value.replace(/,$/, '').trim();
+      _addExcludeTag(val);
+      e.target.value = '';
+    }
   }
 
-  function _renumberSourceOrder() {
-    document.querySelectorAll('#def-source-order .source-order-item').forEach((item, i) => {
-      item.querySelector('.order-num').textContent = i + 1;
-    });
+  function _getExcludeWords() {
+    return [...document.querySelectorAll('#exclude-tags .exclude-tag')].map(t => t.dataset.word);
   }
 
-  function getSourceOrderKeys() {
-    return [...document.querySelectorAll('#def-source-order .source-order-item')]
-      .map(item => item.dataset.key);
-  }
-
-  function addToSourceOrder(chip) {
-    const key = chip.dataset.key, label = chip.dataset.label;
-    if (getSourceOrderKeys().includes(key)) return;
-    const list = document.getElementById('def-source-order');
-    list.appendChild(_makeSourceOrderItem(key, label, list.children.length));
-    chip.classList.add('hidden');
-  }
-
-  function removeFromSourceOrder(key) {
-    document.querySelector('#def-source-order [data-key="' + key + '"]')?.remove();
-    _renumberSourceOrder();
-    document.querySelector('#def-source-pool [data-key="' + key + '"]')?.classList.remove('hidden');
-  }
-
-  function _setSourceOrder(keys) {
-    document.querySelectorAll('#def-source-pool .pool-chip').forEach(c => c.classList.remove('hidden'));
-    const list = document.getElementById('def-source-order');
-    list.innerHTML = '';
-    (keys || []).forEach((key, idx) => {
-      const chip = document.querySelector('#def-source-pool [data-key="' + key + '"]');
-      if (!chip) return;
-      list.appendChild(_makeSourceOrderItem(key, chip.dataset.label, idx));
-      chip.classList.add('hidden');
-    });
+  function _setExcludeWords(words) {
+    document.getElementById('exclude-tags').innerHTML = '';
+    (words || []).forEach(_addExcludeTag);
   }
 
   // ── Streaming Defaults — load / save ───────────────────────────────────────
@@ -768,26 +924,28 @@ func configurePage(baseURL string) string {
     const res = await fetch(BASE + '/api/config/defaults');
     if (!res.ok) return;
     const d = await res.json();
-    document.getElementById('def-quality').value    = d.quality    || '';
-    document.getElementById('def-source').value     = d.source     || '';
-    document.getElementById('def-audio-lang').value = d.audio_lang || '';
-    _setSourceOrder(Array.isArray(d.source_type) ? d.source_type : []);
+    setBucket('quality',     d.quality     || {});
+    setBucket('source_type', d.source_type || {});
+    setBucket('source',      d.source      || {});
+    setBucket('audio_lang',  d.audio_lang  || {});
     document.getElementById('def-min-size').value    = d.min_size    || '';
     document.getElementById('def-max-size').value    = d.max_size    || '';
     document.getElementById('def-min-bitrate').value = d.min_bitrate || '';
     document.getElementById('def-max-bitrate').value = d.max_bitrate || '';
+    _setExcludeWords(Array.isArray(d.exclude_words) ? d.exclude_words : []);
   }
 
   async function saveDefaults() {
     const body = {
-      quality:     document.getElementById('def-quality').value,
-      source:      document.getElementById('def-source').value,
-      audio_lang:  document.getElementById('def-audio-lang').value,
-      source_type: getSourceOrderKeys(),
-      min_size:    parseFloat(document.getElementById('def-min-size').value)    || 0,
-      max_size:    parseFloat(document.getElementById('def-max-size').value)    || 0,
-      min_bitrate: parseFloat(document.getElementById('def-min-bitrate').value) || 0,
-      max_bitrate: parseFloat(document.getElementById('def-max-bitrate').value) || 0,
+      quality:      getBucket('quality'),
+      source_type:  getBucket('source_type'),
+      source:       getBucket('source'),
+      audio_lang:   getBucket('audio_lang'),
+      min_size:     parseFloat(document.getElementById('def-min-size').value)    || 0,
+      max_size:     parseFloat(document.getElementById('def-max-size').value)    || 0,
+      min_bitrate:  parseFloat(document.getElementById('def-min-bitrate').value) || 0,
+      max_bitrate:  parseFloat(document.getElementById('def-max-bitrate').value) || 0,
+      exclude_words: _getExcludeWords(),
     };
     const res = await fetch(BASE + '/api/config/defaults', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },

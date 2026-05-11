@@ -29,44 +29,34 @@ func (s *Server) handleUpdateDefaults(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 
-	if v, ok := raw["quality"]; ok {
-		var q string
-		if err := json.Unmarshal(v, &q); err != nil {
-			s.mu.Unlock()
-			http.Error(w, "invalid quality", http.StatusBadRequest)
-			return
+	for _, pair := range []struct {
+		key string
+		dst *config.Bucket
+	}{
+		{"quality", &s.cfg.Defaults.Quality},
+		{"source_type", &s.cfg.Defaults.SourceType},
+		{"source", &s.cfg.Defaults.Source},
+		{"audio_lang", &s.cfg.Defaults.AudioLang},
+	} {
+		if v, ok := raw[pair.key]; ok {
+			var b config.Bucket
+			if err := json.Unmarshal(v, &b); err != nil {
+				s.mu.Unlock()
+				http.Error(w, "invalid value for "+pair.key+": "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			*pair.dst = b
 		}
-		s.cfg.Defaults.Quality = q
 	}
 
-	if v, ok := raw["source_type"]; ok {
-		var st []string
-		if err := json.Unmarshal(v, &st); err != nil {
+	if v, ok := raw["exclude_words"]; ok {
+		var ew []string
+		if err := json.Unmarshal(v, &ew); err != nil {
 			s.mu.Unlock()
-			http.Error(w, "invalid source_type", http.StatusBadRequest)
+			http.Error(w, "invalid exclude_words", http.StatusBadRequest)
 			return
 		}
-		s.cfg.Defaults.SourceType = st
-	}
-
-	if v, ok := raw["source"]; ok {
-		var src string
-		if err := json.Unmarshal(v, &src); err != nil {
-			s.mu.Unlock()
-			http.Error(w, "invalid source", http.StatusBadRequest)
-			return
-		}
-		s.cfg.Defaults.Source = src
-	}
-
-	if v, ok := raw["audio_lang"]; ok {
-		var al string
-		if err := json.Unmarshal(v, &al); err != nil {
-			s.mu.Unlock()
-			http.Error(w, "invalid audio_lang", http.StatusBadRequest)
-			return
-		}
-		s.cfg.Defaults.AudioLang = al
+		s.cfg.Defaults.ExcludeWords = ew
 	}
 
 	for _, pair := range []struct {
@@ -104,20 +94,40 @@ func (s *Server) handleUpdateDefaults(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(d)
 }
 
-// applyDefaults merges server-side defaults into prefs for any field that was
-// not explicitly supplied via query params (i.e. still at its zero value).
+// applyStreamingDefaults merges server-side defaults into prefs for any field
+// that was not explicitly supplied via query params.
+// Config excluded buckets always apply — URL params cannot override exclusions.
 func applyStreamingDefaults(p PlayPrefs, d config.DefaultsConfig) PlayPrefs {
-	if p.Quality == "" && d.Quality != "" && d.Quality != "Auto" {
-		p.Quality = d.Quality
+	// Excluded always inherits from config if not set by caller.
+	if len(p.Quality.Excluded) == 0 {
+		p.Quality.Excluded = d.Quality.Excluded
 	}
-	if len(p.SourceType) == 0 && len(d.SourceType) > 0 {
-		p.SourceType = d.SourceType
+	if len(p.SourceType.Excluded) == 0 {
+		p.SourceType.Excluded = d.SourceType.Excluded
 	}
-	if p.Source == "" && d.Source != "" {
-		p.Source = d.Source
+	if len(p.Source.Excluded) == 0 {
+		p.Source.Excluded = d.Source.Excluded
 	}
-	if p.AudioLang == "" && d.AudioLang != "" {
-		p.AudioLang = d.AudioLang
+	if len(p.AudioLang.Excluded) == 0 {
+		p.AudioLang.Excluded = d.AudioLang.Excluded
+	}
+
+	// Preferred: only inherit from config when the URL param didn't set a preferred list.
+	if len(p.Quality.Preferred) == 0 {
+		p.Quality.Preferred = d.Quality.Preferred
+	}
+	if len(p.SourceType.Preferred) == 0 {
+		p.SourceType.Preferred = d.SourceType.Preferred
+	}
+	if len(p.Source.Preferred) == 0 {
+		p.Source.Preferred = d.Source.Preferred
+	}
+	if len(p.AudioLang.Preferred) == 0 {
+		p.AudioLang.Preferred = d.AudioLang.Preferred
+	}
+
+	if len(p.ExcludeWords) == 0 && len(d.ExcludeWords) > 0 {
+		p.ExcludeWords = d.ExcludeWords
 	}
 	if p.MinSize == 0 && d.MinSize > 0 {
 		p.MinSize = d.MinSize

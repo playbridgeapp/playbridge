@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // SourceAddon is a configured upstream Stremio stream addon.
@@ -25,8 +27,8 @@ type MetaAddon struct {
 // ProbingConfig controls ffprobe-based stream validation.
 type ProbingConfig struct {
 	Enabled     bool `json:"enabled"`
-	MaxAttempts int  `json:"max_attempts"` // max streams to probe before giving up, default 5
-	TimeoutMs   int  `json:"timeout_ms"`   // per-probe ffprobe timeout, default 5000
+	MaxAttempts int  `json:"max_attempts"` // kept for config compat; no longer caps parallel probing
+	TimeoutMs   int  `json:"timeout_ms"`   // per-probe ffprobe timeout, default 15000
 }
 
 // CacheConfig controls TTLs for on-disk caches.
@@ -36,29 +38,79 @@ type CacheConfig struct {
 	MetaTTLSeconds       int `json:"meta_ttl_seconds"`        // runtime lookup cache, default 86400
 }
 
+// Bucket is a two-list preference set for a single filter dimension.
+// Preferred streams are tried first; if all fail, everything not in Excluded
+// is retried. Excluded streams are never used.
+type Bucket struct {
+	Preferred []string `json:"preferred"`
+	Excluded  []string `json:"excluded"`
+}
+
+// UnmarshalJSON accepts the new object form `{preferred, excluded}` and is
+// tolerant of legacy shapes:
+//   - a JSON string is treated as a single preferred value (skipping ""/"auto")
+//   - a JSON array of strings is treated as the preferred list
+//   - null leaves the bucket zero-valued
+//
+// Unknown fields like the old "fallback" key are silently ignored.
+func (b *Bucket) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	switch trimmed[0] {
+	case '{':
+		type bucketAlias Bucket
+		var alias bucketAlias
+		if err := json.Unmarshal(data, &alias); err != nil {
+			return err
+		}
+		*b = Bucket(alias)
+		return nil
+	case '[':
+		var arr []string
+		if err := json.Unmarshal(data, &arr); err != nil {
+			return err
+		}
+		b.Preferred = arr
+		return nil
+	case '"':
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		if s != "" && !strings.EqualFold(s, "auto") {
+			b.Preferred = []string{s}
+		}
+		return nil
+	}
+	return fmt.Errorf("cannot unmarshal %s into Bucket", string(trimmed))
+}
+
 // DefaultsConfig holds server-side streaming preference defaults applied when
-// a /api/play request omits the corresponding query parameter.
+// a /play request omits the corresponding query parameter.
 // Explicit query params always take precedence over these defaults.
 type DefaultsConfig struct {
-	Quality    string   `json:"quality"`     // "Auto", "4K", "1080p", "720p", "480p" — empty = any
-	SourceType []string `json:"source_type"` // e.g. ["web-dl","remux"] — nil/empty = any
-	Source     string   `json:"source"`      // addon name substring — empty = any
-	AudioLang  string   `json:"audio_lang"`  // "en", "multi", etc. — empty = any
-	MinSize    float64  `json:"min_size"`    // GB — 0 = no limit
-	MaxSize    float64  `json:"max_size"`    // GB — 0 = no limit
-	MinBitrate float64  `json:"min_bitrate"` // Mbps — 0 = no limit
-	MaxBitrate float64  `json:"max_bitrate"` // Mbps — 0 = no limit
+	Quality      Bucket   `json:"quality"`
+	SourceType   Bucket   `json:"source_type"`
+	Source       Bucket   `json:"source"`
+	AudioLang    Bucket   `json:"audio_lang"`
+	ExcludeWords []string `json:"exclude_words"` // case-insensitive substrings — streams matching any are dropped
+	MinSize      float64  `json:"min_size"`      // GB — 0 = no limit
+	MaxSize      float64  `json:"max_size"`      // GB — 0 = no limit
+	MinBitrate   float64  `json:"min_bitrate"`   // Mbps — 0 = no limit
+	MaxBitrate   float64  `json:"max_bitrate"`   // Mbps — 0 = no limit
 }
 
 // Config is the top-level addon configuration.
 type Config struct {
-	Port       int            `json:"port"`     // HTTP listen port, default 7000
-	BaseURL    string         `json:"base_url"` // public base URL e.g. http://localhost:7000
+	Port       int            `json:"port"`        // HTTP listen port, default 7000
+	BaseURL    string         `json:"base_url"`    // public base URL e.g. http://localhost:7000
 	Addons     []SourceAddon  `json:"addons"`
 	MetaAddons []MetaAddon    `json:"meta_addons"` // used to fetch runtime for probing validation
 	Probing    ProbingConfig  `json:"probing"`
 	Cache      CacheConfig    `json:"cache"`
-	Defaults   DefaultsConfig `json:"defaults"` // server-side streaming preference defaults
+	Defaults   DefaultsConfig `json:"defaults"`
 }
 
 // Load reads and parses the config file at the given path, applying defaults
@@ -108,7 +160,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Probing.MaxAttempts = 5
 	}
 	if cfg.Probing.TimeoutMs == 0 {
-		cfg.Probing.TimeoutMs = 15000 // debrid URLs involve multi-hop redirects; 5s was too tight
+		cfg.Probing.TimeoutMs = 15000
 	}
 
 	if cfg.Cache.StreamListTTLSeconds == 0 {
