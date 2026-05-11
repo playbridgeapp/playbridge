@@ -193,6 +193,7 @@ class ReceiverServer extends ChangeNotifier {
           title: title,
           headers: headers,
           subtitles: subtitles,
+          isRemote: true,
         ));
       case PlaylistCmd(:final items, :final startIndex):
         unawaited(player.playPlaylist(
@@ -205,6 +206,7 @@ class ReceiverServer extends ChangeNotifier {
                   ))
               .toList(),
           startIndex,
+          isRemote: true,
         ));
         _broadcastPlaylistStatus();
       case PlaylistJumpCmd(:final index):
@@ -217,6 +219,7 @@ class ReceiverServer extends ChangeNotifier {
             title: item.title,
             headers: item.headers,
             subtitles: item.subtitles,
+            isRemote: true,
           ));
         }
       case ControlCmd(:final command):

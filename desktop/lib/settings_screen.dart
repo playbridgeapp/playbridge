@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import 'auto_launch.dart';
 import 'pairing_store.dart';
+import 'player_controller.dart';
+import 'player_engine.dart';
 import 'server.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -11,11 +13,13 @@ class SettingsScreen extends StatefulWidget {
     super.key,
     required this.server,
     required this.store,
+    required this.player,
     required this.onNavigateToCast,
   });
 
   final ReceiverServer server;
   final PairingStore store;
+  final PlayerController player;
   final VoidCallback onNavigateToCast;
 
   @override
@@ -68,7 +72,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: widget.server,
+      listenable: Listenable.merge([widget.server, widget.player]),
       builder: (context, _) {
         final authed = widget.server.authedClientCount;
         final total = widget.server.connectedClientCount;
@@ -77,6 +81,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Text('Settings', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 24),
+
+            // — Playback ————————————————————————————
+            _Section('Playback'),
+            _Tile(
+              icon: Icons.settings_input_component,
+              title: 'Video Engine',
+              subtitle: widget.player.engineType == EngineType.mpv
+                  ? 'High performance (libmpv)'
+                  : 'Alternative compatibility (libmdk/ffmpeg)',
+              trailing: DropdownButton<EngineType>(
+                value: widget.player.engineType,
+                underline: const SizedBox(),
+                dropdownColor: const Color(0xFF1E1E1E),
+                items: const [
+                  DropdownMenuItem(value: EngineType.mpv, child: Text('MPV')),
+                  DropdownMenuItem(value: EngineType.fvp, child: Text('FVP')),
+                ],
+                onChanged: (type) async {
+                  if (type != null) {
+                    await widget.store.setEngineType(type);
+                    await widget.player.switchEngine(type);
+                  }
+                },
+              ),
+            ),
 
             // — Pairing ————————————————————————————
             _Section('Pairing'),

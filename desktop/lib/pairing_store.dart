@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import 'player_engine.dart';
+
 /// Persistent pairing identity for the desktop receiver.
 ///
 /// Mirrors the TV's contract:
@@ -17,6 +19,7 @@ class PairingStore {
   static const _kDeviceId = 'pb.device_id';
   static const _kDeviceName = 'pb.device_name';
   static const _kHasPaired = 'pb.has_paired';
+  static const _kEngineType = 'pb.engine_type';
 
   final SharedPreferences _prefs;
 
@@ -24,6 +27,15 @@ class PairingStore {
     final p = await SharedPreferences.getInstance();
     return PairingStore._(p);
   }
+
+  EngineType get engineType {
+    final val = _prefs.getString(_kEngineType);
+    if (val == 'fvp') return EngineType.fvp;
+    return EngineType.mpv;
+  }
+
+  Future<void> setEngineType(EngineType type) =>
+      _prefs.setString(_kEngineType, type == EngineType.fvp ? 'fvp' : 'mpv');
 
   String get authToken {
     var t = _prefs.getString(_kAuthToken);

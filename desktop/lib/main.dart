@@ -4,7 +4,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
+import 'package:fvp/fvp.dart' as fvp;
 import 'package:window_manager/window_manager.dart';
 
 import 'discovery.dart';
@@ -14,6 +14,8 @@ import 'history_store.dart';
 import 'pairing_store.dart';
 import 'pair_screen.dart';
 import 'player_controller.dart';
+import 'player_engine.dart';
+import 'playback_surface.dart';
 import 'server.dart';
 import 'settings_screen.dart';
 import 'shader_background.dart';
@@ -22,6 +24,7 @@ import 'tray_controller.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  fvp.registerWith();
   await windowManager.ensureInitialized();
 
   windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
@@ -53,7 +56,6 @@ class ReceiverApp extends StatefulWidget {
 
 class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final PlayerController _player;
-  late final VideoController _video;
   late final ReceiverServer _server;
   late final DiscoveryPublisher _discovery;
   late final TrayController _tray;
@@ -95,8 +97,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   @override
   void initState() {
     super.initState();
-    _player = PlayerController();
-    _video = VideoController(_player.player);
+    _player = PlayerController(initialEngine: widget.store.engineType);
     _server = ReceiverServer(player: _player, store: widget.store);
     _discovery = DiscoveryPublisher(
       serviceName: widget.store.deviceName,
@@ -107,6 +108,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
     windowManager.addListener(this);
     _player.addListener(_handlePlayerChange);
+    _player.playRequests.addListener(_handlePlayRequest);
 
     _bootServer();
     _bootDiscovery();
@@ -122,12 +124,18 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     await windowManager.focus();
   }
 
+  void _handlePlayRequest() {
+    unawaited(_revealWindow(fullScreen: true));
+    if (!_showingVideo) {
+      setState(() => _showingVideo = true);
+    }
+  }
+
   void _handlePlayerChange() {
     final hasMedia = _player.queue.isNotEmpty;
 
     // Rising edge: new playback session started → switch to video view.
     if (hasMedia && !_hadMedia) {
-      unawaited(_revealWindow());
       setState(() => _showingVideo = true);
     }
 
@@ -151,9 +159,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     }
   }
 
-  Future<void> _revealWindow() async {
+  Future<void> _revealWindow({bool fullScreen = false}) async {
     await windowManager.show();
     await windowManager.focus();
+    if (fullScreen) {
+      await windowManager.setFullScreen(true);
+    }
   }
 
   @override
@@ -216,6 +227,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _hideTimer?.cancel();
     windowManager.removeListener(this);
     _player.removeListener(_handlePlayerChange);
+    _player.playRequests.removeListener(_handlePlayRequest);
     _tray.dispose();
     _discovery.stop();
     _server.stop();
@@ -325,15 +337,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                       offstage: !_showingVideo || !hasMedia,
                                       child: Container(
                                         color: Colors.black,
-                                        child: Video(
-                                          controller: _video,
-                                          controls: NoVideoControls,
-                                          fill: Colors.transparent,
-                                        ),
+                                        child: PlaybackSurface(controller: _player),
                                       ),
                                     ),
-                                  ),
-                                  if (!_showingVideo)
+                                  ),                                  if (!_showingVideo)
                                     Positioned.fill(child: _buildScreen()),
                                   if (_showingVideo && hasMedia)
                                     Positioned(
@@ -342,10 +349,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                       bottom: 0,
                                       child: _PlayerControlsBar(
                                         player: _player,
+                                        store: widget.store,
                                         visible: _videoHovered ||
                                             _playlistDrawerOpen ||
-                                            _menusOpen > 0,
-                                        showQueueControls: hasQueue,
+                                            _menusOpen > 0,                                        showQueueControls: hasQueue,
                                         onTogglePlaylist: () => setState(
                                           () => _playlistDrawerOpen = !_playlistDrawerOpen,
                                         ),
@@ -419,9 +426,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       _Dest.settings => SettingsScreen(
           server: _server,
           store: widget.store,
+          player: _player,
           onNavigateToCast: () => setState(() => _dest = _Dest.cast),
-        ),
-    };
+        ),    };
   }
 }
 
@@ -658,7 +665,7 @@ class _StatusBar extends StatelessWidget {
                 child: Text(
                   serverError != null
                       ? 'Server failed: $serverError'
-                      : ':$kDefaultPort  ·  $hostInfo  ·  $phaseLabel  ·  ${player.state}'
+                      : '$phaseLabel  ·  ${player.state}  ·  ${player.engineType.name.toUpperCase()}'
                           '${player.currentTitle != null ? '  ·  ${player.currentTitle}' : ''}'
                           '${discoveryError != null ? '  ·  mDNS: $discoveryError' : ''}',
                   overflow: TextOverflow.ellipsis,
@@ -690,6 +697,7 @@ class _StatusBar extends StatelessWidget {
 class _PlayerControlsBar extends StatefulWidget {
   const _PlayerControlsBar({
     required this.player,
+    required this.store,
     required this.visible,
     required this.showQueueControls,
     required this.onTogglePlaylist,
@@ -701,6 +709,7 @@ class _PlayerControlsBar extends StatefulWidget {
   });
 
   final PlayerController player;
+  final PairingStore store;
   final bool visible;
   final bool showQueueControls;
   final VoidCallback onTogglePlaylist;
@@ -805,6 +814,11 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         onPressed: () =>
                             p.state == 'playing' ? p.pause() : p.resume(),
                       ),
+                      IconButton(
+                        tooltip: 'Stop',
+                        icon: const Icon(Icons.stop),
+                        onPressed: () => p.stop(),
+                      ),
                       if (widget.showQueueControls)
                         IconButton(
                           tooltip: 'Next',
@@ -818,15 +832,28 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                           style: const TextStyle(color: Colors.white70),
                         ),
                       const Spacer(),
-                      _AudioMenuButton(
-                        player: p,
-                        onOpened: widget.onMenuOpened,
-                        onClosed: widget.onMenuClosed,
-                      ),
-                      _SubtitleMenuButton(
-                        player: p,
-                        onOpened: widget.onMenuOpened,
-                        onClosed: widget.onMenuClosed,
+                      if (p.engineType == EngineType.mpv) ...[
+                        _AudioMenuButton(
+                          player: p,
+                          onOpened: widget.onMenuOpened,
+                          onClosed: widget.onMenuClosed,
+                        ),
+                        _SubtitleMenuButton(
+                          player: p,
+                          onOpened: widget.onMenuOpened,
+                          onClosed: widget.onMenuClosed,
+                        ),
+                      ],
+                      IconButton(
+                        tooltip: 'Swap engine to ${p.engineType == EngineType.mpv ? 'FVP' : 'MPV'}',
+                        icon: const Icon(Icons.swap_horiz),
+                        onPressed: () async {
+                          final next = p.engineType == EngineType.mpv
+                              ? EngineType.fvp
+                              : EngineType.mpv;
+                          await widget.store.setEngineType(next);
+                          await p.switchEngine(next);
+                        },
                       ),
                       if (widget.showQueueControls)
                         IconButton(
