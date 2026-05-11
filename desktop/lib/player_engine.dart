@@ -7,7 +7,11 @@ typedef QueueItem = ({
   List<String>? subtitles,
 });
 
-enum EngineType { mpv, fvp }
+enum EngineType { 
+  mpvInternal, 
+  mpvExternal, 
+  vlcExternal 
+}
 
 abstract class PlayerEngine extends ChangeNotifier {
   String get state; // idle | buffering | playing | paused | ended

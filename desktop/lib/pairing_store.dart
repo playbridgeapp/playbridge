@@ -30,12 +30,21 @@ class PairingStore {
 
   EngineType get engineType {
     final val = _prefs.getString(_kEngineType);
-    if (val == 'fvp') return EngineType.fvp;
-    return EngineType.mpv;
+    return switch (val) {
+      'mpv_ext' => EngineType.mpvExternal,
+      'vlc_ext' => EngineType.vlcExternal,
+      _ => EngineType.mpvInternal,
+    };
   }
 
-  Future<void> setEngineType(EngineType type) =>
-      _prefs.setString(_kEngineType, type == EngineType.fvp ? 'fvp' : 'mpv');
+  Future<void> setEngineType(EngineType type) {
+    final val = switch (type) {
+      EngineType.mpvInternal => 'mpv_int',
+      EngineType.mpvExternal => 'mpv_ext',
+      EngineType.vlcExternal => 'vlc_ext',
+    };
+    return _prefs.setString(_kEngineType, val);
+  }
 
   String get authToken {
     var t = _prefs.getString(_kAuthToken);

@@ -1,17 +1,18 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'player_engine.dart';
 import 'engines/mpv_engine.dart';
-import 'engines/fvp_engine.dart';
+import 'engines/external_engine.dart';
 
 /// Coordinator that delegates playback to the active [PlayerEngine].
 class PlayerController extends ChangeNotifier {
-  PlayerController({EngineType initialEngine = EngineType.mpv}) {
+  PlayerController({EngineType initialEngine = EngineType.mpvInternal}) {
     _setEngine(initialEngine);
   }
 
   late PlayerEngine _engine;
-  EngineType _currentType = EngineType.mpv;
+  EngineType _currentType = EngineType.mpvInternal;
 
   void _setEngine(EngineType type) {
     if (type == _currentType && _hasInited) return;
@@ -22,16 +23,36 @@ class PlayerController extends ChangeNotifier {
     }
 
     _currentType = type;
-    if (type == EngineType.fvp) {
-      _engine = FvpEngine();
-    } else {
-      _engine = MpvEngine();
-    }
-    
-    if (_engine is MpvEngine) {
-      (_engine as MpvEngine).onCompleted = _onCompleted;
-    } else if (_engine is FvpEngine) {
-      (_engine as FvpEngine).onCompleted = _onCompleted;
+    switch (type) {
+      case EngineType.mpvInternal:
+        _engine = MpvEngine();
+        (_engine as MpvEngine).onCompleted = _onCompleted;
+      case EngineType.mpvExternal:
+        _engine = ExternalEngine(
+          command: 'mpv',
+          argsBuilder: (item) => [
+            item.url,
+            '--fs',
+            '--force-window=yes',
+            if (item.title != null) '--title=${item.title}',
+            if (item.headers != null)
+              '--http-header-fields=${item.headers!.entries.map((e) => "${e.key}: ${e.value}").join(",")}',
+          ],
+        );
+        (_engine as ExternalEngine).onCompleted = _onCompleted;
+      case EngineType.vlcExternal:
+        final vlcCmd = Platform.isMacOS ? '/Applications/VLC.app/Contents/MacOS/VLC' : 'vlc';
+        _engine = ExternalEngine(
+          command: vlcCmd,
+          argsBuilder: (item) => [
+            item.url,
+            '--fullscreen',
+            '--play-and-exit',
+            if (item.headers != null)
+              '--http-user-agent=${item.headers!['User-Agent'] ?? 'PlayBridge'}',
+          ],
+        );
+        (_engine as ExternalEngine).onCompleted = _onCompleted;
     }
 
     _engine.addListener(notifyListeners);

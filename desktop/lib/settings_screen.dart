@@ -87,16 +87,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _Tile(
               icon: Icons.settings_input_component,
               title: 'Video Engine',
-              subtitle: widget.player.engineType == EngineType.mpv
-                  ? 'High performance (libmpv)'
-                  : 'Alternative compatibility (libmdk/ffmpeg)',
+              subtitle: switch (widget.player.engineType) {
+                EngineType.mpvInternal => 'High performance (Integrated MPV)',
+                EngineType.mpvExternal => 'Native Player (External MPV)',
+                EngineType.vlcExternal => 'Native Player (External VLC)',
+              },
               trailing: DropdownButton<EngineType>(
                 value: widget.player.engineType,
                 underline: const SizedBox(),
                 dropdownColor: const Color(0xFF1E1E1E),
                 items: const [
-                  DropdownMenuItem(value: EngineType.mpv, child: Text('MPV')),
-                  DropdownMenuItem(value: EngineType.fvp, child: Text('FVP')),
+                  DropdownMenuItem(value: EngineType.mpvInternal, child: Text('MPV (Internal)')),
+                  DropdownMenuItem(value: EngineType.mpvExternal, child: Text('MPV (External)')),
+                  DropdownMenuItem(value: EngineType.vlcExternal, child: Text('VLC (External)')),
                 ],
                 onChanged: (type) async {
                   if (type != null) {

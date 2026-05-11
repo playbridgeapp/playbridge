@@ -4,7 +4,6 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
-import 'package:fvp/fvp.dart' as fvp;
 import 'package:window_manager/window_manager.dart';
 
 import 'discovery.dart';
@@ -24,7 +23,6 @@ import 'tray_controller.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  fvp.registerWith();
   await windowManager.ensureInitialized();
 
   windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
@@ -665,7 +663,7 @@ class _StatusBar extends StatelessWidget {
                 child: Text(
                   serverError != null
                       ? 'Server failed: $serverError'
-                      : '$phaseLabel  ·  ${player.state}  ·  ${player.engineType.name.toUpperCase()}'
+                      : '$phaseLabel  ·  ${player.state}  ·  ${_engineLabel(player.engineType)}'
                           '${player.currentTitle != null ? '  ·  ${player.currentTitle}' : ''}'
                           '${discoveryError != null ? '  ·  mDNS: $discoveryError' : ''}',
                   overflow: TextOverflow.ellipsis,
@@ -682,6 +680,14 @@ class _StatusBar extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _engineLabel(EngineType type) {
+    return switch (type) {
+      EngineType.mpvInternal => 'MPV',
+      EngineType.mpvExternal => 'MPV (EXT)',
+      EngineType.vlcExternal => 'VLC (EXT)',
+    };
   }
 
   static String _fmt(Duration d) {
@@ -832,7 +838,7 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                           style: const TextStyle(color: Colors.white70),
                         ),
                       const Spacer(),
-                      if (p.engineType == EngineType.mpv) ...[
+                      if (p.engineType == EngineType.mpvInternal) ...[
                         _AudioMenuButton(
                           player: p,
                           onOpened: widget.onMenuOpened,
@@ -845,12 +851,14 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         ),
                       ],
                       IconButton(
-                        tooltip: 'Swap engine to ${p.engineType == EngineType.mpv ? 'FVP' : 'MPV'}',
+                        tooltip: 'Swap engine',
                         icon: const Icon(Icons.swap_horiz),
                         onPressed: () async {
-                          final next = p.engineType == EngineType.mpv
-                              ? EngineType.fvp
-                              : EngineType.mpv;
+                          final next = switch (p.engineType) {
+                            EngineType.mpvInternal => EngineType.mpvExternal,
+                            EngineType.mpvExternal => EngineType.vlcExternal,
+                            EngineType.vlcExternal => EngineType.mpvInternal,
+                          };
                           await widget.store.setEngineType(next);
                           await p.switchEngine(next);
                         },

@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:video_player/video_player.dart' as vp;
 import 'player_engine.dart';
 import 'player_controller.dart';
 import 'engines/mpv_engine.dart';
-import 'engines/fvp_engine.dart';
 
 class PlaybackSurface extends StatefulWidget {
   const PlaybackSurface({super.key, required this.controller});
@@ -26,9 +24,9 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
   }
 
   void _onControllerChange() {
-    if (widget.controller.engineType == EngineType.mpv && _mpvVideo == null) {
+    if (widget.controller.engineType == EngineType.mpvInternal && _mpvVideo == null) {
       _initMpv();
-    } else if (widget.controller.engineType == EngineType.fvp && _mpvVideo != null) {
+    } else if (widget.controller.engineType != EngineType.mpvInternal && _mpvVideo != null) {
       _mpvVideo = null;
       setState(() {});
     }
@@ -50,19 +48,25 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
 
   @override
   Widget build(BuildContext context) {
-    final engine = widget.controller.engine;
-
-    if (widget.controller.engineType == EngineType.fvp && engine is FvpEngine) {
-      final vpc = engine.controller;
-      if (vpc != null && vpc.value.isInitialized) {
-        return Center(
-          child: AspectRatio(
-            aspectRatio: vpc.value.aspectRatio,
-            child: vp.VideoPlayer(vpc),
-          ),
-        );
-      }
-      return const ColoredBox(color: Colors.black);
+    if (widget.controller.engineType != EngineType.mpvInternal) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.rocket_launch, size: 64, color: Colors.tealAccent),
+            const SizedBox(height: 24),
+            Text(
+              'Playing in ${widget.controller.engineType == EngineType.mpvExternal ? 'MPV' : 'VLC'} (External)',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Use the external player window for playback.',
+              style: TextStyle(color: Colors.white60),
+            ),
+          ],
+        ),
+      );
     }
 
     if (_mpvVideo != null) {
