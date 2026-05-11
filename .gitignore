@@ -85,3 +85,5 @@ stream-resolver/*.exe
 
 # Claude Code local settings
 .claude/
+# Added by code-review-graph
+.code-review-graph/
