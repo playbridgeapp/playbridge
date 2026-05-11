@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import '../player_engine.dart';
 
 class ExternalEngine extends PlayerEngine {
   ExternalEngine({required this.command, required this.argsBuilder});
 
   final String command;
-  final List<String> Function(QueueItem item) argsBuilder;
+  final List<String> Function(QueueItem item, File? m3u, int startIndex)
+      argsBuilder;
 
   Process? _process;
   bool _isDisposed = false;
@@ -18,7 +20,7 @@ class ExternalEngine extends PlayerEngine {
   String get state => _state;
 
   @override
-  int get positionMs => 0; // Position tracking not implemented for generic external
+  int get positionMs => 0;
   @override
   int get durationMs => 0;
 
@@ -32,11 +34,19 @@ class ExternalEngine extends PlayerEngine {
   Future<void> setSubtitleTrack(dynamic t) async {}
 
   @override
-  Future<void> open(QueueItem item) async {
+  Future<void> open(QueueItem item) => openPlaylist([item], 0);
+
+  @override
+  Future<void> openPlaylist(List<QueueItem> items, int startIndex) async {
     await stop();
     if (_isDisposed) return;
 
-    final args = argsBuilder(item);
+    File? m3u;
+    if (items.length > 1) {
+      m3u = await _generateM3u(items);
+    }
+
+    final args = argsBuilder(items[startIndex.clamp(0, items.length - 1)], m3u, startIndex);
     debugPrint('[external] launching: $command ${args.join(' ')}');
 
     try {
@@ -44,7 +54,6 @@ class ExternalEngine extends PlayerEngine {
       _state = 'playing';
       notifyListeners();
 
-      // Listen for exit to trigger next/idle
       _process?.exitCode.then((code) {
         debugPrint('[external] process exited with $code');
         if (!_isDisposed) {
@@ -52,12 +61,26 @@ class ExternalEngine extends PlayerEngine {
           notifyListeners();
           onCompleted?.call();
         }
+        // Cleanup temp file
+        m3u?.delete().catchError((_) => m3u!);
       });
     } catch (e) {
       debugPrint('[external] failed to launch $command: $e');
       _state = 'idle';
       notifyListeners();
     }
+  }
+
+  Future<File> _generateM3u(List<QueueItem> items) async {
+    final temp = await getTemporaryDirectory();
+    final file = File('${temp.path}/pb_playlist_${DateTime.now().millisecondsSinceEpoch}.m3u');
+    final buffer = StringBuffer('#EXTM3U\n');
+    for (final item in items) {
+      buffer.writeln('#EXTINF:-1,${item.title}');
+      buffer.writeln(item.url);
+    }
+    await file.writeAsString(buffer.toString());
+    return file;
   }
 
   @override

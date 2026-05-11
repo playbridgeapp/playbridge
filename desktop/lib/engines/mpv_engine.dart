@@ -62,10 +62,18 @@ class MpvEngine extends PlayerEngine {
   Future<void> setSubtitleTrack(dynamic t) => player.setSubtitleTrack(t as SubtitleTrack);
 
   @override
-  Future<void> open(QueueItem item) async {
-    final media = Media(item.url, httpHeaders: item.headers);
-    await player.open(media, play: true);
+  Future<void> open(QueueItem item) => openPlaylist([item], 0);
 
+  @override
+  Future<void> openPlaylist(List<QueueItem> items, int startIndex) async {
+    final playlist = Playlist(
+      items.map((i) => Media(i.url, httpHeaders: i.headers)).toList(),
+      index: startIndex,
+    );
+    await player.open(playlist, play: true);
+
+    // External subtitles for the current item
+    final item = items[startIndex.clamp(0, items.length - 1)];
     final subs = item.subtitles ?? const <String>[];
     if (subs.isNotEmpty) {
       final native = player.platform;
@@ -108,17 +116,8 @@ class MpvEngine extends PlayerEngine {
       try {
         await native.setProperty('hwdec', 'auto-safe');
         await native.setProperty('cache', 'yes');
-        await native.setProperty('cache-secs', '60');
-        await native.setProperty('demuxer-readahead-secs', '60');
         await native.setProperty('demuxer-max-bytes', '314572800');
         await native.setProperty('demuxer-max-back-bytes', '104857600');
-        await native.setProperty('stream-buffer-size', '8MiB');
-        await native.setProperty('network-timeout', '120');
-        const lavf = 'timeout=30000000,reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5';
-        await native.setProperty('stream-lavf-o-add', lavf);
-        await native.setProperty('demuxer-lavf-o-add', lavf);
-        await native.setProperty('cache-pause', 'no');
-        await native.setProperty('cache-pause-wait', '1');
       } catch (e) {
         debugPrint('[mpv] failed to tune: $e');
       }

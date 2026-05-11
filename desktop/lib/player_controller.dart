@@ -30,8 +30,12 @@ class PlayerController extends ChangeNotifier {
       case EngineType.mpvExternal:
         _engine = ExternalEngine(
           command: 'mpv',
-          argsBuilder: (item) => [
-            item.url,
+          argsBuilder: (item, m3u, startIdx) => [
+            if (m3u != null) ...[
+              m3u.path,
+              '--playlist-start=$startIdx',
+            ] else
+              item.url,
             '--fs',
             '--force-window=yes',
             if (item.title != null) '--title=${item.title}',
@@ -44,8 +48,12 @@ class PlayerController extends ChangeNotifier {
         final vlcCmd = Platform.isMacOS ? '/Applications/VLC.app/Contents/MacOS/VLC' : 'vlc';
         _engine = ExternalEngine(
           command: vlcCmd,
-          argsBuilder: (item) => [
-            item.url,
+          argsBuilder: (item, m3u, startIdx) => [
+            if (m3u != null) ...[
+              m3u.path,
+              '--playlist-index=$startIdx',
+            ] else
+              item.url,
             '--fullscreen',
             '--play-and-exit',
             if (item.headers != null)
@@ -155,7 +163,7 @@ class PlayerController extends ChangeNotifier {
     if (isRemote) {
       playRequests.value++;
     }
-    await _engine.open(_queue[0]);
+    await _engine.openPlaylist(_queue, _currentIndex);
   }
 
   Future<void> playPlaylist(
@@ -171,13 +179,13 @@ class PlayerController extends ChangeNotifier {
     if (isRemote) {
       playRequests.value++;
     }
-    await _engine.open(_queue[_currentIndex]);
+    await _engine.openPlaylist(_queue, _currentIndex);
   }
 
   Future<void> jumpTo(int index) async {
     if (index < 0 || index >= _queue.length) return;
     _setIndex(index);
-    await _engine.open(_queue[index]);
+    await _engine.openPlaylist(_queue, _currentIndex);
   }
 
   Future<void> next() async {

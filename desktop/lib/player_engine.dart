@@ -25,6 +25,8 @@ abstract class PlayerEngine extends ChangeNotifier {
   Future<void> setSubtitleTrack(dynamic t);
 
   Future<void> open(QueueItem item);
+  Future<void> openPlaylist(List<QueueItem> items, int startIndex) =>
+      open(items[startIndex]);
   Future<void> resume();
   Future<void> pause();
   Future<void> seek(Duration position);
