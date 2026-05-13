@@ -177,7 +177,8 @@ class AddonRepository(
                     resources = resourcesJson,
                     resourceDetailsJson = resourceDetailsJson,
                     catalogsJson = catalogsJson,
-                    playEndpoint = manifest.behaviorHints?.playEndpoint ?: ""
+                    playEndpoint = manifest.behaviorHints?.playEndpoint ?: "",
+                    isConfigurable = manifest.behaviorHints?.configurable ?: false
                 )
 
                 addonDao.insert(entity)
@@ -258,7 +259,8 @@ class AddonRepository(
                     resources = json.encodeToString(resourceNames),
                     resourceDetailsJson = resourceDetailsJson,
                     catalogsJson = json.encodeToString(manifest.catalogs),
-                    playEndpoint = manifest.behaviorHints?.playEndpoint ?: ""
+                    playEndpoint = manifest.behaviorHints?.playEndpoint ?: "",
+                    isConfigurable = manifest.behaviorHints?.configurable ?: false
                 )
                 addonDao.update(updated)
                 Log.d(TAG, "Refreshed addon: ${updated.name}")
@@ -568,7 +570,7 @@ class AddonRepository(
         return try {
             var url = "${addon.baseUrl}/meta/$type/$id.json"
             // If this is the Hub (aggregating multiple sources), pass the 'src' parameter
-            if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.name.contains("Hub"))) {
+            if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.supportsPlayEndpoint())) {
                 url += "?src=${android.net.Uri.encode(forcedSource)}"
             }
             Log.d(TAG, "Fetching meta from ${addon.name}: $url")
@@ -997,7 +999,7 @@ class AddonRepository(
             try {
                 var url = "${addon.baseUrl}/stream/$type/$id.json"
                 // If this is the Hub, pass the 'src' parameter to help it resolve correctly
-                if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.name.contains("Hub"))) {
+                if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.supportsPlayEndpoint())) {
                     url += "?src=${android.net.Uri.encode(forcedSource)}"
                 }
                 Log.d(TAG, "Fetching streams from ${addon.name}: $url")

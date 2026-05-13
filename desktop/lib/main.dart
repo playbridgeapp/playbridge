@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -38,6 +39,13 @@ Future<void> main() async {
     history: results[1] as HistoryStore,
   ));
 }
+
+// Keyboard shortcuts
+class PlayPauseIntent extends Intent { const PlayPauseIntent(); }
+class SeekForwardIntent extends Intent { const SeekForwardIntent(); }
+class SeekBackwardIntent extends Intent { const SeekBackwardIntent(); }
+class VolumeUpIntent extends Intent { const VolumeUpIntent(); }
+class VolumeDownIntent extends Intent { const VolumeDownIntent(); }
 
 // Navigation destinations — nowPlaying is a mode, not a persistent screen.
 enum _Dest { cast, history, favorites, settings }
@@ -232,21 +240,60 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _player.dispose();
     super.dispose();
   }
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'PlayBridge Desktop',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: Colors.transparent,
-        canvasColor: Colors.transparent,
-      ),
-      home: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: AnimatedBuilder(
-          animation: Listenable.merge([_server, _player]),
-          builder: (context, _) {
+@override
+Widget build(BuildContext context) {
+  return Shortcuts(
+    shortcuts: {
+      const SingleActivator(LogicalKeyboardKey.space): const PlayPauseIntent(),
+      const SingleActivator(LogicalKeyboardKey.arrowRight): const SeekForwardIntent(),
+      const SingleActivator(LogicalKeyboardKey.arrowLeft): const SeekBackwardIntent(),
+      const SingleActivator(LogicalKeyboardKey.arrowUp): const VolumeUpIntent(),
+      const SingleActivator(LogicalKeyboardKey.arrowDown): const VolumeDownIntent(),
+    },
+    child: Actions(
+      actions: {
+        PlayPauseIntent: CallbackAction<PlayPauseIntent>(
+          onInvoke: (_) => _player.state == 'playing' ? _player.pause() : _player.resume(),
+        ),
+        SeekForwardIntent: CallbackAction<SeekForwardIntent>(
+          onInvoke: (_) {
+            _player.seek(Duration(milliseconds: _player.positionMs + 2000));
+            return null;
+          },
+        ),
+        SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
+          onInvoke: (_) {
+            _player.seek(Duration(milliseconds: _player.positionMs - 2000));
+            return null;
+          },
+        ),
+        VolumeUpIntent: CallbackAction<VolumeUpIntent>(
+          onInvoke: (_) {
+            _player.setVolume((_player.volume + 0.05).clamp(0.0, 1.0));
+            return null;
+          },
+        ),
+        VolumeDownIntent: CallbackAction<VolumeDownIntent>(
+          onInvoke: (_) {
+            _player.setVolume((_player.volume - 0.05).clamp(0.0, 1.0));
+            return null;
+          },
+        ),
+      },
+      child: Focus(
+        autofocus: true,
+        child: MaterialApp(
+          title: 'PlayBridge Desktop',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData.dark(useMaterial3: true).copyWith(
+            scaffoldBackgroundColor: Colors.transparent,
+            canvasColor: Colors.transparent,
+          ),
+          home: Scaffold(
+            backgroundColor: Colors.transparent,
+            body: AnimatedBuilder(
+              animation: Listenable.merge([_server, _player]),
+              builder: (context, _) {
             final hasMedia = _player.queue.isNotEmpty;
             final hasQueue = _player.queue.length > 1;
             const titleBarHeight = 28.0;
@@ -398,7 +445,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           },
         ),
       ),
-    );
+    ),
+  ),
+),
+);
   }
 
   Widget _buildScreen() {

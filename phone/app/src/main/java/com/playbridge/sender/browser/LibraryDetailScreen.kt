@@ -216,7 +216,7 @@ fun LibraryDetailScreen(
 
         isLoading = false
         hasAddons = addonRepository.hasAnyAddons()
-        hubAddon = addonRepository.getInstalledAddons().find { it.name == "PlayBridge Hub" }
+        hubAddon = addonRepository.getInstalledAddons().find { it.supportsPlayEndpoint() }
     }
 
     // IDs for tracking/streams are now managed as state variables
@@ -469,66 +469,46 @@ fun LibraryDetailScreen(
             onTvDeviceSelect?.invoke(selectedTvDevice)
         }
 
-        // 1. Proxy path
-        if (!forPhone && proxyMode != MediaflowProxy.Mode.OFF && proxyAvailable) {
+        // 1. Proxy path (only for auto-play; long-press should still use picker)
+        if (!forPhone && !forcePicker && proxyMode != MediaflowProxy.Mode.OFF && proxyAvailable) {
             startProxiedResolution(streamId, streamType, resTitle, episode)
             return@triggerWatch
         }
 
-        // 2. Hub / Instant Play logic
-        if (!forcePicker) {
-            if (hubAddon != null) {
-                if (isSeries) {
-                    // TV Show: Send playlist
-                    val playlist = buildHubPlaylist(targetEpisode = episode)
-                    if (playlist != null) {
-                        if (forPhone) {
-                            // Phone doesn't support playlists yet, just play the current one
-                            val hubUrl = StreamingUtils.buildPlayUrl(hubAddon!!, streamType, streamId, context)
-                            openInExternalPlayer(context, hubUrl, null, null)
-                        } else {
-                            onPlayPlaylistToTv(playlist)
-                        }
-                        return@triggerWatch
-                    }
-                } else {
-                    // Movie: Send single play
-                    val hubUrl = StreamingUtils.buildPlayUrl(hubAddon!!, streamType, streamId, context)
+        // 2. Hub / Instant Play logic (only for single click)
+        if (!forcePicker && hubAddon != null) {
+            if (isSeries) {
+                // TV Show: Send playlist
+                val playlist = buildHubPlaylist(targetEpisode = episode)
+                if (playlist != null) {
                     if (forPhone) {
+                        // Phone doesn't support playlists yet, just play the current one
+                        val hubUrl = StreamingUtils.buildPlayUrl(hubAddon!!, streamType, streamId, context)
                         openInExternalPlayer(context, hubUrl, null, null)
                     } else {
-                        onPlayPayloadToTv(com.playbridge.shared.protocol.PlayPayload(
-                            url = hubUrl,
-                            title = resTitle,
-                            contentType = "movie",
-                            detectedBy = "library",
-                            visualMetadata = buildVisualMetadata(null)
-                        ))
+                        onPlayPlaylistToTv(playlist)
                     }
                     return@triggerWatch
                 }
-            } else if (!forPhone) {
-                // If Hub not present and it's a single click for TV, trigger auto-pick
-                startResolution(streamId, streamType, resTitle, false, false, episode)
+            } else {
+                // Movie: Send single play
+                val hubUrl = StreamingUtils.buildPlayUrl(hubAddon!!, streamType, streamId, context)
+                if (forPhone) {
+                    openInExternalPlayer(context, hubUrl, null, null)
+                } else {
+                    onPlayPayloadToTv(com.playbridge.shared.protocol.PlayPayload(
+                        url = hubUrl,
+                        title = resTitle,
+                        contentType = "movie",
+                        detectedBy = "library",
+                        visualMetadata = buildVisualMetadata(null)
+                    ))
+                }
                 return@triggerWatch
             }
         }
 
-        // 3. Hold logic for TV shows (as requested)
-        if (!forPhone && isSeries && forcePicker) {
-            // "when holding the watch button, open the stream picker (basically as it is now) 
-            // and still send a playplaylist command with instant play links for all episodes."
-            val playlist = buildHubPlaylist(targetEpisode = episode)
-            if (playlist != null) {
-                onPlayPlaylistToTv(playlist)
-            }
-            // And also open the picker on phone (which is the current behavior for "opening picker")
-            // We pass forPhone=false so it knows it should eventually send the selection to TV
-            startResolution(streamId, streamType, resTitle, false, true, episode)
-            return@triggerWatch
-        }
-
-        // 4. Default: Resolve
+        // 3. Default: Resolve (always used for long-press or when Hub/Proxy are unavailable)
         startResolution(streamId, streamType, resTitle, forPhone, forcePicker, episode)
     }
 
@@ -1003,10 +983,9 @@ fun LibraryDetailScreen(
                                 }
 
                                 // Metadata source chip
-                                 val displaySource = if (addonMetaSource == "PlayBridge Hub" && forcedSource != null) forcedSource else addonMetaSource
-                                 val sourceLabel = displaySource?.let { "via $it" }
-                                sourceLabel?.let { DetailInfoChip(label = "Source", value = it) }
-                            }
+                                val displaySource = if (addonMetaSource == hubAddon?.name && forcedSource != null) forcedSource else addonMetaSource
+                                val sourceLabel = displaySource?.let { "via $it" }
+                                sourceLabel?.let { DetailInfoChip(label = "Source", value = it) }                            }
                         }
                     }
 

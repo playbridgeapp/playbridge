@@ -38,6 +38,7 @@ import com.playbridge.sender.data.library.disabledFeatureSet
 import com.playbridge.sender.data.library.isFeatureEnabled
 import com.playbridge.sender.data.library.parsedCatalogEntries
 import com.playbridge.sender.data.library.supportsResource
+import com.playbridge.sender.data.library.supportsPlayEndpoint
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -442,79 +443,94 @@ private fun AddonCard(
                 AddonCapabilityBadges(addon = addon)
             }
 
-            // ── 3-dot menu ───────────────────────────────────────────────
-            Box {
-                IconButton(onClick = { menuExpanded = true }) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "Addon options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            // ── Actions ──────────────────────────────────────────────────
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (addon.isConfigurable) {
+                    TextButton(
+                        onClick = onOpenUrl,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Icon(Icons.Default.Settings, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Configure", style = MaterialTheme.typography.labelLarge)
+                    }
                 }
 
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false }
-                ) {
-                    // Copy URL
-                    DropdownMenuItem(
-                        text = { Text("Copy Manifest URL") },
-                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
-                        onClick = {
-                            menuExpanded = false
-                            onCopyUrl()
-                        }
-                    )
+                // ── 3-dot menu ───────────────────────────────────────────────
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "Addon options",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
-                    // Open in browser
-                    DropdownMenuItem(
-                        text = { Text("Configure") },
-                        leadingIcon = { Icon(Icons.Default.OpenInBrowser, null) },
-                        onClick = {
-                            menuExpanded = false
-                            onOpenUrl()
-                        }
-                    )
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
+                        // Copy URL
+                        DropdownMenuItem(
+                            text = { Text("Copy Manifest URL") },
+                            leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                            onClick = {
+                                menuExpanded = false
+                                onCopyUrl()
+                            }
+                        )
 
-                    HorizontalDivider()
+                        // Open in browser
+                        DropdownMenuItem(
+                            text = { Text(if (addon.isConfigurable) "Re-configure" else "Configure") },
+                            leadingIcon = { Icon(Icons.Default.OpenInBrowser, null) },
+                            onClick = {
+                                menuExpanded = false
+                                onOpenUrl()
+                            }
+                        )
 
-                    // Configure features
-                    DropdownMenuItem(
-                        text = { Text("Addon Features") },
-                        leadingIcon = { Icon(Icons.Default.Tune, null) },
-                        onClick = {
-                            menuExpanded = false
-                            showConfigureDialog = true
-                        }
-                    )
+                        HorizontalDivider()
 
-                    // Refresh metadata
-                    DropdownMenuItem(
-                        text = { Text("Refresh") },
-                        leadingIcon = { Icon(Icons.Default.Refresh, null) },
-                        onClick = {
-                            menuExpanded = false
-                            onRefresh()
-                        }
-                    )
+                        // Configure features
+                        DropdownMenuItem(
+                            text = { Text("Addon Features") },
+                            leadingIcon = { Icon(Icons.Default.Tune, null) },
+                            onClick = {
+                                menuExpanded = false
+                                showConfigureDialog = true
+                            }
+                        )
 
-                    HorizontalDivider()
+                        // Refresh metadata
+                        DropdownMenuItem(
+                            text = { Text("Refresh") },
+                            leadingIcon = { Icon(Icons.Default.Refresh, null) },
+                            onClick = {
+                                menuExpanded = false
+                                onRefresh()
+                            }
+                        )
 
-                    // Delete
-                    DropdownMenuItem(
-                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Delete,
-                                null,
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            showDeleteDialog = true
-                        }
-                    )
+                        HorizontalDivider()
+
+                        // Delete
+                        DropdownMenuItem(
+                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                showDeleteDialog = true
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -565,13 +581,13 @@ private fun AddonCapabilityBadges(addon: InstalledAddonEntity) {
     // "catalog" in its resources array (Torrentio with RealDebrid is the canonical case).
     val hasCatalogEntries = remember(addon.catalogsJson) { addon.parsedCatalogEntries().isNotEmpty() }
     val supported = resources.filter { addon.supportsResource(it) || (it == "catalog" && hasCatalogEntries) }
-    if (supported.isEmpty()) return
+    if (supported.isEmpty() && !addon.supportsPlayEndpoint()) return
 
     val catalogCount = remember(addon.catalogsJson) { addon.parsedCatalogEntries().size }
     val disabledSet = remember(addon.disabledFeatures) { addon.disabledFeatureSet() }
 
     Spacer(Modifier.height(6.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         supported.forEach { cap ->
             val label = when (cap) {
                 "stream"    -> "Streams"
@@ -582,6 +598,10 @@ private fun AddonCapabilityBadges(addon: InstalledAddonEntity) {
             }
             val featureDisabled = !addon.isEnabled || cap in disabledSet
             CapabilityBadge(label = label, cap = cap, dimmed = featureDisabled)
+        }
+        
+        if (addon.supportsPlayEndpoint()) {
+            CapabilityBadge(label = "Play Endpoint", cap = "play", dimmed = !addon.isEnabled)
         }
     }
 }
@@ -594,6 +614,7 @@ private fun CapabilityBadge(label: String, cap: String, dimmed: Boolean = false)
         "catalog"   -> MaterialTheme.colorScheme.tertiaryContainer
         "meta"      -> MaterialTheme.colorScheme.secondaryContainer
         "subtitles" -> Color(0xFFFFE0B2)
+        "play"      -> Color(0xFFE1BEE7) // Light purple for Play Endpoint
         else        -> MaterialTheme.colorScheme.surfaceVariant
     }.copy(alpha = alpha)
     val contentColor = when (cap) {
@@ -601,6 +622,7 @@ private fun CapabilityBadge(label: String, cap: String, dimmed: Boolean = false)
         "catalog"   -> MaterialTheme.colorScheme.onTertiaryContainer
         "meta"      -> MaterialTheme.colorScheme.onSecondaryContainer
         "subtitles" -> Color(0xFFE65100)
+        "play"      -> Color(0xFF4A148C) // Dark purple
         else        -> MaterialTheme.colorScheme.onSurfaceVariant
     }.copy(alpha = alpha)
     Surface(

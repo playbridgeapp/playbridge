@@ -138,6 +138,7 @@ class PlayerController extends ChangeNotifier {
 
   int get positionMs => _engine.positionMs;
   int get durationMs => _engine.durationMs;
+  double get volume => _engine.volume;
 
   dynamic get tracks => _engine.tracks;
   dynamic get track => _engine.track;
@@ -212,6 +213,7 @@ class PlayerController extends ChangeNotifier {
   Future<void> resume() => _engine.resume();
   Future<void> pause() => _engine.pause();
   Future<void> seek(Duration position) => _engine.seek(position);
+  Future<void> setVolume(double volume) => _engine.setVolume(volume);
   Future<void> stop() async {
     await _engine.stop();
     _queue.clear();

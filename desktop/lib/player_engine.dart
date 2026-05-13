@@ -17,6 +17,7 @@ abstract class PlayerEngine extends ChangeNotifier {
   String get state; // idle | buffering | playing | paused | ended
   int get positionMs;
   int get durationMs;
+  double get volume => 1.0;
   
   // Track management (optional, implementations can return empty/no-op)
   dynamic get tracks;
@@ -30,6 +31,7 @@ abstract class PlayerEngine extends ChangeNotifier {
   Future<void> resume();
   Future<void> pause();
   Future<void> seek(Duration position);
+  Future<void> setVolume(double volume) async {}
   Future<void> stop();
   @override
   Future<void> dispose();

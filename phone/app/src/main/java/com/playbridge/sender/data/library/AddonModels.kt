@@ -25,6 +25,7 @@ data class InstalledAddonEntity(
     val description: String = "",
     val baseUrl: String,       // e.g. https://torrentio.strem.fun/providers=yts|sort=qualitysize|debridoptions=nodownloadlinks|realdebrid=XXXX
     val playEndpoint: String = "", // "/api/play/{type}/{id}" or empty = standard /stream only
+    val isConfigurable: Boolean = false, // From behaviorHints.configurable
     val version: String = "",
     val types: String = "",    // Comma-separated: "movie,series"
     val resources: String = "",      // JSON array of resource names, e.g. ["stream","catalog","meta","subtitles"]
@@ -61,6 +62,9 @@ fun InstalledAddonEntity.supportsResource(name: String): Boolean {
         false
     }
 }
+
+/** True if this addon supports the Play Endpoint protocol for optimized TV playback. */
+fun InstalledAddonEntity.supportsPlayEndpoint(): Boolean = playEndpoint.isNotBlank()
 
 /**
  * Returns the set of resource names the user has explicitly disabled for this addon,
@@ -142,6 +146,7 @@ data class StremioManifest(
 
 @Serializable
 data class StremioManifestHints(
+    val configurable: Boolean = false,
     val playEndpoint: String? = null
 )
 
