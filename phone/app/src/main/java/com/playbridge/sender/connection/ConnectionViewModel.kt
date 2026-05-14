@@ -2,6 +2,7 @@ package com.playbridge.sender.connection
 
 import android.app.Application
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,6 +12,7 @@ import com.playbridge.sender.data.history.CommandHistoryEntity
 import com.playbridge.sender.model.TvDevice
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 class ConnectionViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -47,6 +49,11 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _autoConnectEnabled = MutableStateFlow(prefs.getBoolean("auto_connect_tv", true))
     val autoConnectEnabled: StateFlow<Boolean> = _autoConnectEnabled.asStateFlow()
 
+    // Stable identity sent to receivers during pairing so the TV can display a friendly name.
+    private val phoneDeviceName: String = Build.MODEL
+    private val phoneDeviceUUID: String = prefs.getString("pb_phone_uuid", null)
+        ?: UUID.randomUUID().toString().also { prefs.edit().putString("pb_phone_uuid", it).apply() }
+
     private var hasAttemptedInitialConnect = false
 
     init {
@@ -63,7 +70,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     state is WebSocketClient.ConnectionState.Disconnected) {
                     hasAttemptedInitialConnect = true
                     Log.d(TAG, "Auto-connecting to saved TV: ${device.name} at ${device.ip}:${device.port}")
-                    webSocketClient.connect(device.ip, device.port, device.token, device.name)
+                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID)
                 }
             }
         }
@@ -96,7 +103,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         )
                         connectionStore.saveTvDevice(updatedDevice)
                         connectionStore.addToHistory(updatedDevice)
-                        webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name)
+                        webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name, phoneDeviceName, phoneDeviceUUID)
                     }
                 }
             }
@@ -115,14 +122,15 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
 
-        // On auth failure, wipe the stale token from storage so the next tap on this device
-        // shows the PIN dialog instead of silently retrying the wrong token (e.g. after TV reinstall).
+        // On auth failure or pairing denial, wipe the token so the next tap triggers
+        // a fresh pairing_request instead of silently retrying the wrong token.
         viewModelScope.launch {
             connectionState.collect { state ->
-                if (state is WebSocketClient.ConnectionState.AuthFailed) {
+                if (state is WebSocketClient.ConnectionState.AuthFailed ||
+                    state is WebSocketClient.ConnectionState.PairingDenied) {
                     val currentDevice = connectionStore.tvDevice.first()
                     if (currentDevice != null && currentDevice.token.isNotEmpty()) {
-                        Log.i(TAG, "Auth failed — clearing stale token for ${currentDevice.ip}")
+                        Log.i(TAG, "Auth/pairing failed — clearing token for ${currentDevice.ip}")
                         val clearedDevice = currentDevice.copy(token = "")
                         connectionStore.saveTvDevice(clearedDevice)
                         connectionStore.addToHistory(clearedDevice)
@@ -140,7 +148,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             viewModelScope.launch {
                 val device = tvDevice.first()
                 if (device != null) {
-                    webSocketClient.connect(device.ip, device.port, device.token, device.name)
+                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID)
                 }
             }
         }
@@ -152,7 +160,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             hasAttemptedInitialConnect = true
             connectionStore.saveTvDevice(device)
             connectionStore.addToHistory(device)
-            webSocketClient.connect(device.ip, device.port, device.token, device.name)
+            webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID)
         }
     }
 
@@ -190,53 +198,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         Log.d(TAG, "Sending command payload: $commandJson")
         webSocketClient.send(commandJson)
     }
-    // Timestamp of the last requestPairing call (per-instance debounce).
-    private var lastPairingRequestMs = 0L
-
-    /**
-     * Opens a short-lived WebSocket connection to the TV and sends a [request_pairing] signal,
-     * then immediately closes. No PIN or token is required.
-     *
-     * The TV handles this in its pre-auth loop: it emits [connectionAttemptFlow], raises its
-     * overlay window (for Android 14+ BAL), and opens its PairingScreen so the user can read
-     * the PIN *before* they look down at the phone to type it.
-     *
-     * Debounced to 5 s so rapid taps or quick AuthFailed retries don't flood the TV.
-     * Call this just before showing the PIN entry dialog.
-     */
-    fun requestPairing(ip: String, port: Int) {
-        val now = System.currentTimeMillis()
-        if (now - lastPairingRequestMs < 5_000L) {
-            Log.d(TAG, "requestPairing debounced — called too soon after previous signal")
-            return
-        }
-        lastPairingRequestMs = now
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val client = okhttp3.OkHttpClient.Builder()
-                    .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
-                    .build()
-                val request = okhttp3.Request.Builder()
-                    .url("ws://$ip:$port")
-                    .build()
-                client.newWebSocket(request, object : okhttp3.WebSocketListener() {
-                    override fun onOpen(ws: okhttp3.WebSocket, response: okhttp3.Response) {
-                        ws.send(com.playbridge.shared.protocol.createRequestPairingJson())
-                        // TV will close the connection after the ack; close our side too
-                        ws.close(1000, "pairing_requested")
-                    }
-                    override fun onFailure(ws: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
-                        Log.d(TAG, "requestPairing signal failed (TV may not be reachable): ${t.message}")
-                    }
-                })
-                // Shut down the one-shot client so it doesn't linger
-                client.dispatcher.executorService.shutdown()
-            } catch (e: Exception) {
-                Log.d(TAG, "requestPairing error: ${e.message}")
-            }
-        }
-    }
-
     fun startDiscovery() {
         nsdHelper.startDiscovery()
     }

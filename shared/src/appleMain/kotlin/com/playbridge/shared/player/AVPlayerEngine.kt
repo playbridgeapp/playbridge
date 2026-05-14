@@ -39,6 +39,8 @@ class AVPlayerEngine : PlaybackEngine {
     private val _subtitleTracks = MutableStateFlow<List<Track>>(emptyList())
     override val subtitleTracks: StateFlow<List<Track>> = _subtitleTracks.asStateFlow()
 
+    override var isTransitioning = false
+
     private var timeObserver: Any? = null
 
     init {

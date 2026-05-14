@@ -298,13 +298,12 @@ data class PlaylistStatusMessage(
     val totalCount: Int = 0
 )
 
-// ==================== Authentication ====================
+// ==================== Authentication & Pairing ====================
 
 @Serializable
 data class AuthMessage(
     val type: String = "auth",
-    val token: String? = null,
-    val pin: String? = null
+    val token: String? = null
 )
 
 @Serializable
@@ -312,6 +311,28 @@ data class AuthResponse(
     val type: String = "auth_response",
     val success: Boolean,
     val token: String? = null
+)
+
+// Sent by phone on first connection (no saved token). Receiver holds the
+// connection open and shows an Allow/Deny prompt to the user.
+@Serializable
+data class PairingRequestMessage(
+    val type: String = "pairing_request",
+    val deviceName: String,
+    val deviceUUID: String
+)
+
+// Receiver → Phone: user tapped Allow. Carries the token the phone must store.
+@Serializable
+data class PairingApprovedMessage(
+    val type: String = "pairing_approved",
+    val token: String
+)
+
+// Receiver → Phone: user tapped Deny (or 30s timeout elapsed).
+@Serializable
+data class PairingDeniedMessage(
+    val type: String = "pairing_denied"
 )
 
 // ==================== Heartbeat ====================
@@ -349,9 +370,12 @@ sealed class Command {
     data class QueueAdd(val item: PlayPayload) : Command()
     data class PlaylistJump(val index: Int) : Command()
     data object Ping : Command()
-    // Sent by the phone before it has a PIN/token, as a lightweight "I'm about to pair"
-    // signal so the TV can open its PairingScreen and show the PIN in advance.
-    data object RequestPairing : Command()
+    // Sent by phone on first connection — receiver shows Allow/Deny prompt to the user.
+    data class PairingRequest(val deviceName: String, val deviceUUID: String) : Command()
+    // Receiver → Phone: user approved the pairing request.
+    data class PairingApproved(val token: String) : Command()
+    // Receiver → Phone: user denied (or 30s timeout elapsed).
+    data object PairingDenied : Command()
     data class Unknown(val type: String, val rawJson: String? = null) : Command()
 }
 
@@ -366,7 +390,15 @@ fun parseCommand(jsonString: String): Command {
 
         when (envelope.type) {
             "ping" -> Command.Ping
-            "request_pairing" -> Command.RequestPairing
+            "pairing_request" -> {
+                val msg = protocolJson.decodeFromString<PairingRequestMessage>(jsonString)
+                Command.PairingRequest(deviceName = msg.deviceName, deviceUUID = msg.deviceUUID)
+            }
+            "pairing_approved" -> {
+                val msg = protocolJson.decodeFromString<PairingApprovedMessage>(jsonString)
+                Command.PairingApproved(token = msg.token)
+            }
+            "pairing_denied" -> Command.PairingDenied
             "command" -> {
                 when (envelope.action) {
                     "play" -> {
@@ -592,12 +624,25 @@ fun createPlaylistStatusJson(
 }
 
 fun createAuthJson(token: String): String {
-    // Determine if it's a PIN (4 chars) or full token
-    return if (token.length <= 4) {
-        protocolJson.encodeToString(AuthMessage.serializer(), AuthMessage(pin = token))
-    } else {
-        protocolJson.encodeToString(AuthMessage.serializer(), AuthMessage(token = token))
-    }
+    return protocolJson.encodeToString(AuthMessage.serializer(), AuthMessage(token = token))
+}
+
+fun createPairingRequestJson(deviceName: String, deviceUUID: String): String {
+    return protocolJson.encodeToString(
+        PairingRequestMessage.serializer(),
+        PairingRequestMessage(deviceName = deviceName, deviceUUID = deviceUUID)
+    )
+}
+
+fun createPairingApprovedJson(token: String): String {
+    return protocolJson.encodeToString(
+        PairingApprovedMessage.serializer(),
+        PairingApprovedMessage(token = token)
+    )
+}
+
+fun createPairingDeniedJson(): String {
+    return protocolJson.encodeToString(PairingDeniedMessage.serializer(), PairingDeniedMessage())
 }
 
 /**
@@ -625,9 +670,3 @@ fun createContextJson(active: String): String {
     return """{"type":"context","active":"$active"}"""
 }
 
-/**
- * Create JSON string for request_pairing message (Phone → TV).
- * Sent before auth so the TV opens its PairingScreen and displays the PIN
- * while the user is reading it from the screen to type on the phone.
- */
-fun createRequestPairingJson(): String = """{"type":"request_pairing"}"""

@@ -83,6 +83,7 @@ fun AppSidebar(
                 icon = Icons.Default.Settings,
                 onSelected = onScreenSelected
             )
+
         }
     }
 }

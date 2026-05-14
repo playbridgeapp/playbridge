@@ -53,12 +53,12 @@ struct ContentView: View {
                     MenuButton(
                         title: "Settings", icon: "gearshape.fill", currentScreen: $currentScreen,
                         screen: .settings)
-
                     Spacer()
                 }
                 .padding(.horizontal, 40)
                 .frame(width: 400)
                 .background(Color.black.opacity(0.3).edgesIgnoringSafeArea(.all))
+                .focusSection()
                 .disabled(server.currentPlayRequest != nil)
 
                 // Main Content
@@ -76,6 +76,7 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .focusSection()
                 .disabled(server.currentPlayRequest != nil)
             }
             .disabled(server.currentPlayRequest != nil)

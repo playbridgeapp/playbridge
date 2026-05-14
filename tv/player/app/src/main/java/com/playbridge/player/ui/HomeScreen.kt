@@ -9,7 +9,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -25,11 +24,9 @@ fun HomeScreen(
     serverPort: Int?,
     connectedCount: Int,
     deviceId: String,
-    token: String,
     deviceName: String,
     modifier: Modifier = Modifier
 ) {
-    val pinDisplay = token.take(4).uppercase()
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -115,41 +112,12 @@ fun HomeScreen(
             
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Pairing PIN — always visible
-            if (pinDisplay.isNotEmpty()) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Enter this PIN on your phone",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = pinDisplay,
-                        fontSize = 96.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        letterSpacing = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = deviceName,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
             Text(
                 text = when (connectionState) {
                     is WebSocketServer.ConnectionState.Connected ->
                         "Ready to receive videos!\nUse your phone to send content."
                     else ->
-                        "Open PlayBridge on your phone and enter the PIN above."
+                        "Open PlayBridge on your phone and connect to this device."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

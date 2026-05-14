@@ -87,8 +87,8 @@ class TrayController with TrayListener {
     // Tooltip + status string driven by current phase + player state.
     final phase = server.phase;
     final status = switch (phase) {
-      PairingPhase.idle => 'PIN: ${store.pin}  ·  waiting for phone',
-      PairingPhase.awaitingPin => 'Pairing… PIN: ${store.pin}',
+      PairingPhase.idle => '${store.deviceName}  ·  waiting for phone',
+      PairingPhase.awaitingApproval => 'Approve connection on screen…',
       PairingPhase.authenticated =>
         player.queue.isNotEmpty
             ? 'Playing: ${player.currentTitle ?? '—'}'

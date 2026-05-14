@@ -58,8 +58,10 @@ fun HomeScreen(
                             when (connectionState) {
                                 is WebSocketClient.ConnectionState.Connected -> Color(0xFF00FF88)
                                 is WebSocketClient.ConnectionState.Connecting,
+                                is WebSocketClient.ConnectionState.WaitingForApproval,
                                 is WebSocketClient.ConnectionState.Retrying -> Color(0xFFFFAA00)
                                 is WebSocketClient.ConnectionState.Error,
+                                is WebSocketClient.ConnectionState.PairingDenied,
                                 is WebSocketClient.ConnectionState.AuthFailed -> Color(0xFFFF4444)
                                 is WebSocketClient.ConnectionState.Disconnected -> Color(0xFF666666)
                             }
@@ -70,9 +72,11 @@ fun HomeScreen(
                     text = when (connectionState) {
                         is WebSocketClient.ConnectionState.Connected -> "Connected to ${connectionState.serverName}"
                         is WebSocketClient.ConnectionState.Connecting -> "Connecting..."
+                        is WebSocketClient.ConnectionState.WaitingForApproval -> "Waiting for ${connectionState.serverName} to approve..."
                         is WebSocketClient.ConnectionState.Retrying -> "Retrying in ${connectionState.nextRetrySeconds}s..."
                         is WebSocketClient.ConnectionState.Error -> "Connection Failed"
-                        is WebSocketClient.ConnectionState.AuthFailed -> "Incorrect PIN"
+                        is WebSocketClient.ConnectionState.PairingDenied -> "Connection denied"
+                        is WebSocketClient.ConnectionState.AuthFailed -> "Auth Failed"
                         is WebSocketClient.ConnectionState.Disconnected -> "Disconnected"
                     },
                     style = MaterialTheme.typography.titleMedium
@@ -235,6 +239,31 @@ fun HomeScreen(
                         Text("Cancel")
                     }
                 }
+                is WebSocketClient.ConnectionState.WaitingForApproval -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(48.dp)
+                    )
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+                is WebSocketClient.ConnectionState.PairingDenied -> {
+                    OutlinedButton(
+                        onClick = onRescan,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Connect to TV")
+                    }
+                    TextButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Cancel")
+                    }
+                }
             }
             
             Spacer(modifier = Modifier.weight(1f))
@@ -242,15 +271,19 @@ fun HomeScreen(
             // Instructions
             Text(
                 text = when (connectionState) {
-                    is WebSocketClient.ConnectionState.Connected -> 
+                    is WebSocketClient.ConnectionState.Connected ->
                         "Ready to send videos to your TV!\nBrowse and detect video links."
                     is WebSocketClient.ConnectionState.Connecting,
                     is WebSocketClient.ConnectionState.Retrying ->
                         "Establishing connection..."
+                    is WebSocketClient.ConnectionState.WaitingForApproval ->
+                        "Approve the connection on your TV to continue."
                     is WebSocketClient.ConnectionState.Error ->
                         "Check that:\n• TV app is running\n• Both devices are on same network\n• IP address is correct"
+                    is WebSocketClient.ConnectionState.PairingDenied ->
+                        "The TV denied the connection request.\nTap Connect to try again."
                     is WebSocketClient.ConnectionState.AuthFailed ->
-                        "The PIN was incorrect or the TV app was reinstalled.\nEnter the PIN shown on your TV to re-pair."
+                        "The TV app was reinstalled. Connect again to re-pair."
                     is WebSocketClient.ConnectionState.Disconnected ->
                         "Connect to your TV to start casting videos."
                 },

@@ -17,7 +17,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
@@ -25,6 +24,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import kotlinx.coroutines.launch
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.model.TvDevice
@@ -59,41 +59,39 @@ fun ConnectionScreen(
         }
     }
 
-    var showPinDialog by remember { mutableStateOf<TvDevice?>(null) } // pending device (token not yet entered)
-    var pinDialogShowError by remember { mutableStateOf(false) }
     var showManualDialog by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
 
-    // When auth fails, re-open the PIN dialog for the current device so the user knows
-    // to try again (covers wrong PIN and TV app reinstall scenarios).
-    val tvDeviceSnapshot by viewModel.tvDevice.collectAsState(initial = null)
+    // Show a snackbar when pairing is denied or a stale token is rejected.
     LaunchedEffect(connectionState) {
-        if (connectionState is WebSocketClient.ConnectionState.AuthFailed) {
-            val device = tvDeviceSnapshot
-            if (device != null) {
-                // Re-signal the TV so its PairingScreen comes back up (it may have navigated
-                // away after the failed attempt closed the WebSocket connection).
-                viewModel.requestPairing(device.ip, device.port)
-                pinDialogShowError = true
-                showPinDialog = device
-            }
+        when (val state = connectionState) {
+            is WebSocketClient.ConnectionState.PairingDenied ->
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("${state.serverName} denied the connection")
+                }
+            is WebSocketClient.ConnectionState.AuthFailed ->
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Connection lost — tap the TV to reconnect")
+                }
+            else -> Unit
         }
     }
-    
-    // When a device is selected, check history for token
+
+    // When a device is selected, check history for a saved token.
     fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") {
-        // Find if we have a token for this device by uuid or ip/port
         val existing = if (uuid.isNotEmpty()) {
             history.find { it.uuid == uuid } ?: history.find { it.ip == ip && it.port == port }
         } else {
             history.find { it.ip == ip && it.port == port }
         }
-        
+
         if (existing != null && existing.token.isNotEmpty()) {
-            // Already have token, connect directly. Update IP and name if changed.
+            // Saved token — reconnect directly (no pairing prompt).
             viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
         } else {
-            viewModel.requestPairing(ip, port)
-            showPinDialog = TvDevice(ip = ip, port = port, token = "", name = name, uuid = uuid)
+            // No token — connect with empty token; WebSocketClient will send pairing_request.
+            viewModel.connect(TvDevice(ip = ip, port = port, token = "", name = name, uuid = uuid))
         }
     }
 
@@ -127,7 +125,8 @@ fun ConnectionScreen(
                 icon = { Icon(Icons.Default.Add, "Manual Connect") },
                 text = { Text("Manual Connect") }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { paddingValues ->
         LazyColumn(
             modifier = modifier
@@ -220,27 +219,37 @@ fun ConnectionScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-            } else if (connectionState is WebSocketClient.ConnectionState.Connecting) {
+            } else if (connectionState is WebSocketClient.ConnectionState.Connecting ||
+                       connectionState is WebSocketClient.ConnectionState.WaitingForApproval) {
                 item {
+                    val isWaiting = connectionState is WebSocketClient.ConnectionState.WaitingForApproval
+                    val serverName = (connectionState as? WebSocketClient.ConnectionState.WaitingForApproval)?.serverName
+
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                         )
                     ) {
-                        Box(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(24.dp),
-                            contentAlignment = Alignment.Center
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("Connecting to TV...", style = MaterialTheme.typography.bodyMedium)
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            Text(
+                                text = if (isWaiting && serverName != null)
+                                    "Waiting for $serverName to approve…"
+                                else
+                                    "Connecting to TV…",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            if (isWaiting) {
+                                TextButton(onClick = { viewModel.disconnect() }) {
+                                    Text("Cancel")
+                                }
                             }
                         }
                     }
@@ -327,25 +336,6 @@ fun ConnectionScreen(
         }
     }
     
-    // PIN Dialog
-    showPinDialog?.let { pendingDevice ->
-        PinEntryDialog(
-            ip = pendingDevice.ip,
-            port = pendingDevice.port,
-            uuid = pendingDevice.uuid,
-            showError = pinDialogShowError,
-            onDismiss = {
-                showPinDialog = null
-                pinDialogShowError = false
-            },
-            onConfirm = { pin ->
-                showPinDialog = null
-                pinDialogShowError = false
-                viewModel.connect(pendingDevice.copy(token = pin))
-            }
-        )
-    }
-
     // Manual Dialog
     if (showManualDialog) {
         ManualConnectionDialog(
@@ -435,69 +425,6 @@ fun DeviceItem(
             }
         }
     }
-}
-
-@Composable
-fun PinEntryDialog(
-    ip: String,
-    port: Int,
-    uuid: String = "",
-    showError: Boolean = false,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit
-) {
-    var pin by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Enter PIN") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (showError) {
-                    Text(
-                        text = "Incorrect PIN — please check the PIN shown on the TV and try again.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                } else {
-                    Text(
-                        text = "Enter the 4-digit PIN displayed on the TV at $ip",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-
-                if (uuid.isNotEmpty()) {
-                    Text(
-                        text = "Device ID: $uuid",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                OutlinedTextField(
-                    value = pin,
-                    onValueChange = { if (it.length <= 4) pin = it.uppercase() },
-                    label = { Text("PIN") },
-                    singleLine = true,
-                    isError = showError,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(pin) },
-                enabled = pin.length >= 4
-            ) {
-                Text("Connect")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
 }
 
 @Composable

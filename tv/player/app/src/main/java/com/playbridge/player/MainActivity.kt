@@ -33,6 +33,7 @@ import com.playbridge.player.ui.components.StaticAuroraBackground
 import com.playbridge.player.ui.theme.AppTheme
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.saveable.rememberSaveable
 
 class MainActivity : ComponentActivity() {
@@ -142,12 +143,15 @@ fun MainContent(
     openPairingRequest: MutableState<Boolean>,
     currentTheme: MutableState<AppTheme>
 ) {
+    val scope = rememberCoroutineScope()
+
     // Default to History; overridden below once we know whether any device has paired.
     var currentScreen by rememberSaveable { mutableStateOf(Screen.History) }
     var isInitialCheckDone by remember { mutableStateOf(false) }
 
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
+    val pendingPairingRequest by ServerService.pendingPairingRequest.collectAsState()
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
     val isOnboardingDone by pairingStore.isOnboardingDone.collectAsState(initial = true)
 
@@ -179,7 +183,6 @@ fun MainContent(
 
     var serverIp by remember { mutableStateOf<String?>(null) }
     var serverPort by remember { mutableStateOf<Int?>(null) }
-    var authToken by remember { mutableStateOf("") }
     var deviceName by remember { mutableStateOf("Android TV") }
     var deviceId by remember { mutableStateOf("") }
 
@@ -189,7 +192,6 @@ fun MainContent(
     LaunchedEffect(Unit) {
         val appCtx = currentContext.applicationContext ?: currentContext
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            authToken = pairingStore.getOrCreateToken()
             deviceId = pairingStore.getOrCreateDeviceId()
             serverPort = pairingStore.serverPort.first()
             serverIp = getLocalIpAddress(appCtx)
@@ -273,11 +275,16 @@ fun MainContent(
                         PairingScreen(
                             ip = serverIp ?: "unknown",
                             port = serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT,
-                            token = authToken,
                             deviceName = deviceName,
                             deviceId = deviceId,
                             connectionState = connectionState,
-                            connectedCount = connectedCount
+                            connectedCount = connectedCount,
+                            pendingRequest = pendingPairingRequest,
+                            onAllow = { ServerService.approvePairing() },
+                            onDeny = { ServerService.denyPairing() },
+                            pairedDevices = pairedDevices,
+                            onForget = { device -> scope.launch { pairingStore.forgetDevice(device) } },
+                            onForgetAll = { scope.launch { pairingStore.forgetAllDevices() } }
                         )
                     }
                     Screen.History -> {

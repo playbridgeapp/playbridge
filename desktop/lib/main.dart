@@ -454,12 +454,15 @@ Widget build(BuildContext context) {
   Widget _buildScreen() {
     return switch (_dest) {
       _Dest.cast => PairScreen(
-          pin: widget.store.pin,
+          store: widget.store,
           deviceName: widget.store.deviceName,
           hostInfo: _hostInfo,
           port: kDefaultPort,
           phase: _server.phase,
           discoveryError: _discoveryError,
+          pendingRequest: _server.pendingPairingRequest,
+          onAllow: _server.approvePairing,
+          onDeny: _server.denyPairing,
         ),
       _Dest.history => HistoryScreen(
           store: widget.history,
@@ -476,7 +479,8 @@ Widget build(BuildContext context) {
           store: widget.store,
           player: _player,
           onNavigateToCast: () => setState(() => _dest = _Dest.cast),
-        ),    };
+        ),
+    };
   }
 }
 
@@ -580,7 +584,7 @@ class _NavSidebar extends StatelessWidget {
                 onTap: () => onDestSelect(_Dest.favorites),
               ),
 
-              const Spacer(),
+                      const Spacer(),
 
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -687,7 +691,7 @@ class _StatusBar extends StatelessWidget {
     final dur = Duration(milliseconds: player.durationMs);
     final phaseLabel = switch (phase) {
       PairingPhase.idle => 'waiting for phone',
-      PairingPhase.awaitingPin => 'pairing…',
+      PairingPhase.awaitingApproval => 'awaiting approval…',
       PairingPhase.authenticated => 'paired',
     };
     return ClipRect(

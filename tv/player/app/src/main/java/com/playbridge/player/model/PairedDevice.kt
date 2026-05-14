@@ -9,5 +9,7 @@ import kotlinx.serialization.Serializable
 data class PairedDevice(
     val id: String,
     val name: String,
+    val deviceUUID: String = "",
+    val token: String = "",
     val lastConnected: Long = System.currentTimeMillis()
 )

@@ -2,8 +2,13 @@ package com.playbridge.player.server
 
 import android.util.Log
 import com.playbridge.shared.protocol.Command
+import com.playbridge.shared.protocol.createPairingApprovedJson
+import com.playbridge.shared.protocol.createPairingDeniedJson
 import com.playbridge.shared.protocol.createPongJson
 import com.playbridge.shared.protocol.parseCommand
+import com.playbridge.shared.protocol.protocolJson
+import com.playbridge.shared.protocol.PairingRequestMessage
+import kotlinx.coroutines.CompletableDeferred
 import com.playbridge.player.logging.FileLogger
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -31,9 +36,15 @@ private const val TAG = "WebSocketServer"
  */
 class WebSocketServer(
     private val port: Int = com.playbridge.shared.protocol.Config.DEFAULT_PORT,
-    private val authToken: String,
+    private val isTokenAuthorized: suspend (String) -> Boolean,
+    private val onPairingApproved: suspend (deviceName: String, deviceUUID: String) -> String,
     private val subtitleDir: File? = null
 ) {
+    data class PairingRequest(
+        val deviceName: String,
+        val deviceUUID: String,
+        internal val approval: CompletableDeferred<Boolean>
+    )
     private var server: EmbeddedServer<*, *>? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -52,10 +63,22 @@ class WebSocketServer(
     private val _commands = MutableSharedFlow<Command>(replay = 0)
     val commands = _commands.asSharedFlow()
 
-    // Fires whenever a new client starts a connection attempt (before auth completes).
-    // ServerService observes this to auto-open the PairingScreen when the app is backgrounded.
+    // Fires when a new device sends pairing_request; ServerService observes this to bring
+    // the app to the foreground so the user can tap Allow/Deny.
     private val _connectionAttemptFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val connectionAttemptFlow = _connectionAttemptFlow.asSharedFlow()
+
+    // Non-null while a device is waiting for the user to tap Allow or Deny.
+    private val _pendingPairingRequest = MutableStateFlow<PairingRequest?>(null)
+    val pendingPairingRequest: StateFlow<PairingRequest?> = _pendingPairingRequest.asStateFlow()
+
+    fun approvePairing() {
+        _pendingPairingRequest.value?.approval?.complete(true)
+    }
+
+    fun denyPairing() {
+        _pendingPairingRequest.value?.approval?.complete(false)
+    }
 
     sealed class ConnectionState {
         data object Stopped : ConnectionState()
@@ -186,13 +209,9 @@ class WebSocketServer(
             val remoteHost = session.call.request.local.remoteHost
             val isLocalhost = remoteHost == "127.0.0.1" || remoteHost == "::1"
 
-            // Authentication phase
-            // Loop until we get an auth message, handling pings in the meantime
+            // Authentication phase — loop until auth resolves or connection closes.
             var isAuthenticated = isLocalhost
             if (isLocalhost) FileLogger.i(TAG, "Localhost connection — skipping auth: $clientId")
-
-            // Log the expected PIN for debugging
-            val pin = authToken.take(4).uppercase()
 
             while (!isAuthenticated) {
                 val frame = session.incoming.receive()
@@ -200,53 +219,81 @@ class WebSocketServer(
                     val text = frame.readText()
 
                     if (text.contains("\"type\":\"ping\"") || text.contains("\"type\": \"ping\"")) {
-                        FileLogger.d(TAG, "Received ping during auth, sending pong")
                         session.send(Frame.Text(createPongJson()))
                         continue
                     }
 
-                    if (text.contains("\"type\":\"request_pairing\"")) {
-                        FileLogger.i(TAG, "request_pairing received from $clientId — waking PairingScreen")
+                    if (text.contains("\"type\":\"pairing_request\"")) {
+                        // Another device already waiting — deny immediately.
+                        if (_pendingPairingRequest.value != null) {
+                            FileLogger.w(TAG, "Pairing request ignored — another request already pending")
+                            session.send(Frame.Text(createPairingDeniedJson()))
+                            session.close(CloseReason(CloseReason.Codes.NORMAL, "busy"))
+                            return
+                        }
+
+                        val msg = try {
+                            protocolJson.decodeFromString<PairingRequestMessage>(text)
+                        } catch (e: Exception) {
+                            FileLogger.w(TAG, "Failed to parse pairing_request: ${e.message}")
+                            session.send(Frame.Text(createPairingDeniedJson()))
+                            session.close(CloseReason(CloseReason.Codes.NORMAL, "parse_error"))
+                            return
+                        }
+
+                        FileLogger.i(TAG, "pairing_request from ${msg.deviceName} (${msg.deviceUUID})")
+                        val approval = CompletableDeferred<Boolean>()
+                        val request = PairingRequest(msg.deviceName, msg.deviceUUID, approval)
+                        _pendingPairingRequest.value = request
                         _connectionAttemptFlow.tryEmit(Unit)
-                        try { session.send(Frame.Text("{\"type\":\"pairing_ack\"}")) } catch (_: Exception) {}
-                        session.close(CloseReason(CloseReason.Codes.NORMAL, "pairing_requested"))
-                        return
+
+                        // Auto-deny after 30 seconds if the user doesn't respond.
+                        val timeoutJob = scope.launch {
+                            delay(30_000)
+                            FileLogger.i(TAG, "Pairing request timed out for ${msg.deviceName}")
+                            approval.complete(false)
+                        }
+
+                        val approved = approval.await()
+                        timeoutJob.cancel()
+                        _pendingPairingRequest.value = null
+
+                        if (approved) {
+                            val token = onPairingApproved(msg.deviceName, msg.deviceUUID)
+                            FileLogger.i(TAG, "Pairing approved for ${msg.deviceName} — token issued")
+                            session.send(Frame.Text(createPairingApprovedJson(token)))
+                            isAuthenticated = true
+                        } else {
+                            FileLogger.i(TAG, "Pairing denied for ${msg.deviceName}")
+                            session.send(Frame.Text(createPairingDeniedJson()))
+                            session.close(CloseReason(CloseReason.Codes.NORMAL, "denied"))
+                            return
+                        }
+                        continue
                     }
 
-                    try {
-                        // Robust JSON parsing
-                        val authMessage = com.playbridge.shared.protocol.protocolJson.decodeFromString<com.playbridge.shared.protocol.AuthMessage>(text)
-
-                        if (authMessage.type == "auth") {
-                            if (authMessage.token == authToken) {
-                                // Re-connection with valid token
+                    // Reconnect with saved token.
+                    if (text.contains("\"type\":\"auth\"")) {
+                        try {
+                            val authMessage = protocolJson.decodeFromString<com.playbridge.shared.protocol.AuthMessage>(text)
+                            val token = authMessage.token
+                            if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
                                 isAuthenticated = true
-                                FileLogger.i(TAG, "Client authenticated with token")
-                                session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true}"))
-                            } else if (authMessage.pin?.uppercase() == pin) {
-                                isAuthenticated = true
-                                FileLogger.i(TAG, "Client authenticated with PIN")
-                                // Send back the full token for future use
-                                session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": true, \"token\": \"$authToken\"}"))
+                                FileLogger.i(TAG, "Client reconnected with saved token: $clientId")
+                                session.send(Frame.Text("{\"type\":\"auth_response\",\"success\":true}"))
                             } else {
-                                FileLogger.w(TAG, "Authentication failed for client: $clientId")
-                                session.send(Frame.Text("{\"type\": \"auth_response\", \"success\": false}"))
-                                session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid credentials"))
+                                FileLogger.w(TAG, "Auth rejected — unknown or revoked token: $clientId")
+                                session.send(Frame.Text("{\"type\":\"auth_response\",\"success\":false}"))
+                                session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid token"))
                                 return
                             }
-                        } else {
-                              FileLogger.w(TAG, "Unexpected message type during auth: ${authMessage.type}")
-                             // Don't close immediately, maybe it's just noise or a wrong message type
+                        } catch (e: Exception) {
+                            FileLogger.w(TAG, "Failed to parse auth message for $clientId", e)
                         }
-                    } catch (e: Exception) {
-                        FileLogger.w(TAG, "Failed to parse auth message for client: $clientId", e)
-                        // Fallback to substring matching just in case, or treat as error
-                        // For now, let's just log and continue waiting
                     }
                 } else {
-                    // Ignore non-text frames or close if necessary
                     if (frame is Frame.Close) {
-                        FileLogger.i(TAG, "Client closed connection during auth")
+                        FileLogger.i(TAG, "Client closed connection during auth: $clientId")
                         return
                     }
                 }

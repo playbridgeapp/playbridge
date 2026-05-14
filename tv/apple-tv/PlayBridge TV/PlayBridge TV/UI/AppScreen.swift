@@ -1,8 +1,8 @@
 import Foundation
 
-enum AppScreen { 
+enum AppScreen {
     case pairing
     case history
     case favorites
-    case settings 
+    case settings
 }

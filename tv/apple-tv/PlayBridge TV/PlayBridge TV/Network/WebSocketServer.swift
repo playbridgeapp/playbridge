@@ -3,6 +3,12 @@ import Network
 import SwiftUI
 import Combine
 
+struct PairingRequest {
+    let deviceName: String
+    let deviceUUID: String
+    let connection: NWConnection
+}
+
 // MARK: - Server Logic
 class WebSocketServer: ObservableObject {
     private var listener: NWListener?
@@ -12,15 +18,19 @@ class WebSocketServer: ObservableObject {
 
     @Published var currentPlayRequest: PlayRequest?
     @Published var isAuthenticated = false
-    @Published var pairingPin: String = ""
+    @Published var pendingPairingRequest: PairingRequest?
+    @Published var pairedDevicesList: [PairedDevice] = []
     @Published var connectedCount: Int = 0
     @Published var localIP: String = "0.0.0.0"
     @Published var serverState: String = "Stopped"
 
     var deviceName: String { UIDevice.current.name }
-    private let serverTokenKey = "pb_server_token"
     private let authorizedTokensKey = "pb_authorized_tokens"
     private let deviceUUIDKey = "pb_device_uuid"
+    private let pairedDevicesKey = "pb_paired_devices"
+
+    private var autoTimeoutWork: DispatchWorkItem?
+    private var keepaliveTimer: Timer?
 
     private var deviceUUID: String {
         if let uuid = UserDefaults.standard.string(forKey: deviceUUIDKey) { return uuid }
@@ -29,11 +39,20 @@ class WebSocketServer: ObservableObject {
         return newUUID
     }
 
-    private var serverToken: String {
-        if let token = UserDefaults.standard.string(forKey: serverTokenKey) { return token }
-        let newToken = UUID().uuidString
-        UserDefaults.standard.set(newToken, forKey: serverTokenKey)
-        return newToken
+    private var storedPairedDevices: [PairedDevice] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: pairedDevicesKey),
+                  let devices = try? JSONDecoder().decode([PairedDevice].self, from: data) else {
+                return []
+            }
+            return devices
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: pairedDevicesKey)
+            }
+            pairedDevicesList = newValue
+        }
     }
 
     private var authorizedTokens: Set<String> {
@@ -44,12 +63,17 @@ class WebSocketServer: ObservableObject {
     init(historyStore: HistoryStore? = nil, playlistStore: PlaylistStore? = nil) {
         self.historyStore = historyStore
         self.playlistStore = playlistStore
-        self.pairingPin = String(format: "%04d", Int.random(in: 0...9999))
         self.localIP = getIPAddress()
+        self.pairedDevicesList = storedPairedDevices
     }
 
     func start(port: UInt16 = 8765) {
-        let parameters = NWParameters.tcp
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 60
+        tcpOptions.keepaliveInterval = 30
+        tcpOptions.keepaliveCount = 3
+        let parameters = NWParameters(tls: nil, tcp: tcpOptions)
         let wsOptions = NWProtocolWebSocket.Options()
         wsOptions.autoReplyPing = true
         parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
@@ -79,7 +103,30 @@ class WebSocketServer: ObservableObject {
                 self?.handleNewConnection(connection)
             }
             listener?.start(queue: .main)
+            startKeepalive()
         } catch { print("Server error: \(error)") }
+    }
+
+    private func startKeepalive() {
+        keepaliveTimer?.invalidate()
+        keepaliveTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            for connection in self.connectedConnections {
+                self.sendPing(to: connection)
+            }
+        }
+    }
+
+    private func sendPing(to connection: NWConnection) {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
+        let context = NWConnection.ContentContext(identifier: "keepalive-ping", metadata: [metadata])
+        connection.send(content: nil, contentContext: context, isComplete: true,
+                        completion: .contentProcessed({ [weak self] error in
+            if let error = error {
+                print("Keepalive ping failed for \(connection.endpoint): \(error)")
+                self?.removeConnection(connection)
+            }
+        }))
     }
 
     private func handleNewConnection(_ connection: NWConnection) {
@@ -104,10 +151,17 @@ class WebSocketServer: ObservableObject {
     }
 
     private func removeConnection(_ connection: NWConnection) {
+        connection.cancel()
         DispatchQueue.main.async {
             self.connectedConnections.removeAll(where: { $0 === connection })
             self.connectedCount = self.connectedConnections.count
             if self.connectedConnections.isEmpty { self.isAuthenticated = false }
+            // Clear pending request if it was this connection
+            if self.pendingPairingRequest?.connection === connection {
+                self.autoTimeoutWork?.cancel()
+                self.autoTimeoutWork = nil
+                self.pendingPairingRequest = nil
+            }
         }
     }
 
@@ -137,21 +191,86 @@ class WebSocketServer: ObservableObject {
 
         switch type {
         case "ping": send(json: ["type": "pong"], to: connection)
+        case "pairing_request": handlePairingRequest(json, from: connection)
         case "auth": handleAuth(json, from: connection)
         case "command": if isAuthenticated { handleCommand(json) }
         default: break
         }
     }
 
+    // MARK: - Pairing
+
+    private func handlePairingRequest(_ json: [String: Any], from connection: NWConnection) {
+        guard let incomingDeviceName = json["deviceName"] as? String,
+              let deviceUUID = json["deviceUUID"] as? String else { return }
+
+        // Deny immediately if another request is already pending
+        if pendingPairingRequest != nil {
+            send(json: ["type": "pairing_denied"], to: connection)
+            connection.cancel()
+            return
+        }
+
+        let request = PairingRequest(deviceName: incomingDeviceName, deviceUUID: deviceUUID, connection: connection)
+        DispatchQueue.main.async { self.pendingPairingRequest = request }
+
+        // Auto-deny after 30 seconds
+        autoTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self,
+                  self.pendingPairingRequest?.deviceUUID == deviceUUID else { return }
+            self.denyPairing()
+        }
+        autoTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: work)
+    }
+
+    func approvePairing() {
+        guard let request = pendingPairingRequest else { return }
+        autoTimeoutWork?.cancel()
+        autoTimeoutWork = nil
+
+        let token = UUID().uuidString
+
+        var tokens = authorizedTokens
+        tokens.insert(token)
+        authorizedTokens = tokens
+
+        let device = PairedDevice(
+            deviceUUID: request.deviceUUID,
+            deviceName: request.deviceName,
+            token: token,
+            lastConnected: Date()
+        )
+        savePairedDevice(device)
+
+        send(json: ["type": "pairing_approved", "token": token], to: request.connection)
+        completeAuth(from: request.connection, token: token)
+
+        pendingPairingRequest = nil
+    }
+
+    func denyPairing() {
+        guard let request = pendingPairingRequest else { return }
+        autoTimeoutWork?.cancel()
+        autoTimeoutWork = nil
+
+        send(json: ["type": "pairing_denied"], to: request.connection)
+        request.connection.cancel()
+
+        pendingPairingRequest = nil
+    }
+
+    // MARK: - Reconnection
+
     private func handleAuth(_ json: [String: Any], from connection: NWConnection) {
-        let pin = json["pin"] as? String
-        let token = json["token"] as? String
-        if let token = token, authorizedTokens.contains(token) {
+        guard let token = json["token"] as? String else {
+            send(json: ["type": "auth_response", "success": false], to: connection)
+            return
+        }
+        if authorizedTokens.contains(token) {
+            updateLastConnected(token: token)
             completeAuth(from: connection, token: token)
-        } else if let pin = pin, pin == self.pairingPin {
-            let newToken = serverToken
-            authorizedTokens.insert(newToken)
-            completeAuth(from: connection, token: newToken)
         } else {
             send(json: ["type": "auth_response", "success": false], to: connection)
         }
@@ -167,12 +286,53 @@ class WebSocketServer: ObservableObject {
         }
     }
 
+    // MARK: - Paired Device Management
+
+    private func savePairedDevice(_ device: PairedDevice) {
+        var devices = storedPairedDevices
+        if let idx = devices.firstIndex(where: { $0.deviceUUID == device.deviceUUID }) {
+            devices[idx] = device
+        } else {
+            devices.append(device)
+        }
+        storedPairedDevices = devices
+    }
+
+    func forgetDevice(_ device: PairedDevice) {
+        var devices = storedPairedDevices
+        devices.removeAll { $0.deviceUUID == device.deviceUUID }
+        storedPairedDevices = devices
+
+        var tokens = authorizedTokens
+        tokens.remove(device.token)
+        authorizedTokens = tokens
+    }
+
+    func forgetAllDevices() {
+        storedPairedDevices = []
+        authorizedTokens = []
+        DispatchQueue.main.async { self.pairedDevicesList = [] }
+    }
+
+    private func updateLastConnected(token: String) {
+        var devices = storedPairedDevices
+        if let idx = devices.firstIndex(where: { $0.token == token }) {
+            let d = devices[idx]
+            devices[idx] = PairedDevice(
+                deviceUUID: d.deviceUUID, deviceName: d.deviceName,
+                token: token, lastConnected: Date()
+            )
+            storedPairedDevices = devices
+        }
+    }
+
+    // MARK: - Command Handling
+
     private func handleCommand(_ json: [String: Any]) {
         let commandType = (json["command"] as? String) ?? (json["action"] as? String)
-        
+
         guard let type = commandType else {
             print("WebSocket Warning: No 'command' or 'action' field found in message")
-            // Legacy/fallback: if no explicit command field, treat as "play" if payload exists
             if json["payload"] != nil {
                 print("WebSocket: Falling back to 'play' command")
                 handlePlayCommand(json)
@@ -212,24 +372,23 @@ class WebSocketServer: ObservableObject {
     }
 
     private func handlePlaylistCommand(_ json: [String: Any]) {
-        // Items and startIndex might be at top level OR inside payload
         let data = (json["payload"] as? [String: Any]) ?? json
-        
+
         guard let itemsArray = data["items"] as? [[String: Any]] else {
             print("WebSocket Playlist Error: Missing 'items' array in data: \(data)")
             return
         }
         let startIndex = data["startIndex"] as? Int ?? 0
         print("WebSocket Playlist: Received \(itemsArray.count) items, startIndex: \(startIndex)")
-        
+
         let requests = itemsArray.compactMap { parsePlayRequest($0) }
         print("WebSocket Playlist: Successfully parsed \(requests.count) / \(itemsArray.count) items")
-        
+
         guard !requests.isEmpty else {
             print("WebSocket Playlist Error: No valid items parsed")
             return
         }
-        
+
         DispatchQueue.main.async {
             self.playlistStore?.setPlaylist(items: requests, startIndex: startIndex)
             if let first = self.playlistStore?.currentItem {
@@ -243,7 +402,7 @@ class WebSocketServer: ObservableObject {
         let data = (json["payload"] as? [String: Any]) ?? json
         guard let item = data["item"] as? [String: Any],
               let request = parsePlayRequest(item) else { return }
-        
+
         DispatchQueue.main.async {
             self.playlistStore?.addToQueue(item: request)
         }
@@ -252,7 +411,7 @@ class WebSocketServer: ObservableObject {
     private func handlePlaylistJumpCommand(_ json: [String: Any]) {
         let data = (json["payload"] as? [String: Any]) ?? json
         guard let index = data["index"] as? Int else { return }
-        
+
         DispatchQueue.main.async {
             if let request = self.playlistStore?.jumpTo(index: index) {
                 self.currentPlayRequest = request
@@ -266,7 +425,7 @@ class WebSocketServer: ObservableObject {
             print("WebSocket Parse Error: Missing or invalid 'url' in payload: \(payload)")
             return nil
         }
-        
+
         return PlayRequest(
             url: url,
             title: payload["title"] as? String,

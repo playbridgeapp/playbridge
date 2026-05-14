@@ -182,7 +182,6 @@ class ServerService : Service() {
     private fun startServer() {
         if (webSocketServer != null) return  // Already running from a previous onStartCommand
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val token = pairingStore.getOrCreateToken()
             val port = pairingStore.serverPort.first()
             val ip = getLocalIpAddress(applicationContext) ?: "unknown"
 
@@ -193,13 +192,30 @@ class ServerService : Service() {
             }
 
             val subtitleDir = java.io.File(cacheDir, "subtitles").also { it.mkdirs() }
-            webSocketServer = WebSocketServer(port = port, authToken = token, subtitleDir = subtitleDir).also { server ->
+            webSocketServer = WebSocketServer(
+                port = port,
+                isTokenAuthorized = { token -> pairingStore.isTokenAuthorized(token) },
+                onPairingApproved = { deviceName, deviceUUID ->
+                    val newToken = java.util.UUID.randomUUID().toString()
+                    pairingStore.addAuthorizedToken(newToken)
+                    pairingStore.addPairedDevice(
+                        com.playbridge.player.model.PairedDevice(
+                            id = java.util.UUID.randomUUID().toString(),
+                            name = deviceName,
+                            deviceUUID = deviceUUID,
+                            token = newToken
+                        )
+                    )
+                    newToken
+                },
+                subtitleDir = subtitleDir
+            ).also { server ->
                 server.start()
 
                 // Register NSD service
                 registerNsdService(port)
 
-                _serverInfo.value = ServerInfo(ip = ip, port = port, token = token)
+                _serverInfo.value = ServerInfo(ip = ip, port = port, token = "")
 
                 // Observe connection state for notification updates and expose to UI
                 launch {
@@ -216,13 +232,7 @@ class ServerService : Service() {
                                 else -> Unit
                             }
 
-                            if (state is WebSocketServer.ConnectionState.Connected) {
-                                val device = PairedDevice(
-                                    id = state.clientId,
-                                    name = "Phone (${state.clientId.take(4)})"
-                                )
-                                pairingStore.addPairedDevice(device)
-                            }
+                            // PairedDevice is recorded by onPairingApproved when pairing completes.
                         } catch (e: Exception) {
                             FileLogger.e(TAG, "connectionState collector crashed on state: $state", e)
                         }
@@ -237,6 +247,13 @@ class ServerService : Service() {
                         } catch (e: Exception) {
                             FileLogger.e(TAG, "connectedClientCount collector crashed", e)
                         }
+                    }
+                }
+
+                // Forward pendingPairingRequest to the static flow for MainActivity to observe.
+                launch {
+                    server.pendingPairingRequest.collect { request ->
+                        _pendingPairingRequest.value = request
                     }
                 }
 
@@ -623,8 +640,8 @@ class ServerService : Service() {
             is Command.Ping -> {
                 // Handled by WebSocketServer
             }
-            is Command.RequestPairing -> {
-                // Handled in WebSocketServer's auth loop before this point — should never arrive here
+            is Command.PairingRequest, is Command.PairingApproved, is Command.PairingDenied -> {
+                // Handled inside WebSocketServer's auth loop — should never reach here.
             }
             is Command.Unknown -> {
                 FileLogger.w(TAG, "Unknown command: ${command.type}. Raw JSON: ${command.rawJson}")
@@ -903,6 +920,13 @@ class ServerService : Service() {
         // Static flow for UI to observe connected client count
         private val _connectedClientCount = MutableStateFlow(0)
         val connectedClientCount: StateFlow<Int> = _connectedClientCount.asStateFlow()
+
+        // Static flow exposing a pending pairing request so MainActivity can show Allow/Deny UI.
+        private val _pendingPairingRequest = MutableStateFlow<WebSocketServer.PairingRequest?>(null)
+        val pendingPairingRequest: StateFlow<WebSocketServer.PairingRequest?> = _pendingPairingRequest.asStateFlow()
+
+        fun approvePairing() { _staticInstance?.webSocketServer?.approvePairing() }
+        fun denyPairing() { _staticInstance?.webSocketServer?.denyPairing() }
 
         fun start(context: Context) {
             val intent = Intent(context, ServerService::class.java)

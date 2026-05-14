@@ -1,6 +1,8 @@
 package com.playbridge.sender.connection
 
 import android.util.Log
+import com.playbridge.shared.protocol.createAuthJson
+import com.playbridge.shared.protocol.createPairingRequestJson
 import com.playbridge.shared.protocol.createPingJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -64,23 +66,34 @@ class WebSocketClient {
         }
     }
 
-    private data class TvConnectionInfo(val ip: String, val port: Int, val token: String, val serverName: String)
+    private data class TvConnectionInfo(
+        val ip: String,
+        val port: Int,
+        val token: String,
+        val serverName: String,
+        val deviceName: String,
+        val deviceUUID: String,
+    )
 
     sealed class ConnectionState {
         data object Disconnected : ConnectionState()
         data object Connecting : ConnectionState()
         data class Connected(val serverName: String) : ConnectionState()
+        // Pairing request sent — waiting for the TV user to tap Allow.
+        data class WaitingForApproval(val serverName: String) : ConnectionState()
+        // TV user tapped Deny, or the 30s timeout elapsed.
+        data class PairingDenied(val serverName: String) : ConnectionState()
         data class Retrying(val attempt: Int, val maxAttempts: Int, val nextRetrySeconds: Int) : ConnectionState()
         data class Error(val message: String) : ConnectionState()
-        // Auth-specific failure: wrong PIN or stale token. Distinct from Error so the UI can
-        // prompt the user to re-enter their PIN rather than showing a generic error.
+        // Stale token rejected by TV (e.g. after TV reinstall). Distinct from Error so the
+        // ViewModel can wipe the token and prompt re-pairing rather than showing a generic error.
         data object AuthFailed : ConnectionState()
     }
     
-    fun connect(ip: String, port: Int, token: String, serverName: String) {
+    fun connect(ip: String, port: Int, token: String, serverName: String, deviceName: String, deviceUUID: String) {
         retryCount = 0
         isUserDisconnect = false  // Reset so retries are allowed for genuine connectivity failures
-        targetConnection = TvConnectionInfo(ip, port, token, serverName)
+        targetConnection = TvConnectionInfo(ip, port, token, serverName, deviceName, deviceUUID)
         attemptConnection(ip, port, serverName)
     }
 
@@ -107,23 +120,32 @@ class WebSocketClient {
                     return
                 }
                 Log.i(TAG, "Socket opened to $serverName")
-                // _connectionState.value = ConnectionState.Connected(serverName) // Wait for auth
                 retryCount = 0
-                
-                // Send auth message immediately
+
                 scope.launch {
                     try {
-                        val authJson = com.playbridge.shared.protocol.createAuthJson(targetConnection?.token ?: "")
-                        Log.d(TAG, "Sending auth: $authJson")
-                        webSocket.send(authJson)
+                        val conn = targetConnection
+                        if (conn?.token.isNullOrEmpty()) {
+                            // First-time pairing — send identity and wait for TV user to approve.
+                            val json = createPairingRequestJson(
+                                deviceName = conn?.deviceName ?: "Android Phone",
+                                deviceUUID = conn?.deviceUUID ?: ""
+                            )
+                            Log.d(TAG, "Sending pairing_request: $json")
+                            webSocket.send(json)
+                            _connectionState.value = ConnectionState.WaitingForApproval(serverName)
+                        } else {
+                            // Reconnect with saved token.
+                            val authJson = createAuthJson(conn!!.token)
+                            Log.d(TAG, "Sending auth: $authJson")
+                            webSocket.send(authJson)
+                            delay(500)
+                            sendPing()
+                        }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to send auth", e)
-                        webSocket.close(1000, "Auth failed")
+                        Log.e(TAG, "Failed to send pairing/auth message", e)
+                        webSocket.close(1000, "Send failed")
                     }
-                    
-                    // Send initial ping to verify connection (or keep alive)
-                    delay(500)
-                    sendPing()
                 }
             }
             
@@ -134,26 +156,59 @@ class WebSocketClient {
                 }
                 Log.d(TAG, "Received: $text")
                 
-                // Check for auth response
+                // Handle pairing and auth responses before forwarding to command flow.
+                if (text.contains("pairing_approved")) {
+                    try {
+                        val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
+                        if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_approved") {
+                            val token = json["token"]?.toString()?.replace("\"", "")
+                            Log.i(TAG, "Pairing approved by $serverName")
+                            if (!token.isNullOrEmpty() && token != "null") {
+                                // Update in-memory connection info so retries after a network
+                                // blip send `auth` (not another `pairing_request`).
+                                targetConnection = targetConnection?.copy(token = token)
+                                scope.launch { _newToken.emit(token) }
+                            }
+                            _connectionState.value = ConnectionState.Connected(serverName)
+                            return
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parsing pairing_approved", e)
+                    }
+                }
+
+                if (text.contains("pairing_denied")) {
+                    try {
+                        val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
+                        if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_denied") {
+                            Log.i(TAG, "Pairing denied by $serverName")
+                            isUserDisconnect = true
+                            _connectionState.value = ConnectionState.PairingDenied(serverName)
+                            webSocket.close(1000, "Pairing denied")
+                            return
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parsing pairing_denied", e)
+                    }
+                }
+
                 if (text.contains("auth_response")) {
                     try {
                         val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
-                        if (json is kotlinx.serialization.json.JsonObject) {
+                        if (json is JsonObject) {
                             val type = json["type"].toString().replace("\"", "")
                             if (type == "auth_response") {
                                 val success = json["success"].toString() == "true"
                                 if (success) {
                                     Log.i(TAG, "Authentication successful")
                                     _connectionState.value = ConnectionState.Connected(serverName)
-                                    // Helper to update token if returned
                                     val token = json["token"]?.toString()?.replace("\"", "")
                                     if (!token.isNullOrEmpty() && token != "null") {
-                                        scope.launch {
-                                            _newToken.emit(token)
-                                        }
+                                        targetConnection = targetConnection?.copy(token = token)
+                                        scope.launch { _newToken.emit(token) }
                                     }
                                 } else {
-                                    Log.e(TAG, "Authentication failed — wrong PIN or stale token")
+                                    Log.e(TAG, "Authentication failed — stale token")
                                     // Set flag before close so onClosed doesn't overwrite AuthFailed
                                     // with Disconnected, and so onFailure won't schedule retries.
                                     isUserDisconnect = true

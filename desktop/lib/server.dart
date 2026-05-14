@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_web_socket/shelf_web_socket.dart';
+import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'pairing_store.dart';
@@ -12,17 +13,28 @@ import 'protocol.dart';
 
 const int kDefaultPort = 8765;
 
-/// Surfaced to the UI so it can show a pairing PIN prompt or the player view.
+/// Surfaced to the UI so it can show an approval prompt or the player view.
 enum PairingPhase {
   /// No client connected.
   idle,
 
-  /// Client connected and explicitly asked to pair (sent `request_pairing`)
-  /// or hasn't sent auth yet — UI should show the PIN.
-  awaitingPin,
+  /// A phone connected and sent `pairing_request` — UI should show Allow/Deny.
+  awaitingApproval,
 
   /// At least one authenticated client is connected.
   authenticated,
+}
+
+class PendingPairingRequest {
+  final String deviceName;
+  final String deviceUUID;
+  final WebSocketChannel channel;
+
+  const PendingPairingRequest({
+    required this.deviceName,
+    required this.deviceUUID,
+    required this.channel,
+  });
 }
 
 class ReceiverServer extends ChangeNotifier {
@@ -33,13 +45,15 @@ class ReceiverServer extends ChangeNotifier {
 
   HttpServer? _http;
   Timer? _statusTimer;
+  Timer? _approvalTimeout;
   bool _disposed = false;
 
-  // All connected channels — but only authed ones receive status broadcasts
+  // All connected channels — only authed ones receive status broadcasts
   // and can issue commands.
   final Set<WebSocketChannel> _all = {};
   final Set<WebSocketChannel> _authed = {};
-  final Set<WebSocketChannel> _awaitingPin = {};
+
+  PendingPairingRequest? _pendingPairingRequest;
 
   // Dedupe rapid-fire duplicate play commands from the phone.
   String? _lastPlayUrl;
@@ -47,9 +61,11 @@ class ReceiverServer extends ChangeNotifier {
 
   PairingPhase get phase {
     if (_authed.isNotEmpty) return PairingPhase.authenticated;
-    if (_awaitingPin.isNotEmpty) return PairingPhase.awaitingPin;
+    if (_pendingPairingRequest != null) return PairingPhase.awaitingApproval;
     return PairingPhase.idle;
   }
+
+  PendingPairingRequest? get pendingPairingRequest => _pendingPairingRequest;
 
   Future<void> start({int port = kDefaultPort}) async {
     final handler = webSocketHandler(_onClient);
@@ -68,6 +84,7 @@ class ReceiverServer extends ChangeNotifier {
     if (_disposed) return;
     _disposed = true;
     _statusTimer?.cancel();
+    _approvalTimeout?.cancel();
     player.removeListener(_broadcastStatus);
     player.indexChanges.removeListener(_broadcastPlaylistStatus);
     for (final c in _all.toList()) {
@@ -75,7 +92,7 @@ class ReceiverServer extends ChangeNotifier {
     }
     _all.clear();
     _authed.clear();
-    _awaitingPin.clear();
+    _pendingPairingRequest = null;
     await _http?.close(force: true);
   }
 
@@ -93,18 +110,16 @@ class ReceiverServer extends ChangeNotifier {
     debugPrint('[server] client connected');
     _all.add(channel);
 
-    var authed = false;
-
     channel.stream.listen(
       (raw) {
         if (raw is! String) return;
-        debugPrint('[recv${authed ? '' : ' pre-auth'}] $raw');
-        if (authed) {
+        final isAuthed = _authed.contains(channel);
+        debugPrint('[recv${isAuthed ? '' : ' pre-auth'}] $raw');
+        if (isAuthed) {
           _handleAuthed(channel, raw);
         } else {
-          authed = _handleAuthFrame(channel, raw);
-          if (authed) {
-            _awaitingPin.remove(channel);
+          final shouldAuth = _handleAuthFrame(channel, raw);
+          if (shouldAuth) {
             _authed.add(channel);
             notifyListeners();
             _sendPlaylistStatusTo(channel);
@@ -112,19 +127,26 @@ class ReceiverServer extends ChangeNotifier {
         }
       },
       onDone: () {
-        // Playback intentionally continues — disconnect only removes the
-        // channel from broadcast sets, never touches the player.
-        debugPrint('[server] client disconnected (player state=${player.state}, queue=${player.queue.length})');
+        debugPrint('[server] client disconnected');
         _all.remove(channel);
         _authed.remove(channel);
-        _awaitingPin.remove(channel);
+        // Clear pending request if this was the pending channel
+        if (_pendingPairingRequest?.channel == channel) {
+          _approvalTimeout?.cancel();
+          _approvalTimeout = null;
+          _pendingPairingRequest = null;
+        }
         notifyListeners();
       },
       onError: (e) {
         debugPrint('[server] client error: $e');
         _all.remove(channel);
         _authed.remove(channel);
-        _awaitingPin.remove(channel);
+        if (_pendingPairingRequest?.channel == channel) {
+          _approvalTimeout?.cancel();
+          _approvalTimeout = null;
+          _pendingPairingRequest = null;
+        }
         notifyListeners();
       },
       cancelOnError: true,
@@ -138,29 +160,75 @@ class ReceiverServer extends ChangeNotifier {
       case PingCmd():
         channel.sink.add(pongJson());
         return false;
-      case RequestPairingCmd():
-        // Phone is signaling "I'm about to pair" — surface PIN to the UI.
-        _awaitingPin.add(channel);
+
+      case PairingRequestCmd(:final deviceName, :final deviceUUID):
+        // Deny immediately if another pairing is already pending.
+        if (_pendingPairingRequest != null) {
+          channel.sink.add(pairingDeniedJson());
+          channel.sink.close();
+          return false;
+        }
+        _pendingPairingRequest = PendingPairingRequest(
+          deviceName: deviceName,
+          deviceUUID: deviceUUID,
+          channel: channel,
+        );
+        // Auto-deny after 30 seconds.
+        _approvalTimeout?.cancel();
+        _approvalTimeout = Timer(const Duration(seconds: 30), denyPairing);
         notifyListeners();
         return false;
-      case AuthCmd(:final pin, :final token):
-        if (token != null && token == store.authToken) {
-          channel.sink.add(authResponseJson(success: true));
-          unawaited(store.markPaired());
-          return true;
-        }
-        if (pin != null && pin.toUpperCase() == store.pin) {
-          // PIN match — return the long-lived token so the phone can cache it.
-          channel.sink.add(authResponseJson(success: true, token: store.authToken));
-          unawaited(store.markPaired());
+
+      case AuthCmd(:final token):
+        if (token != null && store.isTokenAuthorized(token)) {
+          channel.sink.add(authResponseJson(success: true, token: token));
+          unawaited(store.updateLastConnected(token));
           return true;
         }
         channel.sink.add(authResponseJson(success: false));
         return false;
+
       default:
-        // Anything else before auth is ignored, mirroring the TV.
         return false;
     }
+  }
+
+  void approvePairing() {
+    final pending = _pendingPairingRequest;
+    if (pending == null) return;
+
+    _approvalTimeout?.cancel();
+    _approvalTimeout = null;
+    _pendingPairingRequest = null;
+
+    final token = const Uuid().v4();
+    final device = PairedDeviceRecord(
+      deviceUUID: pending.deviceUUID,
+      deviceName: pending.deviceName,
+      token: token,
+      lastConnected: DateTime.now(),
+    );
+    unawaited(store.addPairedDevice(device));
+
+    pending.channel.sink.add(pairingApprovedJson(token));
+    // Immediately treat as authed — phone won't send a separate auth after pairing_approved.
+    pending.channel.sink.add(authResponseJson(success: true, token: token));
+    _authed.add(pending.channel);
+    notifyListeners();
+    _sendPlaylistStatusTo(pending.channel);
+  }
+
+  void denyPairing() {
+    final pending = _pendingPairingRequest;
+    if (pending == null) return;
+
+    _approvalTimeout?.cancel();
+    _approvalTimeout = null;
+    _pendingPairingRequest = null;
+
+    pending.channel.sink.add(pairingDeniedJson());
+    unawaited(pending.channel.sink.close());
+    notifyListeners();
   }
 
   void _handleAuthed(WebSocketChannel channel, String raw) {
@@ -171,15 +239,9 @@ class ReceiverServer extends ChangeNotifier {
       case AuthCmd():
         // Already authed — re-auth is a no-op success.
         channel.sink.add(authResponseJson(success: true));
-      case RequestPairingCmd():
-        // Already authed — nothing to do.
-        break;
       case ContextQueryCmd():
         channel.sink.add(contextJson(player.state == 'idle' ? 'idle' : 'player'));
       case PlayCmd(:final url, :final title, :final headers, :final subtitles):
-        // Phones sometimes fire the same play command twice within ms (double
-        // tap, retry on slow ack). Each replay tears down whatever buffer mpv
-        // has accumulated, so swallow exact duplicates within a short window.
         final now = DateTime.now();
         if (url == _lastPlayUrl &&
             now.difference(_lastPlayAt) < const Duration(seconds: 2)) {
@@ -223,19 +285,19 @@ class ReceiverServer extends ChangeNotifier {
           ));
         }
       case ControlCmd(:final command):
-        debugPrint('[server] control: $command (queue=${player.queue.length}, state=${player.state})');
+        debugPrint('[server] control: $command');
         switch (command) {
           case 'play':
             unawaited(player.resume());
           case 'pause':
             unawaited(player.pause());
           case 'stop':
-            // Don't tear down the queue on a remote stop — keeps playback
-            // controllable from the desktop side if the phone has gone away.
             unawaited(player.pause());
         }
       case UnknownCmd(:final type):
         debugPrint('[server] unknown command: $type');
+      default:
+        break;
     }
   }
 
@@ -278,5 +340,4 @@ class ReceiverServer extends ChangeNotifier {
       currentIndex: player.currentIndex.clamp(0, player.queue.length),
     ));
   }
-
 }

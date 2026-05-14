@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -5,21 +6,43 @@ import 'package:uuid/uuid.dart';
 
 import 'player_engine.dart';
 
+class PairedDeviceRecord {
+  final String deviceUUID;
+  final String deviceName;
+  final String token;
+  final DateTime lastConnected;
+
+  const PairedDeviceRecord({
+    required this.deviceUUID,
+    required this.deviceName,
+    required this.token,
+    required this.lastConnected,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'deviceUUID': deviceUUID,
+        'deviceName': deviceName,
+        'token': token,
+        'lastConnected': lastConnected.millisecondsSinceEpoch,
+      };
+
+  static PairedDeviceRecord fromJson(Map<String, dynamic> j) => PairedDeviceRecord(
+        deviceUUID: j['deviceUUID'] as String,
+        deviceName: j['deviceName'] as String,
+        token: j['token'] as String,
+        lastConnected:
+            DateTime.fromMillisecondsSinceEpoch(j['lastConnected'] as int),
+      );
+}
+
 /// Persistent pairing identity for the desktop receiver.
-///
-/// Mirrors the TV's contract:
-///   - `authToken` is a stable UUID, generated once and reused forever
-///   - `PIN`       is the first 4 chars of the token, uppercased
-///   - `deviceId`  is a stable UUID published via NSD's `uuid` TXT record
-///   - `deviceName` is the human-readable name shown by the phone in its picker
 class PairingStore {
   PairingStore._(this._prefs);
 
-  static const _kAuthToken = 'pb.auth_token';
   static const _kDeviceId = 'pb.device_id';
   static const _kDeviceName = 'pb.device_name';
-  static const _kHasPaired = 'pb.has_paired';
   static const _kEngineType = 'pb.engine_type';
+  static const _kPairedDevices = 'pb.paired_devices';
 
   final SharedPreferences _prefs;
 
@@ -46,17 +69,6 @@ class PairingStore {
     return _prefs.setString(_kEngineType, val);
   }
 
-  String get authToken {
-    var t = _prefs.getString(_kAuthToken);
-    if (t == null) {
-      t = const Uuid().v4();
-      _prefs.setString(_kAuthToken, t);
-    }
-    return t;
-  }
-
-  String get pin => authToken.substring(0, 4).toUpperCase();
-
   String get deviceId {
     var id = _prefs.getString(_kDeviceId);
     if (id == null) {
@@ -75,15 +87,60 @@ class PairingStore {
   Future<void> setDeviceName(String name) =>
       _prefs.setString(_kDeviceName, name);
 
-  Future<void> regenerateToken() async {
-    await _prefs.setString(_kAuthToken, const Uuid().v4());
+  // ─── Paired devices ──────────────────────────────────────────────────────
+
+  List<PairedDeviceRecord> get pairedDevices {
+    final raw = _prefs.getString(_kPairedDevices);
+    if (raw == null) return [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return list
+          .whereType<Map<String, dynamic>>()
+          .map(PairedDeviceRecord.fromJson)
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
-  /// True once any client has successfully paired (PIN or token). Used to
-  /// decide whether to show the window at launch.
-  bool get hasPairedClient => _prefs.getBool(_kHasPaired) ?? false;
+  Future<void> _savePairedDevices(List<PairedDeviceRecord> devices) =>
+      _prefs.setString(
+          _kPairedDevices, jsonEncode(devices.map((d) => d.toJson()).toList()));
 
-  Future<void> markPaired() => _prefs.setBool(_kHasPaired, true);
+  bool isTokenAuthorized(String token) =>
+      pairedDevices.any((d) => d.token == token);
+
+  Future<void> addPairedDevice(PairedDeviceRecord device) async {
+    final devices = pairedDevices.toList();
+    final idx = devices.indexWhere((d) => d.deviceUUID == device.deviceUUID);
+    if (idx >= 0) {
+      devices[idx] = device;
+    } else {
+      devices.add(device);
+    }
+    await _savePairedDevices(devices);
+  }
+
+  Future<void> updateLastConnected(String token) async {
+    final devices = pairedDevices.toList();
+    final idx = devices.indexWhere((d) => d.token == token);
+    if (idx < 0) return;
+    final d = devices[idx];
+    devices[idx] = PairedDeviceRecord(
+      deviceUUID: d.deviceUUID,
+      deviceName: d.deviceName,
+      token: d.token,
+      lastConnected: DateTime.now(),
+    );
+    await _savePairedDevices(devices);
+  }
+
+  Future<void> forgetDevice(String deviceUUID) async {
+    final devices = pairedDevices.where((d) => d.deviceUUID != deviceUUID).toList();
+    await _savePairedDevices(devices);
+  }
+
+  Future<void> forgetAllDevices() => _prefs.remove(_kPairedDevices);
 
   static String _defaultName() {
     try {

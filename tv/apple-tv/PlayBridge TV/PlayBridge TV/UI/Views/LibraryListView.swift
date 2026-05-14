@@ -5,7 +5,6 @@ struct LibraryListView: View {
     let items: [PlaybackHistoryItem]
     @EnvironmentObject var historyStore: HistoryStore
     @EnvironmentObject var server: WebSocketServer
-    let columns = [GridItem(.adaptive(minimum: 400), spacing: 40)]
     @State private var showClearConfirm = false
 
     var body: some View {
@@ -36,7 +35,7 @@ struct LibraryListView: View {
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 40) {
+                    LazyVStack(spacing: 16) {
                         ForEach(items) { item in
                             HistoryCard(item: item) {
                                 server.currentPlayRequest = PlayRequest(
@@ -44,7 +43,8 @@ struct LibraryListView: View {
                             }
                         }
                     }
-                    .padding(60)
+                    .padding(.horizontal, 60)
+                    .padding(.vertical, 20)
                 }
             }
         }

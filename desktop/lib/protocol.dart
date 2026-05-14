@@ -46,13 +46,23 @@ class PingCmd extends Command {
 }
 
 class AuthCmd extends Command {
-  final String? pin;
   final String? token;
-  const AuthCmd({this.pin, this.token});
+  const AuthCmd({this.token});
 }
 
-class RequestPairingCmd extends Command {
-  const RequestPairingCmd();
+class PairingRequestCmd extends Command {
+  final String deviceName;
+  final String deviceUUID;
+  const PairingRequestCmd({required this.deviceName, required this.deviceUUID});
+}
+
+class PairingApprovedCmd extends Command {
+  final String token;
+  const PairingApprovedCmd(this.token);
+}
+
+class PairingDeniedCmd extends Command {
+  const PairingDeniedCmd();
 }
 
 class UnknownCmd extends Command {
@@ -82,13 +92,13 @@ Command parseCommand(String json) {
     switch (type) {
       case 'ping':
         return const PingCmd();
-      case 'request_pairing':
-        return const RequestPairingCmd();
-      case 'auth':
-        return AuthCmd(
-          pin: root['pin'] as String?,
-          token: root['token'] as String?,
+      case 'pairing_request':
+        return PairingRequestCmd(
+          deviceName: (root['deviceName'] as String?) ?? '',
+          deviceUUID: (root['deviceUUID'] as String?) ?? '',
         );
+      case 'auth':
+        return AuthCmd(token: root['token'] as String?);
       case 'command':
         final action = root['action'] as String?;
         final payload = root['payload'];
@@ -129,6 +139,11 @@ Command parseCommand(String json) {
 // ===== Outgoing message builders =====
 
 String pongJson() => jsonEncode({'type': 'pong'});
+
+String pairingApprovedJson(String token) =>
+    jsonEncode({'type': 'pairing_approved', 'token': token});
+
+String pairingDeniedJson() => jsonEncode({'type': 'pairing_denied'});
 
 String authResponseJson({required bool success, String? token}) =>
     jsonEncode({'type': 'auth_response', 'success': success, if (token != null) 'token': token});

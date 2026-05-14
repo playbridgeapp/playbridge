@@ -25,7 +25,8 @@ class PairingStore(private val context: Context) {
         private val PAIRED_DEVICES = stringPreferencesKey("paired_devices")
         private val DEVICE_ID = stringPreferencesKey("device_id")
         private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
-        
+        private val AUTHORIZED_TOKENS = stringPreferencesKey("authorized_tokens")
+
         const val DEFAULT_PORT = com.playbridge.shared.protocol.Config.DEFAULT_PORT
     }
     
@@ -145,8 +146,10 @@ class PairingStore(private val context: Context) {
                 }
             } ?: mutableListOf()
             
-            // Remove existing device with same ID and add new one
-            current.removeAll { it.id == device.id }
+            // Deduplicate by deviceUUID (phone's stable identifier); fall back to id.
+            current.removeAll {
+                (device.deviceUUID.isNotEmpty() && it.deviceUUID == device.deviceUUID) || it.id == device.id
+            }
             current.add(device)
             
             prefs[PAIRED_DEVICES] = protocolJson.encodeToString(
@@ -157,7 +160,7 @@ class PairingStore(private val context: Context) {
     }
     
     /**
-     * Remove a paired device
+     * Remove a paired device by id
      */
     suspend fun removePairedDevice(deviceId: String) {
         context.dataStore.edit { prefs ->
@@ -168,12 +171,72 @@ class PairingStore(private val context: Context) {
                     mutableListOf()
                 }
             } ?: mutableListOf()
-            
+
             current.removeAll { it.id == deviceId }
-            
+
             prefs[PAIRED_DEVICES] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(PairedDevice.serializer()),
                 current
+            )
+        }
+    }
+
+    /**
+     * Forget a paired device: remove from the list and revoke its token so it cannot reconnect.
+     */
+    suspend fun forgetDevice(device: PairedDevice) {
+        removePairedDevice(device.id)
+        if (device.token.isNotEmpty()) removeAuthorizedToken(device.token)
+    }
+
+    /**
+     * Forget all paired devices and clear all authorized tokens.
+     */
+    suspend fun forgetAllDevices() {
+        context.dataStore.edit { prefs ->
+            prefs[PAIRED_DEVICES] = "[]"
+            prefs[AUTHORIZED_TOKENS] = "[]"
+        }
+    }
+
+    // ── Per-device token authorization ────────────────────────────────────────
+
+    private suspend fun getAuthorizedTokenSet(): MutableSet<String> {
+        val json = context.dataStore.data.first()[AUTHORIZED_TOKENS] ?: "[]"
+        return try {
+            protocolJson.decodeFromString<List<String>>(json).toMutableSet()
+        } catch (e: Exception) {
+            mutableSetOf()
+        }
+    }
+
+    suspend fun isTokenAuthorized(token: String): Boolean =
+        getAuthorizedTokenSet().contains(token)
+
+    suspend fun addAuthorizedToken(token: String) {
+        context.dataStore.edit { prefs ->
+            val set = prefs[AUTHORIZED_TOKENS]?.let {
+                try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
+                catch (e: Exception) { mutableSetOf() }
+            } ?: mutableSetOf()
+            set.add(token)
+            prefs[AUTHORIZED_TOKENS] = protocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
+                set.toList()
+            )
+        }
+    }
+
+    suspend fun removeAuthorizedToken(token: String) {
+        context.dataStore.edit { prefs ->
+            val set = prefs[AUTHORIZED_TOKENS]?.let {
+                try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
+                catch (e: Exception) { mutableSetOf() }
+            } ?: mutableSetOf()
+            set.remove(token)
+            prefs[AUTHORIZED_TOKENS] = protocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
+                set.toList()
             )
         }
     }
