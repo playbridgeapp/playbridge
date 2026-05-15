@@ -242,54 +242,54 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   }
 @override
 Widget build(BuildContext context) {
-  return Shortcuts(
-    shortcuts: {
-      const SingleActivator(LogicalKeyboardKey.space): const PlayPauseIntent(),
-      const SingleActivator(LogicalKeyboardKey.arrowRight): const SeekForwardIntent(),
-      const SingleActivator(LogicalKeyboardKey.arrowLeft): const SeekBackwardIntent(),
-      const SingleActivator(LogicalKeyboardKey.arrowUp): const VolumeUpIntent(),
-      const SingleActivator(LogicalKeyboardKey.arrowDown): const VolumeDownIntent(),
-    },
-    child: Actions(
-      actions: {
-        PlayPauseIntent: CallbackAction<PlayPauseIntent>(
-          onInvoke: (_) => _player.state == 'playing' ? _player.pause() : _player.resume(),
-        ),
-        SeekForwardIntent: CallbackAction<SeekForwardIntent>(
-          onInvoke: (_) {
-            _player.seek(Duration(milliseconds: _player.positionMs + 2000));
-            return null;
-          },
-        ),
-        SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
-          onInvoke: (_) {
-            _player.seek(Duration(milliseconds: _player.positionMs - 2000));
-            return null;
-          },
-        ),
-        VolumeUpIntent: CallbackAction<VolumeUpIntent>(
-          onInvoke: (_) {
-            _player.setVolume((_player.volume + 0.05).clamp(0.0, 1.0));
-            return null;
-          },
-        ),
-        VolumeDownIntent: CallbackAction<VolumeDownIntent>(
-          onInvoke: (_) {
-            _player.setVolume((_player.volume - 0.05).clamp(0.0, 1.0));
-            return null;
-          },
-        ),
+  return MaterialApp(
+    title: 'PlayBridge Desktop',
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData.dark(useMaterial3: true).copyWith(
+      scaffoldBackgroundColor: Colors.transparent,
+      canvasColor: Colors.transparent,
+    ),
+    home: Shortcuts(
+      shortcuts: {
+        const SingleActivator(LogicalKeyboardKey.space): const PlayPauseIntent(),
+        const SingleActivator(LogicalKeyboardKey.arrowRight): const SeekForwardIntent(),
+        const SingleActivator(LogicalKeyboardKey.arrowLeft): const SeekBackwardIntent(),
+        const SingleActivator(LogicalKeyboardKey.arrowUp): const VolumeUpIntent(),
+        const SingleActivator(LogicalKeyboardKey.arrowDown): const VolumeDownIntent(),
       },
-      child: Focus(
-        autofocus: true,
-        child: MaterialApp(
-          title: 'PlayBridge Desktop',
-          debugShowCheckedModeBanner: false,
-          theme: ThemeData.dark(useMaterial3: true).copyWith(
-            scaffoldBackgroundColor: Colors.transparent,
-            canvasColor: Colors.transparent,
+      child: Actions(
+        actions: {
+          PlayPauseIntent: CallbackAction<PlayPauseIntent>(
+            onInvoke: (_) => _player.state == 'playing' ? _player.pause() : _player.resume(),
           ),
-          home: Scaffold(
+          SeekForwardIntent: CallbackAction<SeekForwardIntent>(
+            onInvoke: (_) {
+              _player.seek(Duration(milliseconds: _player.positionMs + 10000));
+              return null;
+            },
+          ),
+          SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
+            onInvoke: (_) {
+              _player.seek(Duration(milliseconds: _player.positionMs - 10000));
+              return null;
+            },
+          ),
+          VolumeUpIntent: CallbackAction<VolumeUpIntent>(
+            onInvoke: (_) {
+              _player.setVolume((_player.volume + 0.05).clamp(0.0, 1.0));
+              return null;
+            },
+          ),
+          VolumeDownIntent: CallbackAction<VolumeDownIntent>(
+            onInvoke: (_) {
+              _player.setVolume((_player.volume - 0.05).clamp(0.0, 1.0));
+              return null;
+            },
+          ),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
             backgroundColor: Colors.transparent,
             body: AnimatedBuilder(
               animation: Listenable.merge([_server, _player]),
@@ -382,7 +382,10 @@ Widget build(BuildContext context) {
                                       offstage: !_showingVideo || !hasMedia,
                                       child: Container(
                                         color: Colors.black,
-                                        child: PlaybackSurface(controller: _player),
+                                        child: PlaybackSurface(
+                                          controller: _player,
+                                          controlsVisible: _videoHovered || _playlistDrawerOpen || _menusOpen > 0,
+                                        ),
                                       ),
                                     ),
                                   ),                                  if (!_showingVideo)
@@ -824,7 +827,8 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         ),
                       ),
                       Expanded(
-                        child: SliderTheme(
+                        child: ExcludeFocus(
+                          child: SliderTheme(
                           data: SliderTheme.of(context).copyWith(
                             trackHeight: 3,
                             thumbShape:
@@ -846,6 +850,7 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                                   }
                                 : null,
                           ),
+                        ),
                         ),
                       ),
                       SizedBox(

@@ -4,10 +4,14 @@ import 'player_engine.dart';
 import 'player_controller.dart';
 import 'engines/mpv_engine.dart';
 
+const _kSubtitleBottomDefault = 24.0;
+const _kSubtitleBottomWithControls = 138.0; // clears ~114px controls bar
+
 class PlaybackSurface extends StatefulWidget {
-  const PlaybackSurface({super.key, required this.controller});
+  const PlaybackSurface({super.key, required this.controller, this.controlsVisible = false});
 
   final PlayerController controller;
+  final bool controlsVisible;
 
   @override
   State<PlaybackSurface> createState() => _PlaybackSurfaceState();
@@ -70,9 +74,20 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
     }
 
     if (_mpvVideo != null) {
-      return Video(
-        controller: _mpvVideo!,
-        controls: NoVideoControls,
+      return TweenAnimationBuilder<double>(
+        tween: Tween(
+          end: widget.controlsVisible
+              ? _kSubtitleBottomWithControls
+              : _kSubtitleBottomDefault,
+        ),
+        duration: const Duration(milliseconds: 150),
+        builder: (context, bottomPad, _) => Video(
+          controller: _mpvVideo!,
+          controls: NoVideoControls,
+          subtitleViewConfiguration: SubtitleViewConfiguration(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPad),
+          ),
+        ),
       );
     }
 
