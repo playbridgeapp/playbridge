@@ -6,6 +6,7 @@ import TVVLCKit
 struct VLCPlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
+    let subtitles: [String]?
     let initialTime: Double
     let isPreBuffering: Bool
     let onDismiss: () -> Void  // end-of-video: advance playlist or quit
@@ -16,6 +17,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         let controller = VLCViewController()
         controller.url = url
         controller.headers = headers
+        controller.subtitles = subtitles
         controller.initialTime = initialTime
         controller.isPreBuffering = isPreBuffering
         controller.onDismiss = onDismiss
@@ -32,7 +34,9 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         var mediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
         var url: URL?
         var headers: [String: String]?
+        var subtitles: [String]?
         var initialTime: Double = 0.0
+        private var slavesAttached: Bool = false
         var onDismiss: (() -> Void)?
         var onExit: (() -> Void)?
         var onSwitch: ((Double) -> Void)?
@@ -208,6 +212,26 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             }
         }
         
+        private func attachSlavesIfNeeded() {
+            guard !slavesAttached else { return }
+            guard let subtitles = subtitles, !subtitles.isEmpty else {
+                slavesAttached = true
+                return
+            }
+            for sub in subtitles {
+                guard let url = URL(string: sub) else {
+                    print("VLC: skipping invalid subtitle URL: \(sub)")
+                    continue
+                }
+                let rc = mediaPlayer.addPlaybackSlave(url, type: .subtitle, enforce: false)
+                print("VLC: addPlaybackSlave subtitle=\(url.absoluteString) rc=\(rc)")
+            }
+            slavesAttached = true
+            // Slaves arrive after the initial parse — refresh the track list so
+            // the new entries appear in the Subtitles menu.
+            updateSubtitleTracks()
+        }
+
         private func applyPreBufferingState() {
             mediaPlayer.audio?.isMuted = isPreBuffering
             if isPreBuffering {
@@ -222,6 +246,13 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         func mediaPlayerStateChanged(_ aNotification: Notification) {
             DispatchQueue.main.async {
                 self.playbackState.isPlaying = self.mediaPlayer.isPlaying
+                // libvlc requires the input to be running before slaves can be
+                // attached to the *current* playback. Hook .opening (and .playing
+                // as a fallback) so external SRT/VTT URLs from the phone show up
+                // in the Subtitles menu.
+                if self.mediaPlayer.state == .opening || self.mediaPlayer.state == .playing {
+                    self.attachSlavesIfNeeded()
+                }
                 if self.mediaPlayer.state == .playing {
                     // Clear userPaused when VLC resumes
                     self.playbackState.userPaused = false

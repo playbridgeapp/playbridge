@@ -9,10 +9,20 @@ import Network
 class ProxySessionManager: NSObject, URLSessionDataDelegate {
     static let shared = ProxySessionManager()
 
-    private struct ConnState {
+    private final class ConnState {
         let connection: NWConnection
-        let task: URLSessionDataTask       // upstream task — cancelled when VLC disconnects
-        let sendGate: DispatchSemaphore    // backpressure: only 1 in-flight send at a time
+        let task: URLSessionDataTask
+        let sendGate: DispatchSemaphore       // backpressure: only 1 in-flight send at a time
+        weak var proxyServer: VLCProxyServer? // needed to rewrite HLS URIs into proxy URLs
+        var hlsBuffer: Data?                  // non-nil = buffer this response for URI rewriting
+        var hlsResponse: HTTPURLResponse?
+
+        init(connection: NWConnection, task: URLSessionDataTask, proxyServer: VLCProxyServer) {
+            self.connection = connection
+            self.task = task
+            self.sendGate = DispatchSemaphore(value: 1)
+            self.proxyServer = proxyServer
+        }
     }
 
     private var states: [Int: ConnState] = [:]
@@ -29,10 +39,9 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         return URLSession(configuration: config, delegate: self, delegateQueue: q)
     }()
 
-    func proxy(request: URLRequest, to connection: NWConnection) {
+    func proxy(request: URLRequest, to connection: NWConnection, proxyServer: VLCProxyServer) {
         let task = session.dataTask(with: request)
-        let gate = DispatchSemaphore(value: 1)
-        let state = ConnState(connection: connection, task: task, sendGate: gate)
+        let state = ConnState(connection: connection, task: task, proxyServer: proxyServer)
 
         lock.lock()
         states[task.taskIdentifier] = state
@@ -71,6 +80,40 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         }
     }
 
+    /// Build the HTTP response headers we hand back to VLC.
+    ///
+    /// URLSession transparently decodes `Content-Encoding` (gzip/deflate/br) and
+    /// unwraps `Transfer-Encoding: chunked` before invoking delegate callbacks.
+    /// Forwarding either header verbatim makes VLC try to decode the body again
+    /// — for chunked responses VLC waits forever for a chunk terminator that
+    /// never arrives, which manifests as HLS playlists "getting stuck".
+    /// `Content-Length` is also dropped when the original body was encoded
+    /// (decoded size differs) or when we rewrote the body ourselves.
+    private func buildResponseHeader(_ http: HTTPURLResponse, overrideContentLength: Int? = nil) -> String {
+        var header = "HTTP/1.1 \(http.statusCode) \(HTTPURLResponse.localizedString(forStatusCode: http.statusCode))\r\n"
+
+        let hasContentEncoding = http.value(forHTTPHeaderField: "Content-Encoding") != nil
+
+        for (key, value) in http.allHeaderFields {
+            guard let k = key as? String else { continue }
+            switch k.lowercased() {
+            case "content-encoding", "transfer-encoding", "connection":
+                continue
+            case "content-length":
+                if hasContentEncoding || overrideContentLength != nil { continue }
+                header += "\(k): \(value)\r\n"
+            default:
+                header += "\(k): \(value)\r\n"
+            }
+        }
+
+        if let len = overrideContentLength {
+            header += "Content-Length: \(len)\r\n"
+        }
+        header += "Connection: close\r\n\r\n"
+        return header
+    }
+
     // MARK: URLSessionDataDelegate
 
     func urlSession(
@@ -89,17 +132,22 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
             return
         }
 
-        print("[Proxy] T\(dataTask.taskIdentifier) upstream response: \(http.statusCode) content-length=\(http.allHeaderFields["Content-Length"] ?? "unknown") type=\(http.allHeaderFields["Content-Type"] ?? "unknown")")
+        print("[Proxy] T\(dataTask.taskIdentifier) upstream response: \(http.statusCode) content-length=\(http.value(forHTTPHeaderField: "Content-Length") ?? "unknown") type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "unknown")")
 
-        var header = "HTTP/1.1 \(http.statusCode) \(HTTPURLResponse.localizedString(forStatusCode: http.statusCode))\r\n"
-        for (key, value) in http.allHeaderFields {
-            if let key = key as? String { header += "\(key): \(value)\r\n" }
+        // HLS playlists: buffer the body so we can rewrite every URI inside to
+        // route back through this proxy. Headers + rewritten body are flushed
+        // atomically in didCompleteWithError so we can include an accurate
+        // Content-Length for the rewritten payload.
+        if isHLSResponse(http) {
+            state.hlsBuffer = Data()
+            state.hlsResponse = http
+            completionHandler(.allow)
+            return
         }
-        header += "\r\n"
 
         let taskId = dataTask.taskIdentifier
+        let header = buildResponseHeader(http)
 
-        // Backpressure: wait for any prior send to finish before sending header
         state.sendGate.wait()
 
         state.connection.send(content: header.data(using: .utf8), completion: .contentProcessed({ [weak self] error in
@@ -118,6 +166,12 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         let state = states[dataTask.taskIdentifier]
         lock.unlock()
         guard let state = state else { return }
+
+        // HLS path: accumulate; we'll rewrite + flush in didCompleteWithError.
+        if state.hlsBuffer != nil {
+            state.hlsBuffer?.append(data)
+            return
+        }
 
         let taskId = dataTask.taskIdentifier
 
@@ -149,6 +203,30 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
             print("[Proxy] T\(task.taskIdentifier) upstream completed successfully")
         }
 
+        // HLS flush: rewrite URIs in the buffered playlist, then send headers +
+        // body atomically with a corrected Content-Length.
+        if let buffer = state.hlsBuffer, let response = state.hlsResponse, error == nil {
+            let body: Data
+            if let baseURL = response.url ?? task.currentRequest?.url ?? task.originalRequest?.url,
+               let proxyServer = state.proxyServer {
+                body = rewriteHLSPlaylist(buffer, baseURL: baseURL, proxyServer: proxyServer)
+            } else {
+                body = buffer
+            }
+            let header = buildResponseHeader(response, overrideContentLength: body.count)
+            let payload = (header.data(using: .utf8) ?? Data()) + body
+
+            state.sendGate.wait()
+            state.connection.send(content: payload, completion: .contentProcessed({ _ in
+                state.sendGate.signal()
+                state.connection.send(
+                    content: nil, contentContext: .finalMessage, isComplete: true,
+                    completion: .contentProcessed({ _ in state.connection.cancel() })
+                )
+            }))
+            return
+        }
+
         // Wait for last data chunk to finish sending before closing
         state.sendGate.wait()
 
@@ -162,9 +240,99 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
     }
 }
 
+// MARK: - HLS detection & playlist URI rewriting
+
+private let hlsContentTypeMarkers: [String] = [
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "audio/mpegurl",
+    "audio/x-mpegurl",
+    "vnd.apple.mpegurl",
+    "x-mpegurl",
+]
+
+private func isHLSResponse(_ http: HTTPURLResponse) -> Bool {
+    if let ct = http.value(forHTTPHeaderField: "Content-Type")?.lowercased() {
+        for marker in hlsContentTypeMarkers where ct.contains(marker) { return true }
+    }
+    if let url = http.url, url.pathExtension.lowercased() == "m3u8" { return true }
+    return false
+}
+
+private let hlsURIAttributeRegex = try! NSRegularExpression(pattern: #"URI="([^"]*)""#)
+
+/// Rewrite every URI in an HLS playlist (plain URI lines and `URI="..."`
+/// attributes on tags like `#EXT-X-KEY`, `#EXT-X-MAP`, `#EXT-X-MEDIA`,
+/// `#EXT-X-I-FRAME-STREAM-INF`) to point at the proxy. Without this, segments
+/// or sub-playlists hosted on a different CDN bypass the proxy and arrive
+/// upstream without the custom headers — usually a 403.
+private func rewriteHLSPlaylist(_ data: Data, baseURL: URL, proxyServer: VLCProxyServer) -> Data {
+    guard let text = String(data: data, encoding: .utf8) else { return data }
+    let lines = text.components(separatedBy: "\n")
+
+    let rewrittenLines: [String] = lines.map { rawLine in
+        let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return rawLine }
+
+        if trimmed.hasPrefix("#") {
+            return rewriteURIAttributes(in: rawLine, baseURL: baseURL, proxyServer: proxyServer)
+        }
+
+        guard let upstream = URL(string: trimmed, relativeTo: baseURL)?.absoluteURL else {
+            return rawLine
+        }
+        return proxyServer.proxyURL(forUpstream: upstream).absoluteString
+    }
+
+    return rewrittenLines.joined(separator: "\n").data(using: .utf8) ?? data
+}
+
+private func rewriteURIAttributes(in line: String, baseURL: URL, proxyServer: VLCProxyServer) -> String {
+    let nsLine = line as NSString
+    let matches = hlsURIAttributeRegex.matches(in: line, range: NSRange(location: 0, length: nsLine.length))
+    if matches.isEmpty { return line }
+
+    var result = line
+    // Replace right-to-left so earlier ranges remain valid
+    for m in matches.reversed() {
+        let captureRange = m.range(at: 1)
+        guard captureRange.location != NSNotFound else { continue }
+        let original = nsLine.substring(with: captureRange)
+        guard let upstream = URL(string: original, relativeTo: baseURL)?.absoluteURL else { continue }
+        let proxied = proxyServer.proxyURL(forUpstream: upstream).absoluteString
+        if let r = Range(captureRange, in: result) {
+            result.replaceSubrange(r, with: proxied)
+        }
+    }
+    return result
+}
+
+// MARK: - base64url helpers
+
+private func base64URLEncode(_ string: String) -> String {
+    return Data(string.utf8).base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+}
+
+private func base64URLDecode(_ string: String) -> Data? {
+    var b64 = string
+        .replacingOccurrences(of: "-", with: "+")
+        .replacingOccurrences(of: "_", with: "/")
+    while b64.count % 4 != 0 { b64.append("=") }
+    return Data(base64Encoded: b64)
+}
+
 /// Lightweight local HTTP proxy that intercepts VLC connections and
 /// re-issues them upstream with custom headers via URLSession.
 class VLCProxyServer {
+    /// Path used for sub-resources whose original URL doesn't share targetURL's
+    /// host (e.g. an HLS playlist on origin pointing at segments on a CDN).
+    /// The original URL is base64url-encoded into the `_pb_u` query parameter.
+    static let extPath = "/_pb_ext"
+    static let extQueryKey = "_pb_u"
+
     private let targetURL: URL
     private let headers: [String: String]
     private var listener: NWListener?
@@ -185,6 +353,20 @@ class VLCProxyServer {
     init(targetURL: URL, headers: [String: String]) {
         self.targetURL = targetURL
         self.headers = headers
+    }
+
+    /// Build a proxy URL that, when fetched by VLC, will route to the given
+    /// upstream URL with the proxy's custom headers attached. Used when
+    /// rewriting HLS playlists so cross-host segments still get our headers.
+    func proxyURL(forUpstream url: URL) -> URL {
+        let encoded = base64URLEncode(url.absoluteString)
+        var c = URLComponents()
+        c.scheme = "http"
+        c.host = "127.0.0.1"
+        c.port = Int(port)
+        c.path = Self.extPath
+        c.queryItems = [URLQueryItem(name: Self.extQueryKey, value: encoded)]
+        return c.url!
     }
 
     func start() {
@@ -240,18 +422,25 @@ class VLCProxyServer {
 
             // Decode VLC's percent-encoded path for comparison (targetURL.path is always decoded)
             let decodedRequestPath = requestPath.removingPercentEncoding ?? requestPath
+            let targetPath = self.targetURL.path.isEmpty ? "/" : self.targetURL.path
 
             // Determine the upstream URL
             let upstreamURL: URL
-            let targetPath = self.targetURL.path.isEmpty ? "/" : self.targetURL.path
-
-            if decodedRequestPath == targetPath || requestPath == "/" {
+            if decodedRequestPath == Self.extPath {
+                // HLS sub-resource on an arbitrary host — full URL is encoded in the query
+                guard let q = requestQuery, let decoded = Self.decodeExtURL(fromQuery: q) else {
+                    print("[Proxy] Failed to decode ext URL: \(requestURI)")
+                    connection.cancel()
+                    return
+                }
+                upstreamURL = decoded
+                print("[Proxy] Resolved as ext-encoded sub-request -> \(upstreamURL.absoluteString)")
+            } else if decodedRequestPath == targetPath || requestPath == "/" {
                 // Initial request — use the original target URL exactly
                 upstreamURL = self.targetURL
                 print("[Proxy] Resolved as initial request -> \(upstreamURL.absoluteString)")
             } else {
-                // Sub-request (HLS segment/sub-playlist)
-                // Decode first — .path setter will re-encode correctly
+                // Same-host sub-request (path-relative resolution)
                 var c = URLComponents()
                 c.scheme = self.targetURL.scheme
                 c.host = self.targetURL.host
@@ -259,7 +448,7 @@ class VLCProxyServer {
                 c.path = decodedRequestPath
                 c.percentEncodedQuery = requestQuery
                 upstreamURL = c.url ?? self.targetURL
-                print("[Proxy] Resolved as sub-request -> \(upstreamURL.absoluteString)")
+                print("[Proxy] Resolved as same-host sub-request -> \(upstreamURL.absoluteString)")
             }
 
             var urlRequest = URLRequest(url: upstreamURL)
@@ -280,7 +469,18 @@ class VLCProxyServer {
 
             for (k, v) in self.headers { urlRequest.setValue(v, forHTTPHeaderField: k) }
 
-            ProxySessionManager.shared.proxy(request: urlRequest, to: connection)
+            ProxySessionManager.shared.proxy(request: urlRequest, to: connection, proxyServer: self)
         }
+    }
+
+    private static func decodeExtURL(fromQuery query: String) -> URL? {
+        guard let comps = URLComponents(string: "?\(query)"),
+              let value = comps.queryItems?.first(where: { $0.name == Self.extQueryKey })?.value
+        else { return nil }
+        guard let data = base64URLDecode(value),
+              let str = String(data: data, encoding: .utf8),
+              let url = URL(string: str)
+        else { return nil }
+        return url
     }
 }

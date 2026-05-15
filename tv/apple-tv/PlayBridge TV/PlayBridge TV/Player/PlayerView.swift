@@ -51,6 +51,7 @@ struct PlayerView: View {
                 VLCPlayerView(
                     url: currentRequest.url,
                     headers: currentRequest.headers,
+                    subtitles: currentRequest.subtitles,
                     initialTime: resumeTime,
                     isPreBuffering: isPreBuffering,
                     onDismiss: handleNext,  // end-of-video → try next item

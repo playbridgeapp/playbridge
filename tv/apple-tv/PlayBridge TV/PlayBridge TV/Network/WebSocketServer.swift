@@ -107,6 +107,26 @@ class WebSocketServer: ObservableObject {
         } catch { print("Server error: \(error)") }
     }
 
+    func stop() {
+        keepaliveTimer?.invalidate()
+        keepaliveTimer = nil
+        listener?.cancel()
+        listener = nil
+        for connection in connectedConnections { connection.cancel() }
+        connectedConnections.removeAll()
+        DispatchQueue.main.async {
+            self.connectedCount = 0
+            self.isAuthenticated = false
+            self.pendingPairingRequest = nil
+            self.serverState = "Stopped"
+        }
+    }
+
+    func restart(port: UInt16 = 8765) {
+        stop()
+        start(port: port)
+    }
+
     private func startKeepalive() {
         keepaliveTimer?.invalidate()
         keepaliveTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in

@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var currentScreen: AppScreen = .pairing
     @State private var time = 0.0
     @State private var playerStarted: Bool = false
+    @Environment(\.scenePhase) private var scenePhase
     let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     init() {
@@ -120,6 +121,13 @@ struct ContentView: View {
             }
         }
         .onAppear { server.start() }
+        .onChange(of: scenePhase) { newPhase in
+            switch newPhase {
+            case .active: server.restart()
+            case .background: server.stop()
+            default: break
+            }
+        }
         .onReceive(server.$currentPlayRequest) { request in
             // Reset playerStarted for every new incoming request
             playerStarted = false
