@@ -1,4 +1,5 @@
 name: Extension Build
+# protocol submodule: playbridgeapp/playbridge-protocol
 
 on:
   push:
@@ -6,6 +7,7 @@ on:
     paths:
       - "extension/**"
       - ".github/workflows/extension_build.yml"
+      - ".gitmodules"
   workflow_dispatch:
 
 jobs:
