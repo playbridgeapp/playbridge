@@ -25,6 +25,10 @@ dependencies:
   fvp: ^0.36.2
   video_player: ^2.9.2
 
+  # PlayBridge protocol — generated protobuf types (git submodule)
+  playbridge_protocol:
+    path: ../protocol/generated/dart
+
   # mDNS service publishing (_playbridge._tcp.) + persistent pairing
   bonsoir: ^5.1.10
   shared_preferences: ^2.3.3

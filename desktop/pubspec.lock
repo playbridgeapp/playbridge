@@ -464,6 +464,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.6"
+  playbridge_protocol:
+    dependency: "direct main"
+    description:
+      path: "../protocol/generated/dart"
+      relative: true
+    source: path
+    version: "0.1.0"
   plugin_platform_interface:
     dependency: transitive
     description:
@@ -480,6 +487,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.5.0"
+  protobuf:
+    dependency: transitive
+    description:
+      name: protobuf
+      sha256: "579fe5557eae58e3adca2e999e38f02441d8aa908703854a9e0a0f47fa857731"
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.1.0"
   safe_local_storage:
     dependency: transitive
     description:

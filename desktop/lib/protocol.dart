@@ -1,22 +1,32 @@
 import 'dart:convert';
 
-/// Minimal Dart mirror of the PlayBridge protocol envelope.
-/// See shared/src/commonMain/.../protocol/Message.kt for the source of truth.
+import 'package:playbridge_protocol/messages.pb.dart';
+
+export 'package:playbridge_protocol/messages.pb.dart'
+    show PlayPayload, VisualMetadata, PlaylistPayload;
+
+// ==================== Command sealed class ====================
 
 sealed class Command {
   const Command();
 }
 
+// PlayCmd wraps the generated PlayPayload so all proto fields are preserved,
+// while exposing the four fields server.dart pattern-matches on as getters.
 class PlayCmd extends Command {
-  final String url;
-  final String? title;
-  final Map<String, String>? headers;
-  final List<String>? subtitles;
-  const PlayCmd({required this.url, this.title, this.headers, this.subtitles});
+  final PlayPayload payload;
+
+  PlayCmd(this.payload);
+
+  String get url => payload.url;
+  String? get title => payload.hasTitle() ? payload.title : null;
+  Map<String, String>? get headers =>
+      payload.headers.isEmpty ? null : Map.unmodifiable(payload.headers);
+  List<String>? get subtitles =>
+      payload.subtitles.isEmpty ? null : List.unmodifiable(payload.subtitles);
 }
 
 class ControlCmd extends Command {
-  /// One of: play, pause, stop, seek
   final String command;
   const ControlCmd(this.command);
 }
@@ -70,23 +80,31 @@ class UnknownCmd extends Command {
   const UnknownCmd(this.type);
 }
 
+// ==================== Parsing ====================
+
 PlayCmd _parsePlayPayload(Map<String, dynamic> p) {
-  final headers = (p['headers'] as Map?)?.map(
-    (k, v) => MapEntry(k.toString(), v.toString()),
-  );
-  final subs = (p['subtitles'] as List?)?.map((e) => e.toString()).toList();
-  return PlayCmd(
-    url: (p['url'] ?? '') as String,
-    title: p['title'] as String?,
-    headers: headers,
-    subtitles: subs,
-  );
+  final proto = PlayPayload()..url = (p['url'] as String? ?? '');
+  if (p['title'] case final String t) proto.title = t;
+  if (p['contentType'] case final String v) proto.contentType = v;
+  if (p['detectedBy'] case final String v) proto.detectedBy = v;
+  if (p['playerMode'] case final String v) proto.playerMode = v;
+  if (p['preferredAudioLanguage'] case final String v) proto.preferredAudioLanguage = v;
+  if (p['preferredSubtitleLanguage'] case final String v) proto.preferredSubtitleLanguage = v;
+  if (p['defaultVideoQuality'] case final String v) proto.defaultVideoQuality = v;
+  if (p['maxBitrateCapMbps'] case final num v) proto.maxBitrateCapMbps = v.toDouble();
+  if (p['headers'] case final Map<String, dynamic> h) {
+    proto.headers.addAll(h.map((k, v) => MapEntry(k, v.toString())));
+  }
+  if (p['subtitles'] case final List<dynamic> s) {
+    proto.subtitles.addAll(s.map((e) => e.toString()));
+  }
+  return PlayCmd(proto);
 }
 
 Command parseCommand(String json) {
   try {
     final root = jsonDecode(json);
-    if (root is! Map) return UnknownCmd('not_a_map');
+    if (root is! Map) return const UnknownCmd('not_a_map');
     final type = root['type'] as String?;
 
     switch (type) {
@@ -97,6 +115,10 @@ Command parseCommand(String json) {
           deviceName: (root['deviceName'] as String?) ?? '',
           deviceUUID: (root['deviceUUID'] as String?) ?? '',
         );
+      case 'pairing_approved':
+        return PairingApprovedCmd((root['token'] as String?) ?? '');
+      case 'pairing_denied':
+        return const PairingDeniedCmd();
       case 'auth':
         return AuthCmd(token: root['token'] as String?);
       case 'command':
@@ -115,10 +137,7 @@ Command parseCommand(String json) {
                 .whereType<Map<String, dynamic>>()
                 .map(_parsePlayPayload)
                 .toList();
-            return PlaylistCmd(
-              items,
-              (payload?['startIndex'] ?? 0) as int,
-            );
+            return PlaylistCmd(items, (payload?['startIndex'] ?? 0) as int);
           case 'playlist_jump':
             return PlaylistJumpCmd((payload?['index'] ?? 0) as int);
           case 'queue_add':
@@ -136,7 +155,7 @@ Command parseCommand(String json) {
   }
 }
 
-// ===== Outgoing message builders =====
+// ==================== Outgoing message builders ====================
 
 String pongJson() => jsonEncode({'type': 'pong'});
 
@@ -145,8 +164,11 @@ String pairingApprovedJson(String token) =>
 
 String pairingDeniedJson() => jsonEncode({'type': 'pairing_denied'});
 
-String authResponseJson({required bool success, String? token}) =>
-    jsonEncode({'type': 'auth_response', 'success': success, if (token != null) 'token': token});
+String authResponseJson({required bool success, String? token}) => jsonEncode({
+      'type': 'auth_response',
+      'success': success,
+      if (token != null) 'token': token,
+    });
 
 String contextJson(String active) => jsonEncode({'type': 'context', 'active': active});
 
@@ -155,20 +177,22 @@ String statusJson({
   required int positionMs,
   required int durationMs,
   String? title,
-}) => jsonEncode({
-  'type': 'status',
-  'state': state,
-  'position': positionMs,
-  'duration': durationMs,
-  if (title != null) 'title': title,
-});
+}) =>
+    jsonEncode({
+      'type': 'status',
+      'state': state,
+      'position': positionMs,
+      'duration': durationMs,
+      if (title != null) 'title': title,
+    });
 
 String playlistStatusJson({
   required List<({int index, String title})> items,
   required int currentIndex,
-}) => jsonEncode({
-  'type': 'playlist_status',
-  'items': items.map((e) => {'index': e.index, 'title': e.title}).toList(),
-  'currentIndex': currentIndex,
-  'totalCount': items.length,
-});
+}) =>
+    jsonEncode({
+      'type': 'playlist_status',
+      'items': items.map((e) => {'index': e.index, 'title': e.title}).toList(),
+      'currentIndex': currentIndex,
+      'totalCount': items.length,
+    });
