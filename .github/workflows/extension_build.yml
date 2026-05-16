@@ -22,6 +22,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        submodules: true
 
     - name: Get version
       id: version
@@ -52,6 +53,12 @@ jobs:
       with:
         node-version: '20'
 
+    - name: Install dependencies and build
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        npm install
+        npm run build
+
     - name: Install web-ext
       if: steps.check_tag.outputs.skipped == 'false'
       run: npm install -g web-ext
@@ -63,7 +70,7 @@ jobs:
         AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
       run: |
         web-ext sign \
-          --source-dir src \
+          --source-dir dist \
           --artifacts-dir dist \
           --channel unlisted \
           --api-key "$AMO_JWT_ISSUER" \

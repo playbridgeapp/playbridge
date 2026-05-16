@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["firefox-webext-browser"],
+    "baseUrl": ".",
+    "paths": {
+      "@bufbuild/protobuf": ["node_modules/@bufbuild/protobuf"],
+      "@bufbuild/protobuf/*": ["node_modules/@bufbuild/protobuf/dist/cjs/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "../protocol/generated/typescript/*.ts"]
+}
