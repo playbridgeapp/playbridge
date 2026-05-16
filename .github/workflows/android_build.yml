@@ -3,6 +3,13 @@ name: Android Build
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - 'phone/**'
+      - 'tv/**'
+      - 'shared/**'
+      - '*.gradle.kts'
+      - 'gradle/**'
+      - 'gradle.properties'
   # pull_request:
   #   branches: [ "main" ]
   workflow_dispatch:
