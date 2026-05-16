@@ -1,0 +1,8 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "playbridge",
+  "compatibility_date": "2026-05-16",
+  "assets": {
+    "directory": "./build"
+  }
+}
