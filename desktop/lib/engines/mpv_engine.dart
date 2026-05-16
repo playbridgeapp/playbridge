@@ -123,6 +123,7 @@ class MpvEngine extends PlayerEngine {
         await native.setProperty('cache', 'yes');
         await native.setProperty('demuxer-max-bytes', '314572800');
         await native.setProperty('demuxer-max-back-bytes', '104857600');
+        await native.setProperty('network-timeout', '60');
       } catch (e) {
         debugPrint('[mpv] failed to tune: $e');
       }
