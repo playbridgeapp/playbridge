@@ -119,7 +119,8 @@ jobs:
           clang \
           pkg-config \
           libmpv-dev \
-          liblzma-dev
+          liblzma-dev \
+          libayatana-appindicator3-dev
 
     - name: Set up Flutter
       if: steps.check_tag.outputs.skipped == 'false'
