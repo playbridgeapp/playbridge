@@ -11,7 +11,7 @@
     <!-- Centered foreground icon -->
     <item
         android:gravity="center"
-        android:width="128dp"
-        android:height="128dp"
+        android:width="200dp"
+        android:height="200dp"
         android:drawable="@mipmap/ic_launcher_foreground" />
 </layer-list>
