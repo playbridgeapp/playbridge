@@ -153,14 +153,79 @@ jobs:
         aws s3 cp "playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz" \
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
+  build-macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: ./desktop
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: recursive
+
+    - name: Get version
+      id: version
+      run: |
+        VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '[:space:]')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Check tag
+      id: check_tag
+      run: |
+        if git rev-parse "desktop-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ desktop-v${{ steps.version.outputs.version }} already exists, skipping."
+        else
+          echo "skipped=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Flutter
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
+        cache: true
+
+    - name: Install dependencies
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: flutter pub get
+
+    - name: Build macOS
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: flutter build macos --release
+
+    - name: Package macOS artifact
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        cd build/macos/Build/Products/Release
+        zip -r "$GITHUB_WORKSPACE/desktop/playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip" \
+          playbridge_desktop.app
+
+    - name: Upload to R2
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      run: |
+        aws s3 cp "playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip" \
+          s3://${{ secrets.R2_BUCKET }}/desktop-release/
+
   release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     if: |
       (success() || always()) &&
       needs.build-windows.outputs.skipped == 'false' &&
       needs.build-linux.outputs.skipped == 'false' &&
+      needs.build-macos.outputs.skipped == 'false' &&
       needs.build-windows.result != 'failure' &&
-      needs.build-linux.result != 'failure'
+      needs.build-linux.result != 'failure' &&
+      needs.build-macos.result != 'failure'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -197,8 +262,11 @@ jobs:
           |----------|------|
           | Windows 10+ | `playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip` — extract and run `playbridge_desktop.exe` |
           | Linux | `playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz` — extract and run `bundle/playbridge_desktop` |
+          | macOS 12+ | `playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip` — extract and right-click → Open (unsigned) |
 
           **Linux:** requires `libmpv2` (`sudo apt install libmpv2` or `sudo dnf install mpv-libs`).
+
+          **macOS:** unsigned build — Gatekeeper will warn on first launch. Right-click → Open to bypass, or run `xattr -dr com.apple.quarantine PlayBridge\ Desktop.app`.
         files: output/*
         generate_release_notes: true
 
