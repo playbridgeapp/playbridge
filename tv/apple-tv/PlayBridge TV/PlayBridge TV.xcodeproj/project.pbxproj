@@ -7,8 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1CFFF07F44934837BC059A28 /* messages.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9556E50F0B149CF87E65874 /* messages.pb.swift */; };
 		9AA073877A4175267723B6CE /* Pods_PlayBridge_TV.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8FB972483704A0A2065F09C /* Pods_PlayBridge_TV.framework */; };
-		E6F46D7C2F9384E100653943 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
+		E6F46D7C2F9384E100653943 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -16,11 +17,14 @@
 		C2B15D2DEC174B6881C0E22B /* Pods-PlayBridge TV.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-PlayBridge TV.debug.xcconfig"; path = "Target Support Files/Pods-PlayBridge TV/Pods-PlayBridge TV.debug.xcconfig"; sourceTree = "<group>"; };
 		D8FB972483704A0A2065F09C /* Pods_PlayBridge_TV.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_PlayBridge_TV.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		E6F46D472F937ABC00653943 /* PlayBridge TV.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PlayBridge TV.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F9556E50F0B149CF87E65874 /* messages.pb.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = messages.pb.swift; path = ../../../protocol/generated/swift/messages.pb.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E6F46D492F937ABC00653943 /* PlayBridge TV */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = "PlayBridge TV";
 			sourceTree = "<group>";
 		};
@@ -31,7 +35,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E6F46D7C2F9384E100653943 /* (null) in Frameworks */,
+				E6F46D7C2F9384E100653943 /* BuildFile in Frameworks */,
 				9AA073877A4175267723B6CE /* Pods_PlayBridge_TV.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -39,6 +43,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		3DA5B3EE1B8D40B5B26B9A14 /* Protocol */ = {
+			isa = PBXGroup;
+			children = (
+				F9556E50F0B149CF87E65874 /* messages.pb.swift */,
+			);
+			name = Protocol;
+			sourceTree = "<group>";
+		};
 		9A15495D1A1C1B8A1B53141C /* Pods */ = {
 			isa = PBXGroup;
 			children = (
@@ -60,6 +72,7 @@
 			isa = PBXGroup;
 			children = (
 				E6F46D492F937ABC00653943 /* PlayBridge TV */,
+				3DA5B3EE1B8D40B5B26B9A14 /* Protocol */,
 				E6F46D482F937ABC00653943 /* Products */,
 				9A15495D1A1C1B8A1B53141C /* Pods */,
 				C9B85A2C7D34EDA19AA6A57D /* Frameworks */,
@@ -174,13 +187,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-PlayBridge TV/Pods-PlayBridge TV-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-PlayBridge TV/Pods-PlayBridge TV-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -194,6 +203,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1CFFF07F44934837BC059A28 /* messages.pb.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

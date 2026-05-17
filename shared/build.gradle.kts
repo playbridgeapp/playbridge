@@ -14,30 +14,10 @@ kotlin {
         }
     }
 
-    listOf(
-        tvosArm64(),
-        tvosSimulatorArm64(),
-        tvosX64()
-    ).forEach {
-        it.binaries.framework {
-            baseName = "Shared"
-            isStatic = true
-        }
-        /*
-        it.compilations.getByName("main") {
-            val TVVLCKit by cinterops.creating {
-                definitionFile.set(project.file("src/nativeInterop/cinterop/TVVLCKit.def"))
-                packageName("com.playbridge.shared.vlc")
-                // Framework is expected to be in tv/apple-tv/Frameworks/
-                compilerOpts("-framework", "TVVLCKit", "-F${project.rootDir}/tv/apple-tv/Frameworks")
-            }
-        }
-        */
-    }
-
-    applyDefaultHierarchyTemplate()   // gives us commonMain, appleMain, iosMain, tvosMain
-
     sourceSets {
+        commonMain {
+            kotlin.srcDir("../protocol/generated/kotlin")
+        }
         commonMain.dependencies {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
@@ -45,6 +25,7 @@ kotlin {
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.json)
             implementation(libs.okio)
+            api(libs.wire.runtime)
             implementation(libs.multiplatform.settings)
             implementation(libs.multiplatform.settings.coroutines)
         }
@@ -69,9 +50,6 @@ kotlin {
 
             // MPV
             implementation(project(":libs:mpv-android"))
-        }
-        appleMain.dependencies {
-            implementation(libs.ktor.client.darwin)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

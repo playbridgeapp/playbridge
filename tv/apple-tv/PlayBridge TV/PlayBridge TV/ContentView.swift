@@ -121,7 +121,7 @@ struct ContentView: View {
             }
         }
         .onAppear { server.start() }
-        .onChange(of: scenePhase) { newPhase in
+        .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active: server.restart()
             case .background: server.stop()

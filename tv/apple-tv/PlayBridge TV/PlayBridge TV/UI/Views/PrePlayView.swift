@@ -125,7 +125,7 @@ struct PrePlayView: View {
                 }
             }
         }
-        .onChange(of: imagesReady) { ready in
+        .onChange(of: imagesReady) { _, ready in
             if ready { markReady() }
         }
         .onDisappear {

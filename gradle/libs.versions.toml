@@ -32,6 +32,7 @@ tvFoundation = "1.0.0-alpha12"
 tvMaterial = "1.0.1"
 libvlc = "4.0.0-eap24"
 composeUiTextGoogleFonts = "1.6.4"
+wire = "5.1.0"
 
 [libraries]
 androidx-palette-ktx = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
@@ -66,6 +67,7 @@ kotlinx-serialization-json      = { module = "org.jetbrains.kotlinx:kotlinx-seri
 kotlinx-coroutines-core         = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android      = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 okio                            = { module = "com.squareup.okio:okio", version.ref = "okio" }
+wire-runtime                    = { module = "com.squareup.wire:wire-runtime", version.ref = "wire" }
 multiplatform-settings          = { module = "com.russhwolf:multiplatform-settings", version.ref = "settings-mp" }
 multiplatform-settings-coroutines = { module = "com.russhwolf:multiplatform-settings-coroutines", version.ref = "settings-mp" }
 turbine                         = { module = "app.cash.turbine:turbine", version.ref = "turbine" }

@@ -83,20 +83,12 @@ class UnknownCmd extends Command {
 // ==================== Parsing ====================
 
 PlayCmd _parsePlayPayload(Map<String, dynamic> p) {
-  final proto = PlayPayload()..url = (p['url'] as String? ?? '');
-  if (p['title'] case final String t) proto.title = t;
-  if (p['contentType'] case final String v) proto.contentType = v;
-  if (p['detectedBy'] case final String v) proto.detectedBy = v;
-  if (p['playerMode'] case final String v) proto.playerMode = v;
-  if (p['preferredAudioLanguage'] case final String v) proto.preferredAudioLanguage = v;
-  if (p['preferredSubtitleLanguage'] case final String v) proto.preferredSubtitleLanguage = v;
-  if (p['defaultVideoQuality'] case final String v) proto.defaultVideoQuality = v;
-  if (p['maxBitrateCapMbps'] case final num v) proto.maxBitrateCapMbps = v.toDouble();
-  if (p['headers'] case final Map<String, dynamic> h) {
-    proto.headers.addAll(h.map((k, v) => MapEntry(k, v.toString())));
-  }
-  if (p['subtitles'] case final List<dynamic> s) {
-    proto.subtitles.addAll(s.map((e) => e.toString()));
+  final proto = PlayPayload();
+  try {
+    proto.mergeFromProto3Json(p, ignoreUnknownFields: true);
+  } catch (e) {
+    print('PlayPayload proto3 parse failed, falling back to url-only: $e');
+    if (p['url'] case final String u) proto.url = u;
   }
   return PlayCmd(proto);
 }
