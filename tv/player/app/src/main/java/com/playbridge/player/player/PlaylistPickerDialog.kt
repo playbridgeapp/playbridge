@@ -21,7 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 
 /**
  * Compact side-panel playlist picker that overlays the video.

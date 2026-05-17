@@ -7,7 +7,7 @@ import android.content.Context
 import android.net.Uri
 import android.view.Surface
 import com.playbridge.shared.logging.logger
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -255,7 +255,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         }
 
         var userAgentSet = false
-        payload.headers?.forEach { (k, v) ->
+        payload.headers.forEach { (k, v) ->
             if (k.equals("user-agent", true)) {
                 MPVLib.setOptionString("user-agent", v)
                 userAgentSet = true
@@ -267,10 +267,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         // http-header-fields is a comma-separated string-list option in mpv.
         // Header values that contain commas (e.g. Accept) must be escaped as \,.
         val headerString = payload.headers
-            ?.filterKeys { !it.equals("user-agent", ignoreCase = true) }
-            ?.entries
-            ?.joinToString(",") { "${it.key}: ${it.value.replace("\\", "\\\\").replace(",", "\\,")}" }
-            ?: ""
+            .filterKeys { !it.equals("user-agent", ignoreCase = true) }
+            .entries
+            .joinToString(",") { "${it.key}: ${it.value.replace("\\", "\\\\").replace(",", "\\,")}" }
         if (headerString.isNotEmpty()) {
             logger.d(TAG, "Setting http-header-fields: $headerString")
             MPVLib.setOptionString("http-header-fields", headerString)

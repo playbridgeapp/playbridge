@@ -149,7 +149,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     // Playlist state
-    private var playlistItems: MutableList<com.playbridge.shared.protocol.PlayPayload> = mutableListOf()
+    private var playlistItems: MutableList<playbridge.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
 
@@ -876,10 +876,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             headers = headers,
             playlistJson = if (playlistItems.isNotEmpty()) {
                 try {
-                    com.playbridge.shared.protocol.protocolJson.encodeToString(
-                        kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
-                        playlistItems
-                    )
+                    com.playbridge.shared.protocol.encodePlayPayloadListJson(playlistItems)
                 } catch (e: Exception) { null }
             } else null,
             playlistIndex = playlistIndex,
@@ -930,7 +927,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             }
         }
 
-        val payload = com.playbridge.shared.protocol.PlayPayload(url = url, headers = headers)
+        val payload = playbridge.PlayPayload(url = url, headers = headers ?: emptyMap())
         engine?.load(payload)
 
         // Re-apply external subtitle if present via SubtitleManager

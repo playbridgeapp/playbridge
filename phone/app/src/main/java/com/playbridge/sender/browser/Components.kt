@@ -14,10 +14,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.int
-import kotlinx.serialization.json.decodeFromJsonElement
-import com.playbridge.shared.protocol.VisualMetadata
-import com.playbridge.shared.protocol.PlayPayload
-import com.playbridge.shared.protocol.protocolJson
+import com.playbridge.shared.protocol.decodeVisualMetadataJson
+import playbridge.PlayPayload
+import playbridge.VisualMetadata
 import mozilla.components.browser.engine.gecko.GeckoEngine
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.webextension.WebExtension
@@ -359,20 +358,16 @@ object Components {
                 } else if (type == "cast") {
                     val itemsJson = jsonObject["items"]?.jsonArray
                     val startIndex = jsonObject["startIndex"]?.jsonPrimitive?.int ?: 0
-                    val playlistMetadata = jsonObject["metadata"]?.let {
-                        try { protocolJson.decodeFromJsonElement<VisualMetadata>(it) } catch(e: Exception) { null }
-                    }
+                    val playlistMetadata = jsonObject["metadata"]?.let { decodeVisualMetadataJson(it.toString()) }
                     if (itemsJson != null) {
                         val items = itemsJson.mapNotNull { item ->
                             val obj = item as? JsonObject ?: return@mapNotNull null
                             val url = obj["url"]?.jsonPrimitive?.content ?: return@mapNotNull null
                             val title = obj["title"]?.jsonPrimitive?.content
-                            
-                            val metadata = obj["metadata"]?.let {
-                                try { protocolJson.decodeFromJsonElement<VisualMetadata>(it) } catch(e: Exception) { null }
-                            }
-                            
-                            PlayPayload(url = url, title = title, visualMetadata = metadata)
+
+                            val metadata = obj["metadata"]?.let { decodeVisualMetadataJson(it.toString()) }
+
+                            PlayPayload(url = url, title = title, visual_metadata = metadata)
                         }
                         if (items.isNotEmpty()) {
                             Log.i(TAG, "CAST MESSAGE received via extension: ${items.size} items, startIndex: $startIndex")

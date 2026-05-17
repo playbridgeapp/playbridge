@@ -3,7 +3,7 @@ package com.playbridge.shared.player
 import android.content.Context
 import android.net.Uri
 import com.playbridge.shared.logging.logger
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -125,7 +125,7 @@ class VlcPlayerEngine(private val context: Context) : PlaybackEngine {
 
             val extraHeaders = mutableListOf<String>()
             var userAgentSet = false
-            payload.headers?.forEach { (key, value) ->
+            payload.headers.forEach { (key, value) ->
                 when (key.lowercase()) {
                     "user-agent" -> {
                         addOption(":http-user-agent=$value")

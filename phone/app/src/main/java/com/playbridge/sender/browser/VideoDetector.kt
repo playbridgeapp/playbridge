@@ -49,7 +49,8 @@ data class DetectedVideo(
     var subtitlePreview: String? = null,
     var subtitlePreviewChecked: Boolean = false,
     var isPlayable: Boolean? = null,
-    val playlistPayload: List<com.playbridge.shared.protocol.PlayPayload>? = null,
+    @kotlinx.serialization.Transient
+    val playlistPayload: List<playbridge.PlayPayload>? = null,
     val title: String? = null
 ) {
     val isSubtitle: Boolean

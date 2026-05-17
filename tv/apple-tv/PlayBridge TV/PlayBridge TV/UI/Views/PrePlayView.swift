@@ -66,7 +66,7 @@ private struct MetaChip: View {
 // MARK: - PrePlayView
 
 struct PrePlayView: View {
-    let metadata: VisualMetadata
+    let metadata: Playbridge_VisualMetadata
     let onStart: () -> Void
     let onBack: () -> Void
 
@@ -83,8 +83,8 @@ struct PrePlayView: View {
 
     /// True as soon as all expected images are loaded (or URLs are absent).
     private var imagesReady: Bool {
-        let needsBackdrop = (metadata.backdropUrl ?? metadata.posterUrl) != nil
-        let needsPoster   = metadata.posterUrl != nil
+        let needsBackdrop = metadata.hasBackdropURL || metadata.hasPosterURL
+        let needsPoster   = metadata.hasPosterURL
         let backdropOk    = !needsBackdrop || backdropLoaded
         let posterOk      = !needsPoster   || posterLoaded
         return backdropOk && posterOk
@@ -154,7 +154,8 @@ struct PrePlayView: View {
     @ViewBuilder
     private var backdrop: some View {
         GeometryReader { proxy in
-            let imageUrl = metadata.backdropUrl ?? metadata.posterUrl
+            let imageUrl: String? = metadata.hasBackdropURL ? metadata.backdropURL
+                : (metadata.hasPosterURL ? metadata.posterURL : nil)
             if let urlString = imageUrl, let url = URL(string: urlString) {
                 AsyncImage(url: url) { phase in
                     switch phase {
@@ -229,7 +230,7 @@ struct PrePlayView: View {
             Spacer()
 
             // Logo or Title
-            if let logoUrl = metadata.logoUrl, let url = URL(string: logoUrl) {
+            if metadata.hasLogoURL, let url = URL(string: metadata.logoURL) {
                 AsyncImage(url: url) { phase in
                     if case .success(let image) = phase {
                         image
@@ -258,8 +259,8 @@ struct PrePlayView: View {
             Spacer().frame(height: 22)
 
             // Overview
-            if let overview = metadata.overview {
-                Text(overview)
+            if metadata.hasOverview {
+                Text(metadata.overview)
                     .font(.system(size: 28))
                     .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(5)
@@ -290,41 +291,41 @@ struct PrePlayView: View {
     @ViewBuilder
     private var metaChipsRow: some View {
         HStack(spacing: 10) {
-            if let year = metadata.year {
-                MetaChip(label: year)
+            if metadata.hasYear {
+                MetaChip(label: metadata.year)
             }
-            if let rating = metadata.rating {
-                MetaChip(label: "IMDb \(rating)", accent: Color(hue: 0.13, saturation: 0.9, brightness: 0.95))
+            if metadata.hasRating {
+                MetaChip(label: "IMDb \(metadata.rating)", accent: Color(hue: 0.13, saturation: 0.9, brightness: 0.95))
             }
-            if let runtime = metadata.runtime {
-                MetaChip(label: runtime)
+            if metadata.hasRuntime {
+                MetaChip(label: metadata.runtime)
             }
         }
     }
 
     @ViewBuilder
     private var episodeInfo: some View {
-        if let season = metadata.season, let episode = metadata.episode {
+        if metadata.hasSeason && metadata.hasEpisode {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
-                    Text("S\(season)")
+                    Text("S\(metadata.season)")
                         .font(.system(size: 25, weight: .bold))
                         .foregroundStyle(.white.opacity(0.5))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
 
-                    Text("E\(episode)")
+                    Text("E\(metadata.episode)")
                         .font(.system(size: 25, weight: .bold))
                         .foregroundStyle(.white.opacity(0.5))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
 
-                    if let title = metadata.episodeTitle {
+                    if metadata.hasEpisodeTitle {
                         Text("·")
                             .foregroundStyle(.white.opacity(0.3))
-                        Text(title)
+                        Text(metadata.episodeTitle)
                             .font(.system(size: 30, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.9))
                             .lineLimit(1)
@@ -355,7 +356,7 @@ struct PrePlayView: View {
 
     @ViewBuilder
     private var posterColumn: some View {
-        if let posterUrl = metadata.posterUrl, let url = URL(string: posterUrl) {
+        if metadata.hasPosterURL, let url = URL(string: metadata.posterURL) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):

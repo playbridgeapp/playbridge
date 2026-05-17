@@ -82,10 +82,10 @@ fun LibraryDetailScreen(
     type: String,
     addonRepository: AddonRepository,
     onPlayStream: (url: String, title: String) -> Unit = { _, _ -> },
-    onPlayPayloadToTv: (com.playbridge.shared.protocol.PlayPayload) -> Unit = {},
-    onPlayPlaylistToTv: (com.playbridge.shared.protocol.PlaylistPayload) -> Unit = {},
+    onPlayPayloadToTv: (playbridge.PlayPayload) -> Unit = {},
+    onPlayPlaylistToTv: (playbridge.PlaylistPayload) -> Unit = {},
     onPlayTrailer: ((String) -> Unit)? = null,
-    onQueueAdd: (com.playbridge.shared.protocol.PlayPayload) -> Unit = {},
+    onQueueAdd: (playbridge.PlayPayload) -> Unit = {},
     onNowPlayingStarted: (tmdbId: Int, season: Int, startEpisode: Int) -> Unit = { _, _, _ -> },
     viewModel: LibraryViewModel,
     tvName: String? = null,
@@ -279,10 +279,10 @@ fun LibraryDetailScreen(
     val episodesInSeason = addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList()
 
     /** Helper to build visual metadata for the TV receiver. */
-    fun buildVisualMetadata(episode: StremioVideo?): com.playbridge.shared.protocol.VisualMetadata {
+    fun buildVisualMetadata(episode: StremioVideo?): playbridge.VisualMetadata {
         val currentImdbId = resolvedImdbId
         val currentTmdbId = resolvedTmdbId
-        return com.playbridge.shared.protocol.VisualMetadata(
+        return playbridge.VisualMetadata(
             title = displayTitle,
             year = displayYear,
             rating = displayRating,
@@ -291,19 +291,19 @@ fun LibraryDetailScreen(
             genres = displayGenres,
             cast = displayCast,
             director = displayDirector,
-            backdropUrl = displayBackdrop,
-            posterUrl = addonMeta?.poster,
-            logoUrl = displayLogo,
-            imdbId = currentImdbId,
-            tmdbId = currentTmdbId?.toString(),
+            backdrop_url = displayBackdrop,
+            poster_url = addonMeta?.poster,
+            logo_url = displayLogo,
+            imdb_id = currentImdbId,
+            tmdb_id = currentTmdbId?.toString(),
             season = if (isSeries) selectedSeason else null,
             episode = if (isSeries) episode?.episode else null,
-            episodeTitle = if (isSeries) episode?.title else null
+            episode_title = if (isSeries) episode?.title else null
         )
     }
 
     /** Helper to build Hub URLs for all episodes. */
-    fun buildHubPlaylist(targetEpisode: StremioVideo? = null): com.playbridge.shared.protocol.PlaylistPayload? {
+    fun buildHubPlaylist(targetEpisode: StremioVideo? = null): playbridge.PlaylistPayload? {
         val hub = hubAddon ?: return null
         val videos = addonMeta?.videos
             ?.filter { it.season != null && it.episode != null && it.season > 0 }
@@ -320,12 +320,12 @@ fun LibraryDetailScreen(
                 hub, streamType, streamId, context
             )
 
-            com.playbridge.shared.protocol.PlayPayload(
+            playbridge.PlayPayload(
                 url = hubUrl,
                 title = "$displayTitle S${vid.season}E${vid.episode}${if (vid.title.isNotBlank()) " - ${vid.title}" else ""}",
-                contentType = "series",
-                detectedBy = "library",
-                visualMetadata = buildVisualMetadata(vid)
+                content_type = "series",
+                detected_by = "library",
+                visual_metadata = buildVisualMetadata(vid)
             )
         }
             
@@ -333,10 +333,10 @@ fun LibraryDetailScreen(
             videos.indexOfFirst { it.season == targetEpisode.season && it.episode == targetEpisode.episode }.coerceAtLeast(0)
         } else 0
 
-        return com.playbridge.shared.protocol.PlaylistPayload(
+        return playbridge.PlaylistPayload(
             items = items,
-            startIndex = startIndex,
-            visualMetadata = buildVisualMetadata(null)
+            start_index = startIndex,
+            visual_metadata = buildVisualMetadata(null)
         )
     }
 
@@ -385,12 +385,12 @@ fun LibraryDetailScreen(
                             openInExternalPlayer(context, streamUrl, null, null)
                         } else {
                             // Send to TV with metadata
-                            val payload = com.playbridge.shared.protocol.PlayPayload(
+                            val payload = playbridge.PlayPayload(
                                 url = streamUrl,
                                 title = resTitle,
-                                contentType = if (isSeries) "series" else "movie",
-                                detectedBy = "library",
-                                visualMetadata = buildVisualMetadata(episode)
+                                content_type = if (isSeries) "series" else "movie",
+                                detected_by = "library",
+                                visual_metadata = buildVisualMetadata(episode)
                             )
                             onPlayPayloadToTv(payload)
                         }
@@ -496,12 +496,12 @@ fun LibraryDetailScreen(
                 if (forPhone) {
                     openInExternalPlayer(context, hubUrl, null, null)
                 } else {
-                    onPlayPayloadToTv(com.playbridge.shared.protocol.PlayPayload(
+                    onPlayPayloadToTv(playbridge.PlayPayload(
                         url = hubUrl,
                         title = resTitle,
-                        contentType = "movie",
-                        detectedBy = "library",
-                        visualMetadata = buildVisualMetadata(null)
+                        content_type = "movie",
+                        detected_by = "library",
+                        visual_metadata = buildVisualMetadata(null)
                     ))
                 }
                 return@triggerWatch
@@ -530,12 +530,12 @@ fun LibraryDetailScreen(
                 if (forPhone) {
                     openInExternalPlayer(context, streamUrl, null, null)
                 } else {
-                    val payload = com.playbridge.shared.protocol.PlayPayload(
+                    val payload = playbridge.PlayPayload(
                         url = streamUrl,
                         title = streamPickerTitle,
-                        contentType = if (isSeries) "series" else "movie",
-                        detectedBy = "library",
-                        visualMetadata = buildVisualMetadata(currentEpisodeSelection)
+                        content_type = if (isSeries) "series" else "movie",
+                        detected_by = "library",
+                        visual_metadata = buildVisualMetadata(currentEpisodeSelection)
                     )
                     onPlayPayloadToTv(payload)
                 }

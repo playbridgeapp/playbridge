@@ -241,7 +241,8 @@ class ReceiverServer extends ChangeNotifier {
         channel.sink.add(authResponseJson(success: true));
       case ContextQueryCmd():
         channel.sink.add(contextJson(player.state == 'idle' ? 'idle' : 'player'));
-      case PlayCmd(:final url, :final title, :final headers, :final subtitles):
+      case PlayCmd(:final payload):
+        final url = payload.url;
         final now = DateTime.now();
         if (url == _lastPlayUrl &&
             now.difference(_lastPlayAt) < const Duration(seconds: 2)) {
@@ -252,9 +253,9 @@ class ReceiverServer extends ChangeNotifier {
         _lastPlayAt = now;
         unawaited(player.playUrl(
           url,
-          title: title,
-          headers: headers,
-          subtitles: subtitles,
+          title: payload.titleOrNull,
+          headers: payload.headersOrNull,
+          subtitles: payload.subtitlesOrNull,
           isRemote: true,
         ));
       case PlaylistCmd(:final items, :final startIndex):
@@ -262,9 +263,9 @@ class ReceiverServer extends ChangeNotifier {
           items
               .map((p) => (
                     url: p.url,
-                    title: p.title ?? p.url,
-                    headers: p.headers,
-                    subtitles: p.subtitles,
+                    title: p.titleOrNull ?? p.url,
+                    headers: p.headersOrNull,
+                    subtitles: p.subtitlesOrNull,
                   ))
               .toList(),
           startIndex,
@@ -278,9 +279,9 @@ class ReceiverServer extends ChangeNotifier {
         if (player.queue.isEmpty) {
           unawaited(player.playUrl(
             item.url,
-            title: item.title,
-            headers: item.headers,
-            subtitles: item.subtitles,
+            title: item.titleOrNull,
+            headers: item.headersOrNull,
+            subtitles: item.subtitlesOrNull,
             isRemote: true,
           ));
         }

@@ -1,6 +1,6 @@
 package com.playbridge.shared.player
 
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 
 /**
  * UI state machine for the player screen.

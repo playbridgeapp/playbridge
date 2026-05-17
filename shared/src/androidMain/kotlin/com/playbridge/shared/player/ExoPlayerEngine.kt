@@ -21,7 +21,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import java.util.concurrent.TimeUnit
 import com.playbridge.shared.logging.logger
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -93,7 +93,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         var finalUrl = payload.url
         val requestProperties = HashMap<String, String>()
         
-        payload.headers?.forEach { (key, value) ->
+        payload.headers.forEach { (key, value) ->
             if (!key.equals("Range", ignoreCase = true) && !key.equals("Accept-Encoding", ignoreCase = true)) {
                 requestProperties[key] = value
             }
@@ -135,7 +135,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             }
         }
 
-        val userAgent = payload.headers?.get("User-Agent")
+        val userAgent = payload.headers["User-Agent"]
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, ignoreCase = true) Chrome/120.0.0.0 Safari/537.36"
         requestProperties["User-Agent"] = userAgent
 
@@ -177,10 +177,10 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         // Determine which network stack to use: 
         // 1. Browser-captured streams (detectedBy is not null) use the legacy DefaultHttpDataSource for live stream compatibility.
         // 2. Direct Hub/Debrid streams use OkHttp with IPv4-First DNS for performance.
-        val isBrowserStream = !payload.detectedBy.isNullOrEmpty()
+        val isBrowserStream = !payload.detected_by.isNullOrEmpty()
 
         val httpDataSourceFactory = if (isBrowserStream) {
-            logger.i(TAG, "Using Legacy Network Stack (DefaultHttpDataSource) for browser-captured stream: ${payload.detectedBy}")
+            logger.i(TAG, "Using Legacy Network Stack (DefaultHttpDataSource) for browser-captured stream: ${payload.detected_by}")
             DefaultHttpDataSource.Factory()
                 .setUserAgent(userAgent)
                 .setDefaultRequestProperties(requestProperties)
@@ -213,17 +213,17 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 .setExceedVideoConstraintsIfNecessary(true)
                 .setExceedRendererCapabilitiesIfNecessary(true)
 
-            payload.preferredAudioLanguage?.let {
+            payload.preferred_audio_language?.let {
                 logger.i(TAG, "Applying preferred audio language: $it")
                 params.setPreferredAudioLanguage(it)
             }
-            payload.preferredSubtitleLanguage?.let {
+            payload.preferred_subtitle_language?.let {
                 logger.i(TAG, "Applying preferred subtitle language: $it")
                 params.setPreferredTextLanguage(it)
                 params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             }
 
-            payload.defaultVideoQuality?.let { quality ->
+            payload.default_video_quality?.let { quality ->
                 val (maxW, maxH) = when (quality.lowercase()) {
                     "720p"        -> 1280 to 720
                     "1080p"       -> 1920 to 1080
@@ -236,7 +236,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 }
             }
 
-            payload.maxBitrateCapMbps?.let { cap ->
+            payload.max_bitrate_cap_mbps?.let { cap ->
                 val capBps = (cap * 1_000_000).toInt()
                 logger.i(TAG, "Applying max bitrate cap: $cap Mbps -> $capBps bps")
                 params.setMaxVideoBitrate(capBps)
@@ -251,14 +251,14 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         }
 
         // 3. Media Source Factory
-        val isHls = (payload.detectedBy == "body_content_m3u8") ||
-                    (payload.detectedBy == "url_pattern_m3u8") ||
-                    (payload.contentType == "application/vnd.apple.mpegurl") ||
-                    (payload.contentType == "application/x-mpegurl") ||
-                    (payload.contentType == MimeTypes.APPLICATION_M3U8) ||
-                    (payload.contentType.isNullOrEmpty() && (payload.url.contains(".m3u8") || payload.url.contains(".jpg")))
+        val isHls = (payload.detected_by == "body_content_m3u8") ||
+                    (payload.detected_by == "url_pattern_m3u8") ||
+                    (payload.content_type == "application/vnd.apple.mpegurl") ||
+                    (payload.content_type == "application/x-mpegurl") ||
+                    (payload.content_type == MimeTypes.APPLICATION_M3U8) ||
+                    (payload.content_type.isNullOrEmpty() && (payload.url.contains(".m3u8") || payload.url.contains(".jpg")))
 
-        logger.i(TAG, "Content detection: isHls=$isHls (detectedBy=${payload.detectedBy}, contentType=${payload.contentType})")
+        logger.i(TAG, "Content detection: isHls=$isHls (detectedBy=${payload.detected_by}, contentType=${payload.content_type})")
 
         val mediaSourceFactory = if (isHls) {
             logger.i(TAG, "Using HlsMediaSource.Factory")
@@ -293,8 +293,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 }
                 if (isHls) {
                     builder.setMimeType(MimeTypes.APPLICATION_M3U8)
-                } else if (!payload.contentType.isNullOrEmpty()) {
-                    builder.setMimeType(payload.contentType)
+                } else if (!payload.content_type.isNullOrEmpty()) {
+                    builder.setMimeType(payload.content_type)
                 }
 
                 val mediaItem = builder.build()

@@ -44,7 +44,9 @@ object MousePacket {
         return result
     }
 
-    fun unpack(bytes: ByteArray): Command.Mouse? {
+    data class Unpacked(val event: String, val dx: Float, val dy: Float)
+
+    fun unpack(bytes: ByteArray): Unpacked? {
         if (bytes.size < 9) return null
 
         val type = bytes[0]
@@ -57,20 +59,18 @@ object MousePacket {
             else -> "move"
         }
 
-        // Unpack DX
         val xBits = ((bytes[1].toInt() and 0xFF) shl 24) or
                     ((bytes[2].toInt() and 0xFF) shl 16) or
                     ((bytes[3].toInt() and 0xFF) shl 8) or
                     (bytes[4].toInt() and 0xFF)
         val dx = Float.fromBits(xBits)
 
-        // Unpack DY
         val yBits = ((bytes[5].toInt() and 0xFF) shl 24) or
                     ((bytes[6].toInt() and 0xFF) shl 16) or
                     ((bytes[7].toInt() and 0xFF) shl 8) or
                     (bytes[8].toInt() and 0xFF)
         val dy = Float.fromBits(yBits)
 
-        return Command.Mouse(event, dx, dy)
+        return Unpacked(event, dx, dy)
     }
 }

@@ -242,7 +242,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     private var currentHeaders: Map<String, String>? = null
 
     // Playlist state
-    private var playlistItems: MutableList<com.playbridge.shared.protocol.PlayPayload> = mutableListOf()
+    private var playlistItems: MutableList<playbridge.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
 
     // Preferred language selections — persisted across stream switches and app restarts
@@ -812,7 +812,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
 
 
-    private fun playPlaylistItem(item: com.playbridge.shared.protocol.PlayPayload) {
+    private fun playPlaylistItem(item: playbridge.PlayPayload) {
         isLoadingNewStream = true
         syncSelectionsToProgressManager()
         progressManager.saveProgress()
@@ -825,17 +825,18 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         )
         
         originalM3u8Url = item.url
-        currentHeaders = item.headers
-        subtitleUrls = item.subtitles ?: emptyList()
+        val itemHeaders = item.headers.takeIf { it.isNotEmpty() }
+        currentHeaders = itemHeaders
+        subtitleUrls = item.subtitles
         currentSubtitleUrl = null
 
         if (item.url.contains(".m3u8", ignoreCase = true)) {
             lifecycleScope.launch {
-                M3uParser.parseMasterPlaylist(item.url, item.headers)
-                playVideo(item.url, item.headers)
+                M3uParser.parseMasterPlaylist(item.url, itemHeaders)
+                playVideo(item.url, itemHeaders)
             }
         } else {
-            playVideo(item.url, item.headers)
+            playVideo(item.url, itemHeaders)
         }
     }
 
@@ -991,15 +992,16 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         val firstItem = parsedPlaylist[0]
                         runOnUiThread { controlsViewModel.setTitle(firstItem.title ?: title ?: "") }
                         originalM3u8Url = firstItem.url
-                        currentHeaders = firstItem.headers
-                        subtitleUrls = firstItem.subtitles ?: emptyList()
+                        val firstHeaders = firstItem.headers.takeIf { it.isNotEmpty() }
+                        currentHeaders = firstHeaders
+                        subtitleUrls = firstItem.subtitles
                         currentSubtitleUrl = null
 
                         if (firstItem.url.contains(".m3u8", ignoreCase = true)) {
-                            M3uParser.parseMasterPlaylist(firstItem.url, firstItem.headers)
+                            M3uParser.parseMasterPlaylist(firstItem.url, firstHeaders)
                         }
                         // Continue playback with the first item from the playlist
-                        playVideoInternal(firstItem.url, firstItem.headers, resumeTime, startPaused, subtitles = firstItem.subtitles?.let { ArrayList(it) })
+                        playVideoInternal(firstItem.url, firstHeaders, resumeTime, startPaused, subtitles = firstItem.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) })
                         return@launch
                     }
                 } catch (e: Exception) {
@@ -1022,10 +1024,8 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         if (playlistItems.isEmpty() && historyItem?.playlistJson != null) {
             try {
-                val decoded = com.playbridge.shared.protocol.protocolJson.decodeFromString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
-                    historyItem.playlistJson!!
-                )
+                val decoded = com.playbridge.shared.protocol.decodePlayPayloadListJson(historyItem.playlistJson!!)
+                    ?: emptyList()
                 if (decoded.isNotEmpty()) {
                     playlistItems = decoded.toMutableList()
                     playlistIndex = historyItem.playlistIndex
@@ -1040,10 +1040,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         // Build playlist JSON for history persistence
         val plistJson = if (playlistItems.isNotEmpty()) {
             try {
-                com.playbridge.shared.protocol.protocolJson.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
-                    playlistItems
-                )
+                com.playbridge.shared.protocol.encodePlayPayloadListJson(playlistItems)
             } catch (e: Exception) {
                 null
             }
@@ -1074,9 +1071,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         val startPos = intent?.getLongExtra(ServerService.EXTRA_START_POSITION, -1L) ?: -1L
         val finalResumeTime = if (startPos > 0L) startPos else (resumeTime ?: historyItem?.position)
 
-        val payload = com.playbridge.shared.protocol.PlayPayload(
+        val payload = playbridge.PlayPayload(
             url = url,
-            headers = headers
+            headers = headers ?: emptyMap()
         )
 
         // Recreate setup to ensure a clean native state and avoid resource race conditions

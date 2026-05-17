@@ -133,7 +133,7 @@ class ExoPlayerActivity : PlayerActivity() {
     private var subtitleUrls: List<String> = emptyList()
 
     // Playlist queue for auto-advancing through episodes
-    private var playlistItems: MutableList<com.playbridge.shared.protocol.PlayPayload> = mutableListOf()
+    private var playlistItems: MutableList<playbridge.PlayPayload> = mutableListOf()
     private var playlistIndex: Int = 0
     private var lastVolume: Float = 1.0f
     private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
@@ -627,10 +627,10 @@ class ExoPlayerActivity : PlayerActivity() {
                     startPlayback(
                         firstItem.url,
                         displayTitle,
-                        firstItem.contentType,
-                        firstItem.detectedBy,
-                        firstItem.headers,
-                        firstItem.subtitles?.let { ArrayList(it) }
+                        firstItem.content_type,
+                        firstItem.detected_by,
+                        firstItem.headers.takeIf { it.isNotEmpty() },
+                        firstItem.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) }
                     )
                     return@launch
                 }
@@ -662,10 +662,7 @@ class ExoPlayerActivity : PlayerActivity() {
         // Build playlist JSON for history persistence
         val plistJson = if (playlistItems.isNotEmpty()) {
             try {
-                com.playbridge.shared.protocol.protocolJson.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
-                    playlistItems
-                )
+                com.playbridge.shared.protocol.encodePlayPayloadListJson(playlistItems)
             } catch (e: Exception) { null }
         } else null
 
@@ -675,17 +672,17 @@ class ExoPlayerActivity : PlayerActivity() {
         progressManager.setCurrentMedia(url, title, contentType, intentHeaders, plistJson, playlistIndex)
         controlsViewModel.setTitle(title ?: "")
 
-        val payload = com.playbridge.shared.protocol.PlayPayload(
+        val payload = playbridge.PlayPayload(
             url = url,
             title = title,
-            headers = intentHeaders,
-            contentType = contentType,
-            detectedBy = detectedBy,
-            subtitles = subtitles,
-            preferredAudioLanguage = preferredAudioLanguage,
-            preferredSubtitleLanguage = preferredSubtitleLanguage,
-            defaultVideoQuality = defaultVideoQuality,
-            maxBitrateCapMbps = maxBitrateCapMbps
+            headers = intentHeaders ?: emptyMap(),
+            content_type = contentType,
+            detected_by = detectedBy,
+            subtitles = subtitles ?: emptyList(),
+            preferred_audio_language = preferredAudioLanguage,
+            preferred_subtitle_language = preferredSubtitleLanguage,
+            default_video_quality = defaultVideoQuality,
+            max_bitrate_cap_mbps = maxBitrateCapMbps
         )
 
         lifecycleScope.launch {
@@ -1129,10 +1126,10 @@ class ExoPlayerActivity : PlayerActivity() {
             playVideo(
                 url = item.url,
                 title = title,
-                contentType = item.contentType,
-                detectedBy = item.detectedBy,
-                intentHeaders = item.headers,
-                subtitles = item.subtitles?.let { ArrayList(it) }
+                contentType = item.content_type,
+                detectedBy = item.detected_by,
+                intentHeaders = item.headers.takeIf { it.isNotEmpty() },
+                subtitles = item.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) }
             )
             videoFilterManager.reapplyFilter()
             controlsViewModel.hideControls()
@@ -1185,10 +1182,10 @@ class ExoPlayerActivity : PlayerActivity() {
             playVideo(
                 url = prevItem.url,
                 title = title,
-                contentType = prevItem.contentType,
-                detectedBy = prevItem.detectedBy,
-                intentHeaders = prevItem.headers,
-                subtitles = prevItem.subtitles?.let { ArrayList(it) }
+                contentType = prevItem.content_type,
+                detectedBy = prevItem.detected_by,
+                intentHeaders = prevItem.headers.takeIf { it.isNotEmpty() },
+                subtitles = prevItem.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) }
             )
             videoFilterManager.reapplyFilter()
             controlsViewModel.hideControls()
@@ -1272,10 +1269,10 @@ class ExoPlayerActivity : PlayerActivity() {
             playVideo(
                 url = nextItem.url,
                 title = title,
-                contentType = nextItem.contentType,
-                detectedBy = nextItem.detectedBy,
-                intentHeaders = nextItem.headers,
-                subtitles = nextItem.subtitles?.let { ArrayList(it) }
+                contentType = nextItem.content_type,
+                detectedBy = nextItem.detected_by,
+                intentHeaders = nextItem.headers.takeIf { it.isNotEmpty() },
+                subtitles = nextItem.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) }
             )
             videoFilterManager.reapplyFilter()
             controlsViewModel.hideControls()
@@ -1326,7 +1323,7 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun showPlaylistOverlay() {
-        val displayItems: List<com.playbridge.shared.protocol.PlayPayload>
+        val displayItems: List<playbridge.PlayPayload>
         val displayIndex: Int
 
         if (playlistItems.isNotEmpty()) {

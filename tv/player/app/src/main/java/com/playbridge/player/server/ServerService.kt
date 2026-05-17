@@ -14,9 +14,8 @@ import com.playbridge.player.logging.FileLogger
 import androidx.core.app.NotificationCompat
 import com.playbridge.player.MainActivity
 import com.playbridge.player.R
-import com.playbridge.shared.protocol.Command
+import com.playbridge.shared.protocol.IncomingMessage
 import com.playbridge.shared.protocol.createContextJson
-import com.playbridge.shared.protocol.protocolJson
 import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.model.PairedDevice
 import kotlinx.coroutines.*
@@ -24,7 +23,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.serialization.encodeToString
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import okhttp3.Request
@@ -186,7 +184,7 @@ class ServerService : Service() {
             val ip = getLocalIpAddress(applicationContext) ?: "unknown"
 
             bluetoothServer = BluetoothServer(applicationContext) { command ->
-                handleCommand(command)
+                handleMessage(command)
             }.also { server ->
                 server.start()
             }
@@ -261,7 +259,7 @@ class ServerService : Service() {
                 launch {
                     server.commands.collect { command ->
                         try {
-                            handleCommand(command)
+                            handleMessage(command)
                         } catch (e: Exception) {
                             FileLogger.e(TAG, "commands collector crashed on command", e)
                         }
@@ -315,15 +313,16 @@ class ServerService : Service() {
         }
     }
 
-    private fun handleCommand(command: Command) {
-        if (command !is Command.Mouse) {
-            FileLogger.i(TAG, "=== COMMAND RECEIVED ===")
-            FileLogger.i(TAG, "Command type: ${command.javaClass.simpleName}")
+    private fun handleMessage(msg: IncomingMessage) {
+        if (msg !is IncomingMessage.Mouse) {
+            FileLogger.i(TAG, "=== MESSAGE RECEIVED ===")
+            FileLogger.i(TAG, "Message type: ${msg.javaClass.simpleName}")
         }
 
-        when (command) {
-            is Command.Play -> {
+        when (msg) {
+            is IncomingMessage.Play -> {
                 FileLogger.i(TAG, "=== PLAY COMMAND ===")
+                val payload = msg.payload
 
                 com.playbridge.player.player.PlaylistStore.currentPlaylist = null
 
@@ -335,7 +334,7 @@ class ServerService : Service() {
                 }
 
                 val finalMode = if (tvPref == "phone") {
-                    val phoneMode = command.playerMode
+                    val phoneMode = payload.player_mode
                     if (phoneMode != null && phoneMode != "tv") {
                         phoneMode
                     } else {
@@ -356,10 +355,10 @@ class ServerService : Service() {
                     // MPV. Serving them via the local HTTP server guarantees MPV can access them
                     // regardless of auth, redirects, or SSL quirks on the original URL.
                     scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        val subs = command.subtitles
-                        val localSubUrls = if (!subs.isNullOrEmpty()) {
+                        val subs = payload.subtitles
+                        val localSubUrls = if (subs.isNotEmpty()) {
                             val serverPort = _serverInfo.value?.port
-                            val localFiles = downloadSubtitlesToCache(subs, command.headers)
+                            val localFiles = downloadSubtitlesToCache(subs, payload.headers)
                             if (localFiles.isNotEmpty() && serverPort != null) {
                                 localFiles.map { "http://127.0.0.1:$serverPort/subtitle/${it.name}" }
                             } else subs // fallback to original URLs if download failed
@@ -367,9 +366,9 @@ class ServerService : Service() {
 
                         val intent = Intent(Intent.ACTION_VIEW).apply {
                             setClassName("is.xyz.mpv", "is.xyz.mpv.MPVActivity")
-                            data = android.net.Uri.parse(command.url)
+                            data = android.net.Uri.parse(payload.url)
 
-                            command.title?.let { title ->
+                            payload.title?.let { title ->
                                 putExtra(Intent.EXTRA_TITLE, title)
                                 putExtra("title", title)
                             }
@@ -380,8 +379,8 @@ class ServerService : Service() {
                                 putExtra("sub-files", localSubUrls.joinToString("\n"))
                             }
 
-                            val hdrs = command.headers
-                            if (!hdrs.isNullOrEmpty()) {
+                            val hdrs = payload.headers
+                            if (hdrs.isNotEmpty()) {
                                 val headersStr = hdrs.map { (key, value) ->
                                     val escapedValue = value.replace(",", "\\,")
                                     "$key: $escapedValue"
@@ -401,25 +400,25 @@ class ServerService : Service() {
                     val intent = Intent(Intent.ACTION_VIEW).apply {
                         // Force a generic video/* mime type so that all video players show up in the chooser,
                         // rather than just the ones explicitly registering for strict mime types like application/x-mpegURL
-                        setDataAndType(android.net.Uri.parse(command.url), "video/*")
+                        setDataAndType(android.net.Uri.parse(payload.url), "video/*")
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
                         // Pass title to external player (many players read this specifically)
-                        command.title?.let { title ->
+                        payload.title?.let { title ->
                             putExtra(Intent.EXTRA_TITLE, title)
                             // MX Player specific title extra
                             putExtra("title", title)
                         }
 
                         // Pass headers to external player if supported
-                        command.headers?.let { headersMap ->
+                        if (payload.headers.isNotEmpty()) {
                             val bundle = android.os.Bundle()
-                            headersMap.forEach { (key, value) ->
+                            payload.headers.forEach { (key, value) ->
                                 bundle.putString(key, value)
                             }
                             putExtra(android.provider.Browser.EXTRA_HEADERS, bundle)
                             // MX Player specific headers array
-                            val headersArray = headersMap.flatMap { listOf(it.key, it.value) }.toTypedArray()
+                            val headersArray = payload.headers.flatMap { listOf(it.key, it.value) }.toTypedArray()
                             putExtra("headers", headersArray)
                         }
                     }
@@ -438,36 +437,32 @@ class ServerService : Service() {
                     }
 
                     val playerIntent = Intent(this, activityClass).apply {
-                        putExtra(EXTRA_URL, command.url)
-                        putExtra(EXTRA_TITLE, command.title)
-                        putExtra(EXTRA_CONTENT_TYPE, command.contentType)
-                        command.detectedBy?.let { detectedBy ->
+                        putExtra(EXTRA_URL, payload.url)
+                        putExtra(EXTRA_TITLE, payload.title)
+                        putExtra(EXTRA_CONTENT_TYPE, payload.content_type)
+                        payload.detected_by?.let { detectedBy ->
                             putExtra(EXTRA_DETECTED_BY, detectedBy)
                         }
-                        command.subtitles?.let { subtitles ->
-                            putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(subtitles))
+                        if (payload.subtitles.isNotEmpty()) {
+                            putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(payload.subtitles))
                         }
-                        command.headers?.let { headers ->
-                            putExtra(EXTRA_HEADERS, HashMap(headers))
+                        if (payload.headers.isNotEmpty()) {
+                            putExtra(EXTRA_HEADERS, HashMap(payload.headers))
                         }
-                        command.preferredAudioLanguage?.let { lang ->
+                        payload.preferred_audio_language?.let { lang ->
                             putExtra(EXTRA_PREFERRED_AUDIO_LANG, lang)
                         }
-                        command.preferredSubtitleLanguage?.let { lang ->
+                        payload.preferred_subtitle_language?.let { lang ->
                             putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, lang)
                         }
-                        command.defaultVideoQuality?.let { quality ->
+                        payload.default_video_quality?.let { quality ->
                             putExtra("default_video_quality", quality)
                         }
-                        command.maxBitrateCapMbps?.let { cap ->
+                        payload.max_bitrate_cap_mbps?.let { cap ->
                             putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, cap)
                         }
-                        command.visualMetadata?.let { visualMetadata ->
-                            val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
-                                com.playbridge.shared.protocol.VisualMetadata.serializer(),
-                                visualMetadata
-                            )
-                            putExtra(EXTRA_VISUAL_METADATA, json)
+                        payload.visual_metadata?.let { visualMetadata ->
+                            putExtra(EXTRA_VISUAL_METADATA, visualMetadata.encode())
                         }
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                     }
@@ -475,53 +470,52 @@ class ServerService : Service() {
                 }
             }
 
-            is Command.Browser -> {
-                FileLogger.i(TAG, "Browser command: ${command.url}")
+            is IncomingMessage.Browser -> {
+                FileLogger.i(TAG, "Browser command: ${msg.payload.url}")
                 activeContext = "browser"
                 broadcastContext()
                 val browserIntent = Intent("com.playbridge.player.ACTION_BROWSER").apply {
-                    putExtra("extra_url", command.url)
-                    putExtra("extra_browser_mode", command.browserMode)
-                    putExtra("extra_desktop_mode", command.desktopMode ?: false)
+                    putExtra("extra_url", msg.payload.url)
+                    putExtra("extra_browser_mode", msg.payload.browser_mode)
+                    putExtra("extra_desktop_mode", msg.payload.desktop_mode ?: false)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
                 launchActivityFromBackground(browserIntent, "Opening browser")
             }
-            is Command.Control -> {
-                FileLogger.i(TAG, "Control command: ${command.command}")
-                if (command.command == "stop") {
+            is IncomingMessage.Control -> {
+                FileLogger.i(TAG, "Control command: ${msg.payload.command}")
+                if (msg.payload.command == "stop") {
                     activeContext = "idle"
                     broadcastContext()
                 }
                 val intent = Intent(ACTION_CONTROL).apply {
-                    putExtra(EXTRA_COMMAND, command.command)
+                    putExtra(EXTRA_COMMAND, msg.payload.command)
                     setPackage(packageName)
                 }
                 sendBroadcast(intent)
             }
-            is Command.Remote -> {
-                FileLogger.i(TAG, "Remote command: ${command.key}")
+            is IncomingMessage.Remote -> {
+                FileLogger.i(TAG, "Remote command: ${msg.payload.key}")
                 val intent = Intent(ACTION_REMOTE).apply {
-                    putExtra(EXTRA_REMOTE_KEY, command.key)
+                    putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
                     setPackage(packageName)
                 }
                 sendBroadcast(intent)
                 // Also broadcast to browser app
                 val browserIntent = Intent(ACTION_REMOTE).apply {
-                    putExtra(EXTRA_REMOTE_KEY, command.key)
+                    putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
                     setPackage("com.playbridge.browser")
                 }
                 sendBroadcast(browserIntent)
             }
-            is Command.Mouse -> {
-                // Log.i(TAG, "Mouse command: ${command.event} (${command.dx}, ${command.dy})")
+            is IncomingMessage.Mouse -> {
                 val intent = Intent(ACTION_MOUSE).apply {
-                    putExtra(EXTRA_MOUSE_EVENT, command.event)
-                    putExtra(EXTRA_MOUSE_DX, command.dx)
-                    putExtra(EXTRA_MOUSE_DY, command.dy)
+                    putExtra(EXTRA_MOUSE_EVENT, msg.payload.event)
+                    putExtra(EXTRA_MOUSE_DX, msg.payload.dx)
+                    putExtra(EXTRA_MOUSE_DY, msg.payload.dy)
                 }
-                
-                // Only broadcast mouse events to the active context to reduce IPC overhead 
+
+                // Only broadcast mouse events to the active context to reduce IPC overhead
                 // and avoid waking up background apps unnecessarily.
                 when (activeContext) {
                     "browser" -> {
@@ -536,42 +530,42 @@ class ServerService : Service() {
                         // Fallback: send to both if context is unknown or idle
                         intent.setPackage(packageName)
                         sendBroadcast(intent)
-                        
+
                         val browserIntent = Intent(intent).setPackage("com.playbridge.browser")
                         sendBroadcast(browserIntent)
                     }
                 }
             }
-            is Command.BrowserControl -> {
-                FileLogger.i(TAG, "Browser control: ${command.action}")
+            is IncomingMessage.BrowserControl -> {
+                FileLogger.i(TAG, "Browser control: ${msg.payload.action}")
                 val intent = Intent(ACTION_BROWSER_CONTROL).apply {
-                    putExtra(EXTRA_BROWSER_ACTION, command.action)
+                    putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
                     setPackage(packageName)
                 }
                 sendBroadcast(intent)
                 // Also broadcast to browser app
                 val browserIntent = Intent(ACTION_BROWSER_CONTROL).apply {
-                    putExtra(EXTRA_BROWSER_ACTION, command.action)
+                    putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
                     setPackage("com.playbridge.browser")
                 }
                 sendBroadcast(browserIntent)
             }
-            is Command.ContextQuery -> {
+            is IncomingMessage.ContextQuery -> {
                 FileLogger.i(TAG, "Context query - responding with: $activeContext")
                 scope.launch {
                     webSocketServer?.broadcastStatus(createContextJson(activeContext))
                 }
             }
-            is Command.Playlist -> {
-                FileLogger.i(TAG, "=== PLAYLIST COMMAND === (${command.items.size} items, startIndex: ${command.startIndex})")
+            is IncomingMessage.Playlist -> {
+                val payload = msg.payload
+                FileLogger.i(TAG, "=== PLAYLIST COMMAND === (${payload.items.size} items, startIndex: ${payload.start_index})")
 
-                // Serialize playlist items as JSON for the intent
-                com.playbridge.player.player.PlaylistStore.currentPlaylist = command.items
+                com.playbridge.player.player.PlaylistStore.currentPlaylist = payload.items
 
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
                 val playlistMode = if (tvPref == "phone") {
-                    val phoneMode = command.items.firstOrNull()?.playerMode
+                    val phoneMode = payload.items.firstOrNull()?.player_mode
                     if (phoneMode != null && phoneMode != "tv") phoneMode else "internal"
                 } else {
                     tvPref
@@ -587,64 +581,62 @@ class ServerService : Service() {
                 }
 
                 val playerIntent = Intent(this, activityClass).apply {
-                    // Start with the first item (or startIndex)
-                    val firstItem = command.items.getOrNull(command.startIndex) ?: command.items.firstOrNull()
+                    val firstItem = payload.items.getOrNull(payload.start_index) ?: payload.items.firstOrNull()
                     if (firstItem != null) {
                         putExtra(EXTRA_URL, firstItem.url)
                         putExtra(EXTRA_TITLE, firstItem.title)
-                        putExtra(EXTRA_CONTENT_TYPE, firstItem.contentType)
-                        if (firstItem.preferredAudioLanguage != null) {
-                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, firstItem.preferredAudioLanguage)
+                        putExtra(EXTRA_CONTENT_TYPE, firstItem.content_type)
+                        if (firstItem.preferred_audio_language != null) {
+                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, firstItem.preferred_audio_language)
                         }
-                        if (firstItem.preferredSubtitleLanguage != null) {
-                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, firstItem.preferredSubtitleLanguage)
+                        if (firstItem.preferred_subtitle_language != null) {
+                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, firstItem.preferred_subtitle_language)
                         }
-                        if (firstItem.defaultVideoQuality != null) {
-                            putExtra("default_video_quality", firstItem.defaultVideoQuality)
+                        if (firstItem.default_video_quality != null) {
+                            putExtra("default_video_quality", firstItem.default_video_quality)
                         }
-                        if (firstItem.maxBitrateCapMbps != null) {
-                            putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, firstItem.maxBitrateCapMbps)
+                        if (firstItem.max_bitrate_cap_mbps != null) {
+                            putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, firstItem.max_bitrate_cap_mbps)
                         }
                     }
                     putExtra(EXTRA_IS_PLAYLIST, true)
-                    putExtra(EXTRA_PLAYLIST_INDEX, command.startIndex)
-                    
-                    command.visualMetadata?.let { visualMetadata ->
-                        val json = com.playbridge.shared.protocol.protocolJson.encodeToString(
-                            com.playbridge.shared.protocol.VisualMetadata.serializer(),
-                            visualMetadata
-                        )
-                        putExtra(EXTRA_VISUAL_METADATA, json)
+                    putExtra(EXTRA_PLAYLIST_INDEX, payload.start_index)
+
+                    payload.visual_metadata?.let { visualMetadata ->
+                        putExtra(EXTRA_VISUAL_METADATA, visualMetadata.encode())
                     }
-                    
+
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
                 pendingQueueItems.clear() // discard any stale items from a previous session
-                launchActivityFromBackground(playerIntent, "Playing playlist (${command.items.size} items)")
+                launchActivityFromBackground(playerIntent, "Playing playlist (${payload.items.size} items)")
             }
-            is Command.QueueAdd -> {
-                FileLogger.i(TAG, "=== QUEUE_ADD === title: ${command.item.title}")
-                // Buffer the item so the player can drain it even if its receiver isn't registered yet.
-                // The broadcast acts only as a wake signal — the player always reads from pendingQueueItems.
-                pendingQueueItems.add(command.item)
-                sendBroadcast(Intent(ACTION_QUEUE_ADD).setPackage(packageName))
+            is IncomingMessage.QueueAdd -> {
+                val item = msg.payload.item
+                FileLogger.i(TAG, "=== QUEUE_ADD === title: ${item?.title}")
+                if (item != null) {
+                    // Buffer the item so the player can drain it even if its receiver isn't registered yet.
+                    // The broadcast acts only as a wake signal — the player always reads from pendingQueueItems.
+                    pendingQueueItems.add(item)
+                    sendBroadcast(Intent(ACTION_QUEUE_ADD).setPackage(packageName))
+                }
             }
-            is Command.PlaylistJump -> {
-                FileLogger.i(TAG, "=== PLAYLIST_JUMP === index: ${command.index}")
+            is IncomingMessage.PlaylistJump -> {
+                FileLogger.i(TAG, "=== PLAYLIST_JUMP === index: ${msg.payload.index}")
                 val intent = Intent(ACTION_PLAYLIST_JUMP).apply {
-                    putExtra(EXTRA_PLAYLIST_JUMP_INDEX, command.index)
+                    putExtra(EXTRA_PLAYLIST_JUMP_INDEX, msg.payload.index)
                     setPackage(packageName)
                 }
                 sendBroadcast(intent)
             }
-            is Command.Ping -> {
+            is IncomingMessage.Ping -> {
                 // Handled by WebSocketServer
             }
-            is Command.PairingRequest, is Command.PairingApproved, is Command.PairingDenied -> {
+            is IncomingMessage.PairingRequest, is IncomingMessage.Auth -> {
                 // Handled inside WebSocketServer's auth loop — should never reach here.
             }
-            is Command.Unknown -> {
-                FileLogger.w(TAG, "Unknown command: ${command.type}. Raw JSON: ${command.rawJson}")
+            is IncomingMessage.Unknown -> {
+                FileLogger.w(TAG, "Unknown message: ${msg.type}. Raw: ${msg.raw}")
             }
         }
     }
@@ -975,13 +967,13 @@ class ServerService : Service() {
          * Items buffered here when queue_add arrives before the player's receiver is registered.
          * The player drains this after registering, and on each ACTION_QUEUE_ADD broadcast.
          */
-        val pendingQueueItems = java.util.concurrent.ConcurrentLinkedQueue<com.playbridge.shared.protocol.PlayPayload>()
+        val pendingQueueItems = java.util.concurrent.ConcurrentLinkedQueue<playbridge.PlayPayload>()
 
         /**
          * Atomically drain and return all pending queue items.
          */
-        fun drainPendingQueueItems(): List<com.playbridge.shared.protocol.PlayPayload> {
-            val items = mutableListOf<com.playbridge.shared.protocol.PlayPayload>()
+        fun drainPendingQueueItems(): List<playbridge.PlayPayload> {
+            val items = mutableListOf<playbridge.PlayPayload>()
             while (true) items.add(pendingQueueItems.poll() ?: break)
             return items
         }

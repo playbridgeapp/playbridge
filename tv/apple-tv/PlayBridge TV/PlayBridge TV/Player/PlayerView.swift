@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct PlayerView: View {
-    let request: PlayRequest
+    let payload: Playbridge_PlayPayload
     let onDismiss: () -> Void
     @EnvironmentObject var historyStore: HistoryStore
     @EnvironmentObject var playlistStore: PlaylistStore
@@ -10,8 +10,8 @@ struct PlayerView: View {
     @State private var showPlaylist: Bool = false
     let isPreBuffering: Bool
 
-    init(request: PlayRequest, isPreBuffering: Bool, onDismiss: @escaping () -> Void) {
-        self.request = request
+    init(payload: Playbridge_PlayPayload, isPreBuffering: Bool, onDismiss: @escaping () -> Void) {
+        self.payload = payload
         self.isPreBuffering = isPreBuffering
         self.onDismiss = onDismiss
     }
@@ -23,19 +23,19 @@ struct PlayerView: View {
         resumeTime = currentTime
         preferredPlayer = preferredPlayer == "vlc" ? "avplayer" : "vlc"
     }
-    
+
     private func handleNext() {
-        if let nextRequest = playlistStore.next() {
-            historyStore.addToHistory(url: nextRequest.url, title: nextRequest.title, headers: nextRequest.headers)
+        if let nextRequest = playlistStore.next(), let nextURL = nextRequest.validURL {
+            historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil)
             resumeTime = 0
         } else {
             onDismiss()
         }
     }
-    
+
     private func handleJump(to index: Int) {
-        if let jumpRequest = playlistStore.jumpTo(index: index) {
-            historyStore.addToHistory(url: jumpRequest.url, title: jumpRequest.title, headers: jumpRequest.headers)
+        if let jumpRequest = playlistStore.jumpTo(index: index), let jumpURL = jumpRequest.validURL {
+            historyStore.addToHistory(url: jumpURL, title: jumpRequest.titleOrNil, headers: jumpRequest.headersOrNil)
             resumeTime = 0
             withAnimation { showPlaylist = false }
         }
@@ -45,36 +45,44 @@ struct PlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            let currentRequest = playlistStore.currentItem ?? request
-            let _ = print("PlayerView: Rendering with URL: \(currentRequest.url)")
-            if preferredPlayer == "vlc" {
-                VLCPlayerView(
-                    url: currentRequest.url,
-                    headers: currentRequest.headers,
-                    subtitles: currentRequest.subtitles,
-                    initialTime: resumeTime,
-                    isPreBuffering: isPreBuffering,
-                    onDismiss: handleNext,  // end-of-video → try next item
-                    onExit: onDismiss,      // back button → always go home
-                    onSwitch: handleSwitch
-                )
-                .ignoresSafeArea()
-                .focused($isPlayerFocused)
-                .id(currentRequest.url)
+            let currentRequest = playlistStore.currentItem ?? payload
+            if let currentURL = currentRequest.validURL {
+                let _ = print("PlayerView: Rendering with URL: \(currentURL)")
+                if preferredPlayer == "vlc" {
+                    VLCPlayerView(
+                        url: currentURL,
+                        headers: currentRequest.headersOrNil,
+                        subtitles: currentRequest.subtitlesOrNil,
+                        initialTime: resumeTime,
+                        isPreBuffering: isPreBuffering,
+                        onDismiss: handleNext,  // end-of-video → try next item
+                        onExit: onDismiss,      // back button → always go home
+                        onSwitch: handleSwitch
+                    )
+                    .ignoresSafeArea()
+                    .focused($isPlayerFocused)
+                    .id(currentURL)
+                } else {
+                    NativePlayerView(
+                        url: currentURL,
+                        headers: currentRequest.headersOrNil,
+                        initialTime: resumeTime,
+                        isPreBuffering: isPreBuffering,
+                        onDismiss: handleNext,  // end-of-video → try next item
+                        onExit: onDismiss,      // back button → always go home
+                        onSwitch: handleSwitch
+                    )
+                    .ignoresSafeArea()
+                    .focused($isPlayerFocused)
+                    .id(currentURL)
+                    .onExitCommand { onDismiss() }
+                }
             } else {
-                NativePlayerView(
-                    url: currentRequest.url,
-                    headers: currentRequest.headers,
-                    initialTime: resumeTime,
-                    isPreBuffering: isPreBuffering,
-                    onDismiss: handleNext,  // end-of-video → try next item
-                    onExit: onDismiss,      // back button → always go home
-                    onSwitch: handleSwitch
-                )
-                .ignoresSafeArea()
-                .focused($isPlayerFocused)
-                .id(currentRequest.url)
-                .onExitCommand { onDismiss() }
+                // Unreachable in normal flow: WebSocketServer rejects payloads with invalid URLs
+                // before publishing them, and playlist items go through the same gate. This
+                // branch exists so a stray bad payload dismisses the player instead of crashing.
+                let _ = print("PlayerView: invalid URL in payload, dismissing")
+                Color.black.task { onDismiss() }
             }
 
             if showPlaylist {

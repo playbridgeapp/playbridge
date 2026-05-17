@@ -247,13 +247,10 @@ abstract class PlayerActivity : ComponentActivity() {
             controlsViewModel.setPrePlay(null)
             return
         }
-        val visualMetadataJson = intent?.getStringExtra(ServerService.EXTRA_VISUAL_METADATA)
-        if (visualMetadataJson != null) {
+        val visualMetadataBytes = intent?.getByteArrayExtra(ServerService.EXTRA_VISUAL_METADATA)
+        if (visualMetadataBytes != null) {
             try {
-                val metadata = com.playbridge.shared.protocol.protocolJson.decodeFromString(
-                    com.playbridge.shared.protocol.VisualMetadata.serializer(),
-                    visualMetadataJson
-                )
+                val metadata = playbridge.VisualMetadata.ADAPTER.decode(visualMetadataBytes)
                 FileLogger.i("PlayerActivity", "Received pre-play metadata: ${metadata.title}")
                 controlsViewModel.setPrePlay(metadata)
                 controlsViewModel.setPrePlayLaunching(true)

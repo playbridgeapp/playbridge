@@ -131,7 +131,7 @@ class PlayerControlsViewModel : ViewModel() {
         _controlsState.update { it.copy(isBuffering = isBuffering) }
     }
     
-    fun setPrePlay(metadata: com.playbridge.shared.protocol.VisualMetadata?) {
+    fun setPrePlay(metadata: playbridge.VisualMetadata?) {
         _controlsState.update { it.copy(prePlayMetadata = metadata) }
     }
     
@@ -242,7 +242,7 @@ class PlayerControlsViewModel : ViewModel() {
         showOverlay(ActiveOverlay.VIDEO_FILTER)
     }
 
-    fun showPlaylist(items: List<com.playbridge.shared.protocol.PlayPayload>, index: Int) {
+    fun showPlaylist(items: List<playbridge.PlayPayload>, index: Int) {
         _controlsState.update {
             it.copy(
                 playlistItems = items,

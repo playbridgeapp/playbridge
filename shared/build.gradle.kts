@@ -31,6 +31,7 @@ kotlin {
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.wire.moshi.adapter)
 
             // Media3 ExoPlayer
             implementation(libs.androidx.media3.exoplayer)

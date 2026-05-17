@@ -91,20 +91,20 @@ struct ContentView: View {
             }
 
             if let request = server.currentPlayRequest {
-                let isPreBuffering = !playerStarted && request.visualMetadata != nil
+                let isPreBuffering = !playerStarted && request.hasVisualMetadata
                 ZStack {
                     // PlayerView always renders so it can buffer in the background.
                     // isPreBuffering=true keeps it muted and UI-hidden during preplay.
-                    PlayerView(request: request, isPreBuffering: isPreBuffering) {
+                    PlayerView(payload: request, isPreBuffering: isPreBuffering) {
                         withAnimation { server.currentPlayRequest = nil }
                     }
                     .id(request.url)
                     .zIndex(5)
                     .edgesIgnoringSafeArea(.all)
 
-                    if isPreBuffering, let metadata = request.visualMetadata {
+                    if isPreBuffering, request.hasVisualMetadata {
                         PrePlayView(
-                            metadata: metadata,
+                            metadata: request.visualMetadata,
                             onStart: {
                                 withAnimation { playerStarted = true }
                             },

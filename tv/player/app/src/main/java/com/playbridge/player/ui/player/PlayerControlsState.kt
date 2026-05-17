@@ -37,7 +37,7 @@ data class PlayerControlsState(
     val isLooping: Boolean = false,
     val hasPlaylist: Boolean = false,
     val engineType: String = "",
-    val prePlayMetadata: com.playbridge.shared.protocol.VisualMetadata? = null,
+    val prePlayMetadata: playbridge.VisualMetadata? = null,
     val prePlayCountdown: Int = 0,
     val isPrePlayLaunching: Boolean = false,
     
@@ -53,7 +53,7 @@ data class PlayerControlsState(
     val videoScalingMode: String = "Fit",
     
     // Playlist Data
-    val playlistItems: List<com.playbridge.shared.protocol.PlayPayload> = emptyList(),
+    val playlistItems: List<playbridge.PlayPayload> = emptyList(),
     val playlistIndex: Int = 0,
 
     // Video Filter Data

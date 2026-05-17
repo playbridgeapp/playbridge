@@ -101,8 +101,8 @@ import androidx.activity.viewModels
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.shared.protocol.createPlayCommandJson
 import com.playbridge.shared.protocol.createPlaylistCommandJson
-import com.playbridge.shared.protocol.PlaylistPayload
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlaylistPayload
+import playbridge.PlayPayload
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -510,19 +510,19 @@ class BrowserActivity : ComponentActivity() {
                         
                         val playPayloads = items.map { item ->
                             item.copy(
-                                playerMode = item.playerMode ?: currentMode,
-                                preferredAudioLanguage = item.preferredAudioLanguage ?: preferredAudioLang.takeIf { it.isNotEmpty() },
-                                preferredSubtitleLanguage = item.preferredSubtitleLanguage ?: preferredSubLang.takeIf { it.isNotEmpty() },
-                                defaultVideoQuality = item.defaultVideoQuality ?: defaultVideoQuality.takeIf { it != "Auto" },
-                                maxBitrateCapMbps = item.maxBitrateCapMbps ?: maxBitrateCapMbps
+                                player_mode = item.player_mode ?: currentMode,
+                                preferred_audio_language = item.preferred_audio_language ?: preferredAudioLang.takeIf { it.isNotEmpty() },
+                                preferred_subtitle_language = item.preferred_subtitle_language ?: preferredSubLang.takeIf { it.isNotEmpty() },
+                                default_video_quality = item.default_video_quality ?: defaultVideoQuality.takeIf { it != "Auto" },
+                                max_bitrate_cap_mbps = item.max_bitrate_cap_mbps ?: maxBitrateCapMbps,
                             )
                         }
 
                         if (playPayloads.isNotEmpty()) {
                             val cmd = createPlaylistCommandJson(PlaylistPayload(
-                                items = playPayloads, 
-                                startIndex = startIndex,
-                                visualMetadata = playlistMetadata
+                                items = playPayloads,
+                                start_index = startIndex,
+                                visual_metadata = playlistMetadata,
                             ))
                             
                             connectionViewModel.sendCommandAndRecord(
@@ -586,7 +586,7 @@ class BrowserActivity : ComponentActivity() {
             var forcedVideos by remember { mutableStateOf<List<DetectedVideo>?>(null) }
             var castSheetInitialMode by remember { mutableStateOf("play") }
             var castSheetBrowseOverride by remember { mutableStateOf<String?>(null) }
-            var pendingContentPayload by remember { mutableStateOf<com.playbridge.shared.protocol.PlayPayload?>(null) }
+            var pendingContentPayload by remember { mutableStateOf<playbridge.PlayPayload?>(null) }
 
             // TV active context - updated via WebSocket messages from TV
             var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
@@ -641,17 +641,19 @@ class BrowserActivity : ComponentActivity() {
                     // 1. Check Library Content (highest priority)
                     val content = pendingContentPayload
                     if (content != null && videoCount == 0) {
-                        val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
-                            url = content.url,
-                            title = content.title,
-                            contentType = content.contentType,
-                            detectedBy = content.detectedBy,
-                            playerMode = sheetPlayerMode.takeIf { it != "tv" },
-                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                            maxBitrateCapMbps = maxBitrateCapMbps,
-                            visualMetadata = content.visualMetadata
+                        val cmd = createPlayCommandJson(
+                            PlayPayload(
+                                url = content.url,
+                                title = content.title,
+                                content_type = content.content_type,
+                                detected_by = content.detected_by,
+                                player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                visual_metadata = content.visual_metadata,
+                            )
                         )
                         if (connectionViewModel.webSocketClient.send(cmd)) {
                             tvActiveContext = "player"
@@ -683,7 +685,7 @@ class BrowserActivity : ComponentActivity() {
                         val video = playable.first()
                         if (video.playlistPayload != null) {
                             val cmd = com.playbridge.shared.protocol.createPlaylistCommandJson(
-                                payload = com.playbridge.shared.protocol.PlaylistPayload(items = video.playlistPayload!!)
+                                payload = playbridge.PlaylistPayload(items = video.playlistPayload!!)
                             )
                             if (connectionViewModel.webSocketClient.send(cmd)) {
                                 tvActiveContext = "player"
@@ -699,17 +701,19 @@ class BrowserActivity : ComponentActivity() {
                                 headers["Referer"] = video.originUrl
                             }
                             val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
-                            val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
-                                url = video.url,
-                                title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                headers = headers,
-                                contentType = video.contentType,
-                                detectedBy = video.detectedBy,
-                                playerMode = sheetPlayerMode.takeIf { it != "tv" },
-                                preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                defaultVideoQuality = effectiveQuality,
-                                maxBitrateCapMbps = maxBitrateCapMbps
+                            val cmd = createPlayCommandJson(
+                                PlayPayload(
+                                    url = video.url,
+                                    title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                    headers = headers ?: emptyMap(),
+                                    content_type = video.contentType,
+                                    detected_by = video.detectedBy,
+                                    player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                    preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                    preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                    default_video_quality = effectiveQuality,
+                                    max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                )
                             )
                             connectionViewModel.sendCommandAndRecord(cmd, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
                             if (connectionViewModel.webSocketClient.send(cmd)) {
@@ -1992,23 +1996,20 @@ class BrowserActivity : ComponentActivity() {
                                                             return@launch
                                                         }
 
-                                                        val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
-                                                            url = payload.url,
-                                                            title = payload.title,
-                                                            contentType = payload.contentType,
-                                                            detectedBy = payload.detectedBy,
-                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
-                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                                                            maxBitrateCapMbps = maxBitrateCapMbps,
-                                                            visualMetadata = payload.visualMetadata
+                                                        val cmd = createPlayCommandJson(
+                                                            payload.copy(
+                                                                player_mode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                                                preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                                preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                                default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                                                max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                                            )
                                                         )
                                                         if (connectionViewModel.webSocketClient.send(cmd)) {
-                                                            if (payload.contentType == "series") {
-                                                                nowPlayingTvId = payload.visualMetadata?.tmdbId?.toIntOrNull()
-                                                                nowPlayingSeason = payload.visualMetadata?.season
-                                                                nowPlayingEpisodeStart = payload.visualMetadata?.episode ?: 1
+                                                            if (payload.content_type == "series") {
+                                                                nowPlayingTvId = payload.visual_metadata?.tmdb_id?.toIntOrNull()
+                                                                nowPlayingSeason = payload.visual_metadata?.season
+                                                                nowPlayingEpisodeStart = payload.visual_metadata?.episode ?: 1
                                                             }
                                                             tvActiveContext = "player"
                                                             if (autoSwitchToRemote) {
@@ -2053,17 +2054,19 @@ class BrowserActivity : ComponentActivity() {
                                                             return@launch
                                                         }
 
-                                                        val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
-                                                            url = url,
-                                                            title = title,
-                                                            headers = headers,
-                                                            contentType = contentType,
-                                                            detectedBy = "library",
-                                                            playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
-                                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                                            defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                                                            maxBitrateCapMbps = maxBitrateCapMbps
+                                                        val cmd = createPlayCommandJson(
+                                                            PlayPayload(
+                                                                url = url,
+                                                                title = title,
+                                                                headers = headers ?: emptyMap(),
+                                                                content_type = contentType,
+                                                                detected_by = "library",
+                                                                player_mode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" },
+                                                                preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                                preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                                default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                                                max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                                            )
                                                         )
                                                         if (connectionViewModel.webSocketClient.send(cmd)) {
                                                             tvActiveContext = "player"
@@ -2094,18 +2097,18 @@ class BrowserActivity : ComponentActivity() {
                                                         val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                         val itemsWithPrefs = playlist.items.map {
                                                             it.copy(
-                                                                playerMode = playerMode,
-                                                                preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
-                                                                preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                                                defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" },
-                                                                maxBitrateCapMbps = maxBitrateCapMbps
+                                                                player_mode = playerMode,
+                                                                preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
+                                                                preferred_subtitle_language = preferredSubLang.takeIf { l -> l.isNotEmpty() },
+                                                                default_video_quality = defaultVideoQuality.takeIf { q -> q != "Auto" },
+                                                                max_bitrate_cap_mbps = maxBitrateCapMbps,
                                                             )
                                                         }
                                                         val finalPlaylist = playlist.copy(items = itemsWithPrefs)
                                                         if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))) {
                                                             nowPlayingTvId = screenNumericId
-                                                            nowPlayingSeason = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.season ?: 1
-                                                            nowPlayingEpisodeStart = playlist.items.getOrNull(playlist.startIndex)?.visualMetadata?.episode ?: 1
+                                                            nowPlayingSeason = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.season ?: 1
+                                                            nowPlayingEpisodeStart = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.episode ?: 1
 
                                                             tvActiveContext = "player"
                                                             if (autoSwitchToRemote) {
@@ -2119,11 +2122,11 @@ class BrowserActivity : ComponentActivity() {
                                                 onQueueAdd = { item ->
                                                     val playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }
                                                     val itemWithPrefs = item.copy(
-                                                        playerMode = playerMode,
-                                                        preferredAudioLanguage = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
-                                                        preferredSubtitleLanguage = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                                        defaultVideoQuality = defaultVideoQuality.takeIf { q -> q != "Auto" },
-                                                        maxBitrateCapMbps = maxBitrateCapMbps
+                                                        player_mode = playerMode,
+                                                        preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
+                                                        preferred_subtitle_language = preferredSubLang.takeIf { l -> l.isNotEmpty() },
+                                                        default_video_quality = defaultVideoQuality.takeIf { q -> q != "Auto" },
+                                                        max_bitrate_cap_mbps = maxBitrateCapMbps,
                                                     )
                                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createQueueAddCommandJson(itemWithPrefs))
                                                 },
@@ -2184,23 +2187,20 @@ class BrowserActivity : ComponentActivity() {
                         videos = detectedVideos,
                         contentPayload = pendingContentPayload,
                         onContentClick = { payload ->
-                             val cmd = com.playbridge.shared.protocol.createPlayCommandJson(
-                                 url = payload.url,
-                                 title = payload.title,
-                                 contentType = payload.contentType,
-                                 detectedBy = payload.detectedBy,
-                                 playerMode = sheetPlayerMode.takeIf { it != "tv" },
-                                 preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                 preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                 defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" },
-                                 maxBitrateCapMbps = maxBitrateCapMbps,
-                                 visualMetadata = payload.visualMetadata
+                             val cmd = createPlayCommandJson(
+                                 payload.copy(
+                                     player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                     preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                     preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                     default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                 )
                              )
                             if (connectionViewModel.webSocketClient.send(cmd)) {
-                                if (payload.contentType == "series") {
-                                    nowPlayingTvId = payload.visualMetadata?.tmdbId?.toIntOrNull()
-                                    nowPlayingSeason = payload.visualMetadata?.season
-                                    nowPlayingEpisodeStart = payload.visualMetadata?.episode ?: 1
+                                if (payload.content_type == "series") {
+                                    nowPlayingTvId = payload.visual_metadata?.tmdb_id?.toIntOrNull()
+                                    nowPlayingSeason = payload.visual_metadata?.season
+                                    nowPlayingEpisodeStart = payload.visual_metadata?.episode ?: 1
                                 }
                                 tvActiveContext = "player"
                                 if (autoSwitchToRemote) {
@@ -2232,7 +2232,7 @@ class BrowserActivity : ComponentActivity() {
                                 is WebSocketClient.ConnectionState.Connected -> {
                                     if (video.playlistPayload != null) {
                                         val cmd = com.playbridge.shared.protocol.createPlaylistCommandJson(
-                                            payload = com.playbridge.shared.protocol.PlaylistPayload(items = video.playlistPayload!!)
+                                            payload = playbridge.PlaylistPayload(items = video.playlistPayload!!)
                                         )
                                         if (connectionViewModel.webSocketClient.send(cmd)) {
                                             tvActiveContext = "player"
@@ -2248,18 +2248,20 @@ class BrowserActivity : ComponentActivity() {
                                             headers["Referer"] = video.originUrl
                                         }
                                         val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
-                                        val commandJson = com.playbridge.shared.protocol.createPlayCommandJson(
-                                            url = video.url,
-                                            title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                            headers = headers,
-                                            contentType = video.contentType,
-                                            subtitles = subtitles,
-                                            detectedBy = video.detectedBy,
-                                            playerMode = sheetPlayerMode.takeIf { it != "tv" },
-                                            preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                            preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() },
-                                            defaultVideoQuality = effectiveQuality,
-                                            maxBitrateCapMbps = maxBitrateCapMbps
+                                        val commandJson = createPlayCommandJson(
+                                            PlayPayload(
+                                                url = video.url,
+                                                title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                                headers = headers ?: emptyMap(),
+                                                content_type = video.contentType,
+                                                subtitles = subtitles ?: emptyList(),
+                                                detected_by = video.detectedBy,
+                                                player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                                preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                                preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                                default_video_quality = effectiveQuality,
+                                                max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                            )
                                         )
                                         connectionViewModel.sendCommandAndRecord(commandJson, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
                                         if (connectionViewModel.webSocketClient.send(commandJson)) {
@@ -2376,7 +2378,7 @@ class BrowserActivity : ComponentActivity() {
                     val provider = debridRepository.getActiveProvider()
                     if (provider != null) {
                         MagnetParsingSheet(magnetUri = interceptedMagnet, torrentBytes = interceptedTorrentBytes, provider = provider, onDismiss = { interceptedMagnet = null; interceptedTorrentBytes = null }, onPlayLinks = { links ->
-                            val videos = links.map { link -> com.playbridge.shared.protocol.PlayPayload(url = link.downloadUrl, title = link.filename, playerMode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }, preferredAudioLanguage = preferredAudioLang.takeIf { it.isNotEmpty() }, preferredSubtitleLanguage = preferredSubLang.takeIf { it.isNotEmpty() }, defaultVideoQuality = defaultVideoQuality.takeIf { it != "Auto" }, maxBitrateCapMbps = maxBitrateCapMbps) }
+                            val videos = links.map { link -> playbridge.PlayPayload(url = link.downloadUrl, title = link.filename, player_mode = prefs.getString("tv_player_mode", "tv")?.takeIf { it != "tv" }, preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() }, preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() }, default_video_quality = defaultVideoQuality.takeIf { it != "Auto" }, max_bitrate_cap_mbps = maxBitrateCapMbps) }
                             val detectedVideo = DetectedVideo(url = if (links.size == 1) links.first().downloadUrl else "playlist://magnet", tabId = -1, timestamp = System.currentTimeMillis(), isPlayable = true, detectedBy = "magnet_playlist", playlistPayload = if (links.size > 1) videos else null)
                             scope.launch { forcePlaylistSheet = detectedVideo; showVideoSheet = true }
                             interceptedMagnet = null

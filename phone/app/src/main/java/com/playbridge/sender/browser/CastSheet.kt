@@ -225,8 +225,8 @@ fun CastSheet(
     mediaflowProxyPassword: String = "",
     mediaflowAutoSelect: Boolean = true,
     subtitleService: StremioSubtitleService = StremioSubtitleService(),
-    contentPayload: com.playbridge.shared.protocol.PlayPayload? = null,
-    onContentClick: (com.playbridge.shared.protocol.PlayPayload) -> Unit = {}
+    contentPayload: playbridge.PlayPayload? = null,
+    onContentClick: (playbridge.PlayPayload) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -717,7 +717,7 @@ fun CastSheet(
                                         Spacer(modifier = Modifier.height(8.dp))
 
                                         AsyncImage(
-                                            model = contentPayload.visualMetadata?.backdropUrl ?: contentPayload.visualMetadata?.posterUrl,
+                                            model = contentPayload.visual_metadata?.backdrop_url ?: contentPayload.visual_metadata?.poster_url,
                                             contentDescription = null,
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -734,11 +734,11 @@ fun CastSheet(
                                             fontWeight = FontWeight.Medium
                                         )
 
-                                        if (contentPayload.contentType == "series" && contentPayload.visualMetadata != null) {
-                                            val meta = contentPayload.visualMetadata!!
+                                        if (contentPayload.content_type == "series" && contentPayload.visual_metadata != null) {
+                                            val meta = contentPayload.visual_metadata!!
                                             if (meta.season != null && meta.episode != null) {
                                                 Text(
-                                                    text = "S${meta.season} E${meta.episode}${if (meta.episodeTitle != null) " - ${meta.episodeTitle}" else ""}",
+                                                    text = "S${meta.season} E${meta.episode}${if (meta.episode_title != null) " - ${meta.episode_title}" else ""}",
                                                     style = MaterialTheme.typography.bodySmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )

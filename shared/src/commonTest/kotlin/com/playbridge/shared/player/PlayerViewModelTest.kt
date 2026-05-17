@@ -1,7 +1,7 @@
 package com.playbridge.shared.player
 
 import app.cash.turbine.test
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 import com.playbridge.shared.resume.ResumeStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

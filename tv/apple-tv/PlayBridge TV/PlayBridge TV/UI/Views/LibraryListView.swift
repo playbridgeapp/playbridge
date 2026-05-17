@@ -38,8 +38,12 @@ struct LibraryListView: View {
                     LazyVStack(spacing: 16) {
                         ForEach(items) { item in
                             HistoryCard(item: item) {
-                                server.currentPlayRequest = PlayRequest(
-                                    url: item.url, headers: item.headers)
+                                var payload = Playbridge_PlayPayload()
+                                payload.url = item.url.absoluteString
+                                if let headers = item.headers {
+                                    payload.headers = headers
+                                }
+                                server.currentPlayRequest = payload
                             }
                         }
                     }

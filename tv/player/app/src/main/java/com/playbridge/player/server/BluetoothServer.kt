@@ -7,8 +7,8 @@ import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import com.playbridge.shared.protocol.BluetoothConstants
-import com.playbridge.shared.protocol.Command
-import com.playbridge.shared.protocol.parseCommand
+import com.playbridge.shared.protocol.IncomingMessage
+import com.playbridge.shared.protocol.parseIncomingMessage
 import com.playbridge.player.logging.FileLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +22,7 @@ import java.util.UUID
 
 class BluetoothServer(
     private val context: Context,
-    private val onCommandReceived: (Command) -> Unit
+    private val onCommandReceived: (IncomingMessage) -> Unit
 ) {
     private val TAG = "BluetoothServer"
     private var serverSocket: BluetoothServerSocket? = null
@@ -122,8 +122,8 @@ class BluetoothServer(
                     val message = reader.readLine()
                     if (message != null && message.isNotBlank()) {
                         try {
-                            val command = parseCommand(message)
-                            onCommandReceived(command)
+                            val msg = parseIncomingMessage(message)
+                            onCommandReceived(msg)
                         } catch (e: Exception) {
                             FileLogger.e(TAG, "Failed to parse command from Bluetooth: $message", e)
                         }

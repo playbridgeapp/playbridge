@@ -25,7 +25,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
-import com.playbridge.shared.protocol.VisualMetadata
+import playbridge.VisualMetadata
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -50,7 +50,7 @@ fun PrePlayScreen(
             Box(modifier = Modifier.fillMaxSize()) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
-                        .data(metadata.backdropUrl ?: metadata.posterUrl)
+                        .data(metadata.backdrop_url ?: metadata.poster_url)
                         .crossfade(true)
                         .build(),
                     contentDescription = null,
@@ -85,9 +85,9 @@ fun PrePlayScreen(
                 horizontalArrangement = Arrangement.spacedBy(48.dp)
             ) {
                 Column(modifier = Modifier.weight(0.6f)) {
-                    if (metadata.logoUrl != null) {
+                    if (metadata.logo_url != null) {
                         AsyncImage(
-                            model = metadata.logoUrl,
+                            model = metadata.logo_url,
                             contentDescription = metadata.title,
                             modifier = Modifier.height(120.dp).fillMaxWidth(),
                             contentScale = ContentScale.Fit,
@@ -118,7 +118,7 @@ fun PrePlayScreen(
                     if (metadata.season != null && metadata.episode != null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "S${metadata.season} E${metadata.episode}${if (metadata.episodeTitle != null) " - ${metadata.episodeTitle}" else ""}",
+                            text = "S${metadata.season} E${metadata.episode}${if (metadata.episode_title != null) " - ${metadata.episode_title}" else ""}",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -156,13 +156,13 @@ fun PrePlayScreen(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    if (metadata.posterUrl != null) {
+                    if (metadata.poster_url != null) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.height(450.dp).aspectRatio(2/3f)
                         ) {
                             AsyncImage(
-                                model = metadata.posterUrl,
+                                model = metadata.poster_url,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()

@@ -1,6 +1,6 @@
 package com.playbridge.shared.player
 
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 import com.playbridge.shared.resume.ResumeStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

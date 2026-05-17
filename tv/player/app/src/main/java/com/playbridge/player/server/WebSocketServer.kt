@@ -1,13 +1,11 @@
 package com.playbridge.player.server
 
 import android.util.Log
-import com.playbridge.shared.protocol.Command
+import com.playbridge.shared.protocol.IncomingMessage
 import com.playbridge.shared.protocol.createPairingApprovedJson
 import com.playbridge.shared.protocol.createPairingDeniedJson
 import com.playbridge.shared.protocol.createPongJson
-import com.playbridge.shared.protocol.parseCommand
-import com.playbridge.shared.protocol.protocolJson
-import com.playbridge.shared.protocol.PairingRequestMessage
+import com.playbridge.shared.protocol.parseIncomingMessage
 import kotlinx.coroutines.CompletableDeferred
 import com.playbridge.player.logging.FileLogger
 import io.ktor.http.*
@@ -19,7 +17,6 @@ import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
-import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,8 +56,8 @@ class WebSocketServer(
     private val _connectedClientCount = MutableStateFlow(0)
     val connectedClientCount: StateFlow<Int> = _connectedClientCount.asStateFlow()
 
-    // Command flow for UI to observe
-    private val _commands = MutableSharedFlow<Command>(replay = 0)
+    // Incoming message flow for UI to observe
+    private val _commands = MutableSharedFlow<IncomingMessage>(replay = 0)
     val commands = _commands.asSharedFlow()
 
     // Fires when a new device sends pairing_request; ServerService observes this to bring
@@ -232,25 +229,25 @@ class WebSocketServer(
                             return
                         }
 
-                        val msg = try {
-                            protocolJson.decodeFromString<PairingRequestMessage>(text)
-                        } catch (e: Exception) {
-                            FileLogger.w(TAG, "Failed to parse pairing_request: ${e.message}")
+                        val parsed = parseIncomingMessage(text)
+                        val msg = (parsed as? IncomingMessage.PairingRequest)?.msg
+                        if (msg == null) {
+                            FileLogger.w(TAG, "Failed to parse pairing_request: $parsed")
                             session.send(Frame.Text(createPairingDeniedJson()))
                             session.close(CloseReason(CloseReason.Codes.NORMAL, "parse_error"))
                             return
                         }
 
-                        FileLogger.i(TAG, "pairing_request from ${msg.deviceName} (${msg.deviceUUID})")
+                        FileLogger.i(TAG, "pairing_request from ${msg.device_name} (${msg.device_uuid})")
                         val approval = CompletableDeferred<Boolean>()
-                        val request = PairingRequest(msg.deviceName, msg.deviceUUID, approval)
+                        val request = PairingRequest(msg.device_name, msg.device_uuid, approval)
                         _pendingPairingRequest.value = request
                         _connectionAttemptFlow.tryEmit(Unit)
 
                         // Auto-deny after 30 seconds if the user doesn't respond.
                         val timeoutJob = scope.launch {
                             delay(30_000)
-                            FileLogger.i(TAG, "Pairing request timed out for ${msg.deviceName}")
+                            FileLogger.i(TAG, "Pairing request timed out for ${msg.device_name}")
                             approval.complete(false)
                         }
 
@@ -259,12 +256,12 @@ class WebSocketServer(
                         _pendingPairingRequest.value = null
 
                         if (approved) {
-                            val token = onPairingApproved(msg.deviceName, msg.deviceUUID)
-                            FileLogger.i(TAG, "Pairing approved for ${msg.deviceName} — token issued")
+                            val token = onPairingApproved(msg.device_name, msg.device_uuid)
+                            FileLogger.i(TAG, "Pairing approved for ${msg.device_name} — token issued")
                             session.send(Frame.Text(createPairingApprovedJson(token)))
                             isAuthenticated = true
                         } else {
-                            FileLogger.i(TAG, "Pairing denied for ${msg.deviceName}")
+                            FileLogger.i(TAG, "Pairing denied for ${msg.device_name}")
                             session.send(Frame.Text(createPairingDeniedJson()))
                             session.close(CloseReason(CloseReason.Codes.NORMAL, "denied"))
                             return
@@ -275,8 +272,8 @@ class WebSocketServer(
                     // Reconnect with saved token.
                     if (text.contains("\"type\":\"auth\"")) {
                         try {
-                            val authMessage = protocolJson.decodeFromString<com.playbridge.shared.protocol.AuthMessage>(text)
-                            val token = authMessage.token
+                            val authMessage = (parseIncomingMessage(text) as? IncomingMessage.Auth)?.msg
+                            val token = authMessage?.token
                             if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
                                 isAuthenticated = true
                                 FileLogger.i(TAG, "Client reconnected with saved token: $clientId")
@@ -309,33 +306,41 @@ class WebSocketServer(
                 when (frame) {
                     is Frame.Text -> {
                         val text = frame.readText()
-                        val command = parseCommand(text)
+                        val msg = parseIncomingMessage(text)
 
-                        // Only log non-mouse commands to avoid spam
-                        if (command !is Command.Mouse) {
-                            Log.d(TAG, "Parsed command: ${command.javaClass.simpleName}")
+                        // Only log non-mouse messages to avoid spam
+                        if (msg !is IncomingMessage.Mouse) {
+                            Log.d(TAG, "Parsed message: ${msg.javaClass.simpleName}")
                         }
 
-                        when (command) {
-                            is Command.Ping -> {
+                        when (msg) {
+                            is IncomingMessage.Ping -> {
                                 session.send(Frame.Text(createPongJson()))
                             }
-                            is Command.Play -> {
-                                FileLogger.i(TAG, "Play command parsed - URL: ${command.url}, Title: ${command.title}")
+                            is IncomingMessage.Play -> {
+                                FileLogger.i(TAG, "Play command parsed - URL: ${msg.payload.url}, Title: ${msg.payload.title}")
                                 FileLogger.i(TAG, "Raw JSON body: $text")
-                                _commands.emit(command)
+                                _commands.emit(msg)
                             }
                             else -> {
-                                _commands.emit(command)
+                                _commands.emit(msg)
                             }
                         }
                     }
                     is Frame.Binary -> {
                         val bytes = frame.readBytes()
                         if (bytes.size == 9) {
-                            val mouseCommand = com.playbridge.shared.protocol.MousePacket.unpack(bytes)
-                            if (mouseCommand != null) {
-                                _commands.emit(mouseCommand)
+                            val unpacked = com.playbridge.shared.protocol.MousePacket.unpack(bytes)
+                            if (unpacked != null) {
+                                _commands.emit(
+                                    IncomingMessage.Mouse(
+                                        playbridge.MousePayload(
+                                            event = unpacked.event,
+                                            dx = unpacked.dx,
+                                            dy = unpacked.dy,
+                                        )
+                                    )
+                                )
                             }
                         }
                     }

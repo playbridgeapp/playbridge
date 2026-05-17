@@ -1,8 +1,8 @@
 package com.playbridge.shared.player
 
 import com.playbridge.shared.logging.logger
-import com.playbridge.shared.protocol.PlayPayload
 import com.playbridge.shared.resume.ResumeStore
+import playbridge.PlayPayload
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -135,8 +135,8 @@ class PlayerViewModel(
         scope.launch {
             // Attempt M3U expansion
             val urlWithoutQuery = payload.url.substringBefore("?")
-            val isM3u = payload.contentType == "application/vnd.apple.mpegurl"
-                || payload.contentType == "application/x-mpegurl"
+            val isM3u = payload.content_type == "application/vnd.apple.mpegurl"
+                || payload.content_type == "application/x-mpegurl"
                 || urlWithoutQuery.endsWith(".m3u")
                 || urlWithoutQuery.endsWith(".m3u8")
 

@@ -230,11 +230,8 @@ fun MainContent(
             // Restore playlist context if this item was part of a playlist
             if (item.playlistJson != null) {
                 try {
-                    val decoded = com.playbridge.shared.protocol.protocolJson.decodeFromString(
-                        kotlinx.serialization.builtins.ListSerializer(com.playbridge.shared.protocol.PlayPayload.serializer()),
-                        item.playlistJson
-                    )
-                    com.playbridge.player.player.PlaylistStore.currentPlaylist = decoded
+                    com.playbridge.player.player.PlaylistStore.currentPlaylist =
+                        com.playbridge.shared.protocol.decodePlayPayloadListJson(item.playlistJson)
                     putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
                     putExtra(ServerService.EXTRA_PLAYLIST_INDEX, item.playlistIndex)
                 } catch (e: Exception) {

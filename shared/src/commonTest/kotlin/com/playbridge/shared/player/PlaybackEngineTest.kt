@@ -1,7 +1,7 @@
 package com.playbridge.shared.player
 
 import app.cash.turbine.test
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

@@ -68,6 +68,7 @@ kotlinx-coroutines-core         = { module = "org.jetbrains.kotlinx:kotlinx-coro
 kotlinx-coroutines-android      = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 okio                            = { module = "com.squareup.okio:okio", version.ref = "okio" }
 wire-runtime                    = { module = "com.squareup.wire:wire-runtime", version.ref = "wire" }
+wire-moshi-adapter              = { module = "com.squareup.wire:wire-moshi-adapter", version.ref = "wire" }
 multiplatform-settings          = { module = "com.russhwolf:multiplatform-settings", version.ref = "settings-mp" }
 multiplatform-settings-coroutines = { module = "com.russhwolf:multiplatform-settings-coroutines", version.ref = "settings-mp" }
 turbine                         = { module = "app.cash.turbine:turbine", version.ref = "turbine" }

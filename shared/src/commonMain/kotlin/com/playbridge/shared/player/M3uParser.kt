@@ -2,7 +2,7 @@ package com.playbridge.shared.player
 
 import com.playbridge.shared.logging.logger
 import com.playbridge.shared.network.SharedHttpClient
-import com.playbridge.shared.protocol.PlayPayload
+import playbridge.PlayPayload
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
@@ -139,12 +139,13 @@ object M3uParser {
                     val streamUrl = resolveUrl(url, trimmed)
                     items.add(
                         PlayPayload(
-                                url = streamUrl,
-                                title = currentTitle ?: "Channel ${items.size + 1}",
-                                contentType = null,
-                                detectedBy = currentDetectedBy,
-                                headers = inputHeaders?.toMap()
-                            )                    )
+                            url = streamUrl,
+                            title = currentTitle ?: "Channel ${items.size + 1}",
+                            content_type = null,
+                            detected_by = currentDetectedBy,
+                            headers = inputHeaders?.toMap() ?: emptyMap()
+                        )
+                    )
                     currentTitle = null
                 }
             }

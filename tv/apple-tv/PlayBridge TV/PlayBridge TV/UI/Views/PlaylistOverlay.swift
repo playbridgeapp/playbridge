@@ -53,7 +53,7 @@ struct PlaylistOverlay: View {
                                             Spacer().frame(width: 12)
                                         }
                                         
-                                        Text(item.title ?? "Episode \(index + 1)")
+                                        Text(item.titleOrNil ?? "Episode \(index + 1)")
                                             .font(.body)
                                             .foregroundColor(isCurrent ? .blue : .white)
                                             .lineLimit(1)

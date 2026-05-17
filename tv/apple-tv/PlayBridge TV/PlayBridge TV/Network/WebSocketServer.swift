@@ -17,7 +17,7 @@ class WebSocketServer: ObservableObject {
     private var historyStore: HistoryStore?
     var playlistStore: PlaylistStore?
 
-    @Published var currentPlayRequest: PlayRequest?
+    @Published var currentPlayRequest: Playbridge_PlayPayload?
     @Published var isAuthenticated = false
     @Published var pendingPairingRequest: PairingRequest?
     @Published var pairedDevicesList: [PairedDevice] = []
@@ -365,11 +365,10 @@ class WebSocketServer: ObservableObject {
 
         switch action {
         case "play":
-            if let p = try? Playbridge_PlayPayload(jsonString: payloadJson),
-               let request = PlayRequest(from: p) {
-                handlePlay(request)
+            if let p = try? Playbridge_PlayPayload(jsonString: payloadJson), p.validURL != nil {
+                handlePlay(p)
             } else {
-                print("WebSocket Play Error: Failed to decode PlayPayload")
+                print("WebSocket Play Error: Failed to decode PlayPayload or invalid URL")
             }
         case "playlist":
             if let p = try? Playbridge_PlaylistPayload(jsonString: payloadJson) {
@@ -379,8 +378,9 @@ class WebSocketServer: ObservableObject {
             }
         case "queue_add":
             if let p = try? Playbridge_QueueAddPayload(jsonString: payloadJson),
-               let request = PlayRequest(from: p.item) {
-                DispatchQueue.main.async { self.playlistStore?.addToQueue(item: request) }
+               p.hasItem, p.item.validURL != nil {
+                let item = p.item
+                DispatchQueue.main.async { self.playlistStore?.addToQueue(item: item) }
             }
         case "playlist_jump":
             if let p = try? Playbridge_PlaylistJumpPayload(jsonString: payloadJson) {
@@ -395,24 +395,25 @@ class WebSocketServer: ObservableObject {
         }
     }
 
-    private func handlePlay(_ request: PlayRequest) {
-        print("WebSocket Play: \(request.title ?? "No Title") - \(request.url)")
-        historyStore?.addToHistory(url: request.url, title: request.title, headers: request.headers)
+    private func handlePlay(_ payload: Playbridge_PlayPayload) {
+        let url = payload.validURL!  // pre-validated by caller
+        print("WebSocket Play: \(payload.titleOrNil ?? "No Title") - \(url)")
+        historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil)
         DispatchQueue.main.async {
             self.playlistStore?.clear()
-            self.playlistStore?.addToQueue(item: request)
-            self.currentPlayRequest = request
+            self.playlistStore?.addToQueue(item: payload)
+            self.currentPlayRequest = payload
         }
     }
 
     private func handlePlaylist(_ payload: Playbridge_PlaylistPayload) {
-        let requests = payload.items.compactMap { PlayRequest(from: $0) }
-        print("WebSocket Playlist: \(requests.count)/\(payload.items.count) items, startIndex: \(payload.startIndex)")
-        guard !requests.isEmpty else { return }
+        let valid = payload.items.filter { $0.validURL != nil }
+        print("WebSocket Playlist: \(valid.count)/\(payload.items.count) items, startIndex: \(payload.startIndex)")
+        guard !valid.isEmpty else { return }
         DispatchQueue.main.async {
-            self.playlistStore?.setPlaylist(items: requests, startIndex: Int(payload.startIndex))
-            if let first = self.playlistStore?.currentItem {
-                self.historyStore?.addToHistory(url: first.url, title: first.title, headers: first.headers)
+            self.playlistStore?.setPlaylist(items: valid, startIndex: Int(payload.startIndex))
+            if let first = self.playlistStore?.currentItem, let firstURL = first.validURL {
+                self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil)
                 self.currentPlayRequest = first
             }
         }

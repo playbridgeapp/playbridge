@@ -5,25 +5,31 @@ import 'package:playbridge_protocol/messages.pb.dart';
 export 'package:playbridge_protocol/messages.pb.dart'
     show PlayPayload, VisualMetadata, PlaylistPayload;
 
+// ==================== PlayPayload ergonomics ====================
+// Generated proto types treat optional scalars as empty-string/empty-list when
+// unset. These extensions restore the legacy nullable accessors so consumer
+// code can keep using `?? fallback` idioms without sprinkling `hasFoo()` checks.
+
+extension PlayPayloadX on PlayPayload {
+  String? get titleOrNull => hasTitle() ? title : null;
+  Map<String, String>? get headersOrNull =>
+      headers.isEmpty ? null : Map.unmodifiable(headers);
+  List<String>? get subtitlesOrNull =>
+      subtitles.isEmpty ? null : List.unmodifiable(subtitles);
+}
+
 // ==================== Command sealed class ====================
 
 sealed class Command {
   const Command();
 }
 
-// PlayCmd wraps the generated PlayPayload so all proto fields are preserved,
-// while exposing the four fields server.dart pattern-matches on as getters.
+/// Discriminator variant for a single play command. The full proto payload is
+/// preserved so any field added to messages.proto is immediately accessible
+/// downstream without touching this file.
 class PlayCmd extends Command {
   final PlayPayload payload;
-
   PlayCmd(this.payload);
-
-  String get url => payload.url;
-  String? get title => payload.hasTitle() ? payload.title : null;
-  Map<String, String>? get headers =>
-      payload.headers.isEmpty ? null : Map.unmodifiable(payload.headers);
-  List<String>? get subtitles =>
-      payload.subtitles.isEmpty ? null : List.unmodifiable(payload.subtitles);
 }
 
 class ControlCmd extends Command {
@@ -32,7 +38,7 @@ class ControlCmd extends Command {
 }
 
 class PlaylistCmd extends Command {
-  final List<PlayCmd> items;
+  final List<PlayPayload> items;
   final int startIndex;
   const PlaylistCmd(this.items, this.startIndex);
 }
@@ -43,7 +49,7 @@ class PlaylistJumpCmd extends Command {
 }
 
 class QueueAddCmd extends Command {
-  final PlayCmd item;
+  final PlayPayload item;
   const QueueAddCmd(this.item);
 }
 
@@ -82,7 +88,7 @@ class UnknownCmd extends Command {
 
 // ==================== Parsing ====================
 
-PlayCmd _parsePlayPayload(Map<String, dynamic> p) {
+PlayPayload _parsePlayPayload(Map<String, dynamic> p) {
   final proto = PlayPayload();
   try {
     proto.mergeFromProto3Json(p, ignoreUnknownFields: true);
@@ -90,7 +96,7 @@ PlayCmd _parsePlayPayload(Map<String, dynamic> p) {
     print('PlayPayload proto3 parse failed, falling back to url-only: $e');
     if (p['url'] case final String u) proto.url = u;
   }
-  return PlayCmd(proto);
+  return proto;
 }
 
 Command parseCommand(String json) {
@@ -118,7 +124,7 @@ Command parseCommand(String json) {
         final payload = root['payload'];
         switch (action) {
           case 'play':
-            if (payload is Map<String, dynamic>) return _parsePlayPayload(payload);
+            if (payload is Map<String, dynamic>) return PlayCmd(_parsePlayPayload(payload));
             return const UnknownCmd('play_no_payload');
           case 'control':
             return ControlCmd((payload?['command'] ?? '') as String);

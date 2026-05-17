@@ -16,11 +16,12 @@ import com.playbridge.player.player.ExoPlayerActivity
 import com.playbridge.player.player.MpvPlayerActivity
 import com.playbridge.player.player.VlcPlayerActivity
 import com.playbridge.player.server.ServerService
-import com.playbridge.shared.protocol.*
+import playbridge.PlayPayload
+import playbridge.PlaylistPayload
+import playbridge.VisualMetadata
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.serialization.encodeToString
 
 private const val TAG = "PrePlayActivity"
 
@@ -89,10 +90,10 @@ class PrePlayActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent) {
-        val payloadJson = intent.getStringExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
+        val payloadBytes = intent.getByteArrayExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
         val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
 
-        if (payloadJson == null) {
+        if (payloadBytes == null) {
             if (visualMetadata == null) {
                 Log.e(TAG, "No payload provided")
                 finish()
@@ -102,30 +103,30 @@ class PrePlayActivity : ComponentActivity() {
 
         try {
             if (isPlaylist) {
-                val playlist = protocolJson.decodeFromString(PlaylistPayload.serializer(), payloadJson)
-                val firstItem = playlist.items.getOrNull(playlist.startIndex) ?: playlist.items.firstOrNull()
-                visualMetadata = playlist.visualMetadata ?: firstItem?.visualMetadata
+                val playlist = PlaylistPayload.ADAPTER.decode(payloadBytes)
+                val firstItem = playlist.items.getOrNull(playlist.start_index) ?: playlist.items.firstOrNull()
+                visualMetadata = playlist.visual_metadata ?: firstItem?.visual_metadata
                 streamUrl = firstItem?.url
-                contentType = firstItem?.contentType
-                playerMode = firstItem?.playerMode
-                preferredAudioLanguage = firstItem?.preferredAudioLanguage
-                preferredSubtitleLanguage = firstItem?.preferredSubtitleLanguage
-                defaultVideoQuality = firstItem?.defaultVideoQuality
-                maxBitrateCapMbps = firstItem?.maxBitrateCapMbps
+                contentType = firstItem?.content_type
+                playerMode = firstItem?.player_mode
+                preferredAudioLanguage = firstItem?.preferred_audio_language
+                preferredSubtitleLanguage = firstItem?.preferred_subtitle_language
+                defaultVideoQuality = firstItem?.default_video_quality
+                maxBitrateCapMbps = firstItem?.max_bitrate_cap_mbps
             } else {
-                val play = protocolJson.decodeFromString(PlayPayload.serializer(), payloadJson)
-                visualMetadata = play.visualMetadata
+                val play = PlayPayload.ADAPTER.decode(payloadBytes)
+                visualMetadata = play.visual_metadata
                 streamUrl = play.url
-                contentType = play.contentType
-                playerMode = play.playerMode
-                preferredAudioLanguage = play.preferredAudioLanguage
-                preferredSubtitleLanguage = play.preferredSubtitleLanguage
-                defaultVideoQuality = play.defaultVideoQuality
-                maxBitrateCapMbps = play.maxBitrateCapMbps
+                contentType = play.content_type
+                playerMode = play.player_mode
+                preferredAudioLanguage = play.preferred_audio_language
+                preferredSubtitleLanguage = play.preferred_subtitle_language
+                defaultVideoQuality = play.default_video_quality
+                maxBitrateCapMbps = play.max_bitrate_cap_mbps
             }
 
             FileLogger.i(TAG, "New intent received for: ${visualMetadata?.title}")
-            isLaunching = false 
+            isLaunching = false
             startCountdown()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse payload", e)
@@ -206,7 +207,7 @@ class PrePlayActivity : ComponentActivity() {
         val intent = Intent(this, activityClass).apply {
             putExtra(ServerService.EXTRA_URL, url)
             val fullTitle = if (contentType == "series" && meta.season != null && meta.episode != null) {
-                "${meta.title} S${meta.season}E${meta.episode}${if (meta.episodeTitle != null) " - ${meta.episodeTitle}" else ""}"
+                "${meta.title} S${meta.season}E${meta.episode}${if (meta.episode_title != null) " - ${meta.episode_title}" else ""}"
             } else {
                 meta.title
             }
