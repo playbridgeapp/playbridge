@@ -1,0 +1,211 @@
+name: Desktop Build
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'desktop/**'
+      - 'protocol/**'
+      - '.github/workflows/desktop_build.yml'
+      - '.gitmodules'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ./desktop
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: recursive
+
+    - name: Get version
+      id: version
+      shell: bash
+      run: |
+        VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '[:space:]')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Check tag
+      id: check_tag
+      shell: bash
+      run: |
+        if git rev-parse "desktop-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ desktop-v${{ steps.version.outputs.version }} already exists, skipping."
+        else
+          echo "skipped=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Flutter
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
+        cache: true
+
+    - name: Install dependencies
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: flutter pub get
+
+    - name: Build Windows
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: flutter build windows --release
+
+    - name: Package Windows artifact
+      if: steps.check_tag.outputs.skipped == 'false'
+      shell: pwsh
+      run: |
+        Compress-Archive -Path "build\windows\x64\runner\Release\*" `
+          -DestinationPath "playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip"
+
+    - name: Upload to R2
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      shell: bash
+      run: |
+        aws s3 cp "playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip" \
+          s3://${{ secrets.R2_BUCKET }}/desktop-release/
+
+  build-linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./desktop
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: recursive
+
+    - name: Get version
+      id: version
+      run: |
+        VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '[:space:]')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Check tag
+      id: check_tag
+      run: |
+        if git rev-parse "desktop-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ desktop-v${{ steps.version.outputs.version }} already exists, skipping."
+        else
+          echo "skipped=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Install system dependencies
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y \
+          libgtk-3-dev \
+          ninja-build \
+          cmake \
+          clang \
+          pkg-config \
+          libmpv-dev \
+          liblzma-dev
+
+    - name: Set up Flutter
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
+        cache: true
+
+    - name: Install dependencies
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: flutter pub get
+
+    - name: Build Linux
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: flutter build linux --release
+
+    - name: Package Linux artifact
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        tar -czf "playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz" \
+          -C build/linux/x64/release bundle
+
+    - name: Upload to R2
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      run: |
+        aws s3 cp "playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz" \
+          s3://${{ secrets.R2_BUCKET }}/desktop-release/
+
+  release:
+    needs: [build-windows, build-linux]
+    if: |
+      (success() || always()) &&
+      needs.build-windows.outputs.skipped == 'false' &&
+      needs.build-linux.outputs.skipped == 'false' &&
+      needs.build-windows.result != 'failure' &&
+      needs.build-linux.result != 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version
+      id: version
+      run: |
+        VERSION=$(grep '^version:' desktop/pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '[:space:]')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Download artifacts from R2
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      run: |
+        mkdir -p output
+        aws s3 sync s3://${{ secrets.R2_BUCKET }}/desktop-release/ output/
+
+    - name: Create GitHub release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: desktop-v${{ steps.version.outputs.version }}
+        name: PlayBridge Desktop v${{ steps.version.outputs.version }}
+        body: |
+          **Desktop Receiver:** v${{ steps.version.outputs.version }}
+
+          | Platform | File |
+          |----------|------|
+          | Windows 10+ | `playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip` — extract and run `playbridge_desktop.exe` |
+          | Linux | `playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz` — extract and run `bundle/playbridge_desktop` |
+
+          **Linux:** requires `libmpv2` (`sudo apt install libmpv2` or `sudo dnf install mpv-libs`).
+        files: output/*
+        generate_release_notes: true
+
+    - name: Clean up R2 after release
+      if: always()
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      run: |
+        aws s3 rm s3://${{ secrets.R2_BUCKET }}/desktop-release/ --recursive
