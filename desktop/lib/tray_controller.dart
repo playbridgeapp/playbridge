@@ -46,7 +46,7 @@ class TrayController with TrayListener {
     }
 
     try {
-      await trayManager.setIcon('assets/tray_icon.png');
+      await trayManager.setIcon('assets/tray_icon.png', isTemplate: true);
       debugPrint('[tray] icon set from assets/tray_icon.png');
     } catch (e) {
       debugPrint('[tray] setIcon(asset) failed: $e — will retry with title fallback');
