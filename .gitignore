@@ -87,3 +87,6 @@ stream-resolver/*.exe
 .claude/
 # Added by code-review-graph
 .code-review-graph/
+
+# Icon generation working artifacts (derived SVGs + intermediate PNGs)
+phone/store/icon_variants/_generated/
