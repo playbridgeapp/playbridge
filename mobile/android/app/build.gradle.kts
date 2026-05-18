@@ -19,8 +19,8 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        versionCode = 46
-        versionName = "0.1.46"
+        versionCode = 47
+        versionName = "0.1.47"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
