@@ -20,7 +20,7 @@ const entryPoints = [
 
 function copyStatics() {
   const statics = [
-    ["src/manifest.json",       "dist/manifest.json"],
+    ["manifests/firefox.json",   "dist/manifest.json"],
     ["src/ui/popup.html",       "dist/ui/popup.html"],
     ["src/ui/popup.css",        "dist/ui/popup.css"],
     ["src/ui/outfit.css",       "dist/ui/outfit.css"],

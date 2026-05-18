@@ -29,7 +29,7 @@ jobs:
     - name: Get version
       id: version
       run: |
-        VERSION=$(jq -r '.version' src/manifest.json)
+        VERSION=$(jq -r '.version' manifests/firefox.json)
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
     - name: Check version status
@@ -37,7 +37,7 @@ jobs:
       run: |
         VERSION="${{ steps.version.outputs.version }}"
         # Try to get version from previous commit to check for bumps
-        PREV_VERSION=$(git show HEAD^:extension/src/manifest.json 2>/dev/null | jq -r '.version' 2>/dev/null || echo "none")
+        PREV_VERSION=$(git show HEAD^:extension/manifests/firefox.json 2>/dev/null | jq -r '.version' 2>/dev/null || echo "none")
         
         if git rev-parse "extension-v$VERSION" >/dev/null 2>&1; then
           echo "skipped=true" >> $GITHUB_OUTPUT
@@ -110,7 +110,7 @@ jobs:
       - name: Get version
         id: version
         run: |
-          VERSION=$(jq -r '.version' extension/src/manifest.json)
+          VERSION=$(jq -r '.version' extension/manifests/firefox.json)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download artifact from R2

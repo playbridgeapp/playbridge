@@ -20,15 +20,14 @@ dependencyResolutionManagement {
     }
     versionCatalogs {
         create("libs") {
-            from(files("../gradle/libs.versions.toml"))
+            from(files("../../gradle/libs.versions.toml"))
         }
     }
 }
 
-rootProject.name = "PlayBridgeTV"
-include(":player:app")
-include(":browser:app")
+rootProject.name = "PlayBridgePhone"
+include(":app")
 include(":shared")
-project(":shared").projectDir = File("../shared")
+project(":shared").projectDir = File("../../shared")
 include(":libs:mpv-android")
-project(":libs:mpv-android").projectDir = File("../libs/mpv-android")
+project(":libs:mpv-android").projectDir = File("../../libs/mpv-android")

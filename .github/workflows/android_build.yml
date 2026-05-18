@@ -4,7 +4,11 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - 'android/**'
+      - 'mobile/android/**'
+      - 'tv/android/**'
+      - 'shared/**'
+      - 'libs/**'
+      - 'gradle/**'
   # pull_request:
   #   branches: [ "main" ]
   workflow_dispatch:
@@ -14,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./android/phone
+        working-directory: ./mobile/android
     outputs:
       version: ${{ steps.version.outputs.version }}
       skipped: ${{ steps.check_tag.outputs.skipped }}
@@ -106,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./android/tv/player
+        working-directory: ./tv/android/player
     outputs:
       version: ${{ steps.version.outputs.version }}
       skipped: ${{ steps.check_tag.outputs.skipped }}
@@ -198,7 +202,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./android/tv/browser
+        working-directory: ./tv/android/browser
     outputs:
       version: ${{ steps.version.outputs.version }}
       skipped: ${{ steps.check_tag.outputs.skipped }}
@@ -318,9 +322,9 @@ jobs:
       - name: Get versions
         id: versions
         run: |
-          PHONE=$(grep 'versionName =' android/phone/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
-          PLAYER=$(grep 'versionName =' android/tv/player/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
-          BROWSER=$(grep 'versionName =' android/tv/browser/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          PHONE=$(grep 'versionName =' mobile/android/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          PLAYER=$(grep 'versionName =' tv/android/player/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          BROWSER=$(grep 'versionName =' tv/android/browser/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
           echo "phone=$PHONE" >> $GITHUB_OUTPUT
           echo "player=$PLAYER" >> $GITHUB_OUTPUT
           echo "browser=$BROWSER" >> $GITHUB_OUTPUT
