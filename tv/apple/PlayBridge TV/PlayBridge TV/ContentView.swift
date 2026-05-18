@@ -34,7 +34,13 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             AuroraBackgroundView(time: time)
-                .onReceive(timer) { _ in time += 0.01 }
+                .onReceive(timer) { _ in
+                    // Don't churn SwiftUI state during playback — the player
+                    // covers the aurora completely, and every state tick
+                    // re-evaluates the view tree (incl. PlayerView).
+                    guard server.currentPlayRequest == nil else { return }
+                    time += 0.01
+                }
                 .edgesIgnoringSafeArea(.all)
 
             HStack(spacing: 0) {

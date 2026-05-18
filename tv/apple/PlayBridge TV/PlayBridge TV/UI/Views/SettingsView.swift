@@ -45,6 +45,13 @@ struct SettingsView: View {
                         Spacer()
                         Text(server.serverState).foregroundColor(Theme.accent)
                     }
+                    Button(action: { server.restart() }) {
+                        HStack {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Restart Server")
+                        }
+                        .foregroundColor(Theme.accent)
+                    }
                 }
             }
             .listStyle(.grouped)

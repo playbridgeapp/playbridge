@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import SwiftUI
+import UIKit
 import Combine
 import SwiftProtobuf
 
@@ -32,6 +33,8 @@ class WebSocketServer: ObservableObject {
 
     private var autoTimeoutWork: DispatchWorkItem?
     private var keepaliveTimer: Timer?
+    private var restartWork: DispatchWorkItem?
+    private var restartAttempts = 0
 
     private var deviceUUID: String {
         if let uuid = UserDefaults.standard.string(forKey: deviceUUIDKey) { return uuid }
@@ -66,6 +69,21 @@ class WebSocketServer: ObservableObject {
         self.playlistStore = playlistStore
         self.localIP = getIPAddress()
         self.pairedDevicesList = storedPairedDevices
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleForeground() {
+        if serverState != "Ready to Connect" { restart() }
     }
 
     func start(port: UInt16 = 8765) {
@@ -90,12 +108,18 @@ class WebSocketServer: ObservableObject {
                 txtRecord: NetService.data(fromTXTRecord: txtDict))
             listener?.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async {
+                    guard let self = self else { return }
                     switch state {
-                    case .ready: self?.serverState = "Ready to Connect"
+                    case .ready:
+                        self.serverState = "Ready to Connect"
+                        self.restartAttempts = 0
                     case .failed(let error):
-                        self?.serverState = "Error: \(error.localizedDescription)"
-                    case .setup: self?.serverState = "Starting..."
-                    case .cancelled: self?.serverState = "Stopped"
+                        self.serverState = "Error: \(error.localizedDescription)"
+                        self.scheduleRestart()
+                    case .waiting(let error):
+                        self.serverState = "Waiting: \(error.localizedDescription)"
+                    case .setup: self.serverState = "Starting..."
+                    case .cancelled: self.serverState = "Stopped"
                     default: break
                     }
                 }
@@ -111,6 +135,10 @@ class WebSocketServer: ObservableObject {
     func stop() {
         keepaliveTimer?.invalidate()
         keepaliveTimer = nil
+        restartWork?.cancel()
+        restartWork = nil
+        listener?.stateUpdateHandler = nil
+        listener?.newConnectionHandler = nil
         listener?.cancel()
         listener = nil
         for connection in connectedConnections { connection.cancel() }
@@ -126,6 +154,15 @@ class WebSocketServer: ObservableObject {
     func restart(port: UInt16 = 8765) {
         stop()
         start(port: port)
+    }
+
+    private func scheduleRestart(port: UInt16 = 8765) {
+        restartWork?.cancel()
+        let delay = min(pow(2.0, Double(restartAttempts)), 30.0)
+        restartAttempts += 1
+        let work = DispatchWorkItem { [weak self] in self?.restart(port: port) }
+        restartWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func startKeepalive() {

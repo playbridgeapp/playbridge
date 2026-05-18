@@ -16,6 +16,7 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         weak var proxyServer: VLCProxyServer? // needed to rewrite HLS URIs into proxy URLs
         var hlsBuffer: Data?                  // non-nil = buffer this response for URI rewriting
         var hlsResponse: HTTPURLResponse?
+        var hlsWatchdog: DispatchSourceTimer?
 
         init(connection: NWConnection, task: URLSessionDataTask, proxyServer: VLCProxyServer) {
             self.connection = connection
@@ -23,14 +24,30 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
             self.sendGate = DispatchSemaphore(value: 1)
             self.proxyServer = proxyServer
         }
+
+        func invalidateHLSWatchdog() {
+            hlsWatchdog?.cancel()
+            hlsWatchdog = nil
+        }
     }
+
+    // Legitimate HLS playlists are KB-sized and complete in well under a second.
+    // Anything beyond these limits is either a hung upstream or a non-playlist
+    // body misidentified as HLS — in both cases buffering forever explodes
+    // memory.
+    private static let hlsMaxBufferBytes = 5 * 1024 * 1024
+    private static let hlsWatchdogSeconds = 15
 
     private var states: [Int: ConnState] = [:]
     private let lock = NSLock()
 
     lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // Bypass the shared URLCache entirely. VLC reloads HLS playlists in a
+        // tight loop and the default cache will balloon to hundreds of MB of
+        // playlist + segment bodies otherwise.
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         config.timeoutIntervalForRequest = 300   // 5 min — large files with backpressure need slack
         config.timeoutIntervalForResource = 0
         config.httpMaximumConnectionsPerHost = 8
@@ -52,15 +69,19 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
             print("[Proxy] T\(task.taskIdentifier) request headers: \(headers)")
         }
 
-        // Watch for VLC closing its end of the connection
+        // Watch for VLC closing its end of the connection. Capture only the
+        // taskId — capturing `task` strongly would keep the URLSessionDataTask
+        // alive for the full lifetime of NWConnection's handler, which the
+        // Network framework holds onto past `cancel()`.
+        let taskId = task.taskIdentifier
         connection.stateUpdateHandler = { [weak self] connState in
             switch connState {
             case .failed(let err):
-                print("[Proxy] T\(task.taskIdentifier) VLC connection failed: \(err)")
-                self?.cancelUpstream(for: task.taskIdentifier)
+                print("[Proxy] T\(taskId) VLC connection failed: \(err)")
+                self?.cancelUpstream(for: taskId)
             case .cancelled:
-                print("[Proxy] T\(task.taskIdentifier) VLC connection cancelled")
-                self?.cancelUpstream(for: task.taskIdentifier)
+                print("[Proxy] T\(taskId) VLC connection cancelled")
+                self?.cancelUpstream(for: taskId)
             default: break
             }
         }
@@ -74,10 +95,43 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         let state = states.removeValue(forKey: taskId)
         lock.unlock()
         if let state = state {
+            state.invalidateHLSWatchdog()
             print("[Proxy] T\(taskId) cancelling upstream (VLC disconnected)")
             state.sendGate.signal()   // unblock any waiting didReceive call
             state.task.cancel()
         }
+    }
+
+    /// Drop HLS-buffering mode and switch to pass-through streaming. Used when
+    /// the response was misidentified as HLS — we flush whatever we've buffered
+    /// as the response body, then let subsequent didReceive callbacks go
+    /// through the normal streaming path.
+    private func fallbackFromHLSToStreaming(state: ConnState) {
+        state.invalidateHLSWatchdog()
+        guard let buffer = state.hlsBuffer, let http = state.hlsResponse else { return }
+        state.hlsBuffer = nil
+        state.hlsResponse = nil
+
+        let taskId = state.task.taskIdentifier
+        let header = buildResponseHeader(http)
+        var payload = header.data(using: .utf8) ?? Data()
+        payload.append(buffer)
+
+        state.sendGate.wait()
+        state.connection.send(content: payload, completion: .contentProcessed({ [weak self] error in
+            state.sendGate.signal()
+            if error != nil { self?.cancelUpstream(for: taskId) }
+        }))
+    }
+
+    /// Returns nil if there aren't yet enough bytes to decide, true/false once
+    /// the prefix is known. RFC 8216 allows an optional UTF-8 BOM before the
+    /// mandatory `#EXTM3U` tag.
+    private func looksLikeHLSPlaylist(_ data: Data) -> Bool? {
+        let bomLen = data.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
+        let needed = bomLen + 7
+        guard data.count >= needed else { return nil }
+        return data.dropFirst(bomLen).prefix(7).elementsEqual("#EXTM3U".utf8)
     }
 
     /// Build the HTTP response headers we hand back to VLC.
@@ -141,6 +195,20 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         if isHLSResponse(http) {
             state.hlsBuffer = Data()
             state.hlsResponse = http
+
+            // Watchdog: if the upstream hasn't finished within
+            // hlsWatchdogSeconds, the response is either hung or isn't really
+            // a playlist — abort instead of buffering indefinitely.
+            let taskId = dataTask.taskIdentifier
+            let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+            timer.schedule(deadline: .now() + .seconds(Self.hlsWatchdogSeconds))
+            timer.setEventHandler { [weak self] in
+                print("[Proxy] T\(taskId) HLS response timed out after \(Self.hlsWatchdogSeconds)s, aborting")
+                self?.cancelUpstream(for: taskId)
+            }
+            state.hlsWatchdog = timer
+            timer.resume()
+
             completionHandler(.allow)
             return
         }
@@ -170,6 +238,26 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         // HLS path: accumulate; we'll rewrite + flush in didCompleteWithError.
         if state.hlsBuffer != nil {
             state.hlsBuffer?.append(data)
+
+            // Validate the magic bytes once we have enough — RFC 8216 requires
+            // every playlist to start with "#EXTM3U" (optionally preceded by a
+            // UTF-8 BOM). Misidentified responses (e.g. a binary stream with
+            // an .m3u8 path or wrong content-type) get flushed and switched
+            // to streaming mode so they don't buffer indefinitely.
+            if let buf = state.hlsBuffer, let isHLS = looksLikeHLSPlaylist(buf) {
+                if !isHLS {
+                    print("[Proxy] T\(dataTask.taskIdentifier) response missing #EXTM3U, falling back to streaming")
+                    fallbackFromHLSToStreaming(state: state)
+                    return
+                }
+            }
+
+            // Hard cap: a legitimate playlist never approaches this.
+            if let buf = state.hlsBuffer, buf.count > Self.hlsMaxBufferBytes {
+                print("[Proxy] T\(dataTask.taskIdentifier) HLS buffer exceeded \(Self.hlsMaxBufferBytes) bytes, aborting")
+                cancelUpstream(for: dataTask.taskIdentifier)
+                return
+            }
             return
         }
 
@@ -192,6 +280,7 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         let state = states.removeValue(forKey: task.taskIdentifier)
         lock.unlock()
         guard let state = state else { return }
+        state.invalidateHLSWatchdog()
 
         if let error = error as? NSError {
             if error.code != NSURLErrorCancelled {
@@ -215,6 +304,10 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
             }
             let header = buildResponseHeader(response, overrideContentLength: body.count)
             let payload = (header.data(using: .utf8) ?? Data()) + body
+
+            let preview = String(data: buffer.prefix(200), encoding: .utf8)?
+                .replacingOccurrences(of: "\n", with: "\\n") ?? "<non-utf8>"
+            print("[Proxy] T\(task.taskIdentifier) HLS upstream size=\(buffer.count) rewritten=\(body.count) preview=\(preview)")
 
             state.sendGate.wait()
             state.connection.send(content: payload, completion: .contentProcessed({ _ in
