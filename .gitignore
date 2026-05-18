@@ -95,10 +95,19 @@ AI_CONTEXT.md
 playbridge-context.skill
 SHARED_PLANS.md
 addon-preference-implementation-plan.md
-build_error.log
 tv_idle_blob.html
 pending_patches/
 scratch/
+**/ARCHITECTURE*.md
+**/*_PLAN.md
+**/*_STEP_*.md
+**/*_REVIEW.md
+
+# Build logs / output dumps
+**/build_output.txt
+**/build_errors.log
+**/build_error.log
 
 # Icon generation working artifacts (derived SVGs + intermediate PNGs)
-phone/store/icon_variants/_generated/
+mobile/android/store/icon_variants/_generated/
+mobile/android/store/icon_variants/*.svg
