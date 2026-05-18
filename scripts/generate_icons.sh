@@ -64,6 +64,23 @@ cat > "$FRONT" <<'SVG'
 </svg>
 SVG
 
+# Tray / menu-bar variant: glyph only, solid black on transparent. macOS treats
+# this as a template image (see TrayController.init in desktop/lib/tray_controller.dart)
+# — only the alpha channel is read, then the system tints to match the menu bar
+# (white on dark mode, black on light, blue when highlighted). So colour and any
+# background tile must be stripped.
+TRAY=$(mktemp /tmp/pb_tray_XXXXXX.svg)
+cat > "$TRAY" <<'SVG'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <g transform="rotate(-13 512 512)" fill="none" stroke="#000000"
+     stroke-width="170" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 332 772 L 332 252"/>
+    <path d="M 332 252 L 552 252 C 692 252 772 332 772 422
+             C 772 512 692 582 552 582 L 332 582"/>
+  </g>
+</svg>
+SVG
+
 # Round-icon variant: same glyph, circular background (replaces the rounded-rect
 # tile with a full circle) — used for ic_launcher_round on circular launchers.
 ROUND=$(mktemp /tmp/pb_round_XXXXXX.svg)
@@ -84,6 +101,9 @@ sq() { rsvg-convert -w "$2" -h "$2" "$SQ" -o "$1"; }
 
 # Render the circular-background variant at a given square size
 rd() { rsvg-convert -w "$2" -h "$2" "$ROUND" -o "$1"; }
+
+# Render the template tray glyph at a given square size
+tr_() { rsvg-convert -w "$2" -h "$2" "$TRAY" -o "$1"; }
 
 # Render an arbitrary SVG to PNG at exact pixel dimensions (transparency preserved)
 render() { rsvg-convert -w "$3" -h "$4" "$1" -o "$2"; }
@@ -161,7 +181,9 @@ MAC="$REPO/desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset"
 for size in 16 32 64 128 256 512 1024; do
   sq "$MAC/app_icon_${size}.png" "$size"
 done
-sq "$REPO/desktop/assets/tray_icon.png" 32
+# Menu-bar tray icon: 44px = 22pt @2x, the standard retina menu-bar size.
+# Rendered from the template glyph (black on transparent) so macOS can tint it.
+tr_ "$REPO/desktop/assets/tray_icon.png" 44
 
 # ── Firefox Extension ──────────────────────────────────────────────────────────
 echo "→ Extension"
@@ -281,5 +303,5 @@ JSON
 # Sibling loose logo.png next to the .xcassets (referenced as a bundle resource).
 sq "$TVAPP/logo.png" 512
 
-rm -f "$GLYPH" "$ROUND" "$BACK" "$MIDDLE" "$FRONT"
+rm -f "$GLYPH" "$ROUND" "$TRAY" "$BACK" "$MIDDLE" "$FRONT"
 echo "✓ Done"
