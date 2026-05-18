@@ -47,7 +47,7 @@ kotlin {
             implementation(libs.libvlc.all)
 
             // MPV
-            compileOnly(files("../../libs/mpv-android/mpv-android.aar"))
+            compileOnly(files("../libs/mpv-android/mpv-android.aar"))
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
