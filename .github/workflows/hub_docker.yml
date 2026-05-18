@@ -9,8 +9,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME_SERVER: truedem0n/playbridge-hub-server
-  IMAGE_NAME_UI: truedem0n/playbridge-hub-ui
+  IMAGE_NAME_SERVER: playbridgeapp/playbridge-hub-server
+  IMAGE_NAME_UI: playbridgeapp/playbridge-hub-ui
 
 jobs:
   build-and-push:
