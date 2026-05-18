@@ -88,5 +88,18 @@ stream-resolver/*.exe
 # Added by code-review-graph
 .code-review-graph/
 
+# AI agent / planning artifacts
+AGENTS.md
+GEMINI.md
+CLAUDE.md
+AI_CONTEXT.md
+playbridge-context.skill
+SHARED_PLANS.md
+addon-preference-implementation-plan.md
+build_error.log
+tv_idle_blob.html
+pending_patches/
+scratch/
+
 # Icon generation working artifacts (derived SVGs + intermediate PNGs)
 phone/store/icon_variants/_generated/
