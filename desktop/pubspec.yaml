@@ -27,9 +27,7 @@ dependencies:
 
   # PlayBridge protocol — generated protobuf types
   playbridge_protocol:
-    git:
-      url: https://github.com/playbridgeapp/playbridge-protocol
-      path: generated/dart
+    path: ../protocol/generated/dart
 
   # mDNS service publishing (_playbridge._tcp.) + persistent pairing
   bonsoir: ^5.1.10

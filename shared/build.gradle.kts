@@ -15,6 +15,9 @@ kotlin {
     }
 
     sourceSets {
+        commonMain {
+            kotlin.srcDir("../protocol/generated/kotlin")
+        }
         commonMain.dependencies {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)

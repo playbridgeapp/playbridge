@@ -9,6 +9,7 @@ on:
       - 'shared/**'
       - 'libs/**'
       - 'gradle/**'
+      - 'protocol/**'
   # pull_request:
   #   branches: [ "main" ]
   workflow_dispatch:
@@ -27,6 +28,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        submodules: recursive
 
     - name: Get version
       id: version
@@ -118,6 +120,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        submodules: recursive
 
     - name: Get version
       id: version
@@ -209,6 +212,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        submodules: recursive
 
     - name: Get version
       id: version
@@ -307,6 +311,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Download artifacts from R2
         env:
