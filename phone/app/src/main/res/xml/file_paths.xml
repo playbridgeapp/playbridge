@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Public Downloads folder (Environment.DIRECTORY_DOWNLOADS) -->
+    <external-path name="downloads" path="Download/" />
+</paths>

@@ -1,0 +1,449 @@
+package com.playbridge.sender.browser
+
+import android.app.DownloadManager
+import android.content.Context
+import android.content.Intent
+import android.database.Cursor
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.core.content.FileProvider
+import com.playbridge.sender.browser.DownloadManagerSingleton
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadCursor
+import java.io.File
+import java.io.IOException
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+@androidx.annotation.OptIn(UnstableApi::class)
+data class DownloadItem(
+    val id: Long,
+    val title: String,
+    val status: Int,
+    val uri: String?,
+    val localUri: String? = null, // Local file path for system downloads (file:// URI)
+    val mediaType: String?,
+    val totalSize: Long,
+    val bytesDownloaded: Long,
+    val lastModified: Long,
+    val isExo: Boolean = false,
+    val exoState: Int = 0,
+    val errorReason: String? = null,
+    val speedBytesPerSec: Long = 0L
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+fun DownloadsScreen(
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val downloadManager = remember { context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager }
+    val exoDownloadManager = remember { DownloadManagerSingleton.getDownloadManager(context) }
+    var downloads by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
+    val scope = rememberCoroutineScope()
+    // Track previous bytes and last known speed per item ID
+    val prevBytes = remember { mutableMapOf<Long, Long>() }
+    val lastKnownSpeed = remember { mutableMapOf<Long, Long>() }
+
+    // Deletion state
+    var itemToDelete by remember { mutableStateOf<DownloadItem?>(null) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    // Periodically refresh downloads
+    LaunchedEffect(Unit) {
+        while (true) {
+            val systemDownloads = getSystemDownloads(downloadManager)
+            val exoDownloads = getExoDownloads(exoDownloadManager)
+            val merged = (systemDownloads + exoDownloads).sortedByDescending { it.lastModified }
+            downloads = merged.map { item ->
+                val speed = if (item.status == DownloadManager.STATUS_RUNNING) {
+                    val prev = prevBytes[item.id] ?: item.bytesDownloaded
+                    val delta = (item.bytesDownloaded - prev).coerceAtLeast(0L)
+                    if (delta > 0) {
+                        lastKnownSpeed[item.id] = delta
+                        delta
+                    } else {
+                        // Underlying data hasn't updated yet — keep last reading to avoid flicker
+                        lastKnownSpeed[item.id] ?: 0L
+                    }
+                } else {
+                    lastKnownSpeed.remove(item.id)
+                    0L
+                }
+                prevBytes[item.id] = item.bytesDownloaded
+                item.copy(speedBytesPerSec = speed)
+            }
+            delay(1000)
+        }
+    }
+
+    // Error dialog state
+    var errorToShow by remember { mutableStateOf<String?>(null) }
+    
+    if (showDeleteDialog && itemToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text(if (itemToDelete?.status == DownloadManager.STATUS_RUNNING) "Cancel Download" else "Delete Download") },
+            text = { Text("Are you sure you want to ${if (itemToDelete?.status == DownloadManager.STATUS_RUNNING) "cancel" else "delete"} '${itemToDelete?.title}'?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        itemToDelete?.let { item ->
+                            if (item.isExo) {
+                                item.uri?.let { url ->
+                                     exoDownloadManager.removeDownload(url)
+                                     Toast.makeText(context, "Deleted", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                downloadManager.remove(item.id)
+                                Toast.makeText(context, "Deleted", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        showDeleteDialog = false
+                        itemToDelete = null
+                    }
+                ) {
+                    Text(if (itemToDelete?.status == DownloadManager.STATUS_RUNNING) "Cancel" else "Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (errorToShow != null) {
+        AlertDialog(
+            onDismissRequest = { errorToShow = null },
+            title = { Text("Download Failed") },
+            text = { Text(errorToShow ?: "Unknown error") },
+            confirmButton = {
+                TextButton(onClick = { errorToShow = null }) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Downloads") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        if (downloads.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Download,
+                        null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "No downloads yet",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+
+                items(downloads) { item ->
+                    DownloadItemRow(
+                        item = item,
+                        onDelete = {
+                            itemToDelete = item
+                            showDeleteDialog = true
+                        },
+                        onErrorClick = {
+                            errorToShow = item.errorReason
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+            }
+        }
+    }
+}
+
+fun openInExternalPlayer(context: Context, localUri: String, mediaType: String?) {
+    try {
+        val parsedUri = Uri.parse(localUri)
+        val mimeType = mediaType?.takeIf { it.isNotBlank() } ?: "video/*"
+
+        // content:// URIs (MediaStore on Android 10+) can be used directly.
+        // file:// URIs need to go through FileProvider for cross-app sharing.
+        val contentUri = if (parsedUri.scheme == "content") {
+            parsedUri
+        } else {
+            val file = File(parsedUri.path ?: return)
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        }
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(contentUri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Open with"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "No player found for this file", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+fun DownloadItemRow(
+    item: DownloadItem,
+    onDelete: () -> Unit,
+    onErrorClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val progress = if (item.totalSize > 0) item.bytesDownloaded.toFloat() / item.totalSize.toFloat() else 0f
+
+    // Observe export registry for this item (HLS only)
+    val exportRegistry by HlsExportRegistry.exports.collectAsStateWithLifecycle()
+    val exportResult = if (item.isExo && item.uri != null) exportRegistry[item.uri] else null
+
+    ListItem(
+        headlineContent = {
+            Text(
+                item.title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        supportingContent = {
+            Column {
+                if (item.status == DownloadManager.STATUS_RUNNING) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                    )
+                    val speedStr = if (item.speedBytesPerSec > 0)
+                        "  ·  ${DownloadUtils.formatFileSize(item.speedBytesPerSec)}/s"
+                    else ""
+                    Text("${DownloadUtils.formatFileSize(item.bytesDownloaded)} / ${DownloadUtils.formatFileSize(item.totalSize)}$speedStr")
+                } else if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
+                     Text(DownloadUtils.formatFileSize(item.totalSize))
+                } else if (item.status == DownloadManager.STATUS_FAILED) {
+                    Text("Failed", color = MaterialTheme.colorScheme.error)
+                } else {
+                    Text("Pending...")
+                }
+            }
+        },
+        leadingContent = {
+            val icon = when {
+                item.mediaType?.startsWith("video/") == true -> Icons.Default.Movie
+                item.mediaType?.contains("zip") == true || item.mediaType?.contains("compressed") == true -> Icons.Default.Archive
+                else -> Icons.Default.Description
+            }
+            Icon(icon, null)
+        },
+        trailingContent = {
+            Row {
+                if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
+                    if (item.mediaType?.startsWith("video/") == true || item.isExo) {
+                        // Open in external player (system downloads with a local file)
+                        if (!item.isExo && item.localUri != null) {
+                            IconButton(onClick = {
+                                openInExternalPlayer(context, item.localUri, item.mediaType)
+                            }) {
+                                Icon(Icons.Default.OpenInNew, "Open in player", tint = MaterialTheme.colorScheme.secondary)
+                            }
+                        }
+                        // HLS export state — driven by HlsExportRegistry (auto-triggered by service)
+                        if (item.isExo) {
+                            when (exportResult?.state) {
+                                HlsExportRegistry.ExportState.DONE -> {
+                                    IconButton(onClick = {
+                                        exportResult.path?.let { openInExternalPlayer(context, it, "video/mp2t") }
+                                    }) {
+                                        Icon(Icons.Default.OpenInNew, "Open in player", tint = MaterialTheme.colorScheme.secondary)
+                                    }
+                                }
+                                HlsExportRegistry.ExportState.EXPORTING -> {
+                                    IconButton(onClick = {}, enabled = false) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(20.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    }
+                                }
+                                else -> {
+                                    // FAILED or null — show nothing, export will be retried next time
+                                }
+                            }
+                        }
+                    } else {
+                        IconButton(onClick = {}, enabled = false) {
+                            Icon(Icons.Default.CheckCircle, "Completed", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                } else if (item.status == DownloadManager.STATUS_FAILED) {
+                    IconButton(onClick = onErrorClick) {
+                        Icon(Icons.Default.Error, "Failed", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+                
+                if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
+                     IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Close, "Cancel", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    )
+}
+
+fun getSystemDownloads(downloadManager: DownloadManager): List<DownloadItem> {
+    val downloads = mutableListOf<DownloadItem>()
+    val query = DownloadManager.Query()
+    
+    try {
+        val cursor = downloadManager.query(query)
+        cursor.use {
+            if (it.moveToFirst()) {
+                val idCol = it.getColumnIndex(DownloadManager.COLUMN_ID)
+                val titleCol = it.getColumnIndex(DownloadManager.COLUMN_TITLE)
+                val statusCol = it.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                val uriCol = it.getColumnIndex(DownloadManager.COLUMN_URI) // Remote URI
+                val localUriCol = it.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI) // Local file URI
+                val mediaTypeCol = it.getColumnIndex(DownloadManager.COLUMN_MEDIA_TYPE)
+                val totalSizeCol = it.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                val downloadedCol = it.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                val lastModCol = it.getColumnIndex(DownloadManager.COLUMN_LAST_MODIFIED_TIMESTAMP)
+                val reasonCol = it.getColumnIndex(DownloadManager.COLUMN_REASON)
+
+                do {
+                    val id = it.getLong(idCol)
+                    val title = it.getString(titleCol) ?: "Unknown"
+                    val status = it.getInt(statusCol)
+                    val uri = it.getString(uriCol)
+                    val localUri = if (localUriCol >= 0) it.getString(localUriCol) else null
+                    val mediaType = it.getString(mediaTypeCol)
+                    val totalSize = it.getLong(totalSizeCol)
+                    val bytesDownloaded = it.getLong(downloadedCol)
+                    val lastModified = it.getLong(lastModCol)
+
+                    val errorReason = if (status == DownloadManager.STATUS_FAILED) {
+                        val reason = it.getInt(reasonCol)
+                        DownloadUtils.getDownloadErrorString(reason)
+                    } else null
+
+                    downloads.add(DownloadItem(id, title, status, uri, localUri, mediaType, totalSize, bytesDownloaded, lastModified, errorReason = errorReason))
+                } while (it.moveToNext())
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return downloads
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+fun getExoDownloads(downloadManager: androidx.media3.exoplayer.offline.DownloadManager): List<DownloadItem> {
+    val downloads = mutableListOf<DownloadItem>()
+    try {
+        val cursor: DownloadCursor = downloadManager.downloadIndex.getDownloads()
+        while (cursor.moveToNext()) {
+            val download = cursor.download
+            val id = download.request.id.hashCode().toLong() // Use hash of URL as ID
+            val title = String(download.request.data) // We stored filename in data
+            
+            val status = when (download.state) {
+                Download.STATE_COMPLETED -> DownloadManager.STATUS_SUCCESSFUL
+                Download.STATE_FAILED -> DownloadManager.STATUS_FAILED
+                Download.STATE_DOWNLOADING -> DownloadManager.STATUS_RUNNING
+                Download.STATE_QUEUED -> DownloadManager.STATUS_PENDING
+                Download.STATE_STOPPED -> DownloadManager.STATUS_PAUSED
+                else -> DownloadManager.STATUS_PENDING
+            }
+            
+            val uri = download.request.uri.toString()
+            val mediaType = "application/x-mpegurl" // Assumed HLS
+            val bytesDownloaded = download.bytesDownloaded
+            // HLS contentLength is -1 (unknown); fall back to bytesDownloaded for display
+            val totalSize = if (download.contentLength == -1L) bytesDownloaded else download.contentLength
+            val lastModified = download.updateTimeMs
+            
+            val errorReason = if (status == DownloadManager.STATUS_FAILED) {
+                 if (download.failureReason != Download.FAILURE_REASON_NONE) {
+                     "ExoPlayer Error: ${download.failureReason}" 
+                 } else {
+                     "Unknown ExoPlayer Error"
+                 }
+            } else null
+            
+            downloads.add(DownloadItem(
+                id = id,
+                title = title.ifEmpty { "HLS Video" },
+                status = status,
+                uri = uri,
+                mediaType = mediaType,
+                totalSize = totalSize,
+                bytesDownloaded = bytesDownloaded,
+                lastModified = lastModified,
+                isExo = true,
+                exoState = download.state,
+                errorReason = errorReason
+            ))
+        }
+        cursor.close()
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return downloads
+}

@@ -1,0 +1,15 @@
+{
+  "name": "playbridge-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
+  },
+  "devDependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
+    "@types/firefox-webext-browser": "^143.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.0.0"
+  }
+}

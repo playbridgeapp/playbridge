@@ -1,0 +1,51 @@
+name: playbridge_desktop
+description: "PlayBridge desktop receiver — accepts cast commands from the phone and plays via libmpv."
+publish_to: 'none'
+version: 1.0.2+3
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # WebSocket server (matches phone's expected port 8765, JSON envelope)
+  shelf: ^1.4.1
+  shelf_web_socket: ^2.0.0
+  web_socket_channel: ^3.0.1
+
+  # libmpv-backed player + video surface (cross-platform: macOS, Windows, Linux)
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
+
+  # libmdk-backed player fallback (FFmpeg-based)
+  fvp: ^0.36.2
+  video_player: ^2.9.2
+
+  # PlayBridge protocol — generated protobuf types (git submodule)
+  playbridge_protocol:
+    path: ../protocol/generated/dart
+
+  # mDNS service publishing (_playbridge._tcp.) + persistent pairing
+  bonsoir: ^5.1.10
+  shared_preferences: ^2.3.3
+  uuid: ^4.5.1
+
+  # Service-like behavior: tray icon + programmatic window control.
+  # Launch-at-login is implemented in lib/auto_launch.dart (no plugin).
+  tray_manager: ^0.5.1
+  window_manager: ^0.4.3
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/tray_icon.png

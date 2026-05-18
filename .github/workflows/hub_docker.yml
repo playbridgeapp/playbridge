@@ -1,0 +1,84 @@
+name: Build and Push Hub Docker Images
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'hub/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME_SERVER: truedem0n/playbridge-hub-server
+  IMAGE_NAME_UI: truedem0n/playbridge-hub-ui
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from package.json
+        id: version
+        run: |
+          VERSION=$(jq -r .version hub/ui/package.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git rev-parse "hub-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "skipped=true" >> $GITHUB_OUTPUT
+            echo "⏭️ hub-v${{ steps.version.outputs.version }} already exists, skipping build."
+          else
+            echo "skipped=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log in to the Container registry
+        if: steps.check_tag.outputs.skipped == 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Hub Server
+        if: steps.check_tag.outputs.skipped == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./hub/server
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_SERVER }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_SERVER }}:${{ steps.version.outputs.version }}
+
+      - name: Build and push Hub UI
+        if: steps.check_tag.outputs.skipped == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./hub/ui
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_UI }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_UI }}:${{ steps.version.outputs.version }}
+
+      - name: Create Release
+        if: steps.check_tag.outputs.skipped == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: hub-v${{ steps.version.outputs.version }}
+          name: PlayBridge Hub v${{ steps.version.outputs.version }}
+          body: |
+            Automated Docker build for PlayBridge Hub.
+            
+            **Images:**
+            - `ghcr.io/${{ env.IMAGE_NAME_SERVER }}:${{ steps.version.outputs.version }}`
+            - `ghcr.io/${{ env.IMAGE_NAME_UI }}:${{ steps.version.outputs.version }}`
+          generate_release_notes: true

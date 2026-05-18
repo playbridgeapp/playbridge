@@ -1,0 +1,144 @@
+name: Extension Build
+# protocol submodule: playbridgeapp/playbridge-protocol
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "extension/**"
+      - ".github/workflows/extension_build.yml"
+      - ".gitmodules"
+  workflow_dispatch:
+
+jobs:
+  build-extension:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./extension
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: true
+
+    - name: Get version
+      id: version
+      run: |
+        VERSION=$(jq -r '.version' src/manifest.json)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Check version status
+      id: check_tag
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        # Try to get version from previous commit to check for bumps
+        PREV_VERSION=$(git show HEAD^:extension/src/manifest.json 2>/dev/null | jq -r '.version' 2>/dev/null || echo "none")
+        
+        if git rev-parse "extension-v$VERSION" >/dev/null 2>&1; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ extension-v$VERSION already exists (tag found), skipping."
+        elif [ "$VERSION" == "$PREV_VERSION" ]; then
+          echo "skipped=true" >> $GITHUB_OUTPUT
+          echo "⏭️ Version $VERSION matches previous commit (no bump), skipping."
+        else
+          echo "skipped=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Node
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install dependencies and build
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        npm install
+        npm run build
+
+    - name: Install web-ext
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: npm install -g web-ext
+
+    - name: Sign extension via AMO
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+        AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+      run: |
+        web-ext sign \
+          --source-dir dist \
+          --artifacts-dir dist \
+          --channel unlisted \
+          --api-key "$AMO_JWT_ISSUER" \
+          --api-secret "$AMO_JWT_SECRET"
+
+    - name: Rename output
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        find dist -name "*.xpi" -type f | while read f; do
+          mv "$f" "dist/playbridge-extension-${{ steps.version.outputs.version }}.xpi"
+        done
+
+    - name: Upload to R2
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      run: |
+        aws s3 cp dist/ \
+          s3://${{ secrets.R2_BUCKET }}/extension-release/ \
+          --recursive --exclude "*" --include "*.xpi"
+
+  release:
+    needs: build-extension
+    if: needs.build-extension.outputs.skipped == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' extension/src/manifest.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download artifact from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          mkdir -p output
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/extension-release/ output/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: extension-v${{ steps.version.outputs.version }}
+          name: PlayBridge Extension v${{ steps.version.outputs.version }}
+          body: |
+            **Firefox Extension:** v${{ steps.version.outputs.version }}
+
+            Install by dragging the `.xpi` file into Firefox, or via `about:addons` → Install Add-on From File.
+          files: output/*.xpi
+          generate_release_notes: true
+
+      - name: Clean up R2 after release
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/extension-release/ --recursive

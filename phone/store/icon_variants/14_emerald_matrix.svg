@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="PlayBridge — Emerald Matrix">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#031408"/>
+      <stop offset="1" stop-color="#010602"/>
+    </linearGradient>
+    <radialGradient id="tileGlow" cx="0.5" cy="0.8" r="0.6">
+      <stop offset="0" stop-color="#00ff41" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#00ff41" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bond" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#b8f2d5"/>
+      <stop offset="0.3" stop-color="#00ff41"/>
+      <stop offset="0.8" stop-color="#008f11"/>
+      <stop offset="1" stop-color="#003b00"/>
+    </linearGradient>
+    <filter id="pGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="10" result="blur"/>
+      <feFlood flood-color="#00ff41" flood-opacity="0.5"/>
+      <feComposite in2="blur" operator="in" result="g"/>
+      <feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <rect width="512" height="512" rx="112" fill="url(#tileGlow)"/>
+  <g filter="url(#pGlow)">
+    <path fill="url(#bond)" fill-rule="evenodd" d="
+      M168 139 a14 14 0 0 1 14 -14
+      H244 a116 80 0 0 1 0 160
+      V396 a14 14 0 0 1 -14 14
+      H182 a14 14 0 0 1 -14 -14 Z
+      M244 175 a45 30 0 0 1 0 60 Z
+    "/>
+  </g>
+</svg>

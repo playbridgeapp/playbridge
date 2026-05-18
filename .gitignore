@@ -1,0 +1,92 @@
+# Java heap dumps
+*.hprof
+
+# Android/IntelliJ
+*.iml
+.idea
+.gradle
+build/
+app/build/
+.cxx/
+
+# Local configuration file (sdk.dir, ndk.dir, etc.)
+local.properties
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+
+# Keystore
+*.jks
+*.keystore
+keystore/
+
+# Google Services
+google-services.json
+
+# Captures
+captures/
+
+# OS Specific
+.DS_Store
+Thumbs.db
+
+# Project Specific
+deploymentTargetSelector.xml
+tv/app/release
+tv/player/app/release
+tv/browser/app/release
+phone/app/release
+**/*.apk
+**/*.aab
+
+extension/dist
+
+protocol/bin
+
+.kotlin
+
+# CocoaPods
+**/Pods/
+**/Podfile.lock
+
+# Swift Package Manager
+**/.build/
+
+# Xcode User State
+**/xcuserdata/
+
+
+# open source repos
+inspirations
+
+
+tv/player/build_log.txt
+
+# Hub (Go + SvelteKit)
+hub/ui/node_modules/
+hub/ui/.svelte-kit/
+hub/ui/build/
+pnpm-debug.log*
+hub/server/bin/
+hub/server/server.exe
+.env.*
+!.env.example
+hub/server/cache/
+hub/server/*.db
+hub/server/config.json
+
+# Stream Resolver (Go)
+stream-resolver/config.json
+stream-resolver/cache/
+stream-resolver/playbridge-stream-resolver
+stream-resolver/*.exe
+
+# Claude Code local settings
+.claude/
+# Added by code-review-graph
+.code-review-graph/
+
+# Icon generation working artifacts (derived SVGs + intermediate PNGs)
+phone/store/icon_variants/_generated/

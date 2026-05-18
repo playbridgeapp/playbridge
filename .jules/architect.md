@@ -1,0 +1,1 @@
+## 2024-XX-XX - [Hardcoded Values] **Learning:** Found hardcoded constants like WebSocket port (8765) and connection retry counts scattered across apps. **Action:** Should centralize these in shared protocol module.
