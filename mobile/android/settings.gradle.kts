@@ -29,6 +29,3 @@ rootProject.name = "PlayBridgePhone"
 include(":app")
 include(":shared")
 project(":shared").projectDir = File("../../shared")
-include(":libs:mpv-android")
-project(":libs").projectDir = File("../../libs")
-project(":libs:mpv-android").projectDir = File("../../libs/mpv-android")

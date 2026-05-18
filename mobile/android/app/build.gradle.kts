@@ -140,5 +140,6 @@ dependencies {
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.ui)
 
+    implementation(files("../../libs/mpv-android/mpv-android.aar"))
     implementation(project(":shared"))
 }
