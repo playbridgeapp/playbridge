@@ -34,10 +34,9 @@ Thumbs.db
 
 # Project Specific
 deploymentTargetSelector.xml
-tv/app/release
-tv/player/app/release
-tv/browser/app/release
-phone/app/release
+android/tv/player/app/release
+android/tv/browser/app/release
+android/phone/app/release
 **/*.apk
 **/*.aab
 
@@ -62,7 +61,7 @@ protocol/bin
 inspirations
 
 
-tv/player/build_log.txt
+android/tv/player/build_log.txt
 
 # Hub (Go + SvelteKit)
 hub/ui/node_modules/

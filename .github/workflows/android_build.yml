@@ -4,12 +4,7 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - 'phone/**'
-      - 'tv/**'
-      - 'shared/**'
-      - '*.gradle.kts'
-      - 'gradle/**'
-      - 'gradle.properties'
+      - 'android/**'
   # pull_request:
   #   branches: [ "main" ]
   workflow_dispatch:
@@ -19,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./phone
+        working-directory: ./android/phone
     outputs:
       version: ${{ steps.version.outputs.version }}
       skipped: ${{ steps.check_tag.outputs.skipped }}
@@ -111,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./tv/player
+        working-directory: ./android/tv/player
     outputs:
       version: ${{ steps.version.outputs.version }}
       skipped: ${{ steps.check_tag.outputs.skipped }}
@@ -203,7 +198,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./tv/browser
+        working-directory: ./android/tv/browser
     outputs:
       version: ${{ steps.version.outputs.version }}
       skipped: ${{ steps.check_tag.outputs.skipped }}
@@ -323,9 +318,9 @@ jobs:
       - name: Get versions
         id: versions
         run: |
-          PHONE=$(grep 'versionName =' phone/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
-          PLAYER=$(grep 'versionName =' tv/player/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
-          BROWSER=$(grep 'versionName =' tv/browser/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          PHONE=$(grep 'versionName =' android/phone/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          PLAYER=$(grep 'versionName =' android/tv/player/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          BROWSER=$(grep 'versionName =' android/tv/browser/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
           echo "phone=$PHONE" >> $GITHUB_OUTPUT
           echo "player=$PLAYER" >> $GITHUB_OUTPUT
           echo "browser=$BROWSER" >> $GITHUB_OUTPUT
