@@ -18,11 +18,17 @@ dependencyResolutionManagement {
         mavenCentral()
         maven("https://maven.mozilla.org/maven2/")
     }
+    versionCatalogs {
+        create("libs") {
+            from(files("../gradle/libs.versions.toml"))
+        }
+    }
 }
 
-rootProject.name = "PlayBridge"
+rootProject.name = "PlayBridgeTV"
+include(":player:app")
+include(":browser:app")
 include(":shared")
+project(":shared").projectDir = File("../shared")
 include(":libs:mpv-android")
-include(":phone:app")
-include(":tv:player:app")
-include(":tv:browser:app")
+project(":libs:mpv-android").projectDir = File("../libs/mpv-android")

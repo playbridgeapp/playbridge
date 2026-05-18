@@ -161,7 +161,7 @@ jobs:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew assembleRelease bundleRelease
+      run: ./gradlew :player:app:assembleRelease :player:app:bundleRelease
 
     - name: Rename outputs
       if: steps.check_tag.outputs.skipped == 'false'
@@ -253,7 +253,7 @@ jobs:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew assembleRelease bundleRelease
+      run: ./gradlew :browser:app:assembleRelease :browser:app:bundleRelease
 
     - name: Rename outputs
       if: steps.check_tag.outputs.skipped == 'false'
