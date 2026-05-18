@@ -1,3 +1,0 @@
-## 2026-03-09 - [Add aria-label to Extension Popup] **Learning:**[Icon-only buttons dynamically created in vanilla JS need explicit aria-label attributes for screen readers] **Action:** [Always verify dynamically generated HTML elements for accessibility attributes]
-
-## 2026-03-13 - [Null Content Description for List Icons accompanied by Text] **Learning:**[In Jetpack Compose, when an icon is accompanied by descriptive text within the same layout or button (e.g., an icon next to a text label), its `contentDescription` should be explicitly set to `null` to prevent redundant TalkBack screen reader announcements.] **Action:** [Always verify if icons have adjacent descriptive text before assigning a non-null contentDescription.]
