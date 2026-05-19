@@ -144,7 +144,7 @@ private fun SettingsHubContent(
             SettingsNavItem(
                 icon = Icons.Default.Cloud,
                 title = "Debrid",
-                subtitle = "Real-Debrid, All-Debrid, Premiumize",
+                subtitle = "Real-Debrid, All-Debrid, Premiumize, TorBox",
                 onClick = onDebrid
             )
             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))

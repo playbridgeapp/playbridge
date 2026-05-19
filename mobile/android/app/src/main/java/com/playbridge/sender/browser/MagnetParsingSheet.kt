@@ -87,7 +87,8 @@ fun MagnetParsingSheet(
             val videos = info.files.filter { it.isVideo }.map { it.id }.toSet()
             selectedFiles = videos.ifEmpty { info.files.map { it.id }.toSet() }
 
-            if (info.status == TorrentStatus.WAITING_FILES_SELECTION || provider.name == "Real-Debrid") {
+            if (info.status == TorrentStatus.WAITING_FILES_SELECTION ||
+                (info.files.isNotEmpty() && provider.name == "Real-Debrid")) {
                 currentState = MagnetSheetState.SELECTING_FILES
             } else {
                 // If already downloading or ready and doesn't explicitly need selection UI, just jump to resolving

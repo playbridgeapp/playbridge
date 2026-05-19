@@ -624,6 +624,7 @@ fun DebridLibraryScreen(
                                             for (file in files) {
                                                 val link = when (configName) {
                                                     DebridRepository.PROVIDER_PREMIUMIZE -> file.id
+                                                    DebridRepository.PROVIDER_TORBOX -> "${torrentDetails!!.id}:${file.id}"
                                                     else -> if (file.link.isNotEmpty()) file.link else file.id
                                                 }
                                                 val unrestricted = provider.unrestrictLink(link)
@@ -724,6 +725,7 @@ fun DebridLibraryScreen(
                                                         val configName = repository.getConfiguredProviderName()
                                                         val link = when (configName) {
                                                             DebridRepository.PROVIDER_PREMIUMIZE -> file.id
+                                                            DebridRepository.PROVIDER_TORBOX -> "${torrentDetails!!.id}:${file.id}"
                                                             else -> if (file.link.isNotEmpty()) file.link else file.id
                                                         }
                                                         val unrestricted = provider.unrestrictLink(link)
@@ -744,6 +746,7 @@ fun DebridLibraryScreen(
                                                         val configName = repository.getConfiguredProviderName()
                                                         val link = when (configName) {
                                                             DebridRepository.PROVIDER_PREMIUMIZE -> file.id
+                                                            DebridRepository.PROVIDER_TORBOX -> "${torrentDetails!!.id}:${file.id}"
                                                             else -> if (file.link.isNotEmpty()) file.link else file.id
                                                         }
                                                         val unrestricted = provider.unrestrictLink(link)

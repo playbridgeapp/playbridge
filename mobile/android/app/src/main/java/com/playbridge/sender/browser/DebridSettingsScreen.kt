@@ -40,7 +40,8 @@ fun DebridSettingsScreen(onBack: () -> Unit) {
         DebridRepository.PROVIDER_NONE,
         DebridRepository.PROVIDER_REAL_DEBRID,
         DebridRepository.PROVIDER_ALL_DEBRID,
-        DebridRepository.PROVIDER_PREMIUMIZE
+        DebridRepository.PROVIDER_PREMIUMIZE,
+        DebridRepository.PROVIDER_TORBOX
     )
 
     Scaffold(

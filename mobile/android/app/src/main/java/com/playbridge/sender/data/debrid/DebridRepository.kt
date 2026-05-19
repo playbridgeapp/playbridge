@@ -15,6 +15,7 @@ class DebridRepository(private val context: Context) {
         const val PROVIDER_REAL_DEBRID = "Real-Debrid"
         const val PROVIDER_ALL_DEBRID = "All-Debrid"
         const val PROVIDER_PREMIUMIZE = "Premiumize"
+        const val PROVIDER_TORBOX = "TorBox"
     }
 
     private val json = Json {
@@ -61,6 +62,7 @@ class DebridRepository(private val context: Context) {
             PROVIDER_REAL_DEBRID -> RealDebridClient(apiKey, client, json)
             PROVIDER_ALL_DEBRID -> AllDebridClient(apiKey, client, json)
             PROVIDER_PREMIUMIZE -> PremiumizeClient(apiKey, client, json)
+            PROVIDER_TORBOX -> TorBoxClient(apiKey, client, json)
             else -> null
         }
     }
