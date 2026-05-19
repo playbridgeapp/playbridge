@@ -17,9 +17,14 @@ android {
         applicationId = "com.playbridge.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 52
-        versionName = "0.1.52"
+        versionCode = 53
+        versionName = "0.1.53"
 
+        buildConfigField(
+            "String",
+            "GECKO_PLUGIN_DOWNLOAD_URL",
+            "\"https://github.com/atulmehla/playbridgeapp/releases\""
+        )
     }
 
     signingConfigs {

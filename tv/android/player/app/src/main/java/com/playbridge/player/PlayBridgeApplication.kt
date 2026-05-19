@@ -33,6 +33,9 @@ class PlayBridgeApplication : Application() {
         FileLogger.init(this)
         registerActivityLifecycleCallbacks(activityLifecycleCallbacks)
         installCrashHandler()
+
+        // Preload AdBlocker in background so filters are ready
+        com.playbridge.player.browser.AdBlocker.preload(this)
     }
 
 

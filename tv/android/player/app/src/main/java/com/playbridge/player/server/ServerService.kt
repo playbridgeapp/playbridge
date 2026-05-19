@@ -76,10 +76,19 @@ class ServerService : Service() {
 
         createNotificationChannel()
         val filter = android.content.IntentFilter(ACTION_CONTEXT_IDLE)
+        // Require the signature-protected CONTEXT_IDLE permission so only our own
+        // packages (signed with the same keystore) can reset activeContext.
+        val contextIdlePermission = "com.playbridge.permission.CONTEXT_IDLE"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(contextIdleReceiver, filter, RECEIVER_NOT_EXPORTED)
+            registerReceiver(
+                contextIdleReceiver,
+                filter,
+                contextIdlePermission,
+                null,
+                RECEIVER_EXPORTED
+            )
         } else {
-            registerReceiver(contextIdleReceiver, filter)
+            registerReceiver(contextIdleReceiver, filter, contextIdlePermission, null)
         }
     }
 
@@ -471,16 +480,59 @@ class ServerService : Service() {
             }
 
             is IncomingMessage.Browser -> {
-                FileLogger.i(TAG, "Browser command: ${msg.payload.url}")
-                activeContext = "browser"
-                broadcastContext()
-                val browserIntent = Intent("com.playbridge.player.ACTION_BROWSER").apply {
-                    putExtra("extra_url", msg.payload.url)
-                    putExtra("extra_browser_mode", msg.payload.browser_mode)
-                    putExtra("extra_desktop_mode", msg.payload.desktop_mode ?: false)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                val url = msg.payload.url
+                val browserMode = msg.payload.browser_mode ?: "webview"
+                val desktopMode = msg.payload.desktop_mode ?: false
+
+                FileLogger.i(TAG, "Browser command: $url (mode: $browserMode)")
+
+                val useGecko = browserMode == "gecko"
+
+                if (useGecko) {
+                    if (isGeckoApkInstalled()) {
+                        activeContext = "browser_external"
+                        broadcastContext()
+                        val browserIntent = Intent("com.playbridge.player.ACTION_BROWSER").apply {
+                            setPackage("com.playbridge.browser")
+                            putExtra("extra_url", url)
+                            putExtra("extra_browser_mode", browserMode)
+                            putExtra("extra_desktop_mode", desktopMode)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        }
+                        launchActivityFromBackground(browserIntent, "Opening GeckoView plugin")
+                    } else {
+                        FileLogger.w(TAG, "GeckoView requested but plugin not installed. Falling back to internal WebView.")
+                        scope.launch {
+                            try {
+                                webSocketServer?.broadcastStatus(
+                                    "{\"type\":\"browser_fallback\",\"message\":\"GeckoView engine not installed. Using System WebView.\"}"
+                                )
+                            } catch (e: Exception) {
+                                FileLogger.e(TAG, "Failed to send browser fallback status", e)
+                            }
+                        }
+
+                        activeContext = "browser"
+                        broadcastContext()
+                        val browserIntent = Intent("com.playbridge.player.ACTION_BROWSER_INTERNAL").apply {
+                            setPackage(packageName)
+                            putExtra("extra_url", url)
+                            putExtra("extra_desktop_mode", desktopMode)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        }
+                        launchActivityFromBackground(browserIntent, "Opening internal WebView")
+                    }
+                } else {
+                    activeContext = "browser"
+                    broadcastContext()
+                    val browserIntent = Intent("com.playbridge.player.ACTION_BROWSER_INTERNAL").apply {
+                        setPackage(packageName)
+                        putExtra("extra_url", url)
+                        putExtra("extra_desktop_mode", desktopMode)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    launchActivityFromBackground(browserIntent, "Opening internal WebView")
                 }
-                launchActivityFromBackground(browserIntent, "Opening browser")
             }
             is IncomingMessage.Control -> {
                 FileLogger.i(TAG, "Control command: ${msg.payload.command}")
@@ -496,17 +548,19 @@ class ServerService : Service() {
             }
             is IncomingMessage.Remote -> {
                 FileLogger.i(TAG, "Remote command: ${msg.payload.key}")
-                val intent = Intent(ACTION_REMOTE).apply {
-                    putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
-                    setPackage(packageName)
+                if (activeContext == "browser_external") {
+                    val browserIntent = Intent(ACTION_REMOTE).apply {
+                        putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
+                        setPackage("com.playbridge.browser")
+                    }
+                    sendBroadcast(browserIntent)
+                } else {
+                    val intent = Intent(ACTION_REMOTE).apply {
+                        putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
+                        setPackage(packageName)
+                    }
+                    sendBroadcast(intent)
                 }
-                sendBroadcast(intent)
-                // Also broadcast to browser app
-                val browserIntent = Intent(ACTION_REMOTE).apply {
-                    putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
-                    setPackage("com.playbridge.browser")
-                }
-                sendBroadcast(browserIntent)
             }
             is IncomingMessage.Mouse -> {
                 val intent = Intent(ACTION_MOUSE).apply {
@@ -515,40 +569,34 @@ class ServerService : Service() {
                     putExtra(EXTRA_MOUSE_DY, msg.payload.dy)
                 }
 
-                // Only broadcast mouse events to the active context to reduce IPC overhead
-                // and avoid waking up background apps unnecessarily.
                 when (activeContext) {
-                    "browser" -> {
+                    "browser_external" -> {
                         intent.setPackage("com.playbridge.browser")
                         sendBroadcast(intent)
                     }
-                    "player" -> {
+                    "browser", "player" -> {
                         intent.setPackage(packageName)
                         sendBroadcast(intent)
                     }
-                    else -> {
-                        // Fallback: send to both if context is unknown or idle
-                        intent.setPackage(packageName)
-                        sendBroadcast(intent)
-
-                        val browserIntent = Intent(intent).setPackage("com.playbridge.browser")
-                        sendBroadcast(browserIntent)
-                    }
+                    // "idle" or any unknown context: nothing on screen to receive mouse
+                    // events; dropping rather than waking both packages.
                 }
             }
             is IncomingMessage.BrowserControl -> {
                 FileLogger.i(TAG, "Browser control: ${msg.payload.action}")
-                val intent = Intent(ACTION_BROWSER_CONTROL).apply {
-                    putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
-                    setPackage(packageName)
+                if (activeContext == "browser_external") {
+                    val browserIntent = Intent(ACTION_BROWSER_CONTROL).apply {
+                        putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
+                        setPackage("com.playbridge.browser")
+                    }
+                    sendBroadcast(browserIntent)
+                } else {
+                    val intent = Intent(ACTION_BROWSER_CONTROL).apply {
+                        putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
+                        setPackage(packageName)
+                    }
+                    sendBroadcast(intent)
                 }
-                sendBroadcast(intent)
-                // Also broadcast to browser app
-                val browserIntent = Intent(ACTION_BROWSER_CONTROL).apply {
-                    putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
-                    setPackage("com.playbridge.browser")
-                }
-                sendBroadcast(browserIntent)
             }
             is IncomingMessage.ContextQuery -> {
                 FileLogger.i(TAG, "Context query - responding with: $activeContext")
@@ -832,6 +880,15 @@ class ServerService : Service() {
             preferredIp
         } else {
             backupIp
+        }
+    }
+
+    private fun isGeckoApkInstalled(): Boolean {
+        return try {
+            packageManager.getPackageInfo("com.playbridge.browser", 0)
+            true
+        } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+            false
         }
     }
 

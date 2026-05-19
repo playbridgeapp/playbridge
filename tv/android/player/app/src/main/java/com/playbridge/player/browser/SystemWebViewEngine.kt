@@ -1,4 +1,4 @@
-package com.playbridge.browser
+package com.playbridge.player.browser
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -26,7 +26,7 @@ class SystemWebViewEngine(
     private val onFullscreen: (View, WebChromeClient.CustomViewCallback) -> Unit,
     private val onExitFullscreen: () -> Unit,
     private val onEngineRecreateRequired: (url: String?) -> Unit = {}
-) : BrowserEngine {
+) {
 
     companion object {
         private const val TAG = "SystemWebViewEngine"
@@ -44,36 +44,34 @@ class SystemWebViewEngine(
         setupWebView()
     }
 
-    override fun getView(): View = webView
+    fun getView(): View = webView
 
-    override fun loadUrl(url: String) {
+    fun loadUrl(url: String) {
         currentUrl = url
         webView.loadUrl(url)
     }
 
-    override fun reload() {
+    fun reload() {
         webView.reload()
     }
 
-    override fun goBack() {
+    fun goBack() {
         if (webView.canGoBack()) {
             webView.goBack()
         }
     }
 
-    override fun canGoBack(): Boolean = canGoBack
+    fun canGoBack(): Boolean = canGoBack
 
-    override fun evaluateJavascript(script: String, callback: ((String?) -> Unit)?) {
+    fun evaluateJavascript(script: String, callback: ((String?) -> Unit)? = null) {
         webView.evaluateJavascript(script, callback)
     }
 
-    override fun destroy() {
+    fun destroy() {
         webView.destroy()
     }
 
-
-
-    override fun scrollBy(dx: Float, dy: Float) {
+    fun scrollBy(dx: Float, dy: Float) {
         scrollAccumulatorX += dx
         scrollAccumulatorY += dy
         
@@ -87,7 +85,7 @@ class SystemWebViewEngine(
         }
     }
 
-    override fun simulateClick(x: Float, y: Float) {
+    fun simulateClick(x: Float, y: Float) {
         val downTime = android.os.SystemClock.uptimeMillis()
         val eventTime = downTime
 
@@ -274,7 +272,7 @@ class SystemWebViewEngine(
                     request.setMimeType(mimeType)
 
                     // Extract filename
-                    var fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+                    val fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
                     request.setTitle(fileName)
 
                     // Add cookie if needed

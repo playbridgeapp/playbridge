@@ -1,6 +1,7 @@
 package com.playbridge.player.ui
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -58,6 +59,28 @@ fun SettingsScreen(
     var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
     var isRestarting by remember { mutableStateOf(false) }
     var themeStr by remember { mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK") }
+
+    // GeckoView Plugin states
+    var isGeckoInstalled by remember { mutableStateOf(false) }
+    var showGeckoDialog by remember { mutableStateOf(false) }
+
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                isGeckoInstalled = try {
+                    context.packageManager.getPackageInfo("com.playbridge.browser", 0)
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     fun restartServer() {
         isRestarting = true
@@ -247,6 +270,19 @@ fun SettingsScreen(
                                 onClick = {}
                             )
                         }
+                        item {
+                            SettingClickableItem(
+                                label = "GeckoView Engine (Optional Plugin)",
+                                description = if (isGeckoInstalled) "Installed" else "Not Installed (click to learn more/sideload)",
+                                onClick = {
+                                    if (isGeckoInstalled) {
+                                        Toast.makeText(context, "GeckoView Plugin is ready to use", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        showGeckoDialog = true
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -306,7 +342,53 @@ fun SettingsScreen(
         }
     }
 
+    if (showGeckoDialog) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showGeckoDialog = false }) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.width(450.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(32.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("Install GeckoView Plugin", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "GeckoView is an optional browser engine plugin that provides better compatibility with some streaming sites.\n\n" +
+                        "You can download it from:\n" +
+                        com.playbridge.player.BuildConfig.GECKO_PLUGIN_DOWNLOAD_URL,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(onClick = { showGeckoDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
+                            Text("Cancel")
+                        }
+                        Button(onClick = {
+                            showGeckoDialog = false
+                            try {
+                                val intent = Intent(context, com.playbridge.player.browser.BrowserActivity::class.java).apply {
+                                    action = "com.playbridge.player.ACTION_BROWSER_INTERNAL"
+                                    putExtra("extra_url", com.playbridge.player.BuildConfig.GECKO_PLUGIN_DOWNLOAD_URL)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Failed to launch browser: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }) {
+                            Text("Open Download Page")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 enum class SettingsCategory(val label: String, val icon: ImageVector) {

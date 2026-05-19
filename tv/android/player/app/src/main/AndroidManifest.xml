@@ -26,6 +26,13 @@
     <!-- Auto-start on boot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Signature-protected permission so only the Gecko plugin (signed with the same
+         keystore) can send ACTION_CONTEXT_IDLE to ServerService. -->
+    <permission
+        android:name="com.playbridge.permission.CONTEXT_IDLE"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.playbridge.permission.CONTEXT_IDLE" />
+
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
@@ -53,6 +60,7 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="rtsp" />
         </intent>
+        <package android:name="com.playbridge.browser" />
     </queries>
 
     <application
@@ -90,6 +98,18 @@
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <intent-filter>
                 <action android:name="com.playbridge.player.ACTION_PLAY" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".browser.BrowserActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+            <intent-filter>
+                <action android:name="com.playbridge.player.ACTION_BROWSER_INTERNAL" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>

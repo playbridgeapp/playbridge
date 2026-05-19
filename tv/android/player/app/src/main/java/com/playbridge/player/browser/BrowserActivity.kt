@@ -1,4 +1,4 @@
-package com.playbridge.browser
+package com.playbridge.player.browser
 
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
@@ -17,6 +17,7 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.webkit.WebChromeClient
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
@@ -33,7 +34,7 @@ import kotlinx.coroutines.cancel
 class BrowserActivity : ComponentActivity() {
 
     companion object {
-        private const val TAG = "TVBrowserActivity"
+        private const val TAG = "PBBrowserActivity"
         const val EXTRA_URL = "extra_url"
         const val EXTRA_DESKTOP_MODE = "extra_desktop_mode"
 
@@ -47,7 +48,7 @@ class BrowserActivity : ComponentActivity() {
         const val EXTRA_BROWSER_ACTION = "browser_action"
     }
 
-    private var engine: GeckoViewEngine? = null
+    private var engine: SystemWebViewEngine? = null
     private var canGoBack = false
     private var currentUrl: String? = null
 
@@ -55,6 +56,8 @@ class BrowserActivity : ComponentActivity() {
     private var isDragging = false
     private var dragDownTime = 0L
 
+    // Ad blocker
+    private lateinit var adBlocker: AdBlocker
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     // Cursor state
@@ -70,9 +73,10 @@ class BrowserActivity : ComponentActivity() {
     private val cursorHideDelayMs = 3000L  // Hide after 3 seconds of inactivity
 
     // Fullscreen video support
+    private var fullscreenView: View? = null
+    private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
-    private var isGeckoFullscreen = false
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -105,6 +109,9 @@ class BrowserActivity : ComponentActivity() {
             android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
         )
+
+        // Use the singleton AdBlocker
+        adBlocker = AdBlocker.getInstance(applicationContext)
 
         // Create root container layout with dark background
         rootContainer = FrameLayout(this).apply {
@@ -165,9 +172,8 @@ class BrowserActivity : ComponentActivity() {
 
         // Handle back press
         onBackPressedDispatcher.addCallback(this) {
-            if (isGeckoFullscreen) {
-                exitGeckoFullscreen()
-                engine?.evaluateJavascript("document.exitFullscreen && document.exitFullscreen();", null)
+            if (fullscreenView != null) {
+                exitFullscreen()
             } else if (engine?.canGoBack() == true) {
                 engine?.goBack()
             } else {
@@ -175,7 +181,7 @@ class BrowserActivity : ComponentActivity() {
             }
         }
 
-        // Register broadcast receiver for remote commands from player app
+        // Register broadcast receiver for remote commands
         val filter = IntentFilter().apply {
             addAction(ACTION_MOUSE)
             addAction(ACTION_REMOTE)
@@ -198,16 +204,21 @@ class BrowserActivity : ComponentActivity() {
 
         val desktopMode = intent.getBooleanExtra(EXTRA_DESKTOP_MODE, false)
 
-        Log.d(TAG, "Initializing GeckoView Engine (desktop=$desktopMode)")
-        engine = GeckoViewEngine(
+        Log.d(TAG, "Initializing System WebView Engine (desktop=$desktopMode)")
+        engine = SystemWebViewEngine(
             this,
+            adBlocker,
             desktopMode = desktopMode,
-            onFullscreen = { isFullscreen ->
-                if (isFullscreen) {
-                    enterGeckoFullscreen()
-                } else {
-                    exitGeckoFullscreen()
-                }
+            onFullscreen = { view, callback ->
+                enterFullscreen(view, callback)
+            },
+            onExitFullscreen = {
+                exitFullscreen()
+            },
+            onEngineRecreateRequired = { url ->
+                Log.w(TAG, "Rebuilding SystemWebViewEngine after render process crash")
+                initializeEngine()
+                url?.let { engine?.loadUrl(it) }
             }
         )
 
@@ -215,8 +226,22 @@ class BrowserActivity : ComponentActivity() {
         contentContainer?.addView(engine?.getView(), 0)
     }
 
-    private fun enterGeckoFullscreen() {
-        isGeckoFullscreen = true
+    private fun enterFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) {
+        if (fullscreenView != null) {
+            callback.onCustomViewHidden()
+            return
+        }
+
+        fullscreenView = view
+        fullscreenCallback = callback
+
+        contentContainer?.visibility = View.GONE
+        fullscreenContainer?.visibility = View.VISIBLE
+        fullscreenContainer?.addView(view, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -224,8 +249,18 @@ class BrowserActivity : ComponentActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
-    private fun exitGeckoFullscreen() {
-        isGeckoFullscreen = false
+    private fun exitFullscreen() {
+        if (fullscreenView == null) return
+
+        fullscreenContainer?.removeView(fullscreenView)
+        fullscreenView = null
+
+        fullscreenCallback?.onCustomViewHidden()
+        fullscreenCallback = null
+
+        fullscreenContainer?.visibility = View.GONE
+        contentContainer?.visibility = View.VISIBLE
+
         WindowInsetsControllerCompat(window, window.decorView)
             .show(WindowInsetsCompat.Type.systemBars())
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -237,7 +272,10 @@ class BrowserActivity : ComponentActivity() {
      */
     private fun dispatchTouchToActiveView(action: Int, x: Float, y: Float, downTime: Long, eventTime: Long) {
         val event = android.view.MotionEvent.obtain(downTime, eventTime, action, x, y, 0)
-        val targetView = engine?.getView()
+        val targetView = when {
+            fullscreenView != null -> fullscreenView
+            else -> engine?.getView()
+        }
         targetView?.dispatchTouchEvent(event)
         event.recycle()
     }
@@ -305,13 +343,12 @@ class BrowserActivity : ComponentActivity() {
     private fun handleRemoteCommand(key: String?) {
         Log.d(TAG, "Remote command: $key")
 
-        if (isGeckoFullscreen) {
+        if (fullscreenView != null) {
             when (key) {
                 "back" -> {
                     runOnUiThread {
-                        exitGeckoFullscreen()
+                        exitFullscreen()
                     }
-                    engine?.evaluateJavascript("document.exitFullscreen && document.exitFullscreen();", null)
                 }
                 "dpad_center" -> {
                     showCursorAndResetTimer()
@@ -507,14 +544,16 @@ class BrowserActivity : ComponentActivity() {
         scope.cancel()
         engine?.destroy()
         engine = null
-        // Notify the player app's ServerService that the browser session has ended so it can
-        // reset activeContext to "idle".
+        // Reset ServerService.activeContext so PairingScreen can open again after a
+        // browser session. Same contract as the external Gecko APK uses.
         try {
             val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
                 setPackage("com.playbridge.player")
             }
             sendBroadcast(idleIntent, "com.playbridge.permission.CONTEXT_IDLE")
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send ACTION_CONTEXT_IDLE: ${e.message}")
+        }
         super.onDestroy()
     }
 

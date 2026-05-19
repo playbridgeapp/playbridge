@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Lets this APK send ACTION_CONTEXT_IDLE to the player; signature-protected. -->
+    <uses-permission android:name="com.playbridge.permission.CONTEXT_IDLE" />
+
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />

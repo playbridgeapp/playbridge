@@ -1,4 +1,4 @@
-package com.playbridge.browser
+package com.playbridge.player.browser
 
 import android.content.Context
 import android.util.Log

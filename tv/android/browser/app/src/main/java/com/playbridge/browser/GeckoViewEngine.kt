@@ -13,10 +13,9 @@ import org.mozilla.geckoview.WebExtension
 
 class GeckoViewEngine(
     private val context: Context,
-    private val adBlocker: AdBlocker, // Kept for consistency, though GeckoView has own blocking
     private val desktopMode: Boolean = false,
     private val onFullscreen: ((Boolean) -> Unit)? = null
-) : BrowserEngine {
+) {
 
     companion object {
         private const val TAG = "GeckoViewEngine"
@@ -36,25 +35,25 @@ class GeckoViewEngine(
         setupGeckoView()
     }
 
-    override fun getView(): View = geckoView
+    fun getView(): View = geckoView
 
-    override fun loadUrl(url: String) {
+    fun loadUrl(url: String) {
         session.loadUri(url)
     }
 
-    override fun reload() {
+    fun reload() {
         session.reload()
     }
 
-    override fun goBack() {
+    fun goBack() {
         session.goBack()
     }
 
-    override fun canGoBack(): Boolean {
+    fun canGoBack(): Boolean {
         return _canGoBack
     }
 
-    override fun evaluateJavascript(script: String, callback: ((String?) -> Unit)?) {
+    fun evaluateJavascript(script: String, callback: ((String?) -> Unit)?) {
         val port = bridgePort
         if (port != null) {
             try {
@@ -82,12 +81,12 @@ class GeckoViewEngine(
         }
     }
 
-    override fun destroy() {
+    fun destroy() {
         bridgePort = null
         session.close()
     }
 
-    override fun scrollBy(dx: Float, dy: Float) {
+    fun scrollBy(dx: Float, dy: Float) {
         // Apply a 3x multiplier to make scrolling feel more responsive on TV.
         // GeckoView supports sub-pixel scrolling via PanZoomController, so we
         // can pass the raw double values directly for maximum smoothness.
@@ -98,7 +97,7 @@ class GeckoViewEngine(
         )
     }
 
-    override fun simulateClick(x: Float, y: Float) {
+    fun simulateClick(x: Float, y: Float) {
         // Dispatch touch events to GeckoView
         val downTime = android.os.SystemClock.uptimeMillis()
         val eventTime = downTime
