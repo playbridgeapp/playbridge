@@ -9,8 +9,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Settings
 import android.util.Log
@@ -64,7 +64,7 @@ fun AppSidebar(
                 screen = Screen.History,
                 currentScreen = currentScreen,
                 title = "History",
-                icon = Icons.Default.List,
+                icon = Icons.AutoMirrored.Filled.List,
                 onSelected = onScreenSelected
             )
 

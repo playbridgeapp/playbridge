@@ -120,7 +120,6 @@ fun MediaSettingsPanel(
                     }
                     SettingsTab.SPEED -> SpeedSettingsList(state.playbackSpeed, onSpeedSelected)
                     SettingsTab.SCALING -> ScalingSettingsList(state.videoScalingMode, onScalingSelected, state.engineType)
-                    else -> {}
                 }
             }
         }

@@ -245,7 +245,8 @@ class SystemWebViewEngine(
 
                 // Optimize for media streaming
                 cacheMode = WebSettings.LOAD_DEFAULT
-                databaseEnabled = true
+                // databaseEnabled was removed — WebView database is enabled by default on
+                // all supported API levels (the field has been a no-op since API 33).
 
                 // Enable off-screen rendering for smoother video
                 offscreenPreRaster = true

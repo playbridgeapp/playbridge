@@ -11,6 +11,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.playbridge.player.server.ServerService
+import com.playbridge.player.util.getStringMapExtra
 import com.playbridge.player.logging.FileLogger
 import android.view.Surface
 import android.view.SurfaceView
@@ -305,8 +306,7 @@ abstract class PlayerActivity : ComponentActivity() {
                     putExtra(Intent.EXTRA_TITLE, title)
                     putExtra("title", title)
                 }
-                @Suppress("UNCHECKED_CAST")
-                val headers = pm?.headers ?: intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? java.util.HashMap<String, String>
+                val headers = pm?.headers ?: intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
                 if (headers != null) {
                     val bundle = android.os.Bundle()
                     headers.forEach { (key, value) -> bundle.putString(key, value) }
@@ -348,8 +348,7 @@ abstract class PlayerActivity : ComponentActivity() {
             newIntent.putExtra(ServerService.EXTRA_CONTENT_TYPE, pm.contentType)
         }
 
-        @Suppress("UNCHECKED_CAST")
-        val headers = pm?.headers ?: intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? java.util.HashMap<String, String>
+        val headers = pm?.headers ?: intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
         if (headers != null) {
             newIntent.putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(headers))
         }

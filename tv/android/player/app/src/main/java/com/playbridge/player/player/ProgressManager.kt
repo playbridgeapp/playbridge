@@ -11,6 +11,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import java.io.File
 import java.io.FileOutputStream
 
@@ -191,18 +192,18 @@ class ProgressManager(
                 android.view.PixelCopy.request(surfaceView, bitmap, { copyResult ->
                     if (copyResult == android.view.PixelCopy.SUCCESS) {
                         Log.d(TAG, "Captured bitmap from SurfaceView via PixelCopy")
-                        continuation.resume(bitmap) { }
+                        continuation.resume(bitmap)
                     } else {
                         Log.e(TAG, "PixelCopy failed with error code: $copyResult")
-                        continuation.resume(null) { }
+                        continuation.resume(null)
                     }
                 }, android.os.Handler(android.os.Looper.getMainLooper()))
             } catch (e: IllegalArgumentException) {
                 Log.w(TAG, "Failed to capture screenshot: ${e.message}")
-                continuation.resume(null) { }
+                continuation.resume(null)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to capture screenshot", e)
-                continuation.resume(null) { }
+                continuation.resume(null)
             }
         }
     }

@@ -21,6 +21,7 @@ import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
+import com.playbridge.player.util.getStringMapExtra
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
@@ -727,12 +728,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 ServerService.ACTION_PLAY -> {
                     val url = intent.getStringExtra(ServerService.EXTRA_URL)
                     val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
-                    val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getSerializableExtra(ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
-                    } else {
-                        @Suppress("UNCHECKED_CAST")
-                        intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
-                    }
+                    val headers = intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
                     val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
 
                     if (url != null) {
@@ -779,12 +775,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         handlePrePlayMetadata(intent, controlsViewModel)
 
         val url = intent?.getStringExtra(ServerService.EXTRA_URL) ?: return
-        val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getSerializableExtra(ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
-        } else {
-            @Suppress("UNCHECKED_CAST")
-            intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
-        }
+        val headers = intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
         val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
         val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
 
@@ -1165,16 +1156,16 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 val obj = arr.getJSONObject(i)
                 val id = obj.getInt("id")
                 val type = obj.getString("type")
-                val lang = obj.optString("lang", null)
-                val codec = obj.optString("codec", null)
-                
+                val lang = if (obj.has("lang") && !obj.isNull("lang")) obj.getString("lang") else null
+                val codec = if (obj.has("codec") && !obj.isNull("codec")) obj.getString("codec") else null
+
                 // Build a descriptive title
                 val rawTitle = obj.optString("title", "")
                 val descriptiveTitle = buildString {
                     if (rawTitle.isNotEmpty()) {
                         append(rawTitle)
                     } else if (lang != null) {
-                        append(java.util.Locale(lang).displayLanguage)
+                        append(java.util.Locale.forLanguageTag(lang).displayLanguage)
                     } else {
                         append("Track $id")
                     }

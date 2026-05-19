@@ -29,6 +29,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.data.HistoryStore
+import com.playbridge.player.util.getStringMapExtra
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -159,12 +160,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     val url = intent.getStringExtra(ServerService.EXTRA_URL)
                     val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
                     val contentType = intent.getStringExtra(ServerService.EXTRA_CONTENT_TYPE)
-                    val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getSerializableExtra(ServerService.EXTRA_HEADERS, HashMap::class.java) as? Map<String, String>
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
-                    }
+                    val headers = intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
 
                     val detectedBy = intent.getStringExtra(ServerService.EXTRA_DETECTED_BY)
                     val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
@@ -220,10 +216,6 @@ class ExoPlayerActivity : PlayerActivity() {
         val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
         windowInsetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         windowInsetsController.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            window.navigationBarColor = android.graphics.Color.TRANSPARENT
-        }
 
         // Initialize View Bindings
         setContentView(com.playbridge.player.R.layout.activity_player)
@@ -499,12 +491,7 @@ class ExoPlayerActivity : PlayerActivity() {
         val title = intent?.getStringExtra(ServerService.EXTRA_TITLE)
         val contentType = intent?.getStringExtra(ServerService.EXTRA_CONTENT_TYPE)
         val detectedBy = intent?.getStringExtra(ServerService.EXTRA_DETECTED_BY)
-        val headers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent?.getSerializableExtra(ServerService.EXTRA_HEADERS, HashMap::class.java) as? Map<String, String>
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getSerializableExtra(ServerService.EXTRA_HEADERS) as? Map<String, String>
-        }
+        val headers = intent?.getStringMapExtra(ServerService.EXTRA_HEADERS)
 
         val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
         // Restore saved selections from history or incoming intent preferences
@@ -896,13 +883,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         val currentHeaders = if (playlistItems.isNotEmpty()) {
                             playlistItems.getOrNull(playlistIndex)?.headers ?: emptyMap()
                         } else {
-                            val intentHeaders = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                intent.getSerializableExtra(com.playbridge.player.server.ServerService.EXTRA_HEADERS, java.util.HashMap::class.java) as? Map<String, String>
-                            } else {
-                                @Suppress("UNCHECKED_CAST")
-                                intent.getSerializableExtra(com.playbridge.player.server.ServerService.EXTRA_HEADERS) as? Map<String, String>
-                            }
-                            intentHeaders ?: emptyMap()
+                            intent.getStringMapExtra(com.playbridge.player.server.ServerService.EXTRA_HEADERS) ?: emptyMap()
                         }
                         if (currentHeaders.isNotEmpty()) {
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_HEADERS, HashMap(currentHeaders))
