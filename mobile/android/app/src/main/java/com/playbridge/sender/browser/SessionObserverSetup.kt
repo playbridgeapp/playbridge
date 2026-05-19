@@ -140,6 +140,21 @@ fun SessionObserverSetup(
                         )
                     )
                 }
+
+                // Update the history database item with the loaded page title
+                val url = currentUrl.value
+                if (url.isNotEmpty() && !url.startsWith("about:")) {
+                    scope.launch(Dispatchers.IO) {
+                        historyDao.insert(
+                            HistoryEntity(
+                                url = url,
+                                title = title,
+                                timestamp = System.currentTimeMillis()
+                            )
+                        )
+                    }
+                }
+
                 val match = REGEX_PLAYBRIDGE_TITLE.find(title)
                 if (match != null) {
                     val count = match.groupValues[1].toIntOrNull() ?: 0
@@ -211,6 +226,7 @@ fun SessionObserverSetup(
         var originalContentDelegate: GeckoSession.ContentDelegate? = null
         var originalPermissionDelegate: GeckoSession.PermissionDelegate? = null
         var originalPromptDelegate: GeckoSession.PromptDelegate? = null
+        var originalProgressDelegate: GeckoSession.ProgressDelegate? = null
         var originalMediaDelegate: MediaSession.Delegate? = null
         var geckoSessionInstance: GeckoSession? = null
 
@@ -351,6 +367,18 @@ fun SessionObserverSetup(
                                         val idOpenInNewTabField = item.javaClass.getField("ID_OPEN_IN_NEW_TAB")
                                         val idOpenInNewTab = idOpenInNewTabField.getInt(null)
                                         if (id == idOpenInNewTab) {
+                                            // Actually open the link in a new tab next to current.
+                                            val url = contextMenuUrl.value
+                                            if (!url.isNullOrEmpty()) {
+                                                scope.launch(Dispatchers.Main) {
+                                                    tabManager.createTab(
+                                                        url = url,
+                                                        store = store,
+                                                        parentId = selectedTab?.id,
+                                                        select = false
+                                                    )
+                                                }
+                                            }
                                             return@newProxyInstance true
                                         }
                                     } catch (_: Exception) {}
@@ -394,59 +422,92 @@ fun SessionObserverSetup(
                         gs.contentDelegate = fullscreenDelegate
                     }
                     
-                    originalPermissionDelegate = gs.permissionDelegate
-                    gs.permissionDelegate = object : GeckoSession.PermissionDelegate {
-                        override fun onContentPermissionRequest(
-                            session: GeckoSession,
-                            perm: GeckoSession.PermissionDelegate.ContentPermission
-                        ): GeckoResult<Int> {
-                            return when (perm.permission) {
-                                GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE,
-                                GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE,
-                                GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> {
-                                    Log.d(TAG, "Granting media permission: ${perm.permission} for ${perm.uri}")
-                                    GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                    val existingPermission = gs.permissionDelegate
+                    originalPermissionDelegate = existingPermission
+                    gs.permissionDelegate = java.lang.reflect.Proxy.newProxyInstance(
+                        GeckoSession.PermissionDelegate::class.java.classLoader,
+                        arrayOf(GeckoSession.PermissionDelegate::class.java)
+                    ) { _, method, args ->
+                        if (method.name == "onContentPermissionRequest" && args != null && args.size >= 2) {
+                            val perm = args[1] as? GeckoSession.PermissionDelegate.ContentPermission
+                            if (perm != null) {
+                                when (perm.permission) {
+                                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE,
+                                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE,
+                                    GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> {
+                                        Log.d(TAG, "Granting media permission: ${perm.permission} for ${perm.uri}")
+                                        return@newProxyInstance GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                                    }
                                 }
-                                else -> GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
                             }
                         }
-                    }
 
-                    // ProgressDelegate for Security/SSL status
-                    gs.progressDelegate = object : GeckoSession.ProgressDelegate {
-                        override fun onPageStart(session: GeckoSession, url: String) {
-                            isLoading.value = true
-                        }
-
-                        override fun onPageStop(session: GeckoSession, success: Boolean) {
-                            isLoading.value = false
-                        }
-
-                        override fun onSecurityChange(
-                            session: GeckoSession,
-                            securityInfo: GeckoSession.ProgressDelegate.SecurityInformation
-                        ) {
-                            isSecureConnection.value = securityInfo.isSecure
-
-                            val cert = securityInfo.certificate
-                            val certIssuer = cert?.issuerX500Principal?.name?.let { parseCN(it) }
-                            val certValidUntil = cert?.notAfter?.let {
-                                java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(it)
+                        // Forward to original delegate
+                        if (existingPermission != null) {
+                            try {
+                                if (args != null) method.invoke(existingPermission, *args)
+                                else method.invoke(existingPermission)
+                            } catch (e: java.lang.reflect.InvocationTargetException) {
+                                throw e.targetException
                             }
-                            siteSecurityInfo.value = SiteSecurityInfo(
-                                isSecure = securityInfo.isSecure,
-                                host = securityInfo.host ?: "",
-                                certIssuer = certIssuer,
-                                certValidUntil = certValidUntil
-                            )
+                        } else {
+                            if (method.name == "onContentPermissionRequest") {
+                                GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                            } else {
+                                null
+                            }
+                        }
+                    } as GeckoSession.PermissionDelegate
 
-                            Log.d(TAG, "Security changed: isSecure=${securityInfo.isSecure}, host=${securityInfo.host}, issuer=$certIssuer")
+                    // ProgressDelegate for Security/SSL status and preserving engine session state updates
+                    val existingProgress = gs.progressDelegate
+                    originalProgressDelegate = existingProgress
+                    gs.progressDelegate = java.lang.reflect.Proxy.newProxyInstance(
+                        GeckoSession.ProgressDelegate::class.java.classLoader,
+                        arrayOf(GeckoSession.ProgressDelegate::class.java)
+                    ) { _, method, args ->
+                        // Execute our custom logic for specific callbacks
+                        if (args != null) {
+                            when (method.name) {
+                                "onPageStart" -> {
+                                    isLoading.value = true
+                                }
+                                "onPageStop" -> {
+                                    isLoading.value = false
+                                }
+                                "onSecurityChange" -> {
+                                    val securityInfo = args[1] as? GeckoSession.ProgressDelegate.SecurityInformation
+                                    if (securityInfo != null) {
+                                        isSecureConnection.value = securityInfo.isSecure
+                                        val cert = securityInfo.certificate
+                                        val certIssuer = cert?.issuerX500Principal?.name?.let { parseCN(it) }
+                                        val certValidUntil = cert?.notAfter?.let {
+                                            java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(it)
+                                        }
+                                        siteSecurityInfo.value = SiteSecurityInfo(
+                                            isSecure = securityInfo.isSecure,
+                                            host = securityInfo.host ?: "",
+                                            certIssuer = certIssuer,
+                                            certValidUntil = certValidUntil
+                                        )
+                                        Log.d(TAG, "Security changed: isSecure=${securityInfo.isSecure}, host=${securityInfo.host}, issuer=$certIssuer")
+                                    }
+                                }
+                            }
                         }
 
-                        override fun onProgressChange(session: GeckoSession, progress: Int) {
-                            // Optional: update progress bar precision
+                        // Forward call to the original delegate so GeckoEngineSession can track state/navigation updates
+                        if (existingProgress != null) {
+                            try {
+                                if (args != null) method.invoke(existingProgress, *args)
+                                else method.invoke(existingProgress)
+                            } catch (e: java.lang.reflect.InvocationTargetException) {
+                                throw e.targetException
+                            }
+                        } else {
+                            null
                         }
-                    }
+                    } as GeckoSession.ProgressDelegate
 
                     // PromptDelegate — required for HTML <select> dropdowns, alert(), confirm(), prompt().
                     // Without this, GeckoView silently drops all prompts and dropdowns never open.
@@ -592,6 +653,7 @@ fun SessionObserverSetup(
                 if (originalNavDelegate != null) gs.navigationDelegate = originalNavDelegate
                 if (originalContentDelegate != null) gs.contentDelegate = originalContentDelegate
                 if (originalPermissionDelegate != null) gs.permissionDelegate = originalPermissionDelegate
+                if (originalProgressDelegate != null) gs.progressDelegate = originalProgressDelegate
                 gs.promptDelegate = originalPromptDelegate
                 gs.mediaSessionDelegate = originalMediaDelegate
             }

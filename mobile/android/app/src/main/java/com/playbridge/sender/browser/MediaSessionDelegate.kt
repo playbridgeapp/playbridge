@@ -22,7 +22,7 @@ class MediaSessionDelegate(
     override fun onActivated(session: GeckoSession, mediaSession: MediaSession) {
         Log.d(TAG, "onActivated (tabId=$tabId)")
         isActive = true
-        tabManager.playingTabIds[tabId] = true
+        tabManager.markTabAsPlaying(tabId)
         MediaPlaybackService.start(context)
         
         controlJob?.cancel()
@@ -63,17 +63,20 @@ class MediaSessionDelegate(
     }
 
     override fun onPlay(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onPlay")
+        Log.d(TAG, "onPlay (tabId=$tabId)")
+        tabManager.markTabAsPlaying(tabId)
         MediaPlaybackService.sendStateUpdate(context, true)
     }
 
     override fun onPause(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onPause")
+        Log.d(TAG, "onPause (tabId=$tabId)")
+        tabManager.playingTabIds.remove(tabId)
         MediaPlaybackService.sendStateUpdate(context, false)
     }
 
     override fun onStop(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onStop")
+        Log.d(TAG, "onStop (tabId=$tabId)")
+        tabManager.playingTabIds.remove(tabId)
         MediaPlaybackService.sendStateUpdate(context, false)
     }
 
@@ -82,7 +85,14 @@ class MediaSessionDelegate(
     }
 
     override fun onPositionState(session: GeckoSession, mediaSession: MediaSession, positionState: MediaSession.PositionState) {
-        // Optional: update seek bar in notification
+        Log.d(TAG, "onPositionState: playbackRate=${positionState.playbackRate}")
+        if (positionState.playbackRate == 0.0) {
+            tabManager.playingTabIds.remove(tabId)
+            MediaPlaybackService.sendStateUpdate(context, false)
+        } else {
+            tabManager.markTabAsPlaying(tabId)
+            MediaPlaybackService.sendStateUpdate(context, true)
+        }
     }
 
     companion object {

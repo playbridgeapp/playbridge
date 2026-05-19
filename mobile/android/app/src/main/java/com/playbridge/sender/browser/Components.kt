@@ -45,6 +45,10 @@ object Components {
     // Reference to TabManager for resolving Kotlin tab IDs from extension messages
     var tabManager: TabManager? = null
     var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?) -> Unit)? = null
+
+    val applicationScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
     
     val applicationContext: Context
         get() = appContext

@@ -25,11 +25,29 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import mozilla.components.browser.state.selector.normalTabs
 import mozilla.components.browser.state.state.TabSessionState
-
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.browser.state.state.BrowserState
 import mozilla.components.lib.state.ext.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 
+/**
+ * Data class representing only the visual/display properties of a tab.
+ * Helps prevent recompositions when non-visual properties of the tab change.
+ */
+data class TabDisplayState(
+    val id: String,
+    val title: String,
+    val url: String
+)
+
+/**
+ * Minimal state required by TabsScreen.
+ */
+data class TabsScreenState(
+    val tabs: List<TabDisplayState>,
+    val selectedTabId: String?
+)
 
 /**
  * Extension to observe BrowserStore state as Compose State.
@@ -48,10 +66,25 @@ fun TabsScreen(
     onTabClosed: (String) -> Unit,
     onNewTab: () -> Unit
 ) {
-    // Observe tabs from BrowserStore
-    val state by Components.store.observeAsState()
-    val tabs = state.normalTabs
-    
+    // Observe only the tab list structure and selections.
+    // This ignores high-frequency updates like loading progress (40% -> 41% etc.),
+    // scroll position updates, and background page changes, eliminating lag.
+    val tabsScreenState by remember {
+        Components.store.flow()
+            .map { state ->
+                TabsScreenState(
+                    tabs = state.normalTabs.map { TabDisplayState(it.id, it.content.title, it.content.url) },
+                    selectedTabId = state.selectedTabId
+                )
+            }
+            .distinctUntilChanged()
+    }.collectAsState(
+        initial = TabsScreenState(
+            tabs = Components.store.state.normalTabs.map { TabDisplayState(it.id, it.content.title, it.content.url) },
+            selectedTabId = Components.store.state.selectedTabId
+        )
+    )
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -63,7 +96,7 @@ fun TabsScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "${tabs.size} Open Tabs",
+                text = "${tabsScreenState.tabs.size} Open Tabs",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f)
             )
@@ -106,7 +139,9 @@ fun TabsScreen(
         
         // Scroll to the active tab only on initial load
         val listState = rememberLazyListState()
-        val initialSelectedTabIndex = remember { tabs.indexOfFirst { it.id == state.selectedTabId } }
+        val initialSelectedTabIndex = remember { 
+            tabsScreenState.tabs.indexOfFirst { it.id == tabsScreenState.selectedTabId } 
+        }
 
         LaunchedEffect(Unit) {
             if (initialSelectedTabIndex >= 0) {
@@ -114,7 +149,7 @@ fun TabsScreen(
             }
         }
 
-        if (tabs.isEmpty()) {
+        if (tabsScreenState.tabs.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -140,12 +175,12 @@ fun TabsScreen(
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(items = tabs, key = { it.id }) { tab ->
+                items(items = tabsScreenState.tabs, key = { it.id }) { tab ->
                     TabCard(
                         tab = tab,
                         onSelect = { onTabSelected(tab.id) },
                         onClose = { onTabClosed(tab.id) },
-                        isSelected = tab.id == state.selectedTabId,
+                        isSelected = tab.id == tabsScreenState.selectedTabId,
                         isPlaying = playingTabIds[tab.id] == true
                     )
                 }
@@ -156,7 +191,7 @@ fun TabsScreen(
 
 @Composable
 private fun TabCard(
-    tab: TabSessionState,
+    tab: TabDisplayState,
     onSelect: () -> Unit,
     onClose: () -> Unit,
     isSelected: Boolean,
@@ -180,18 +215,32 @@ private fun TabCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Tab icon (Favicon)
-            val faviconUrl = "https://www.google.com/s2/favicons?domain_url=${tab.content.url}&sz=64"
-            
-            AsyncImage(
-                model = faviconUrl,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(MaterialTheme.shapes.extraSmall),
-                error = rememberVectorPainter(Icons.Default.Public),
-                placeholder = rememberVectorPainter(Icons.Default.Public),
-                contentScale = ContentScale.Crop
-            )
+            val url = tab.url
+            val isValidWebUrl = remember(url) {
+                (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true))
+                        && !url.contains("about:", ignoreCase = true)
+            }
+
+            if (isValidWebUrl) {
+                val faviconUrl = "https://www.google.com/s2/favicons?domain_url=$url&sz=64"
+                AsyncImage(
+                    model = faviconUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(MaterialTheme.shapes.extraSmall),
+                    error = rememberVectorPainter(Icons.Default.Public),
+                    placeholder = rememberVectorPainter(Icons.Default.Public),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Public,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             
             Spacer(modifier = Modifier.width(12.dp))
             
@@ -199,7 +248,7 @@ private fun TabCard(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = tab.content.title.ifEmpty { "Untitled" },
+                        text = tab.title.ifEmpty { "Untitled" },
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -216,7 +265,7 @@ private fun TabCard(
                     }
                 }
                 Text(
-                    text = tab.content.url,
+                    text = tab.url,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -235,3 +284,4 @@ private fun TabCard(
         }
     }
 }
+

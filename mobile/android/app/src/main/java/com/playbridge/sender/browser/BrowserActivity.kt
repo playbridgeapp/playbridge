@@ -195,20 +195,24 @@ class BrowserActivity : ComponentActivity() {
         val tabs = state.tabs
         val selectedId = state.selectedTabId
         val allStates = tabManager.captureAllStates()
-        
+        val now = System.currentTimeMillis()
+
         Log.d(TAG, "saveTabs: starting save for ${tabs.size} tabs, captured ${allStates.size} session states")
 
-        // Use a more robust scope for saving to ensure it completes even if activity is pausing
-        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+        // Use Components.applicationScope to ensure the database save starts and finishes
+        // even when the Activity is paused, stopped, or destroyed.
+        Components.applicationScope.launch {
             try {
-                val entities = tabs.map { tab ->
+                val entities = tabs.mapIndexed { index, tab ->
                     TabEntity(
                         id = tab.id,
                         url = tab.content.url,
                         title = tab.content.title,
-                        parentId = tab.parentId,
+                        parentId = tabManager.parentIds[tab.id] ?: tab.parentId,
                         isSelected = (tab.id == selectedId),
-                        sessionState = allStates[tab.id]
+                        lastAccessTime = now,
+                        sessionState = allStates[tab.id],
+                        position = index
                     )
                 }
                 database.tabDao().updateTabs(entities)
@@ -351,13 +355,53 @@ class BrowserActivity : ComponentActivity() {
                 mutableStateOf(store.state)
             }
 
+            // Debounced persistence: any onStateUpdated or store tab/selection change marks the tabs dirty;
+            // we save at most once every 1.5s, plus a final flush on dispose.
+            val saveDirtyFlow = remember { kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 16) }
+            DisposableEffect(Unit) {
+                tabManager.onAnyStateUpdated = { _ -> saveDirtyFlow.tryEmit(Unit) }
+                onDispose { tabManager.onAnyStateUpdated = null }
+            }
+            LaunchedEffect(Unit) {
+                var lastSaveJob: kotlinx.coroutines.Job? = null
+                saveDirtyFlow.collect {
+                    lastSaveJob?.cancel()
+                    lastSaveJob = scope.launch {
+                        kotlinx.coroutines.delay(1500)
+                        saveTabs()
+                    }
+                }
+            }
+
             // Observe store state changes
             LaunchedEffect(store) {
                 Log.d("PB_STARTUP", "Compose: store.flow() collector started")
+                var lastSelectedId = browserState.selectedTabId
+                var lastTabsIds = browserState.tabs.map { it.id }
                 store.flow().collect { state ->
+                    val newTabsIds = state.tabs.map { it.id }
+                    val newSelected = state.selectedTabId
+
+                    val tabsChanged = newTabsIds != lastTabsIds
+                    val selectedChanged = newSelected != lastSelectedId
+
+                    if (tabsChanged || selectedChanged) {
+                        Log.d("PB_STARTUP", "Compose: store.flow() tab/selection change — tabsChanged=$tabsChanged, selectedChanged=$selectedChanged. Scheduling save.")
+                        saveDirtyFlow.tryEmit(Unit)
+                    }
+
                     if (state.tabs.size != browserState.tabs.size || state.selectedTabId != browserState.selectedTabId) {
                         Log.d("PB_STARTUP", "Compose: store.flow() emitted — tabs=${state.tabs.size}, selectedTabId=${state.selectedTabId}")
                     }
+                    // Record selection so the close-tab fallback stack stays in sync
+                    // even when tabs are selected via direct store dispatches that
+                    // bypass tabManager.selectTab.
+                    if (newSelected != null && newSelected != lastSelectedId) {
+                        tabManager.recordSelection(newSelected)
+                    }
+
+                    lastSelectedId = newSelected
+                    lastTabsIds = newTabsIds
                     browserState = state
                 }
             }
@@ -365,6 +409,11 @@ class BrowserActivity : ComponentActivity() {
             LaunchedEffect(tabsRestoredOrReady.value) {
                 Log.d("PB_STARTUP", "Compose: tabsRestoredOrReady=${tabsRestoredOrReady.value} — force-syncing browserState from store (${store.state.tabs.size} tabs, selectedTabId=${store.state.selectedTabId})")
                 browserState = store.state
+
+                if (tabsRestoredOrReady.value && store.state.tabs.isEmpty()) {
+                    Log.d("PB_STARTUP", "Compose: tabsRestored=true and store empty — calling ensureAtLeastOneTab")
+                    tabManager.ensureAtLeastOneTab(store)
+                }
             }
 
             val tabIds = browserState.tabs.map { it.id }
@@ -372,6 +421,10 @@ class BrowserActivity : ComponentActivity() {
                 Log.d("PB_STARTUP", "Compose: syncSessions triggered — tabCount=${browserState.tabs.size}, selectedTabId=${browserState.selectedTabId}")
                 tabManager.syncSessions(browserState.tabs, browserState.selectedTabId)
                 Log.d("PB_STARTUP", "Compose: syncSessions returned — sessions.keys=${tabManager.sessions.keys.size}")
+                // Purge per-tab state for any tab that was externally removed
+                // from the store (e.g. via Mozilla Components paths that bypass
+                // closeTab). This is the safety net for memory leaks.
+                tabManager.reconcileWithStoreTabs(tabIds.toSet())
             }
 
             val sessions = tabManager.sessions
@@ -408,13 +461,6 @@ class BrowserActivity : ComponentActivity() {
                     return@setContent
                 }
 
-                if (tabsRestoredOrReady.value) {
-                    // Restoration done but session is still null — force create a tab
-                    LaunchedEffect(Unit) {
-                        Log.d("PB_STARTUP", "Compose: tabsRestored=true but session still null — calling ensureAtLeastOneTab (storeTabCount=${store.state.tabs.size})")
-                        tabManager.ensureAtLeastOneTab(store)
-                    }
-                }
                 // No spinner — just return and let the background show through while sessions init
                 return@setContent
             }
@@ -1717,6 +1763,7 @@ class BrowserActivity : ComponentActivity() {
                                             }
                                         }
                                         Screen.History -> {
+                                            BackHandler { currentScreen = lastMainScreen }
                                             HistoryScreen(
                                                 historyItems = allHistory,
                                                 onItemClick = { url ->
@@ -1732,6 +1779,7 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.CastHistory -> {
+                                            BackHandler { currentScreen = lastMainScreen }
                                             val db = com.playbridge.sender.data.history.DatabaseProvider.getDatabase(androidx.compose.ui.platform.LocalContext.current)
                                             val commandHistoryFlow = remember { db.commandHistoryDao().getAll() }
                                             val commandHistory by commandHistoryFlow.collectAsState(initial = emptyList())

@@ -7,7 +7,7 @@ import androidx.room.Transaction
 
 @Dao
 interface TabDao {
-    @Query("SELECT * FROM tabs ORDER BY lastAccessTime ASC")
+    @Query("SELECT * FROM tabs ORDER BY position ASC, lastAccessTime ASC")
     fun getAll(): List<TabEntity>
 
     @Insert

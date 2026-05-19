@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.input.key.*
 
 /**
  * Browser toolbar with navigation controls, URL bar, and menu.
@@ -58,26 +59,32 @@ fun BrowserToolbar(
     menuContent: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val scope = rememberCoroutineScope()
+    var isFocused by remember { mutableStateOf(false) }
+
     // Use TextFieldValue for selection control; display stripped URL when not editing
     var textFieldValue by remember { mutableStateOf(TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))) }
 
-    // Update text when currentUrl changes (only if not editing)
-    LaunchedEffect(currentUrl) {
-        if (!isEditing) {
+    // Keep textFieldValue in sync with currentUrl and isEditing changes.
+    // When editing starts, we show the full URL (including http/https) and select all text.
+    // When editing stops, we strip the protocol for a cleaner, compact display.
+    LaunchedEffect(currentUrl, isEditing) {
+        if (isEditing) {
+            val fullUrl = if (currentUrl == "about:blank") "" else currentUrl
+            // Only overwrite if the user is not actively typing a different URL
+            if (textFieldValue.text != fullUrl && !textFieldValue.text.startsWith(fullUrl.removeSuffix("/"))) {
+                textFieldValue = TextFieldValue(
+                    text = fullUrl,
+                    selection = androidx.compose.ui.text.TextRange(0, fullUrl.length)
+                )
+            }
+        } else {
             textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))
+            focusManager.clearFocus(force = true)
         }
     }
-
-    // Reset stripped URL when editing stops
-    LaunchedEffect(isEditing) {
-        if (!isEditing) {
-            textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))
-        }
-    }
-
-    val scope = rememberCoroutineScope()
-    val keyboardController = LocalSoftwareKeyboardController.current
-    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
     Surface(
         shadowElevation = 4.dp,
@@ -141,21 +148,28 @@ fun BrowserToolbar(
                         .weight(1f)
                         .heightIn(min = 50.dp)
                         .onFocusChanged { focusState ->
+                            isFocused = focusState.isFocused
                             if (focusState.isFocused) {
                                 onEditingChange(true)
-                                val fullUrl = if (currentUrl == "about:blank") "" else currentUrl
-                                textFieldValue = TextFieldValue(
-                                    text = fullUrl,
-                                    selection = androidx.compose.ui.text.TextRange(0, fullUrl.length)
-                                )
                             } else {
                                 scope.launch {
                                     delay(200)
-                                    if (isEditing) {
+                                    // Use the reactive isFocused state to guarantee focus was not regained
+                                    if (!isFocused && isEditing) {
                                         onEditingChange(false)
-                                        textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))
                                     }
                                 }
+                            }
+                        }
+                        .onPreviewKeyEvent { keyEvent ->
+                            // Dismiss edit mode and hide keyboard/clear focus on system back press
+                            if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                                keyboardController?.hide()
+                                focusManager.clearFocus()
+                                onEditingChange(false)
+                                true
+                            } else {
+                                false
                             }
                         },
                     singleLine = true,
@@ -170,6 +184,7 @@ fun BrowserToolbar(
                             onNavigate(url)
                             onEditingChange(false)
                             keyboardController?.hide()
+                            focusManager.clearFocus()
                         }
                     ),
                     interactionSource = urlInteractionSource,
@@ -199,16 +214,18 @@ fun BrowserToolbar(
                                             modifier = Modifier.size(20.dp)
                                         )
                                     } else {
-                                        Icon(
-                                            if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
-                                            contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
-                                            tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier
-                                                .size(16.dp)
-                                                .pointerInput(Unit) {
-                                                    detectTapGestures { onSecurityIconClick() }
-                                                }
-                                        )
+                                        // Wrapped in IconButton for touch target sizing (48dp target) and ripple feedback
+                                        IconButton(
+                                            onClick = onSecurityIconClick,
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                                contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
+                                                tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
                                     }
                                 }
                             } else null,
@@ -331,7 +348,14 @@ private fun normalizeUrl(input: String): String {
         trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
         trimmed.startsWith("about:") -> trimmed
         trimmed.contains(".") && !trimmed.contains(" ") -> "https://$trimmed"
-        else -> "https://www.google.com/search?q=${trimmed.replace(" ", "+")}"
+        else -> {
+            val encodedQuery = try {
+                java.net.URLEncoder.encode(trimmed, "UTF-8")
+            } catch (e: Exception) {
+                trimmed.replace(" ", "+")
+            }
+            "https://www.google.com/search?q=$encodedQuery"
+        }
     }
 }
 

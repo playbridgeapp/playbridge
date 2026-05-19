@@ -39,8 +39,14 @@ class TabManager {
     /** The maximum number of EngineSessions to keep alive to prevent OOM errors. */
     var maxAliveSessions = 5
 
-    /** LRU tracker for recently active tab IDs. */
+    /** LRU tracker for recently active tab IDs (engine-session lifetime). */
     private val recentlyActiveTabIds = linkedSetOf<String>()
+
+    /**
+     * Stack of recently *selected* tab IDs. Used to pick the next tab when the
+     * current one is closed. Most-recent at the end.
+     */
+    private val selectionStack = ArrayDeque<String>()
 
     /** Set of tab IDs currently playing media (audio/video). Observable by Compose. */
     val playingTabIds = mutableStateMapOf<String, Boolean>()
@@ -54,6 +60,28 @@ class TabManager {
     /** Navigation capabilities (back/forward) for each tab ID. Observable by Compose. */
     val navigationStates = mutableStateMapOf<String, TabNavigationState>()
 
+    /**
+     * Tabs that were just restored from a saved state. While this flag is set,
+     * spurious `onNavigationStateChange(false, false)` events from GeckoView's
+     * initial repaint are ignored so they don't clobber the pre-calculated
+     * back/forward state derived from `currentIndex`.
+     */
+    private val justRestored = mutableSetOf<String>()
+
+    /** Tabs that need a reload triggered upon selection (because they were restored in the background). */
+    private val needsReloadOnSelect = mutableSetOf<String>()
+
+    /** Map of tab-id -> parent-id. Decouples parent-child relationships from the store state to ensure stable restoration order. */
+    val parentIds = mutableMapOf<String, String>()
+
+    /**
+     * Optional callback invoked whenever any tab's `onStateUpdated` fires.
+     * BrowserActivity wires this to a debounced DB persistence trigger so
+     * navigation state isn't lost when the process is killed before
+     * `onPause` runs.
+     */
+    var onAnyStateUpdated: ((tabId: String) -> Unit)? = null
+
     // ── Tab operations ───────────────────────────────────────────────
 
     /** Ensure [store] always has at least one tab. */
@@ -63,7 +91,13 @@ class TabManager {
         }
     }
 
-    /** Create a new tab with [url], optionally set [parentId], and select it. */
+    /**
+     * Create a new tab with [url], optionally set [parentId], and select it.
+     *
+     * If [parentId] is provided and matches an existing tab, the new tab is
+     * inserted directly after the parent (Chrome-style "next to current")
+     * instead of appended to the end of the list.
+     */
     fun createTab(
         url: String,
         store: BrowserStore,
@@ -81,29 +115,117 @@ class TabManager {
                 select = select
             )
         )
+        if (parentId != null) {
+            parentIds[tabId] = parentId
+            val parentIndex = store.state.tabs.indexOfFirst { it.id == parentId }
+            val newIndex = store.state.tabs.indexOfFirst { it.id == tabId }
+            // AddTabAction always appends. If the parent is not last, move the new tab next to it.
+            if (parentIndex >= 0 && newIndex >= 0 && newIndex != parentIndex + 1) {
+                store.dispatch(TabListAction.MoveTabsAction(listOf(tabId), parentId, placeAfter = true))
+            }
+        }
         return tabId
     }
 
-    /** Remove a tab by id. */
+    /**
+     * Remove a tab by id. Before removing, choose the next tab to select by
+     * popping the selection stack — falling back to BrowserStore's default
+     * behaviour if no prior selection is still alive.
+     */
     fun closeTab(tabId: String, store: BrowserStore) {
+        val wasSelected = store.state.selectedTabId == tabId
+        if (wasSelected) {
+            // Drain stale entries off the top of the stack until we find a live tab
+            // that isn't the one being closed.
+            val liveTabIds = store.state.tabs.map { it.id }.toSet()
+            var next: String? = null
+            while (selectionStack.isNotEmpty()) {
+                val candidate = selectionStack.removeLast()
+                if (candidate != tabId && candidate in liveTabIds) {
+                    next = candidate
+                    break
+                }
+            }
+            if (next != null) {
+                store.dispatch(TabListAction.SelectTabAction(next))
+            }
+        }
+        // Clean up per-tab maps eagerly so they don't outlive the tab.
+        purgeTabState(tabId)
         store.dispatch(TabListAction.RemoveTabAction(tabId))
     }
 
-    /** Select a tab by id. */
+    /** Select a tab by id. Maintains the selection stack. */
     fun selectTab(tabId: String, store: BrowserStore) {
         store.dispatch(TabListAction.SelectTabAction(tabId))
+        recordSelection(tabId)
+    }
+
+    /** Record a tab selection in the selection stack (most recent at end). */
+    fun recordSelection(tabId: String) {
+        selectionStack.remove(tabId)
+        selectionStack.addLast(tabId)
     }
 
     /** Restore a list of tabs to the store. */
     fun restoreTabs(tabs: List<TabSessionState>, selectedId: String?, store: BrowserStore) {
         tabs.forEach { tab ->
+            tab.parentId?.let { pId ->
+                parentIds[tab.id] = pId
+            }
             store.dispatch(
                 TabListAction.AddTabAction(
-                    tab = tab,
+                    tab = tab.copy(parentId = null),
                     select = (tab.id == selectedId)
                 )
             )
         }
+    }
+
+    /** Marks a tab as actively playing media, and clears all other tabs from the playing state. */
+    fun markTabAsPlaying(tabId: String) {
+        val keysToClear = playingTabIds.keys.filter { it != tabId }
+        keysToClear.forEach { playingTabIds.remove(it) }
+        playingTabIds[tabId] = true
+    }
+
+    /** Drop all per-tab state for [tabId]. Called when a tab is closed. */
+    fun purgeTabState(tabId: String) {
+        savedStates.remove(tabId)
+        engineStates.remove(tabId)
+        navigationStates.remove(tabId)
+        playingTabIds.remove(tabId)
+        recentlyActiveTabIds.remove(tabId)
+        selectionStack.remove(tabId)
+        justRestored.remove(tabId)
+        needsReloadOnSelect.remove(tabId)
+        parentIds.remove(tabId)
+        VideoDetector.clearTab(tabId)
+        val session = sessions.remove(tabId)
+        if (session != null) {
+            try {
+                session.stopLoading()
+                val gs = getGeckoSession(session)
+                gs?.close()
+            } catch (e: Exception) {
+                Log.e(TAG, "purgeTabState: error closing session for $tabId", e)
+            }
+        }
+    }
+
+    /**
+     * Sync per-tab state with the current set of live tabs in BrowserStore.
+     * Drops state for any tab id no longer present. Called from a store
+     * observer in BrowserActivity so externally-dispatched RemoveTabActions
+     * (e.g. Mozilla components, tests) don't leak.
+     */
+    fun reconcileWithStoreTabs(liveTabIds: Set<String>) {
+        val stale = (savedStates.keys + engineStates.keys + navigationStates.keys +
+                playingTabIds.keys + sessions.keys)
+            .toSet() - liveTabIds
+        stale.forEach { purgeTabState(it) }
+        selectionStack.retainAll(liveTabIds)
+        recentlyActiveTabIds.retainAll(liveTabIds)
     }
 
     // ── Session synchronisation ──────────────────────────────────────
@@ -128,6 +250,7 @@ class TabManager {
             // Re-adding at the end of a LinkedHashSet moves it to the most-recently-used position
             recentlyActiveTabIds.remove(selectedTabId)
             recentlyActiveTabIds.add(selectedTabId)
+            recordSelection(selectedTabId)
             Log.d(TAG, "syncSessions: added selectedTabId to LRU — recentlyActive=${recentlyActiveTabIds.size}")
         } else {
             Log.d(TAG, "syncSessions: selectedTabId=$selectedTabId not added to LRU (null or not in tabs)")
@@ -179,10 +302,10 @@ class TabManager {
 
                 sessions[tab.id] = newSession
                 createdCount++
-                
+
                 // Restore saved state if available (history, backstack, etc.)
                 val savedBytes = savedStates[tab.id]
-                
+
                 if (savedBytes != null) {
                     Log.d(TAG, "Restoring GeckoSession state for tab ${tab.id} (bytes=${savedBytes.size})")
                     try {
@@ -192,12 +315,28 @@ class TabManager {
                             val canGoBack = geckoState.currentIndex > 0
                             val canGoForward = geckoState.currentIndex < geckoState.size - 1
                             navigationStates[tab.id] = TabNavigationState(canGoBack, canGoForward)
+                            // Mark as "just restored" so the observer below ignores the
+                            // initial (false,false) GeckoView fires before the history
+                            // is wired back up internally.
+                            justRestored.add(tab.id)
                             Log.d(TAG, "Restored initial nav state for tab ${tab.id}: back=$canGoBack, fwd=$canGoForward (size=${geckoState.size}, index=${geckoState.currentIndex})")
 
                             val engineState = wrapGeckoState(geckoState)
                             if (engineState != null) {
                                 newSession.restoreState(engineState)
                                 Log.d(TAG, "Successfully called restoreState for tab ${tab.id}")
+                                // Some restores leave the view blank until the next paint;
+                                // a reload on the selected tab fixes that without changing
+                                // history.
+                                if (tab.id == selectedTabId && geckoState.size > 0) {
+                                    try {
+                                        newSession.reload()
+                                        Log.d(TAG, "Reloaded restored tab ${tab.id} immediately as it is selected")
+                                    } catch (_: Exception) {}
+                                } else if (geckoState.size > 0) {
+                                    needsReloadOnSelect.add(tab.id)
+                                    Log.d(TAG, "Added tab ${tab.id} to needsReloadOnSelect")
+                                }
                             } else {
                                 Log.e(TAG, "Failed to wrap GeckoState for tab ${tab.id}")
                                 if (url != "about:blank") newSession.loadUrl(url)
@@ -217,11 +356,30 @@ class TabManager {
                     }
                 }
 
-                // Attach a permanent observer to track navigation state in TabManager
-                // We do this AFTER restoreState to avoid initial false-clobbering
+                // Attach a permanent observer to track navigation state in TabManager.
+                // We do this AFTER restoreState. Even so, GeckoView often fires
+                // onNavigationStateChange(false,false) once the page actually
+                // starts loading after restore — gated by `justRestored`.
                 newSession.register(object : EngineSession.Observer {
+                    override fun onStateUpdated(state: mozilla.components.concept.engine.EngineSessionState) {
+                        engineStates[tab.id] = state
+                        onAnyStateUpdated?.invoke(tab.id)
+                    }
                     override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
                         val current = navigationStates[tab.id] ?: TabNavigationState()
+                        // If the tab was just restored and both values come back false,
+                        // assume this is the spurious initial event and keep the
+                        // pre-calculated state. Clear the flag the moment we see a
+                        // "true" or a non-default state.
+                        if (justRestored.contains(tab.id)) {
+                            val bothFalse = (canGoBack == false || canGoBack == null) &&
+                                    (canGoForward == false || canGoForward == null)
+                            if (bothFalse && (current.canGoBack || current.canGoForward)) {
+                                Log.d(TAG, "Ignoring spurious (false,false) nav event for just-restored tab ${tab.id}")
+                                return
+                            }
+                            justRestored.remove(tab.id)
+                        }
                         navigationStates[tab.id] = current.copy(
                             canGoBack = canGoBack ?: current.canGoBack,
                             canGoForward = canGoForward ?: current.canGoForward
@@ -233,24 +391,24 @@ class TabManager {
         }
         Log.d(TAG, "syncSessions: created $createdCount new sessions, total sessions=${sessions.size}")
 
-        // 4. Cleanup sessions for closed or hibernated tabs
-        val hibernatedIds = sessions.keys.filter { it !in activeTabIds }
+        // 4. Cleanup sessions for closed or hibernated tabs.
+        // NOTE: we only iterate sessions that exist for *live* tabs but are not in
+        // the active LRU window — i.e. real hibernation. Sessions whose tab was
+        // actually removed are torn down by `purgeTabState` / `reconcileWithStoreTabs`.
+        val hibernatedIds = sessions.keys.filter { it !in activeTabIds && it in allValidTabIds }
 
         hibernatedIds.forEach { id ->
             val session = sessions[id]
             if (session != null) {
                 try {
                     session.stopLoading()
-                    // Close the internal GeckoSession via reflection so media stops immediately and memory is freed
                     val geckoEngineSession = session as? GeckoEngineSession
                     if (geckoEngineSession != null) {
-                        // Capture latest state aggressively before closing
-                        val bytes = captureSessionState(id, session)
+                        val bytes = captureSessionState(id)
                         if (bytes != null) {
                             savedStates[id] = bytes
                             Log.d(TAG, "Saved GeckoSession state for hibernated tab $id (bytes=${bytes.size})")
                         }
-                        
                         val internalSession = getGeckoSession(geckoEngineSession)
                         internalSession?.close()
                         Log.d(TAG, "Closed/Hibernated GeckoSession for tab $id")
@@ -261,11 +419,24 @@ class TabManager {
             }
             sessions.remove(id)
             playingTabIds.remove(id)
-            // Note: We deliberately DO NOT remove from navigationStates here 
-            // so the UI can still show the last known back/forward buttons for hibernated tabs.
-            
-            // Clean up detected videos for this tab
+            // navigationStates is intentionally retained so the UI can still
+            // show back/forward affordances for hibernated tabs.
+
             VideoDetector.clearTab(id)
+        }
+
+        // If the selected tab needs reload, trigger it now that its session is active
+        if (selectedTabId != null && needsReloadOnSelect.contains(selectedTabId)) {
+            val session = sessions[selectedTabId]
+            if (session != null) {
+                needsReloadOnSelect.remove(selectedTabId)
+                try {
+                    session.reload()
+                    Log.d(TAG, "Reloaded restored tab $selectedTabId upon selection to prevent blank screen")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to reload restored tab $selectedTabId", e)
+                }
+            }
         }
     }
 
@@ -337,8 +508,8 @@ class TabManager {
     /** Capture current state of all active sessions and merge with hibernated states. */
     fun captureAllStates(): Map<String, ByteArray> {
         val allStates = savedStates.toMutableMap()
-        sessions.forEach { (id, session) ->
-            val bytes = captureSessionState(id, session)
+        sessions.keys.forEach { id ->
+            val bytes = captureSessionState(id)
             if (bytes != null) {
                 allStates[id] = bytes
             }
@@ -347,38 +518,28 @@ class TabManager {
         return allStates
     }
 
-    /** Capture the state of a specific [session] and return as bytes, or null on failure. */
-    private fun captureSessionState(id: String, session: EngineSession): ByteArray? {
+    /**
+     * Capture the persisted state of [id] by serialising the most recent
+     * `EngineSessionState` we received via `onStateUpdated`. This avoids
+     * the race in `GeckoSession.flushSessionState()` (which is async) +
+     * reading `mStateCache` immediately, which was returning stale or
+     * empty data.
+     */
+    private fun captureSessionState(id: String): ByteArray? {
         return try {
-            val geckoSession = getGeckoSession(session)
-            if (geckoSession != null) {
-                // Force GeckoSession to flush its state to the internal cache
-                geckoSession.flushSessionState()
-                
-                // Access the private mStateCache field via reflection
-                val field = GeckoSession::class.java.getDeclaredField("mStateCache")
-                field.isAccessible = true
-                val geckoState = field.get(geckoSession) as? GeckoSession.SessionState
-                
-                val bytes = geckoStateToBytes(geckoState)
-                if (bytes != null) {
-                    Log.d(TAG, "captured active state for tab $id (bytes=${bytes.size})")
-                    return bytes
-                }
-            }
-
-            // Fallback to the last received state from onStateUpdated
             val engineState = engineStates[id]
             val geckoState = getGeckoState(engineState)
             val bytes = geckoStateToBytes(geckoState)
             if (bytes != null) {
-                Log.d(TAG, "captured fallback state for tab $id (bytes=${bytes.size})")
+                Log.d(TAG, "captured state for tab $id from onStateUpdated cache (bytes=${bytes.size})")
                 return bytes
             }
-            null
+            // Last resort: previously-saved bytes (e.g. hibernated tab whose
+            // engineStates entry was already purged).
+            savedStates[id]
         } catch (e: Exception) {
             Log.e(TAG, "Failed to capture state for tab $id", e)
-            null
+            savedStates[id]
         }
     }
 
@@ -387,11 +548,18 @@ class TabManager {
     private fun getGeckoState(engineState: mozilla.components.concept.engine.EngineSessionState?): GeckoSession.SessionState? {
         if (engineState == null) return null
         return try {
-            // GeckoEngineSessionState wraps GeckoSession.SessionState. We use reflection to get the actual state
-            // since the getter is internal to the browser-engine-gecko module.
-            val method = engineState.javaClass.getDeclaredMethod("getActualState\$browser_engine_gecko_release")
-            method.isAccessible = true
-            method.invoke(engineState) as? GeckoSession.SessionState
+            // Find the getter method dynamically to avoid issues with Kotlin internal name mangling
+            // module suffixes (e.g. $browser_engine_gecko_debug vs $browser_engine_gecko_release).
+            val method = engineState.javaClass.declaredMethods.firstOrNull {
+                it.returnType == GeckoSession.SessionState::class.java || it.name.startsWith("getActualState")
+            }
+            if (method != null) {
+                method.isAccessible = true
+                method.invoke(engineState) as? GeckoSession.SessionState
+            } else {
+                Log.e(TAG, "getGeckoState: could not find getActualState method via reflection")
+                null
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to extract GeckoSession.SessionState from EngineSessionState", e)
             null
@@ -415,7 +583,9 @@ class TabManager {
         if (state == null) return null
         return try {
             // GeckoSession.SessionState.toString() returns the state as a JSON string
-            state.toString().toByteArray(Charsets.UTF_8)
+            val json = state.toString()
+            if (json.isEmpty() || json == "{}") return null
+            json.toByteArray(Charsets.UTF_8)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to serialize GeckoState to string", e)
             null
