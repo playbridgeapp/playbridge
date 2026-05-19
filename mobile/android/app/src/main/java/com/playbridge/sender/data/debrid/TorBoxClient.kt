@@ -1,8 +1,12 @@
 package com.playbridge.sender.data.debrid
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
@@ -39,6 +43,10 @@ class TorBoxClient(
     override val name: String = "TorBox"
     private val baseUrl = "https://api.torbox.app/v1"
 
+    companion object {
+        private const val TAG = "TorBoxClient"
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun requestBuilder(url: String): Request.Builder =
@@ -48,17 +56,27 @@ class TorBoxClient(
 
     /**
      * Parse the common TorBox JSON envelope and return the data element, or throw on error.
+     * Logs the raw body and parsed outcome to Logcat under the tag "TorBoxClient".
      */
     private fun checkSuccess(body: String): kotlinx.serialization.json.JsonElement {
-        val root = json.parseToJsonElement(body).jsonObject
+        Log.d(TAG, "Raw API response (first 2000 chars): ${body.take(2000)}")
+        val root = try {
+            json.parseToJsonElement(body).jsonObject
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse JSON: ${e.message}\nBody was: $body")
+            throw DebridException("Failed to parse TorBox response: ${e.message}")
+        }
         val success = root["success"]?.jsonPrimitive?.booleanOrNull ?: false
         if (!success) {
             val detail = root["detail"]?.jsonPrimitive?.content
                 ?: root["error"]?.jsonPrimitive?.content
                 ?: "Unknown TorBox error"
+            Log.e(TAG, "TorBox API reported failure. detail='$detail' | full root=$root")
             throw DebridException(detail)
         }
-        return root["data"] ?: throw DebridException("No data field in response")
+        val data = root["data"]
+        Log.d(TAG, "TorBox success=true, data type=${data?.let { it::class.simpleName } ?: "null"}, data=${data.toString().take(500)}")
+        return data ?: throw DebridException("No data field in response")
     }
 
     /**
@@ -76,7 +94,7 @@ class TorBoxClient(
      * Build a [DebridTorrentInfo] from a TorBox torrent JSON object.
      * Works for both the list endpoint and the detail endpoint.
      */
-    private fun parseTorrent(obj: kotlinx.serialization.json.JsonObject): DebridTorrentInfo {
+    private fun parseTorrent(obj: JsonObject): DebridTorrentInfo {
         val id = obj["id"]?.jsonPrimitive?.content ?: ""
         val name = obj["name"]?.jsonPrimitive?.content ?: "Unknown"
         val hash = obj["hash"]?.jsonPrimitive?.content ?: ""
@@ -86,8 +104,21 @@ class TorBoxClient(
             ?: obj["status"]?.jsonPrimitive?.content
         val status = mapStatus(state)
 
-        // TorBox nests files under "files" as an array
-        val filesArray = obj["files"]?.jsonArray
+        // TorBox nests files under "files" as an array.
+        // IMPORTANT: obj["files"] returns JsonNull (not Kotlin null) when the JSON value is null,
+        // so we must guard against JsonNull explicitly before calling .jsonArray.
+        val filesElement = obj["files"]
+        val filesArray: JsonArray? = when (filesElement) {
+            is JsonArray -> filesElement
+            null, is JsonNull -> {
+                Log.d(TAG, "parseTorrent: torrent '$name' (id=$id) has no files array (value=$filesElement)")
+                null
+            }
+            else -> {
+                Log.w(TAG, "parseTorrent: torrent '$name' (id=$id) 'files' field is unexpected type ${filesElement::class.simpleName}: $filesElement")
+                null
+            }
+        }
         val files = filesArray?.mapIndexed { index, elem ->
             val fObj = elem.jsonObject
             DebridFile(
@@ -98,6 +129,8 @@ class TorBoxClient(
                 link = "" // Links are resolved on-demand via requestdl
             )
         } ?: emptyList()
+
+        Log.d(TAG, "parseTorrent: id=$id name='$name' state=$state status=$status files=${files.size}")
 
         return DebridTorrentInfo(
             id = id,
@@ -164,27 +197,36 @@ class TorBoxClient(
     }
 
     override suspend fun getTorrentInfo(id: String): DebridTorrentInfo = withContext(Dispatchers.IO) {
+        Log.d(TAG, "getTorrentInfo: fetching info for id=$id")
         // Use /mylist with id parameter — TorBox returns a single-element list
         val request = requestBuilder("$baseUrl/api/torrents/mylist?id=$id").get().build()
         val response = client.newCall(request).execute()
         val body = response.body?.string() ?: throw DebridException("Empty response")
 
         if (!response.isSuccessful) {
+            Log.e(TAG, "getTorrentInfo HTTP error: code=${response.code} body=$body")
             throw DebridException("Failed to get torrent info: ${response.code} $body")
         }
 
         val data = checkSuccess(body)
         // When id is specified, data may be an object or a single-element array
-        val torrentObj: kotlinx.serialization.json.JsonObject = when {
-            data is kotlinx.serialization.json.JsonObject -> data
-            data is kotlinx.serialization.json.JsonArray && data.size > 0 ->
-                data[0].jsonObject
-            else -> throw DebridException("Torrent $id not found")
+        val torrentObj: JsonObject = when {
+            data is JsonObject -> data
+            data is JsonArray && data.size > 0 -> data[0].jsonObject
+            data is JsonNull || (data is JsonArray && data.isEmpty()) -> {
+                Log.e(TAG, "getTorrentInfo: no torrent found for id=$id, data=$data")
+                throw DebridException("Torrent $id not found")
+            }
+            else -> {
+                Log.e(TAG, "getTorrentInfo: unexpected data type ${data::class.simpleName} for id=$id")
+                throw DebridException("Torrent $id not found")
+            }
         }
         return@withContext parseTorrent(torrentObj)
     }
 
     override suspend fun getTorrents(page: Int): List<DebridTorrentInfo> = withContext(Dispatchers.IO) {
+        Log.d(TAG, "getTorrents: page=$page")
         // TorBox supports offset-based pagination. We use page * 50 as offset.
         val offset = (page - 1) * 50
         val request = requestBuilder("$baseUrl/api/torrents/mylist?offset=$offset&limit=50")
@@ -195,16 +237,35 @@ class TorBoxClient(
         val body = response.body?.string() ?: throw DebridException("Empty response")
 
         if (!response.isSuccessful) {
+            Log.e(TAG, "getTorrents HTTP error: code=${response.code} body=${body.take(500)}")
             throw DebridException("Failed to list torrents: ${response.code} $body")
         }
 
         val data = checkSuccess(body)
-        val array = when (data) {
-            is kotlinx.serialization.json.JsonArray -> data
-            else -> return@withContext emptyList()
+        val array: JsonArray = when (data) {
+            is JsonArray -> {
+                Log.d(TAG, "getTorrents: received ${data.size} items for page=$page")
+                data
+            }
+            is JsonNull -> {
+                // TorBox returns null data when the list is empty
+                Log.d(TAG, "getTorrents: data is null (empty list) for page=$page")
+                return@withContext emptyList()
+            }
+            else -> {
+                Log.w(TAG, "getTorrents: unexpected data type ${data::class.simpleName} for page=$page, value=${data.toString().take(200)}")
+                return@withContext emptyList()
+            }
         }
 
-        return@withContext array.map { elem -> parseTorrent(elem.jsonObject) }
+        return@withContext array.mapIndexed { index, elem ->
+            try {
+                parseTorrent(elem.jsonObject)
+            } catch (e: Exception) {
+                Log.e(TAG, "getTorrents: failed to parse torrent at index $index: ${e.message}\nelem=${elem.toString().take(300)}")
+                throw e
+            }
+        }
     }
 
     /**

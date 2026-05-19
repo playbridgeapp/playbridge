@@ -32,10 +32,8 @@
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-            </intent-filter>
+            <!-- No LEANBACK_LAUNCHER intent-filter: this app has no TV home screen icon.
+                 It is only launchable by the PlayBridge Player via ACTION_BROWSER. -->
             <intent-filter>
                 <action android:name="com.playbridge.player.ACTION_BROWSER" />
                 <category android:name="android.intent.category.DEFAULT" />

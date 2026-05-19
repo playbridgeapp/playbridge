@@ -1,6 +1,7 @@
 package com.playbridge.sender.browser
 
 import android.content.Context
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -28,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import com.playbridge.sender.data.debrid.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private const val TAG_LIBRARY = "DebridLibraryScreen"
 
 private const val PREFS_DEBRID_UI = "debrid_ui_prefs"
 private const val KEY_FAVORITES = "favorite_torrent_ids"
@@ -103,13 +106,17 @@ fun DebridLibraryScreen(
             try {
                 val provider = repository.getActiveProvider()
                 if (provider == null) {
+                    Log.w(TAG_LIBRARY, "loadTorrents: no active Debrid provider configured")
                     errorMessage = "No Debrid provider configured."
                 } else {
+                    Log.d(TAG_LIBRARY, "loadTorrents: calling getTorrents(page=1) on ${provider.name}")
                     val result = provider.getTorrents(page = 1)
+                    Log.d(TAG_LIBRARY, "loadTorrents: got ${result.size} torrents")
                     torrents = result
                     if (result.isEmpty()) hasMorePages = false
                 }
             } catch (e: Exception) {
+                Log.e(TAG_LIBRARY, "loadTorrents: exception loading torrents", e)
                 errorMessage = "Failed to load torrents: ${e.message}"
             } finally {
                 isLoading = false
@@ -124,6 +131,7 @@ fun DebridLibraryScreen(
             try {
                 val provider = repository.getActiveProvider() ?: return@launch
                 val nextPage = currentPage + 1
+                Log.d(TAG_LIBRARY, "loadMoreTorrents: fetching page=$nextPage")
                 val result = provider.getTorrents(page = nextPage)
                 if (result.isEmpty()) {
                     hasMorePages = false
@@ -131,8 +139,9 @@ fun DebridLibraryScreen(
                     torrents = torrents + result
                     currentPage = nextPage
                 }
-            } catch (_: Exception) { }
-            finally {
+            } catch (e: Exception) {
+                Log.e(TAG_LIBRARY, "loadMoreTorrents: exception on page ${currentPage + 1}", e)
+            } finally {
                 isLoadingMore = false
             }
         }
