@@ -42,6 +42,15 @@ class TabManager {
     /** LRU tracker for recently active tab IDs (engine-session lifetime). */
     private val recentlyActiveTabIds = linkedSetOf<String>()
 
+    private data class ClosedTab(
+        val url: String,
+        val parentId: String?,
+        val capturedState: ByteArray?,
+        val title: String
+    )
+
+    private val closedTabsStack = ArrayDeque<ClosedTab>()
+
     /**
      * Stack of recently *selected* tab IDs. Used to pick the next tab when the
      * current one is closed. Most-recent at the end.
@@ -134,6 +143,24 @@ class TabManager {
      */
     fun closeTab(tabId: String, store: BrowserStore) {
         val wasSelected = store.state.selectedTabId == tabId
+
+        // Capture state and save to closed tabs stack before purging
+        val sourceTab = store.state.tabs.find { it.id == tabId }
+        if (sourceTab != null) {
+            val capturedState = captureSessionState(tabId)
+            closedTabsStack.addLast(
+                ClosedTab(
+                    url = sourceTab.content.url,
+                    parentId = parentIds[tabId] ?: sourceTab.parentId,
+                    capturedState = capturedState,
+                    title = sourceTab.content.title
+                )
+            )
+            while (closedTabsStack.size > 10) {
+                closedTabsStack.removeFirst()
+            }
+        }
+
         if (wasSelected) {
             // Drain stale entries off the top of the stack until we find a live tab
             // that isn't the one being closed.
@@ -153,6 +180,31 @@ class TabManager {
         // Clean up per-tab maps eagerly so they don't outlive the tab.
         purgeTabState(tabId)
         store.dispatch(TabListAction.RemoveTabAction(tabId))
+    }
+
+    /**
+     * Reopen the last closed tab, fully restoring its session state, history, and URL.
+     */
+    fun reopenClosedTab(store: BrowserStore): String? {
+        if (closedTabsStack.isEmpty()) return null
+        val closedTab = closedTabsStack.removeLast()
+        val newTabId = createTab(
+            url = closedTab.url,
+            store = store,
+            parentId = closedTab.parentId,
+            select = true
+        )
+        closedTab.capturedState?.let {
+            savedStates[newTabId] = it
+        }
+        return newTabId
+    }
+
+    /**
+     * Returns true if there are recently closed tabs that can be reopened.
+     */
+    fun canReopenClosedTab(): Boolean {
+        return closedTabsStack.isNotEmpty()
     }
 
     /** Select a tab by id. Maintains the selection stack. */
@@ -525,7 +577,7 @@ class TabManager {
      * reading `mStateCache` immediately, which was returning stale or
      * empty data.
      */
-    private fun captureSessionState(id: String): ByteArray? {
+    internal fun captureSessionState(id: String): ByteArray? {
         return try {
             val engineState = engineStates[id]
             val geckoState = getGeckoState(engineState)
@@ -541,6 +593,25 @@ class TabManager {
             Log.e(TAG, "Failed to capture state for tab $id", e)
             savedStates[id]
         }
+    }
+
+    /**
+     * Duplicate a tab, capturing its history and state, creating a new tab
+     * right next to it, and restoring the captured state on the new session.
+     */
+    fun duplicateTab(sourceTabId: String, store: BrowserStore): String? {
+        val sourceTab = store.state.tabs.find { it.id == sourceTabId } ?: return null
+        val capturedState = captureSessionState(sourceTabId)
+        val newTabId = createTab(
+            url = sourceTab.content.url,
+            store = store,
+            parentId = sourceTabId,
+            select = false
+        )
+        capturedState?.let {
+            savedStates[newTabId] = it
+        }
+        return newTabId
     }
 
     // ── Serialization helpers ────────────────────────────────────────

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.filled.*
@@ -442,20 +443,97 @@ class BrowserActivity : ComponentActivity() {
                 Log.d("PB_STARTUP", "Compose: session==null path — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, tabsRestored=${tabsRestoredOrReady.value}, sessionsInMap=${sessions.keys.joinToString()}")
                 if (currentScreen == Screen.Tabs) {
                     PlayBridgeTheme {
-                        Surface(modifier = Modifier.fillMaxSize()) {
-                            TabsScreen(
-                                onTabSelected = { tabId ->
-                                    tabManager.selectTab(tabId, store)
-                                    currentScreen = Screen.Browser
-                                },
-                                onTabClosed = { tabId ->
-                                    tabManager.closeTab(tabId, store)
-                                },
-                                onNewTab = {
-                                    tabManager.createTab("about:blank", store)
-                                    currentScreen = Screen.Browser
-                                }
-                            )
+                        Scaffold(
+                            topBar = {
+                                @OptIn(ExperimentalMaterial3Api::class)
+                                TopAppBar(
+                                    title = { Text("Tabs") },
+                                    actions = {
+                                        IconButton(onClick = {
+                                            tabManager.createTab("about:blank", store)
+                                            currentScreen = Screen.Browser
+                                        }) {
+                                            Icon(Icons.Default.Add, "New Tab")
+                                        }
+
+                                        var menuExpanded by remember { mutableStateOf(false) }
+                                        val playingTabIds = tabManager.playingTabIds
+
+                                        Box {
+                                            IconButton(onClick = { menuExpanded = true }) {
+                                                Icon(Icons.Default.MoreVert, "More options")
+                                            }
+                                            DropdownMenu(
+                                                expanded = menuExpanded,
+                                                onDismissRequest = { menuExpanded = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Go to playing tab") },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        playingTabIds.keys.firstOrNull()?.let {
+                                                            tabManager.selectTab(it, store)
+                                                            currentScreen = Screen.Browser
+                                                        }
+                                                    },
+                                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.VolumeUp, null) },
+                                                    enabled = playingTabIds.isNotEmpty()
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Reopen Closed Tab") },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        tabManager.reopenClosedTab(store)?.let {
+                                                            currentScreen = Screen.Browser
+                                                        }
+                                                    },
+                                                    leadingIcon = { Icon(Icons.Default.Restore, null) },
+                                                    enabled = tabManager.canReopenClosedTab()
+                                                )
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        ) { innerPadding ->
+                            Surface(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                                TabsScreen(
+                                    onTabSelected = { tabId ->
+                                        tabManager.selectTab(tabId, store)
+                                        currentScreen = Screen.Browser
+                                    },
+                                    onTabClosed = { tabId ->
+                                        tabManager.closeTab(tabId, store)
+                                    },
+                                    onNewTab = {
+                                        tabManager.createTab("about:blank", store)
+                                        currentScreen = Screen.Browser
+                                    },
+                                    onTabDuplicate = { tabId ->
+                                        tabManager.duplicateTab(tabId, store)
+                                    },
+                                    onTabBookmark = { tabId ->
+                                        val targetTab = store.state.tabs.find { it.id == tabId }
+                                        targetTab?.let { tab ->
+                                             val url = tab.content.url
+                                             if (url.isNotEmpty() && url != "about:blank") {
+                                                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                     bookmarkDao.insert(
+                                                         com.playbridge.sender.data.history.BookmarkEntity(
+                                                             url = url,
+                                                             title = tab.content.title.ifEmpty { null },
+                                                             timestamp = System.currentTimeMillis()
+                                                         )
+                                                     )
+                                                     scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                                         Toast.makeText(this@BrowserActivity, "Bookmark added", Toast.LENGTH_SHORT).show()
+                                                     }
+                                                 }
+                                             }
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                     return@setContent
@@ -1428,6 +1506,51 @@ class BrowserActivity : ComponentActivity() {
                                         IconButton(onClick = { currentScreen = Screen.Browser }) {
                                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                                         }
+                                    },
+                                    actions = {
+                                        IconButton(onClick = {
+                                            tabManager.createTab("about:blank", store)
+                                            currentScreen = Screen.Browser
+                                        }) {
+                                            Icon(Icons.Default.Add, "New Tab")
+                                        }
+                                        
+                                        var menuExpanded by remember { mutableStateOf(false) }
+                                        val playingTabIds = tabManager.playingTabIds
+                                        
+                                        Box {
+                                            IconButton(onClick = { menuExpanded = true }) {
+                                                Icon(Icons.Default.MoreVert, "More options")
+                                            }
+                                            DropdownMenu(
+                                                expanded = menuExpanded,
+                                                onDismissRequest = { menuExpanded = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Go to playing tab") },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        playingTabIds.keys.firstOrNull()?.let {
+                                                            tabManager.selectTab(it, store)
+                                                            currentScreen = Screen.Browser
+                                                        }
+                                                    },
+                                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.VolumeUp, null) },
+                                                    enabled = playingTabIds.isNotEmpty()
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Reopen Closed Tab") },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        tabManager.reopenClosedTab(store)?.let {
+                                                            currentScreen = Screen.Browser
+                                                        }
+                                                    },
+                                                    leadingIcon = { Icon(Icons.Default.Restore, null) },
+                                                    enabled = tabManager.canReopenClosedTab()
+                                                )
+                                            }
+                                        }
                                     }
                                 )
                             }
@@ -1529,10 +1652,12 @@ class BrowserActivity : ComponentActivity() {
                                             }
 
                                             Box(modifier = Modifier.fillMaxSize()) {
-                                                BrowserView(
-                                                    session = session,
-                                                    onLongPressLink = { url: String -> contextMenuUrl = url }
-                                                )
+                                                if (currentScreen == Screen.Browser) {
+                                                    BrowserView(
+                                                        session = session,
+                                                        onLongPressLink = { url: String -> contextMenuUrl = url }
+                                                    )
+                                                }
 
                                                 if (currentUrl == "about:blank") {
                                                     HomeScreen(
@@ -1818,6 +1943,29 @@ class BrowserActivity : ComponentActivity() {
                                                 onNewTab = {
                                                     tabManager.createTab("about:blank", store)
                                                     currentScreen = Screen.Browser
+                                                },
+                                                onTabDuplicate = { tabId ->
+                                                    tabManager.duplicateTab(tabId, store)
+                                                },
+                                                onTabBookmark = { tabId ->
+                                                    val targetTab = store.state.tabs.find { it.id == tabId }
+                                                    targetTab?.let { tab ->
+                                                        val url = tab.content.url
+                                                        if (url.isNotEmpty() && url != "about:blank") {
+                                                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                                bookmarkDao.insert(
+                                                                    com.playbridge.sender.data.history.BookmarkEntity(
+                                                                        url = url,
+                                                                        title = tab.content.title.ifEmpty { null },
+                                                                        timestamp = System.currentTimeMillis()
+                                                                    )
+                                                                )
+                                                                scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                                                    Toast.makeText(this@BrowserActivity, "Bookmark added", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             )
                                         }
