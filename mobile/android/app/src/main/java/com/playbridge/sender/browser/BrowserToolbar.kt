@@ -36,27 +36,15 @@ import androidx.compose.ui.input.key.*
 fun BrowserToolbar(
     currentUrl: String,
     isLoading: Boolean,
-    canGoBack: Boolean,
-    canGoForward: Boolean,
-    tabCount: Int = 1,
     onUrlChange: (String) -> Unit,
     onNavigate: (String) -> Unit,
-    onBack: () -> Unit,
-    onForward: () -> Unit,
     onRefresh: () -> Unit,
     onStop: () -> Unit,
-    onMenuClick: () -> Unit,
-    onDrawerClick: () -> Unit = {},
-    onTabsClick: () -> Unit = {},
     onRemoteClick: (() -> Unit)? = null,
     isEditing: Boolean = false,
     isSecure: Boolean = false,
     onSecurityIconClick: () -> Unit = {},
-    isDesktopMode: Boolean = false,
-    onDesktopModeChange: (Boolean) -> Unit = {},
-    onBookmarkClick: () -> Unit = {},
     onEditingChange: (Boolean) -> Unit = {},
-    menuContent: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -118,22 +106,36 @@ fun BrowserToolbar(
                              modifier = Modifier.size(24.dp)
                          )
                     }
+                    Spacer(modifier = Modifier.width(4.dp))
                 } else {
-                    // Hamburger menu
-                    IconButton(
-                        onClick = onDrawerClick,
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Menu,
-                            contentDescription = "Open navigation drawer",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(24.dp)
-                        )
+                    // Security / Search icon all the way to the left
+                    if (currentUrl == "about:blank") {
+                        IconButton(
+                            onClick = { onEditingChange(true) },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = "Search",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = onSecurityIconClick,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
+                                tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
+                    Spacer(modifier = Modifier.width(4.dp))
                 }
-
-                Spacer(modifier = Modifier.width(4.dp))
 
                 // URL Bar — BasicTextField + DecorationBox for custom (compact) content padding
                 val urlInteractionSource = remember { MutableInteractionSource() }
@@ -204,31 +206,7 @@ fun BrowserToolbar(
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             },
-                            leadingIcon = if (!isEditing) {
-                                {
-                                    if (currentUrl == "about:blank") {
-                                        Icon(
-                                            Icons.Default.Search,
-                                            contentDescription = "Search",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    } else {
-                                        // Wrapped in IconButton for touch target sizing (48dp target) and ripple feedback
-                                        IconButton(
-                                            onClick = onSecurityIconClick,
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
-                                                contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
-                                                tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            } else null,
+                            leadingIcon = null,
                             trailingIcon = if (textFieldValue.text.isNotEmpty() && isEditing) {
                                 {
                                     IconButton(
@@ -249,8 +227,8 @@ fun BrowserToolbar(
                             } else null,
                             shape = CircleShape,
                             colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent,
                                 cursorColor = MaterialTheme.colorScheme.primary
@@ -283,45 +261,20 @@ fun BrowserToolbar(
                                 modifier = Modifier.size(22.dp)
                             )
                         }
+                        Spacer(modifier = Modifier.width(4.dp))
                     }
 
-                    // Tabs button with badge
+                    // Refresh / Stop button (in place of menu button)
                     IconButton(
-                        onClick = onTabsClick,
+                        onClick = { if (isLoading) onStop() else onRefresh() },
                         modifier = Modifier.size(40.dp)
                     ) {
-                        BadgedBox(
-                            badge = {
-                                Badge(
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary
-                                ) {
-                                    Text(tabCount.toString())
-                                }
-                            }
-                        ) {
-                            Icon(
-                                Icons.Default.WebAsset,
-                                contentDescription = "$tabCount tabs",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-                    }
-
-                    // Menu button
-                    Box {
-                        IconButton(
-                            onClick = onMenuClick,
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.MoreVert,
-                                contentDescription = "Menu",
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-                        menuContent()
+                        Icon(
+                            imageVector = if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
+                            contentDescription = if (isLoading) "Refresh" else "Refresh",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
                 }
             }

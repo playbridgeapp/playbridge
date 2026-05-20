@@ -57,6 +57,7 @@ import kotlinx.coroutines.launch
 import com.playbridge.sender.data.library.TmdbRepository
 import com.playbridge.sender.data.library.StremioSubtitleService
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.ui.theme.PlayBridgeTheme
 
 /**
  * A chip-shaped dropdown trigger that expands to show options as chips.
@@ -346,12 +347,13 @@ fun CastSheet(
         )
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
+    PlayBridgeTheme {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -919,17 +921,19 @@ fun CastSheet(
         }
     }
 }
+}
 
     if (showSubtitleSearchDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                showSubtitleSearchDialog = false
-                showSubtitleResults = false
-                subtitleSearchResults = emptyList()
-            },
-            title = { Text("Search Subtitles") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
+        PlayBridgeTheme {
+            AlertDialog(
+                onDismissRequest = {
+                    showSubtitleSearchDialog = false
+                    showSubtitleResults = false
+                    subtitleSearchResults = emptyList()
+                },
+                title = { Text("Search Subtitles") },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = subtitleSearchQuery,
                         onValueChange = { subtitleSearchQuery = it },
@@ -1028,17 +1032,20 @@ fun CastSheet(
             }
         )
     }
+}
 
     // In-app video preview
     previewVideo?.let { pv ->
-        VideoPreviewSheet(
-            video = pv,
-            onDismiss = { previewVideo = null },
-            onSendToTv = {
-                previewVideo = null
-                onVideoClick(applyProxy(pv), selectedSubtitles.toList())
-            }
-        )
+        PlayBridgeTheme {
+            VideoPreviewSheet(
+                video = pv,
+                onDismiss = { previewVideo = null },
+                onSendToTv = {
+                    previewVideo = null
+                    onVideoClick(applyProxy(pv), selectedSubtitles.toList())
+                }
+            )
+        }
     }
 }
 

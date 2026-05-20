@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -97,15 +98,16 @@ fun VideoPreviewSheet(
         player.playWhenReady = true
     }
 
-    ModalBottomSheet(
-        onDismissRequest = {
-            player.stop()
-            onDismiss()
-        },
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-        dragHandle = null
-    ) {
+    PlayBridgeTheme {
+        ModalBottomSheet(
+            onDismissRequest = {
+                player.stop()
+                onDismiss()
+            },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface,
+            dragHandle = null
+        ) {
         Column(modifier = Modifier.fillMaxWidth()) {
 
             // ── Video player area ──────────────────────────────────────
@@ -225,4 +227,5 @@ fun VideoPreviewSheet(
             Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
         }
     }
+}
 }

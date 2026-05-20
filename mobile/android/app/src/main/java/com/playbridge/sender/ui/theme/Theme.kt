@@ -37,10 +37,15 @@ private val DarkColorScheme = darkColorScheme(
     surfaceContainerHighest = SurfaceContainerHighest,
     primary = Primary,
     onPrimary = OnPrimary,
+    primaryContainer = PrimaryContainer,
+    onPrimaryContainer = OnPrimaryContainer,
+    secondary = Secondary,
+    onSecondary = OnSecondary,
     secondaryContainer = SecondaryContainer,
     onSecondaryContainer = OnSecondaryContainer,
     onSurface = OnSurface,
     onSurfaceVariant = OnSurfaceVariant,
+    outline = Outline,
     outlineVariant = OutlineVariant
 )
 
@@ -54,10 +59,15 @@ private val AmoledColorScheme = darkColorScheme(
     surfaceContainerHighest = AmoledSurfaceContainerHighest,
     primary = Primary,
     onPrimary = OnPrimary,
+    primaryContainer = AmoledPrimaryContainer,
+    onPrimaryContainer = OnPrimaryContainer,
+    secondary = Secondary,
+    onSecondary = OnSecondary,
     secondaryContainer = SecondaryContainer,
     onSecondaryContainer = OnSecondaryContainer,
     onSurface = OnSurface,
     onSurfaceVariant = OnSurfaceVariant,
+    outline = Outline,
     outlineVariant = OutlineVariant
 )
 
@@ -71,10 +81,15 @@ private val LightColorScheme = lightColorScheme(
     surfaceContainerHighest = LightSurfaceContainerHighest,
     primary = LightPrimary,
     onPrimary = LightOnPrimary,
+    primaryContainer = LightPrimaryContainer,
+    onPrimaryContainer = LightOnPrimaryContainer,
+    secondary = LightSecondary,
+    onSecondary = LightOnSecondary,
     secondaryContainer = LightSecondaryContainer,
     onSecondaryContainer = LightOnSecondaryContainer,
     onSurface = LightOnSurface,
     onSurfaceVariant = LightOnSurfaceVariant,
+    outline = LightOutline,
     outlineVariant = LightOutlineVariant
 )
 

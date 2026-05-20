@@ -17,11 +17,17 @@ import androidx.compose.animation.core.*
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -51,6 +57,12 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
@@ -91,6 +103,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.zIndex
 
 import kotlinx.coroutines.flow.first
@@ -224,6 +237,7 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -554,6 +568,8 @@ class BrowserActivity : ComponentActivity() {
 
             var previousUrl by remember(selectedTabId) { mutableStateOf(selectedTab?.content?.url ?: "") }
             var menuExpanded by remember { mutableStateOf(false) }
+            var showMenuSheet by remember { mutableStateOf(false) }
+            val sheetState = rememberModalBottomSheetState()
 
             // User preferences
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
@@ -1117,117 +1133,7 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-
             PlayBridgeTheme {
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    gesturesEnabled = drawerState.isOpen, // Only swipe to close, not to open
-                    drawerContent = {
-                        ModalDrawerSheet(modifier = Modifier.width(260.dp)) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "PlayBridge",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(onClick = {
-                                    scope.launch { drawerState.close() }
-                                    currentScreen = Screen.Settings
-                                }) {
-                                    Icon(
-                                        Icons.Default.Settings,
-                                        contentDescription = "Settings",
-                                        tint = if (currentScreen == Screen.Settings || currentScreen == Screen.AddonSettings)
-                                            MaterialTheme.colorScheme.primary
-                                        else
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            NavigationDrawerItem(
-                                icon = { Icon(Icons.Default.Language, contentDescription = null) },
-                                label = { Text("Browser", style = MaterialTheme.typography.titleMedium) },
-                                selected = currentScreen == Screen.Browser || currentScreen == Screen.Tabs || currentScreen == Screen.History || currentScreen == Screen.Downloads || currentScreen == Screen.Bookmarks || currentScreen == Screen.Remote || currentScreen == Screen.Extensions || currentScreen == Screen.Home,
-                                onClick = {
-                                    scope.launch { drawerState.close() }
-                                    currentScreen = Screen.Browser
-                                },
-                                shape = androidx.compose.ui.graphics.RectangleShape,
-                                modifier = Modifier.height(48.dp)
-                            )
-
-                            NavigationDrawerItem(
-                                icon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = null) },
-                                label = { Text("Library", style = MaterialTheme.typography.titleMedium) },
-                                selected = currentScreen == Screen.Library,
-                                onClick = {
-                                    scope.launch { drawerState.close() }
-                                    currentScreen = Screen.Library
-                                },
-                                shape = androidx.compose.ui.graphics.RectangleShape,
-                                modifier = Modifier.height(48.dp)
-                            )
-
-                            NavigationDrawerItem(
-                                icon = { Icon(Icons.Default.Cloud, contentDescription = null) },
-                                label = { Text("Debrid Library", style = MaterialTheme.typography.titleMedium) },
-                                selected = currentScreen == Screen.DebridLibrary,
-                                onClick = {
-                                    scope.launch { drawerState.close() }
-                                    currentScreen = Screen.DebridLibrary
-                                },
-                                shape = androidx.compose.ui.graphics.RectangleShape,
-                                modifier = Modifier.height(48.dp)
-                            )
-
-                            NavigationDrawerItem(
-                                icon = {
-                                    if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
-                                        Icon(Icons.Default.Tv, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Green)
-                                    } else {
-                                        Icon(Icons.Default.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                },
-                                label = {
-                                    if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
-                                        Text("TV Connection", style = MaterialTheme.typography.titleMedium, color = androidx.compose.ui.graphics.Color.Green)
-                                    } else {
-                                        Text("TV Connection", style = MaterialTheme.typography.titleMedium)
-                                    }
-                                },
-                                selected = currentScreen == Screen.Connection,
-                                onClick = {
-                                    scope.launch { drawerState.close() }
-                                    currentScreen = Screen.Connection
-                                },
-                                shape = androidx.compose.ui.graphics.RectangleShape,
-                                modifier = Modifier.height(48.dp)
-                            )
-
-                            NavigationDrawerItem(
-                                icon = { Icon(Icons.Default.History, contentDescription = null) },
-                                label = { Text("Cast History", style = MaterialTheme.typography.titleMedium) },
-                                selected = currentScreen == Screen.CastHistory,
-                                onClick = {
-                                    scope.launch { drawerState.close() }
-                                    currentScreen = Screen.CastHistory
-                                },
-                                shape = androidx.compose.ui.graphics.RectangleShape,
-                                modifier = Modifier.height(48.dp)
-                            )
-
-                            Spacer(Modifier.height(8.dp))
-                        }
-                    }
-                ) {
                     Scaffold(
                         contentWindowInsets = WindowInsets(0, 0, 0, 0),
                         topBar = {
@@ -1240,15 +1146,9 @@ class BrowserActivity : ComponentActivity() {
                                         BrowserToolbar(
                                             currentUrl = currentUrl,
                                             isLoading = isLoading,
-                                            canGoBack = browserCanGoBack,
-                                            canGoForward = browserCanGoForward,
-                                            tabCount = browserState.tabs.size,
                                             isEditing = isEditing,
                                             isSecure = isSecureConnection,
                                             onSecurityIconClick = { showSiteInfoSheet = true },
-                                            isDesktopMode = isDesktopMode,
-                                            onDesktopModeChange = { isDesktopMode = it },
-                                            onBookmarkClick = { handleBookmarkClick() },
                                             onEditingChange = { editing ->
                                                 isEditing = editing
                                                 if (editing) {
@@ -1263,227 +1163,14 @@ class BrowserActivity : ComponentActivity() {
                                                 session.loadUrl(url)
                                                 isEditing = false
                                             },
-                                            onBack = { session.goBack() },
-                                            onForward = { session.goForward() },
                                             onRefresh = { session.reload() },
                                             onStop = { session.stopLoading() },
-                                            onMenuClick = { menuExpanded = true },
-                                            onDrawerClick = { scope.launch { drawerState.open() } },
-                                            onTabsClick = { currentScreen = Screen.Tabs },
                                             onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                                 {
                                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                                     currentScreen = Screen.Remote
                                                 }
-                                            } else null,
-                                            menuContent = {
-
-                                            // Dropdown menu
-                                            DropdownMenu(
-                                                expanded = menuExpanded,
-                                                onDismissRequest = { menuExpanded = false },
-                                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                                                tonalElevation = 8.dp,
-                                                shape = MaterialTheme.shapes.large
-                                            ) {
-                                                // Navigation buttons row
-                                                AnimatedMenuItem(index = 0) {
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(vertical = 8.dp),
-                                                        horizontalArrangement = Arrangement.SpaceEvenly,
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        IconButton(
-                                                            onClick = {
-                                                                session.goBack()
-                                                                menuExpanded = false
-                                                            },
-                                                            enabled = browserCanGoBack
-                                                        ) {
-                                                            Icon(
-                                                                Icons.AutoMirrored.Filled.ArrowBack,
-                                                                "Back",
-                                                                tint = if (browserCanGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                            )
-                                                        }
-                                                        IconButton(
-                                                            onClick = {
-                                                                session.goForward()
-                                                                menuExpanded = false
-                                                            },
-                                                            enabled = browserCanGoForward
-                                                        ) {
-                                                            Icon(
-                                                                Icons.AutoMirrored.Filled.ArrowForward,
-                                                                "Forward",
-                                                                tint = if (browserCanGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                            )
-                                                        }
-                                                        IconButton(
-                                                            onClick = {
-                                                                if (isLoading) session.stopLoading() else session.reload()
-                                                                menuExpanded = false
-                                                            }
-                                                        ) {
-                                                            Icon(
-                                                                if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
-                                                                if (isLoading) "Stop" else "Refresh",
-                                                                tint = MaterialTheme.colorScheme.onSurface
-                                                            )
-                                                        }
-                                                    }
-                                                }
-
-                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                                                AnimatedMenuItem(
-                                                    index = 3,
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        currentScreen = Screen.History
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("History", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.History, null, tint = MaterialTheme.colorScheme.onSurface) },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-
-                                                AnimatedMenuItem(
-                                                    index = 4,
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        showFindBar = true
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("Find in Page", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary) },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-
-                                                AnimatedMenuItem(
-                                                    index = 4,
-                                                    onClick = {
-                                                        detectVideosEnabled = !detectVideosEnabled
-                                                        prefs.edit().putBoolean("detect_videos", detectVideosEnabled).apply()
-                                                        menuExpanded = false
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("Detect Videos", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = {
-                                                            Icon(
-                                                                if (detectVideosEnabled) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-                                                                null,
-                                                                tint = if (detectVideosEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
-                                                        },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-
-                                                AnimatedMenuItem(
-                                                    index = 4,
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        currentScreen = Screen.Downloads
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("Downloads", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.Download, null, tint = MaterialTheme.colorScheme.primary) },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-
-                                                AnimatedMenuItem(
-                                                    index = 5,
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        currentScreen = Screen.Extensions
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("Extensions", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.primary) },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-
-                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                                                // Bookmarks
-                                                AnimatedMenuItem(
-                                                    index = 8,
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        handleBookmarkClick()
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("Add Bookmark", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.StarBorder, null, tint = MaterialTheme.colorScheme.onSurface) },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-
-                                                AnimatedMenuItem(
-                                                    index = 9,
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        currentScreen = Screen.Bookmarks
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("Bookmarks", style = MaterialTheme.typography.bodyLarge) },
-                                                        leadingIcon = { Icon(Icons.Default.Bookmarks, null, tint = MaterialTheme.colorScheme.onSurface) }, // Changed icon to Bookmarks
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-
-                                                // Desktop Site Toggle
-                                                AnimatedMenuItem(
-                                                    index = 10,
-                                                    onClick = {
-                                                        isDesktopMode = !isDesktopMode
-                                                    }
-                                                ) { onClick ->
-                                                    DropdownMenuItem(
-                                                        text = {
-                                                            Row(
-                                                                modifier = Modifier.fillMaxWidth(),
-                                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                                verticalAlignment = Alignment.CenterVertically
-                                                            ) {
-                                                                Text("Desktop Site", style = MaterialTheme.typography.bodyLarge)
-                                                                Switch(
-                                                                    checked = isDesktopMode,
-                                                                    onCheckedChange = {
-                                                                        isDesktopMode = it
-                                                                    },
-                                                                    modifier = Modifier.scale(0.8f)
-                                                                )
-                                                            }
-                                                        },
-                                                        leadingIcon = { Icon(Icons.Default.DesktopMac, null, tint = MaterialTheme.colorScheme.onSurface) },
-                                                        onClick = onClick,
-                                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                                                    )
-                                                }
-                                            }
-                                            }
+                                            } else null
                                         )
 
                                     // Find on Page Bar
@@ -1578,8 +1265,123 @@ class BrowserActivity : ComponentActivity() {
                             Screen.AddonSettings -> {}
                             Screen.DebridLibrary -> {}
                         }
-                    }
-                ) { innerPadding ->
+                    },
+                        bottomBar = {
+                            if (currentScreen == Screen.Browser && !isFullscreen) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = MaterialTheme.colorScheme.surfaceContainer,
+                                    tonalElevation = 0.dp,
+                                    shadowElevation = 0.dp
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .windowInsetsPadding(WindowInsets.navigationBars)
+                                            .padding(horizontal = 16.dp, vertical = 2.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // 1. Back Button
+                                        IconButton(
+                                            onClick = { session.goBack() },
+                                            enabled = browserCanGoBack
+                                        ) {
+                                            Icon(
+                                                Icons.AutoMirrored.Filled.ArrowBack,
+                                                contentDescription = "Back",
+                                                tint = if (browserCanGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                            )
+                                        }
+
+                                        // 2. Forward Button
+                                        IconButton(
+                                            onClick = { session.goForward() },
+                                            enabled = browserCanGoForward
+                                        ) {
+                                            Icon(
+                                                Icons.AutoMirrored.Filled.ArrowForward,
+                                                contentDescription = "Forward",
+                                                tint = if (browserCanGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                            )
+                                        }
+
+                                        // 3. Play button (minimal/borderless)
+                                        val tabUrl = currentUrl
+                                        if (tabUrl.isNotEmpty() && tabUrl != "about:blank") {
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier
+                                                    .size(48.dp)
+                                                    .clip(CircleShape)
+                                                    .combinedClickable(
+                                                        onClick = { showVideoSheet = true },
+                                                        onLongClick = { performQuickCast() }
+                                                    )
+                                            ) {
+                                                BadgedBox(
+                                                    badge = {
+                                                        if (videoCount > 0) {
+                                                            Badge(
+                                                                containerColor = MaterialTheme.colorScheme.error,
+                                                                contentColor = MaterialTheme.colorScheme.onError
+                                                            ) {
+                                                                Text(videoCount.toString())
+                                                            }
+                                                        }
+                                                    }
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.PlayArrow,
+                                                        contentDescription = "Play/Cast video",
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            }
+                                        } else {
+                                            Spacer(modifier = Modifier.size(48.dp))
+                                        }
+
+                                        // 4. Tab button with tab count outline box
+                                        IconButton(
+                                            onClick = { currentScreen = Screen.Tabs }
+                                        ) {
+                                            val tabCount = browserState.tabs.size
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .border(
+                                                        width = 2.dp,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        shape = RoundedCornerShape(5.dp)
+                                                    ),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = tabCount.toString(),
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = if (tabCount >= 100) 8.sp else if (tabCount >= 10) 10.sp else 12.sp
+                                                    ),
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        }
+
+                                        // 5. Hamburger menu button
+                                        IconButton(
+                                            onClick = { showMenuSheet = true }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Menu,
+                                                contentDescription = "Menu"
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ) { innerPadding ->
                     // content
                     AnimatedContent(
                         targetState = currentScreen,
@@ -1839,52 +1641,6 @@ class BrowserActivity : ComponentActivity() {
                                                         }
                                                     }
                                                 }
-
-                                                val tabUrl = selectedTab?.content?.url.orEmpty()
-                                                if (!isEditing && tabUrl.isNotEmpty() && tabUrl != "about:blank") {
-                                                    Surface(
-                                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        shape = CircleShape,
-                                                        tonalElevation = 6.dp,
-                                                        shadowElevation = 6.dp,
-                                                        modifier = Modifier
-                                                            .align(Alignment.BottomEnd)
-                                                            .padding(24.dp)
-                                                            .offset(x = fabOffsetX.dp, y = fabOffsetY.dp)
-                                                            .size(56.dp)
-                                                            .pointerInput(Unit) {
-                                                                detectTapGestures(
-                                                                    onTap = { showVideoSheet = true },
-                                                                    onLongPress = { performQuickCast() }
-                                                                )
-                                                            }
-                                                            .pointerInput(Unit) {
-                                                                detectDragGestures { change, dragAmount ->
-                                                                    change.consume()
-                                                                    fabOffsetX += dragAmount.x / density
-                                                                    fabOffsetY += dragAmount.y / density
-                                                                }
-                                                            }
-                                                    ) {
-                                                        Box(contentAlignment = Alignment.Center) {
-                                                            BadgedBox(
-                                                                badge = {
-                                                                    if (videoCount > 0) {
-                                                                        Badge(
-                                                                            containerColor = MaterialTheme.colorScheme.error,
-                                                                            contentColor = MaterialTheme.colorScheme.onError
-                                                                        ) {
-                                                                            Text(videoCount.toString())
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ) {
-                                                                Icon(Icons.Default.PlayArrow, "Open TV sheet")
-                                                            }
-                                                        }
-                                                    }
-                                                }
                                             }
                                         }
                                         Screen.History -> {
@@ -1984,7 +1740,7 @@ class BrowserActivity : ComponentActivity() {
                                             BackHandler { currentScreen = lastMainScreen }
                                             ConnectionScreen(
                                                 viewModel = connectionViewModel,
-                                                onMenuClick = { scope.launch { drawerState.open() } },
+                                                onMenuClick = { showMenuSheet = true },
                                                 onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                                     {
                                                         connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
@@ -2142,7 +1898,7 @@ class BrowserActivity : ComponentActivity() {
                                             val nowPlayingEp = tvPlaylistState?.let { nowPlayingEpisodeStart + it.currentIndex }
                                             LibraryScreen(
                                                 viewModel = libraryViewModel,
-                                                onMenuClick = { scope.launch { drawerState.open() } },
+                                                onMenuClick = { showMenuSheet = true },
                                                 nowPlayingTvId = nowPlayingTvId,
                                                 nowPlayingSeason = nowPlayingSeason,
                                                 nowPlayingEpisode = nowPlayingEp,
@@ -2361,7 +2117,7 @@ class BrowserActivity : ComponentActivity() {
                                         Screen.DebridLibrary -> {
                                             BackHandler { finish() }
                                             DebridLibraryScreen(
-                                                onMenuClick = { scope.launch { drawerState.open() } },
+                                                onMenuClick = { showMenuSheet = true },
                                                 onCopyUrl = { linkUrl ->
                                                     clipboardManager.setText(AnnotatedString(linkUrl))
                                                     Toast.makeText(this@BrowserActivity, "Link copied", Toast.LENGTH_SHORT).show()
@@ -2522,6 +2278,272 @@ class BrowserActivity : ComponentActivity() {
                     )
                 }
 
+                if (showMenuSheet) {
+                    PlayBridgeTheme {
+                        ModalBottomSheet(
+                            onDismissRequest = { showMenuSheet = false },
+                            sheetState = sheetState,
+                            dragHandle = { BottomSheetDefaults.DragHandle() },
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 12.dp)
+                        ) {
+                            val pageCount = if (currentScreen == Screen.Browser) 2 else 1
+                            val pagerState = rememberPagerState(pageCount = { pageCount })
+
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(170.dp)
+                            ) { page ->
+                                Column(
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (page == 0) {
+                                        // Page 1: Primary Navigation & Browser options (10 items)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            MenuGridItem(
+                                                icon = Icons.Default.Language,
+                                                label = "Browser",
+                                                selected = currentScreen == Screen.Browser,
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                        showMenuSheet = false
+                                                        currentScreen = Screen.Browser
+                                                    }
+                                                }
+                                            )
+                                            MenuGridItem(
+                                                icon = Icons.AutoMirrored.Filled.LibraryBooks,
+                                                label = "Library",
+                                                selected = currentScreen == Screen.Library,
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                        showMenuSheet = false
+                                                        currentScreen = Screen.Library
+                                                    }
+                                                }
+                                            )
+                                            MenuGridItem(
+                                                icon = Icons.Default.Cloud,
+                                                label = "Debrid",
+                                                selected = currentScreen == Screen.DebridLibrary,
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                        showMenuSheet = false
+                                                        currentScreen = Screen.DebridLibrary
+                                                    }
+                                                }
+                                            )
+                                            val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
+                                            MenuGridItem(
+                                                icon = Icons.Default.Tv,
+                                                label = "Connection",
+                                                selected = currentScreen == Screen.Connection,
+                                                tint = if (isConnected) Color.Green else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                labelColor = if (isConnected) Color.Green else MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                        showMenuSheet = false
+                                                        currentScreen = Screen.Connection
+                                                    }
+                                                }
+                                            )
+                                            MenuGridItem(
+                                                icon = Icons.Default.History,
+                                                label = "Cast History",
+                                                selected = currentScreen == Screen.CastHistory,
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                        showMenuSheet = false
+                                                        currentScreen = Screen.CastHistory
+                                                    }
+                                                }
+                                            )
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            if (currentScreen == Screen.Browser) {
+                                                MenuGridItem(
+                                                    icon = Icons.Default.Bookmarks,
+                                                    label = "Bookmarks",
+                                                    modifier = Modifier.weight(1f),
+                                                    onClick = {
+                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                            showMenuSheet = false
+                                                            currentScreen = Screen.Bookmarks
+                                                        }
+                                                    }
+                                                )
+                                                MenuGridItem(
+                                                    icon = Icons.Default.History,
+                                                    label = "History",
+                                                    modifier = Modifier.weight(1f),
+                                                    onClick = {
+                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                            showMenuSheet = false
+                                                            currentScreen = Screen.History
+                                                        }
+                                                    }
+                                                )
+                                                MenuGridItem(
+                                                    icon = Icons.Default.Download,
+                                                    label = "Downloads",
+                                                    modifier = Modifier.weight(1f),
+                                                    onClick = {
+                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                            showMenuSheet = false
+                                                            currentScreen = Screen.Downloads
+                                                        }
+                                                    }
+                                                )
+                                                MenuGridItem(
+                                                    icon = Icons.Default.Star,
+                                                    label = "Add Bookmark",
+                                                    modifier = Modifier.weight(1f),
+                                                    onClick = {
+                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                            showMenuSheet = false
+                                                            handleBookmarkClick()
+                                                        }
+                                                    }
+                                                )
+                                                MenuGridItem(
+                                                    icon = Icons.Default.Search,
+                                                    label = "Find in Page",
+                                                    modifier = Modifier.weight(1f),
+                                                    onClick = {
+                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                            showMenuSheet = false
+                                                            showFindBar = true
+                                                        }
+                                                    }
+                                                )
+                                            } else {
+                                                MenuGridItem(
+                                                    icon = Icons.Default.Settings,
+                                                    label = "Settings",
+                                                    selected = currentScreen == Screen.Settings,
+                                                    modifier = Modifier.weight(1f),
+                                                    onClick = {
+                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                            showMenuSheet = false
+                                                            currentScreen = Screen.Settings
+                                                        }
+                                                    }
+                                                )
+                                                Spacer(modifier = Modifier.weight(1f))
+                                                Spacer(modifier = Modifier.weight(1f))
+                                                Spacer(modifier = Modifier.weight(1f))
+                                                Spacer(modifier = Modifier.weight(1f))
+                                            }
+                                        }
+                                    } else {
+                                        // Page 2: Tools & Settings (4 items + 6 empty slots)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            MenuGridItem(
+                                                icon = Icons.Default.Extension,
+                                                label = "Extensions",
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                        showMenuSheet = false
+                                                        currentScreen = Screen.Extensions
+                                                    }
+                                                }
+                                            )
+                                            MenuGridItem(
+                                                icon = Icons.Default.Settings,
+                                                label = "Settings",
+                                                selected = currentScreen == Screen.Settings,
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                        showMenuSheet = false
+                                                        currentScreen = Screen.Settings
+                                                    }
+                                                }
+                                            )
+                                            MenuGridItem(
+                                                icon = Icons.Default.Devices,
+                                                label = "Desktop Site",
+                                                selected = isDesktopMode,
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    isDesktopMode = !isDesktopMode
+                                                }
+                                            )
+                                            MenuGridItem(
+                                                icon = Icons.Default.PlayCircle,
+                                                label = "Video Detect",
+                                                selected = detectVideosEnabled,
+                                                modifier = Modifier.weight(1f),
+                                                onClick = {
+                                                    detectVideosEnabled = !detectVideosEnabled
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                            Spacer(modifier = Modifier.weight(1f))
+                                            Spacer(modifier = Modifier.weight(1f))
+                                            Spacer(modifier = Modifier.weight(1f))
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (pageCount > 1) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    repeat(pageCount) { index ->
+                                        val active = pagerState.currentPage == index
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(horizontal = 4.dp)
+                                                .size(if (active) 8.dp else 6.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    if (active) MaterialTheme.colorScheme.primary 
+                                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                                )
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+                }
+                }
+
                 if (showSiteInfoSheet) {
                     val sheetInfo = siteSecurityInfo ?: SiteSecurityInfo(isSecure = isSecureConnection, host = try { java.net.URI(currentUrl).host ?: currentUrl } catch (e: Exception) { currentUrl })
                     SiteInfoSheet(info = sheetInfo, onDismiss = { showSiteInfoSheet = false })
@@ -2588,7 +2610,6 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
         }
-    }
 
     override fun onDestroy() {
         Log.d("PB_STARTUP", "onDestroy: isFinishing=$isFinishing, sessions=${tabManager.sessions.size}")
@@ -2603,6 +2624,91 @@ class BrowserActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxSize(),
                 factory = { context -> GeckoEngineView(context).apply { render(session) } },
                 update = { view -> view.render(session) }
+            )
+        }
+    }
+
+    @Composable
+    private fun MenuSheetItem(
+        icon: androidx.compose.ui.graphics.vector.ImageVector,
+        label: String,
+        selected: Boolean = false,
+        tint: androidx.compose.ui.graphics.Color? = null,
+        labelColor: androidx.compose.ui.graphics.Color? = null,
+        onClick: () -> Unit
+    ) {
+        Surface(
+            onClick = onClick,
+            color = if (selected) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent,
+            contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp, horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = tint ?: if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = labelColor ?: if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun MenuGridItem(
+        icon: ImageVector,
+        label: String,
+        selected: Boolean = false,
+        tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+        labelColor: Color = MaterialTheme.colorScheme.onSurface,
+        modifier: Modifier = Modifier,
+        onClick: () -> Unit
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onClick)
+                .padding(vertical = 4.dp)
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primaryContainer 
+                        else Color.Transparent
+                    )
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = if (selected) MaterialTheme.colorScheme.primary else tint,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (selected) MaterialTheme.colorScheme.primary else if (labelColor == Color.Green) labelColor else labelColor.copy(alpha = 0.7f),
+                maxLines = 2,
+                textAlign = TextAlign.Center,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

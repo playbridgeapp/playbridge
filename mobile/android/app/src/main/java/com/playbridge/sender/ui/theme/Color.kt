@@ -2,64 +2,76 @@ package com.playbridge.sender.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// ── Dark palette ──────────────────────────────────────────────────────────────
+// ── Dark palette (Slate / Charcoal) ───────────────────────────────────────────
 
 // Surface Hierarchy
-val Surface                 = Color(0xFF0D072E)
-val SurfaceContainerLow     = Color(0xFF120C37)
-val SurfaceContainer        = Color(0xFF181241)
-val SurfaceContainerHigh    = Color(0xFF1E1748)
-val SurfaceContainerHighest = Color(0xFF241D54)
-val SurfaceBright           = Color(0xFF2A2660)
+val Surface                 = Color(0xFF1E1E1F)
+val SurfaceContainerLow     = Color(0xFF151516)
+val SurfaceContainer        = Color(0xFF2B2B2C)
+val SurfaceContainerHigh    = Color(0xFF333334)
+val SurfaceContainerHighest = Color(0xFF3B3B3C)
+val SurfaceBright           = Color(0xFF48484A)
 
 // Brand Colors
-val Primary         = Color(0xFF9EA7FF)
-val PrimaryDim      = Color(0xFF5565F2)
-val OnPrimary       = Color(0xFF0D072E)
-val PrimaryFixedDim = Color(0xFF7B84E0)
+val Primary         = Color(0xFF8AB4F8)
+val PrimaryDim      = Color(0xFF4285F4)
+val OnPrimary       = Color(0xFF001F4D)
+val PrimaryFixedDim = Color(0xFF669DF6)
+val PrimaryContainer = Color(0xFF2E3B50)
+val OnPrimaryContainer = Color(0xFFD2E3FC)
+val Secondary       = Color(0xFF8AB4F8)
+val OnSecondary     = Color(0xFF001F4D)
 
 // Secondary
-val SecondaryContainer   = Color(0xFF2E3480)
-val OnSecondaryContainer = Color(0xFFBFC6FF)
+val SecondaryContainer   = Color(0xFF303134)
+val OnSecondaryContainer = Color(0xFFE8EAED)
 
 // Content Colors
-val OnSurface        = Color(0xFFE7E2FF)
-val OnSurfaceVariant = Color(0xFFB0A8D8)
-val OutlineVariant   = Color(0xFF3D3770)
+val OnSurface        = Color(0xFFE8EAED)
+val OnSurfaceVariant = Color(0xFF9AA0A6)
+val Outline          = Color(0xFF5F6368)
+val OutlineVariant   = Color(0xFF3C4043)
 
 // ── AMOLED palette ────────────────────────────────────────────────────────────
 
 // Surface Hierarchy (pure-black OLED surfaces; brand colours unchanged)
 val AmoledSurface                 = Color(0xFF000000)
-val AmoledSurfaceContainerLow     = Color(0xFF06051A)
-val AmoledSurfaceContainer        = Color(0xFF0C0A28)
-val AmoledSurfaceContainerHigh    = Color(0xFF121038)
-val AmoledSurfaceContainerHighest = Color(0xFF181548)
-val AmoledSurfaceBright           = Color(0xFF1E1A58)
+val AmoledSurfaceContainerLow     = Color(0xFF0B0B0C)
+val AmoledSurfaceContainer        = Color(0xFF161617)
+val AmoledSurfaceContainerHigh    = Color(0xFF212122)
+val AmoledSurfaceContainerHighest = Color(0xFF2C2C2D)
+val AmoledSurfaceBright           = Color(0xFF38383A)
+val AmoledPrimaryContainer        = Color(0xFF14243D)
 
 // Brand & content colours are the same as Dark
 
-// ── Light palette ─────────────────────────────────────────────────────────────
+// ── Light palette (Neutral Light) ─────────────────────────────────────────────
 
 // Surface Hierarchy
-val LightSurface                 = Color(0xFFF4F1FF)
-val LightSurfaceContainerLow     = Color(0xFFEDE9FF)
-val LightSurfaceContainer        = Color(0xFFE3DEFF)
-val LightSurfaceContainerHigh    = Color(0xFFD8D2FF)
-val LightSurfaceContainerHighest = Color(0xFFCCC5FF)
+val LightSurface                 = Color(0xFFFFFFFF)
+val LightSurfaceContainerLow     = Color(0xFFF8F9FA)
+val LightSurfaceContainer        = Color(0xFFF1F3F4)
+val LightSurfaceContainerHigh    = Color(0xFFE8EAED)
+val LightSurfaceContainerHighest = Color(0xFFDFE1E5)
 val LightSurfaceBright           = Color(0xFFFFFFFF)
 
-// Brand Colors (darkened primary for contrast on light backgrounds)
-val LightPrimary         = Color(0xFF3040CC)
-val LightPrimaryDim      = Color(0xFF1C2BAD)
+// Brand Colors
+val LightPrimary         = Color(0xFF1A73E8)
+val LightPrimaryDim      = Color(0xFF185ABC)
 val LightOnPrimary       = Color(0xFFFFFFFF)
-val LightPrimaryFixedDim = Color(0xFF4A5ADB)
+val LightPrimaryFixedDim = Color(0xFF1557B0)
+val LightPrimaryContainer = Color(0xFFD2E3FC)
+val LightOnPrimaryContainer = Color(0xFF1A73E8)
+val LightSecondary       = Color(0xFF1A73E8)
+val LightOnSecondary     = Color(0xFFFFFFFF)
 
 // Secondary
-val LightSecondaryContainer   = Color(0xFFC5CAFF)
-val LightOnSecondaryContainer = Color(0xFF0D1780)
+val LightSecondaryContainer   = Color(0xFFF1F3F4)
+val LightOnSecondaryContainer = Color(0xFF3C4043)
 
 // Content Colors
-val LightOnSurface        = Color(0xFF0A0720)
-val LightOnSurfaceVariant = Color(0xFF403A6A)
-val LightOutlineVariant   = Color(0xFFC0BBE0)
+val LightOnSurface        = Color(0xFF202124)
+val LightOnSurfaceVariant = Color(0xFF5F6368)
+val LightOutline          = Color(0xFFDADCE0)
+val LightOutlineVariant   = Color(0xFFDADCE0)
+
