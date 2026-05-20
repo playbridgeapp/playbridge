@@ -106,7 +106,7 @@ fun BrowserToolbar(
                              modifier = Modifier.size(24.dp)
                          )
                     }
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(2.dp))
                 } else {
                     // Security / Search icon all the way to the left
                     if (currentUrl == "about:blank") {
@@ -134,7 +134,7 @@ fun BrowserToolbar(
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(2.dp))
                 }
 
                 // URL Bar — BasicTextField + DecorationBox for custom (compact) content padding
@@ -148,7 +148,7 @@ fun BrowserToolbar(
                     },
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 50.dp)
+                        .height(40.dp)
                         .onFocusChanged { focusState ->
                             isFocused = focusState.isFocused
                             if (focusState.isFocused) {
@@ -236,17 +236,16 @@ fun BrowserToolbar(
                             contentPadding = TextFieldDefaults.contentPaddingWithoutLabel(
                                 top = 6.dp,
                                 bottom = 6.dp,
-                                start = 12.dp,
-                                end = 12.dp
+                                start = 4.dp,
+                                end = 4.dp
                             )
                         )
                     }
                 )
 
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(2.dp))
 
                 if (!isEditing) {
-                    Spacer(modifier = Modifier.width(4.dp))
 
                     // Remote control shortcut (only when connected to TV)
                     if (onRemoteClick != null) {
@@ -261,7 +260,7 @@ fun BrowserToolbar(
                                 modifier = Modifier.size(22.dp)
                             )
                         }
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(2.dp))
                     }
 
                     // Refresh / Stop button (in place of menu button)

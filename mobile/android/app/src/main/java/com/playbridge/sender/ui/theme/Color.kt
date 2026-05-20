@@ -5,19 +5,19 @@ import androidx.compose.ui.graphics.Color
 // ── Dark palette (Slate / Charcoal) ───────────────────────────────────────────
 
 // Surface Hierarchy
-val Surface                 = Color(0xFF1E1E1F)
-val SurfaceContainerLow     = Color(0xFF151516)
-val SurfaceContainer        = Color(0xFF2B2B2C)
-val SurfaceContainerHigh    = Color(0xFF333334)
-val SurfaceContainerHighest = Color(0xFF3B3B3C)
-val SurfaceBright           = Color(0xFF48484A)
+val Surface                 = Color(0xFF121213)
+val SurfaceContainerLow     = Color(0xFF1A1A1C)
+val SurfaceContainer        = Color(0xFF232325)
+val SurfaceContainerHigh    = Color(0xFF2D2D30)
+val SurfaceContainerHighest = Color(0xFF37373B)
+val SurfaceBright           = Color(0xFF424247)
 
 // Brand Colors
 val Primary         = Color(0xFF8AB4F8)
 val PrimaryDim      = Color(0xFF4285F4)
 val OnPrimary       = Color(0xFF001F4D)
 val PrimaryFixedDim = Color(0xFF669DF6)
-val PrimaryContainer = Color(0xFF2E3B50)
+val PrimaryContainer = Color(0xFF232D3F)
 val OnPrimaryContainer = Color(0xFFD2E3FC)
 val Secondary       = Color(0xFF8AB4F8)
 val OnSecondary     = Color(0xFF001F4D)
@@ -36,12 +36,12 @@ val OutlineVariant   = Color(0xFF3C4043)
 
 // Surface Hierarchy (pure-black OLED surfaces; brand colours unchanged)
 val AmoledSurface                 = Color(0xFF000000)
-val AmoledSurfaceContainerLow     = Color(0xFF0B0B0C)
-val AmoledSurfaceContainer        = Color(0xFF161617)
-val AmoledSurfaceContainerHigh    = Color(0xFF212122)
-val AmoledSurfaceContainerHighest = Color(0xFF2C2C2D)
-val AmoledSurfaceBright           = Color(0xFF38383A)
-val AmoledPrimaryContainer        = Color(0xFF14243D)
+val AmoledSurfaceContainerLow     = Color(0xFF0A0A0C)
+val AmoledSurfaceContainer        = Color(0xFF121214)
+val AmoledSurfaceContainerHigh    = Color(0xFF1E1E22)
+val AmoledSurfaceContainerHighest = Color(0xFF2A2A2E)
+val AmoledSurfaceBright           = Color(0xFF36363B)
+val AmoledPrimaryContainer        = Color(0xFF232D3F)
 
 // Brand & content colours are the same as Dark
 
