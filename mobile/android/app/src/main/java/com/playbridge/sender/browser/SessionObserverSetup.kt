@@ -60,7 +60,7 @@ fun SessionObserverSetup(
     onMagnetDetected: (String) -> Unit,
     onTorrentDownloaded: (ByteArray) -> Unit,
     onVideoHashDetected: (String, String) -> Unit,  // (url, kotlinTabId)
-    onFullScreenChange: (Boolean) -> Unit
+    onFullScreenChange: (Boolean, Boolean) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -78,6 +78,12 @@ fun SessionObserverSetup(
     DisposableEffect(session, selectedTab?.id) {
         val observer = object : EngineSession.Observer {
             override fun onLocationChange(url: String, hasUserGesture: Boolean) {
+                if (url.contains("#playbridge-fullscreen-portrait=")) {
+                    val isPortrait = url.substringAfter("#playbridge-fullscreen-portrait=").toBoolean()
+                    onFullScreenChange(true, isPortrait)
+                    return
+                }
+
                 // Update store state to keep it in sync
                 if (selectedTab != null) {
                     store.dispatch(
@@ -398,8 +404,33 @@ fun SessionObserverSetup(
                             }
                             if (method.name == "onFullScreen" && args != null && args.size >= 2) {
                                 val fullScreen = args[1] as? Boolean ?: false
+                                val internalGs = gs
                                 scope.launch(Dispatchers.Main) {
-                                    onFullScreenChange(fullScreen)
+                                    onFullScreenChange(fullScreen, false)
+                                    if (fullScreen && internalGs != null) {
+                                        try {
+                                            val js = """
+                                                javascript:(function() {
+                                                    var el = document.fullscreenElement || document.body;
+                                                    var video = el.tagName === 'VIDEO' ? el : el.querySelector('video');
+                                                    if (!video) {
+                                                        video = document.querySelector('video');
+                                                    }
+                                                    var isPortrait = false;
+                                                    if (video && video.videoWidth && video.videoHeight) {
+                                                        isPortrait = video.videoWidth < video.videoHeight;
+                                                    }
+                                                    window.location.replace(window.location.href.split('#')[0] + '#playbridge-fullscreen-portrait=' + isPortrait);
+                                                    setTimeout(function() {
+                                                        history.replaceState(null, '', window.location.href.split('#')[0]);
+                                                    }, 100);
+                                                })()
+                                            """.trimIndent()
+                                            internalGs.loadUri(js)
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Error executing loadUri for fullscreen check", e)
+                                        }
+                                    }
                                 }
                             }
                             try {
@@ -415,7 +446,31 @@ fun SessionObserverSetup(
                         val fullscreenDelegate = object : GeckoSession.ContentDelegate {
                             override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
                                 scope.launch(Dispatchers.Main) {
-                                    onFullScreenChange(fullScreen)
+                                    onFullScreenChange(fullScreen, false)
+                                    if (fullScreen) {
+                                        try {
+                                            val js = """
+                                                javascript:(function() {
+                                                    var el = document.fullscreenElement || document.body;
+                                                    var video = el.tagName === 'VIDEO' ? el : el.querySelector('video');
+                                                    if (!video) {
+                                                        video = document.querySelector('video');
+                                                    }
+                                                    var isPortrait = false;
+                                                    if (video && video.videoWidth && video.videoHeight) {
+                                                        isPortrait = video.videoWidth < video.videoHeight;
+                                                    }
+                                                    window.location.replace(window.location.href.split('#')[0] + '#playbridge-fullscreen-portrait=' + isPortrait);
+                                                    setTimeout(function() {
+                                                        history.replaceState(null, '', window.location.href.split('#')[0]);
+                                                    }, 100);
+                                                })()
+                                            """.trimIndent()
+                                            session.loadUri(js)
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Error executing loadUri for fullscreen check", e)
+                                        }
+                                    }
                                 }
                             }
                         }

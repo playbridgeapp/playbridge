@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -682,18 +683,25 @@ class BrowserActivity : ComponentActivity() {
             var siteSecurityInfo by remember { mutableStateOf<SiteSecurityInfo?>(null) }
             var showSiteInfoSheet by remember { mutableStateOf(false) }
             var isFullscreen by remember { mutableStateOf(false) }
+            var isFullscreenVideoPortrait by remember { mutableStateOf(false) }
 
-            // Fullscreen: hide/show system bars
+            // Fullscreen: hide/show system bars and handle auto-rotation
             val view = LocalView.current
-            LaunchedEffect(isFullscreen) {
+            LaunchedEffect(isFullscreen, isFullscreenVideoPortrait) {
                 val window = this@BrowserActivity.window ?: return@LaunchedEffect
                 val controller = WindowInsetsControllerCompat(window, view)
                 if (isFullscreen) {
                     controller.hide(WindowInsetsCompat.Type.systemBars())
                     controller.systemBarsBehavior =
                         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    requestedOrientation = if (isFullscreenVideoPortrait) {
+                        ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    } else {
+                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    }
                 } else {
                     controller.show(WindowInsetsCompat.Type.systemBars())
+                    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 }
             }
 
@@ -1109,7 +1117,8 @@ class BrowserActivity : ComponentActivity() {
                         Log.e(TAG, "Error parsing playbridge-video hash", e)
                     }
                 },
-                onFullScreenChange = { fullScreen ->
+                onFullScreenChange = { fullScreen, isPortrait ->
+                    isFullscreenVideoPortrait = isPortrait
                     isFullscreen = fullScreen
                 }
             )
@@ -1306,41 +1315,38 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
 
-                                        // 3. Play button (minimal/borderless)
-                                        val tabUrl = currentUrl
-                                        if (tabUrl.isNotEmpty() && tabUrl != "about:blank") {
-                                            Box(
-                                                contentAlignment = Alignment.Center,
-                                                modifier = Modifier
-                                                    .size(48.dp)
-                                                    .clip(CircleShape)
-                                                    .combinedClickable(
-                                                        onClick = { showVideoSheet = true },
-                                                        onLongClick = { performQuickCast() }
-                                                    )
-                                            ) {
-                                                BadgedBox(
-                                                    badge = {
-                                                        if (videoCount > 0) {
-                                                            Badge(
-                                                                containerColor = MaterialTheme.colorScheme.error,
-                                                                contentColor = MaterialTheme.colorScheme.onError
-                                                            ) {
-                                                                Text(videoCount.toString())
-                                                            }
-                                                        }
-                                                    }
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.PlayArrow,
-                                                        contentDescription = "Play/Cast video",
-                                                        tint = MaterialTheme.colorScheme.primary
-                                                    )
-                                                }
-                                            }
-                                        } else {
-                                            Spacer(modifier = Modifier.size(48.dp))
-                                        }
+                                         val tabUrl = currentUrl
+                                         val isPlayEnabled = tabUrl.isNotEmpty() && tabUrl != "about:blank"
+                                         Box(
+                                             contentAlignment = Alignment.Center,
+                                             modifier = Modifier
+                                                 .size(48.dp)
+                                                 .clip(CircleShape)
+                                                 .combinedClickable(
+                                                     enabled = isPlayEnabled,
+                                                     onClick = { showVideoSheet = true },
+                                                     onLongClick = { performQuickCast() }
+                                                 )
+                                         ) {
+                                             BadgedBox(
+                                                 badge = {
+                                                     if (isPlayEnabled && videoCount > 0) {
+                                                         Badge(
+                                                             containerColor = MaterialTheme.colorScheme.error,
+                                                             contentColor = MaterialTheme.colorScheme.onError
+                                                         ) {
+                                                             Text(videoCount.toString())
+                                                         }
+                                                     }
+                                                 }
+                                             ) {
+                                                 Icon(
+                                                     imageVector = Icons.Default.PlayArrow,
+                                                     contentDescription = "Play/Cast video",
+                                                     tint = if (isPlayEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                                 )
+                                             }
+                                         }
 
                                         // 4. Tab button with tab count outline box
                                         IconButton(

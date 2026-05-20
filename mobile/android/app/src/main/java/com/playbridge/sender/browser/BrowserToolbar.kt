@@ -20,6 +20,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
@@ -51,6 +56,12 @@ fun BrowserToolbar(
     val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     var isFocused by remember { mutableStateOf(false) }
+
+    val mainColor = MaterialTheme.colorScheme.onSurface
+    val dullColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+    val urlVisualTransformation = remember(mainColor, dullColor) {
+        UrlVisualTransformation(mainColor, dullColor)
+    }
 
     // Use TextFieldValue for selection control; display stripped URL when not editing
     var textFieldValue by remember { mutableStateOf(TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))) }
@@ -179,6 +190,7 @@ fun BrowserToolbar(
                         color = MaterialTheme.colorScheme.onSurface
                     ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    visualTransformation = if (isEditing) VisualTransformation.None else urlVisualTransformation,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(
                         onGo = {
@@ -196,7 +208,7 @@ fun BrowserToolbar(
                             innerTextField = innerTextField,
                             enabled = true,
                             singleLine = true,
-                            visualTransformation = VisualTransformation.None,
+                            visualTransformation = if (isEditing) VisualTransformation.None else urlVisualTransformation,
                             interactionSource = urlInteractionSource,
                             placeholder = {
                                 Text(
@@ -316,4 +328,58 @@ private fun normalizeUrl(input: String): String {
  */
 private fun stripProtocol(url: String): String {
     return url.removePrefix("https://").removePrefix("http://")
+}
+
+/**
+ * Visual transformation that styles the domain of a URL brightly,
+ * while keeping the protocol and path/query parameters dull.
+ */
+class UrlVisualTransformation(
+    private val mainColor: Color,
+    private val dullColor: Color
+) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val originalText = text.text
+
+        // 1. Identify where the domain (host) starts (after "://")
+        var hostStart = 0
+        val protocolIndex = originalText.indexOf("://")
+        if (protocolIndex != -1) {
+            hostStart = protocolIndex + 3
+        }
+
+        // 2. Identify where the domain ends and path/query/fragment starts
+        val firstSlash = originalText.indexOf('/', startIndex = hostStart)
+        val firstQuestion = originalText.indexOf('?', startIndex = hostStart)
+        val firstHash = originalText.indexOf('#', startIndex = hostStart)
+
+        var pathStart = originalText.length
+        if (firstSlash != -1 && firstSlash < pathStart) pathStart = firstSlash
+        if (firstQuestion != -1 && firstQuestion < pathStart) pathStart = firstQuestion
+        if (firstHash != -1 && firstHash < pathStart) pathStart = firstHash
+
+        val hostEnd = pathStart
+
+        val annotated = buildAnnotatedString {
+            // Protocol prefix (dull color)
+            if (hostStart > 0) {
+                append(originalText.substring(0, hostStart))
+                addStyle(SpanStyle(color = dullColor), 0, hostStart)
+            }
+
+            // Domain / Host name (main color)
+            if (hostEnd > hostStart) {
+                append(originalText.substring(hostStart, hostEnd))
+                addStyle(SpanStyle(color = mainColor), hostStart, hostEnd)
+            }
+
+            // Path, queries, etc. (dull color)
+            if (originalText.length > hostEnd) {
+                append(originalText.substring(hostEnd))
+                addStyle(SpanStyle(color = dullColor), hostEnd, originalText.length)
+            }
+        }
+
+        return TransformedText(annotated, OffsetMapping.Identity)
+    }
 }
