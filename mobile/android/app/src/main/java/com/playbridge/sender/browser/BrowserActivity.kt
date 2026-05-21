@@ -324,6 +324,7 @@ class BrowserActivity : ComponentActivity() {
             }
             // Tracks the last "main" tab so Settings/overlays know where to return
             var lastMainScreen by remember { mutableStateOf(currentScreen) }
+            var isSettingsFromLibrary by remember { mutableStateOf(false) }
             val clipboardManager = LocalClipboardManager.current
             val keyboardController = LocalSoftwareKeyboardController.current
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -1157,6 +1158,7 @@ class BrowserActivity : ComponentActivity() {
                                             isLoading = isLoading,
                                             isEditing = isEditing,
                                             isSecure = isSecureConnection,
+                                            onLogoClick = { currentScreen = Screen.Dashboard },
                                             onSecurityIconClick = { showSiteInfoSheet = true },
                                             onEditingChange = { editing ->
                                                 isEditing = editing
@@ -1273,6 +1275,7 @@ class BrowserActivity : ComponentActivity() {
                             is Screen.LibraryDetail -> {}
                             Screen.AddonSettings -> {}
                             Screen.DebridLibrary -> {}
+                            Screen.Dashboard -> {}
                         }
                     },
                         bottomBar = {
@@ -1384,6 +1387,72 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                     }
+                                }
+                            } else if ((currentScreen == Screen.Library || currentScreen == Screen.AddonSettings || (currentScreen == Screen.Settings && isSettingsFromLibrary)) && !isFullscreen) {
+                                val navTab by libraryViewModel.selectedTab.collectAsState()
+                                NavigationBar(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                    tonalElevation = 8.dp
+                                ) {
+                                    // 1. Home
+                                    NavigationBarItem(
+                                        selected = currentScreen == Screen.Library && navTab == 0,
+                                        onClick = {
+                                            if (currentScreen != Screen.Library) {
+                                                currentScreen = Screen.Library
+                                            }
+                                            libraryViewModel.setSelectedTab(0)
+                                        },
+                                        icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                                        label = { Text("Home") }
+                                    )
+
+                                    // 2. Discover
+                                    NavigationBarItem(
+                                        selected = currentScreen == Screen.Library && navTab == 1,
+                                        onClick = {
+                                            if (currentScreen != Screen.Library) {
+                                                currentScreen = Screen.Library
+                                            }
+                                            libraryViewModel.setSelectedTab(1)
+                                        },
+                                        icon = { Icon(Icons.Default.Explore, contentDescription = "Discover") },
+                                        label = { Text("Discover") }
+                                    )
+
+                                    // 3. Library
+                                    NavigationBarItem(
+                                        selected = currentScreen == Screen.Library && navTab == 2,
+                                        onClick = {
+                                            if (currentScreen != Screen.Library) {
+                                                currentScreen = Screen.Library
+                                            }
+                                            libraryViewModel.setSelectedTab(2)
+                                        },
+                                        icon = { Icon(Icons.Default.Bookmark, contentDescription = "Library") },
+                                        label = { Text("Library") }
+                                    )
+
+                                    // 4. Addons
+                                    NavigationBarItem(
+                                        selected = currentScreen == Screen.AddonSettings,
+                                        onClick = {
+                                            currentScreen = Screen.AddonSettings
+                                        },
+                                        icon = { Icon(Icons.Default.Extension, contentDescription = "Addons") },
+                                        label = { Text("Addons") }
+                                    )
+
+                                    // 5. Settings
+                                    NavigationBarItem(
+                                        selected = currentScreen == Screen.Settings,
+                                        onClick = {
+                                            isSettingsFromLibrary = true
+                                            currentScreen = Screen.Settings
+                                        },
+                                        icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                                        label = { Text("Settings") }
+                                    )
                                 }
                             }
                         }
@@ -1672,6 +1741,7 @@ class BrowserActivity : ComponentActivity() {
                                             val commandHistory by commandHistoryFlow.collectAsState(initial = emptyList())
                                             CastHistoryScreen(
                                                 historyItems = commandHistory,
+                                                onMenuClick = { currentScreen = Screen.Dashboard },
                                                 onItemClick = { item ->
                                                     forcedVideos = listOf(
                                                         DetectedVideo(
@@ -1746,7 +1816,7 @@ class BrowserActivity : ComponentActivity() {
                                             BackHandler { currentScreen = lastMainScreen }
                                             ConnectionScreen(
                                                 viewModel = connectionViewModel,
-                                                onMenuClick = { showMenuSheet = true },
+                                                onMenuClick = { currentScreen = Screen.Dashboard },
                                                 onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                                     {
                                                         connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
@@ -1762,12 +1832,27 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Settings -> {
-                                            BackHandler { currentScreen = lastMainScreen }
+                                            BackHandler {
+                                                if (isSettingsFromLibrary) {
+                                                    currentScreen = Screen.Library
+                                                    libraryViewModel.setSelectedTab(0)
+                                                } else {
+                                                    currentScreen = lastMainScreen
+                                                }
+                                            }
                                             SettingsScreen(
-                                                onBack = { currentScreen = lastMainScreen },
-                                                onAddonSettings = { currentScreen = Screen.AddonSettings },
+                                                onBack = {
+                                                    if (isSettingsFromLibrary) {
+                                                        currentScreen = Screen.Library
+                                                        libraryViewModel.setSelectedTab(0)
+                                                    } else {
+                                                        currentScreen = lastMainScreen
+                                                    }
+                                                },
                                                 tvIp = if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) tvDevice?.ip else null,
-                                                tvPort = if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) tvDevice?.port else null
+                                                tvPort = if (connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) tvDevice?.port else null,
+                                                showBack = !isSettingsFromLibrary,
+                                                isFromLibrary = isSettingsFromLibrary
                                             )
                                         }
                                         Screen.Bookmarks -> {
@@ -1900,11 +1985,18 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Library -> {
-                                            BackHandler { finish() }
+                                            val selectedTabVal by libraryViewModel.selectedTab.collectAsState()
+                                            BackHandler {
+                                                if (selectedTabVal != 0) {
+                                                    libraryViewModel.setSelectedTab(0)
+                                                } else {
+                                                    finish()
+                                                }
+                                            }
                                             val nowPlayingEp = tvPlaylistState?.let { nowPlayingEpisodeStart + it.currentIndex }
                                             LibraryScreen(
                                                 viewModel = libraryViewModel,
-                                                onMenuClick = { showMenuSheet = true },
+                                                onMenuClick = { currentScreen = Screen.Dashboard },
                                                 nowPlayingTvId = nowPlayingTvId,
                                                 nowPlayingSeason = nowPlayingSeason,
                                                 nowPlayingEpisode = nowPlayingEp,
@@ -2109,21 +2201,40 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.AddonSettings -> {
-                                            BackHandler { currentScreen = Screen.Settings }
+                                            BackHandler {
+                                                currentScreen = Screen.Library
+                                                libraryViewModel.setSelectedTab(0)
+                                            }
                                             AddonSettingsScreen(
                                                 addonRepository = addonRepository,
                                                 installedAddons = installedAddons,
-                                                onBack = { currentScreen = Screen.Settings },
+                                                onBack = {
+                                                    currentScreen = Screen.Library
+                                                    libraryViewModel.setSelectedTab(0)
+                                                },
+                                                showBack = false,
                                                 onOpenUrl = { url ->
                                                     tabManager.createTab(url, store)
                                                     currentScreen = Screen.Browser
                                                 }
                                             )
                                         }
+                                        Screen.Dashboard -> {
+                                            BackHandler { currentScreen = lastMainScreen }
+                                            val isConnected = connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected
+                                            DashboardScreen(
+                                                currentScreen = lastMainScreen,
+                                                isConnected = isConnected,
+                                                connectedDeviceName = tvDevice?.name,
+                                                onNavigate = { screen ->
+                                                    currentScreen = screen
+                                                }
+                                            )
+                                        }
                                         Screen.DebridLibrary -> {
                                             BackHandler { finish() }
                                             DebridLibraryScreen(
-                                                onMenuClick = { showMenuSheet = true },
+                                                onMenuClick = { currentScreen = Screen.Dashboard },
                                                 onCopyUrl = { linkUrl ->
                                                     clipboardManager.setText(AnnotatedString(linkUrl))
                                                     Toast.makeText(this@BrowserActivity, "Link copied", Toast.LENGTH_SHORT).show()
@@ -2296,255 +2407,112 @@ class BrowserActivity : ComponentActivity() {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 12.dp)
+                                .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 16.dp)
                         ) {
-                            val pageCount = if (currentScreen == Screen.Browser) 2 else 1
-                            val pagerState = rememberPagerState(pageCount = { pageCount })
-
-                            HorizontalPager(
-                                state = pagerState,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(170.dp)
-                            ) { page ->
-                                Column(
-                                    modifier = Modifier.fillMaxSize(),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    if (page == 0) {
-                                        // Page 1: Primary Navigation & Browser options (10 items)
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            MenuGridItem(
-                                                icon = Icons.Default.Language,
-                                                label = "Browser",
-                                                selected = currentScreen == Screen.Browser,
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                        showMenuSheet = false
-                                                        currentScreen = Screen.Browser
-                                                    }
-                                                }
-                                            )
-                                            MenuGridItem(
-                                                icon = Icons.AutoMirrored.Filled.LibraryBooks,
-                                                label = "Library",
-                                                selected = currentScreen == Screen.Library,
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                        showMenuSheet = false
-                                                        currentScreen = Screen.Library
-                                                    }
-                                                }
-                                            )
-                                            MenuGridItem(
-                                                icon = Icons.Default.Cloud,
-                                                label = "Debrid",
-                                                selected = currentScreen == Screen.DebridLibrary,
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                        showMenuSheet = false
-                                                        currentScreen = Screen.DebridLibrary
-                                                    }
-                                                }
-                                            )
-                                            val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
-                                            MenuGridItem(
-                                                icon = Icons.Default.Tv,
-                                                label = "Connection",
-                                                selected = currentScreen == Screen.Connection,
-                                                tint = if (isConnected) Color.Green else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                labelColor = if (isConnected) Color.Green else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                        showMenuSheet = false
-                                                        currentScreen = Screen.Connection
-                                                    }
-                                                }
-                                            )
-                                            MenuGridItem(
-                                                icon = Icons.Default.History,
-                                                label = "Cast History",
-                                                selected = currentScreen == Screen.CastHistory,
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                        showMenuSheet = false
-                                                        currentScreen = Screen.CastHistory
-                                                    }
-                                                }
-                                            )
-                                        }
-
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            if (currentScreen == Screen.Browser) {
-                                                MenuGridItem(
-                                                    icon = Icons.Default.Bookmarks,
-                                                    label = "Bookmarks",
-                                                    modifier = Modifier.weight(1f),
-                                                    onClick = {
-                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                            showMenuSheet = false
-                                                            currentScreen = Screen.Bookmarks
-                                                        }
-                                                    }
-                                                )
-                                                MenuGridItem(
-                                                    icon = Icons.Default.History,
-                                                    label = "History",
-                                                    modifier = Modifier.weight(1f),
-                                                    onClick = {
-                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                            showMenuSheet = false
-                                                            currentScreen = Screen.History
-                                                        }
-                                                    }
-                                                )
-                                                MenuGridItem(
-                                                    icon = Icons.Default.Download,
-                                                    label = "Downloads",
-                                                    modifier = Modifier.weight(1f),
-                                                    onClick = {
-                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                            showMenuSheet = false
-                                                            currentScreen = Screen.Downloads
-                                                        }
-                                                    }
-                                                )
-                                                MenuGridItem(
-                                                    icon = Icons.Default.Star,
-                                                    label = "Add Bookmark",
-                                                    modifier = Modifier.weight(1f),
-                                                    onClick = {
-                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                            showMenuSheet = false
-                                                            handleBookmarkClick()
-                                                        }
-                                                    }
-                                                )
-                                                MenuGridItem(
-                                                    icon = Icons.Default.Search,
-                                                    label = "Find in Page",
-                                                    modifier = Modifier.weight(1f),
-                                                    onClick = {
-                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                            showMenuSheet = false
-                                                            showFindBar = true
-                                                        }
-                                                    }
-                                                )
-                                            } else {
-                                                MenuGridItem(
-                                                    icon = Icons.Default.Settings,
-                                                    label = "Settings",
-                                                    selected = currentScreen == Screen.Settings,
-                                                    modifier = Modifier.weight(1f),
-                                                    onClick = {
-                                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                            showMenuSheet = false
-                                                            currentScreen = Screen.Settings
-                                                        }
-                                                    }
-                                                )
-                                                Spacer(modifier = Modifier.weight(1f))
-                                                Spacer(modifier = Modifier.weight(1f))
-                                                Spacer(modifier = Modifier.weight(1f))
-                                                Spacer(modifier = Modifier.weight(1f))
-                                            }
-                                        }
-                                    } else {
-                                        // Page 2: Tools & Settings (4 items + 6 empty slots)
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            MenuGridItem(
-                                                icon = Icons.Default.Extension,
-                                                label = "Extensions",
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                        showMenuSheet = false
-                                                        currentScreen = Screen.Extensions
-                                                    }
-                                                }
-                                            )
-                                            MenuGridItem(
-                                                icon = Icons.Default.Settings,
-                                                label = "Settings",
-                                                selected = currentScreen == Screen.Settings,
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                                        showMenuSheet = false
-                                                        currentScreen = Screen.Settings
-                                                    }
-                                                }
-                                            )
-                                            MenuGridItem(
-                                                icon = Icons.Default.Devices,
-                                                label = "Desktop Site",
-                                                selected = isDesktopMode,
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    isDesktopMode = !isDesktopMode
-                                                }
-                                            )
-                                            MenuGridItem(
-                                                icon = Icons.Default.PlayCircle,
-                                                label = "Video Detect",
-                                                selected = detectVideosEnabled,
-                                                modifier = Modifier.weight(1f),
-                                                onClick = {
-                                                    detectVideosEnabled = !detectVideosEnabled
-                                                }
-                                            )
-                                            Spacer(modifier = Modifier.weight(1f))
-                                        }
-
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Spacer(modifier = Modifier.weight(1f))
-                                            Spacer(modifier = Modifier.weight(1f))
-                                            Spacer(modifier = Modifier.weight(1f))
-                                            Spacer(modifier = Modifier.weight(1f))
-                                            Spacer(modifier = Modifier.weight(1f))
+                            // Row 1: Bookmarks, History, Downloads, Add Bookmark, Find in Page
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                MenuGridItem(
+                                    icon = Icons.Default.Bookmarks,
+                                    label = "Bookmarks",
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                            showMenuSheet = false
+                                            currentScreen = Screen.Bookmarks
                                         }
                                     }
-                                }
-                            }
-
-                            if (pageCount > 1) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    repeat(pageCount) { index ->
-                                        val active = pagerState.currentPage == index
-                                        Box(
-                                            modifier = Modifier
-                                                .padding(horizontal = 4.dp)
-                                                .size(if (active) 8.dp else 6.dp)
-                                                .clip(CircleShape)
-                                                .background(
-                                                    if (active) MaterialTheme.colorScheme.primary 
-                                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                                                )
-                                        )
+                                )
+                                MenuGridItem(
+                                    icon = Icons.Default.History,
+                                    label = "History",
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                            showMenuSheet = false
+                                            currentScreen = Screen.History
+                                        }
                                     }
-                                }
+                                )
+                                MenuGridItem(
+                                    icon = Icons.Default.Download,
+                                    label = "Downloads",
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                            showMenuSheet = false
+                                            currentScreen = Screen.Downloads
+                                        }
+                                    }
+                                )
+                                MenuGridItem(
+                                    icon = Icons.Default.Star,
+                                    label = "Add Bookmark",
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                            showMenuSheet = false
+                                            handleBookmarkClick()
+                                        }
+                                    }
+                                )
+                                MenuGridItem(
+                                    icon = Icons.Default.Search,
+                                    label = "Find in Page",
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                            showMenuSheet = false
+                                            showFindBar = true
+                                        }
+                                    }
+                                )
                             }
-
-                            Spacer(modifier = Modifier.height(16.dp))
+                            // Row 2: Extensions, Settings, Desktop Site, Video Detect
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                MenuGridItem(
+                                    icon = Icons.Default.Extension,
+                                    label = "Extensions",
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                            showMenuSheet = false
+                                            currentScreen = Screen.Extensions
+                                        }
+                                    }
+                                )
+                                MenuGridItem(
+                                    icon = Icons.Default.Settings,
+                                    label = "Settings",
+                                    selected = currentScreen == Screen.Settings,
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                            showMenuSheet = false
+                                            isSettingsFromLibrary = false
+                                            currentScreen = Screen.Settings
+                                        }
+                                    }
+                                )
+                                MenuGridItem(
+                                    icon = Icons.Default.Devices,
+                                    label = "Desktop Site",
+                                    selected = isDesktopMode,
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        isDesktopMode = !isDesktopMode
+                                    }
+                                )
+                                MenuGridItem(
+                                    icon = Icons.Default.PlayCircle,
+                                    label = "Video Detect",
+                                    selected = detectVideosEnabled,
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        detectVideosEnabled = !detectVideosEnabled
+                                    }
+                                )
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
                         }
                     }
                 }
@@ -2736,4 +2704,5 @@ sealed class Screen {
     object DebridLibrary : Screen()
     object AddonSettings : Screen()
     data class LibraryDetail(val id: String, val type: String, val source: String? = null) : Screen()
+    object Dashboard : Screen()
 }

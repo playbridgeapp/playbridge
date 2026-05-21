@@ -13,6 +13,9 @@ import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
+import androidx.compose.ui.res.painterResource
+import com.playbridge.sender.R
+import androidx.compose.foundation.Image
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,7 +110,11 @@ fun ConnectionScreen(
                             role = androidx.compose.ui.semantics.Role.Button
                         }
                     ) {
-                        Icon(Icons.Default.Menu, contentDescription = null)
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_playbridge_logo),
+                            contentDescription = "PlayBridge",
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 },
                 actions = {

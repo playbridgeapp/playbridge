@@ -26,6 +26,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.painterResource
+import com.playbridge.sender.R
+import androidx.compose.foundation.Image
 import com.playbridge.sender.data.debrid.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -186,7 +189,11 @@ fun DebridLibraryScreen(
                             Icon(Icons.Default.ArrowBack, contentDescription = "Close search")
                         }
                         else -> IconButton(onClick = onMenuClick) {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu")
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_playbridge_logo),
+                                contentDescription = "PlayBridge",
+                                modifier = Modifier.size(24.dp)
+                            )
                         }
                     }
                 },

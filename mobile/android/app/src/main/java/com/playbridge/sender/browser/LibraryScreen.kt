@@ -58,6 +58,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.painterResource
+import com.playbridge.sender.R
+import androidx.compose.foundation.Image
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
@@ -459,59 +462,17 @@ private fun LibraryScreenContent(
                                 ),
                                 modifier = Modifier.fillMaxWidth()
                             )
-                        } else if (isConfigured) {
-                            Surface(
-                                shape = RoundedCornerShape(32.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    val homeSelected = selectedTab == 0
-                                    Surface(
-                                        shape = RoundedCornerShape(24.dp),
-                                        color = if (homeSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                        modifier = Modifier.clip(RoundedCornerShape(24.dp)).clickable { viewModel.setSelectedTab(0) }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Home,
-                                            contentDescription = "Home",
-                                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
-                                            tint = if (homeSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-
-                                    val browseSelected = selectedTab == 1
-                                    Surface(
-                                        shape = RoundedCornerShape(24.dp),
-                                        color = if (browseSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                        modifier = Modifier.clip(RoundedCornerShape(24.dp)).clickable { viewModel.setSelectedTab(1) }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Explore,
-                                            contentDescription = "Browse",
-                                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
-                                            tint = if (browseSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-
-                                    val myListSelected = selectedTab == 2
-                                    Surface(
-                                        shape = RoundedCornerShape(24.dp),
-                                        color = if (myListSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                        modifier = Modifier.clip(RoundedCornerShape(24.dp)).clickable { viewModel.setSelectedTab(2) }
-                                    ) {
-                                        Icon(
-                                            imageVector = if (myListSelected) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                                            contentDescription = "My List",
-                                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
-                                            tint = if (myListSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-
-                                }
-                            }
+                        } else {
+                            Text(
+                                text = when (selectedTab) {
+                                    0 -> "Home"
+                                    1 -> "Discover"
+                                    2 -> "Library"
+                                    else -> "Library"
+                                },
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     },
                 navigationIcon = {
@@ -527,7 +488,11 @@ private fun LibraryScreenContent(
                         if (isSearching) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                         } else {
-                            Icon(Icons.Default.Menu, "Menu")
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_playbridge_logo),
+                                contentDescription = "PlayBridge",
+                                modifier = Modifier.size(24.dp)
+                            )
                         }
                     }
                 },

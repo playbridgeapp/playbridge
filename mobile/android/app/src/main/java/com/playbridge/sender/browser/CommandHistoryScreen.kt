@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayArrow
@@ -20,11 +21,14 @@ import com.playbridge.sender.data.history.CommandHistoryEntity
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.playbridge.sender.R
+import androidx.compose.foundation.Image
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CastHistoryScreen(
     historyItems: List<CommandHistoryEntity>,
+    onMenuClick: () -> Unit,
     onItemClick: (CommandHistoryEntity) -> Unit,
     onDelete: (CommandHistoryEntity) -> Unit,
     onClearHistory: () -> Unit,
@@ -35,8 +39,12 @@ fun CastHistoryScreen(
             TopAppBar(
                 title = { Text("Cast History") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(onClick = onMenuClick) {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_playbridge_logo),
+                            contentDescription = "PlayBridge",
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 },
                 actions = {

@@ -33,6 +33,9 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.res.painterResource
+import com.playbridge.sender.R
+import androidx.compose.foundation.Image
 
 /**
  * Browser toolbar with navigation controls, URL bar, and menu.
@@ -46,6 +49,7 @@ fun BrowserToolbar(
     onRefresh: () -> Unit,
     onStop: () -> Unit,
     onRemoteClick: (() -> Unit)? = null,
+    onLogoClick: () -> Unit = {},
     isEditing: Boolean = false,
     isSecure: Boolean = false,
     onSecurityIconClick: () -> Unit = {},
@@ -119,7 +123,19 @@ fun BrowserToolbar(
                     }
                     Spacer(modifier = Modifier.width(2.dp))
                 } else {
-                    // Security / Search icon all the way to the left
+                    // PlayBridge logo
+                    IconButton(
+                        onClick = onLogoClick,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_playbridge_logo),
+                            contentDescription = "PlayBridge",
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(2.dp))
+                    // Security / Search icon
                     if (currentUrl == "about:blank") {
                         IconButton(
                             onClick = { onEditingChange(true) },

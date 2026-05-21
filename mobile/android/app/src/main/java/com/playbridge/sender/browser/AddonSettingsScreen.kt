@@ -58,7 +58,8 @@ fun AddonSettingsScreen(
     installedAddons: List<InstalledAddonEntity>,
     onBack: () -> Unit,
     /** Called when the user taps "Open URL" so the parent can navigate to the browser. */
-    onOpenUrl: (String) -> Unit = {}
+    onOpenUrl: (String) -> Unit = {},
+    showBack: Boolean = true
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -89,8 +90,10 @@ fun AddonSettingsScreen(
             TopAppBar(
                 title = { Text("Stremio Addons") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                        }
                     }
                 }
             )
@@ -445,17 +448,7 @@ private fun AddonCard(
 
             // ── Actions ──────────────────────────────────────────────────
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (addon.isConfigurable) {
-                    TextButton(
-                        onClick = onOpenUrl,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        modifier = Modifier.height(32.dp)
-                    ) {
-                        Icon(Icons.Default.Settings, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Configure", style = MaterialTheme.typography.labelLarge)
-                    }
-                }
+
 
                 // ── 3-dot menu ───────────────────────────────────────────────
                 Box {

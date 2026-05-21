@@ -31,12 +31,20 @@ private sealed class SettingsSection {
     object PopupBlocker : SettingsSection()
 }
 
+private data class SettingsItemData(
+    val icon: ImageVector,
+    val title: String,
+    val subtitle: String,
+    val onClick: () -> Unit
+)
+
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onAddonSettings: () -> Unit = {},
     tvIp: String? = null,
-    tvPort: Int? = null
+    tvPort: Int? = null,
+    showBack: Boolean = true,
+    isFromLibrary: Boolean = false
 ) {
     var section by remember { mutableStateOf<SettingsSection>(SettingsSection.Hub) }
 
@@ -55,7 +63,8 @@ fun SettingsScreen(
             onTV = { section = SettingsSection.TV },
             onImportExport = { section = SettingsSection.ImportExport },
             onPopupBlocker = { section = SettingsSection.PopupBlocker },
-            onAddons = onAddonSettings
+            showBack = showBack,
+            isFromLibrary = isFromLibrary
         )
         SettingsSection.Appearance -> AppearanceSettingsScreen(
             onBack = { section = SettingsSection.Hub }
@@ -98,17 +107,19 @@ private fun SettingsHubContent(
     onTV: () -> Unit,
     onImportExport: () -> Unit,
     onPopupBlocker: () -> Unit,
-    onAddons: () -> Unit
+    showBack: Boolean = true,
+    isFromLibrary: Boolean = false
 ) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                        }
                     }
                 }
             )
@@ -120,68 +131,107 @@ private fun SettingsHubContent(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
-            SettingsNavItem(
-                icon = Icons.Default.Palette,
-                title = "Appearance",
-                subtitle = "Theme: ${AppTheme.fromPrefs(context).label}",
-                onClick = onAppearance
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-            SettingsNavItem(
-                icon = Icons.Default.VideoLibrary,
-                title = "Library",
-                subtitle = "Metadata API keys and display options",
-                onClick = onLibrary
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-            SettingsNavItem(
-                icon = Icons.Default.Extension,
-                title = "Addons",
-                subtitle = "Install and manage Stremio providers",
-                onClick = onAddons
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-            SettingsNavItem(
-                icon = Icons.Default.Cloud,
-                title = "Debrid",
-                subtitle = "Real-Debrid, All-Debrid, Premiumize, TorBox",
-                onClick = onDebrid
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-            SettingsNavItem(
-                icon = Icons.Default.SwapHoriz,
-                title = "Proxy",
-                subtitle = "mediaflow-proxy for stream passthrough & transcoding",
-                onClick = onProxy
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-            SettingsNavItem(
-                icon = Icons.Default.Tune,
-                title = "Streaming Preferences",
-                subtitle = "Audio, subtitles, and auto-select quality",
-                onClick = onStreaming
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-            SettingsNavItem(
-                icon = Icons.Default.Tv,
-                title = "TV",
-                subtitle = "Player defaults and diagnostics",
-                onClick = onTV
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-            SettingsNavItem(
-                icon = Icons.Default.SwapVert,
-                title = "Import / Export",
-                subtitle = "Backup and restore settings",
-                onClick = onImportExport
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-            SettingsNavItem(
-                icon = Icons.Default.Block,
-                title = "Popup Blocker",
-                subtitle = "Block popups with per-site exceptions",
-                onClick = onPopupBlocker
-            )
+            val items = remember(isFromLibrary, context) {
+                buildList {
+                    // 1. Appearance (Shared)
+                    add(
+                        SettingsItemData(
+                            icon = Icons.Default.Palette,
+                            title = "Appearance",
+                            subtitle = "Theme: ${AppTheme.fromPrefs(context).label}",
+                            onClick = onAppearance
+                        )
+                    )
+
+                    // 2. Library (Library-specific)
+                    if (isFromLibrary) {
+                        add(
+                            SettingsItemData(
+                                icon = Icons.Default.VideoLibrary,
+                                title = "Library",
+                                subtitle = "Metadata API keys and display options",
+                                onClick = onLibrary
+                            )
+                        )
+                    }
+
+                    // 3. Debrid (Shared)
+                    add(
+                        SettingsItemData(
+                            icon = Icons.Default.Cloud,
+                            title = "Debrid",
+                            subtitle = "Real-Debrid, All-Debrid, Premiumize, TorBox",
+                            onClick = onDebrid
+                        )
+                    )
+
+                    // 4. Proxy (Shared)
+                    add(
+                        SettingsItemData(
+                            icon = Icons.Default.SwapHoriz,
+                            title = "Proxy",
+                            subtitle = "mediaflow-proxy for stream passthrough & transcoding",
+                            onClick = onProxy
+                        )
+                    )
+
+                    // 5. Streaming (Library-specific)
+                    if (isFromLibrary) {
+                        add(
+                            SettingsItemData(
+                                icon = Icons.Default.Tune,
+                                title = "Streaming Preferences",
+                                subtitle = "Audio, subtitles, and auto-select quality",
+                                onClick = onStreaming
+                            )
+                        )
+                    }
+
+                    // 6. TV (Shared)
+                    add(
+                        SettingsItemData(
+                            icon = Icons.Default.Tv,
+                            title = "TV",
+                            subtitle = "Player defaults and diagnostics",
+                            onClick = onTV
+                        )
+                    )
+
+                    // 7. Import/Export (Shared)
+                    add(
+                        SettingsItemData(
+                            icon = Icons.Default.SwapVert,
+                            title = "Import / Export",
+                            subtitle = "Backup and restore settings",
+                            onClick = onImportExport
+                        )
+                    )
+
+                    // 8. Popup Blocker (Browser-specific)
+                    if (!isFromLibrary) {
+                        add(
+                            SettingsItemData(
+                                icon = Icons.Default.Block,
+                                title = "Popup Blocker",
+                                subtitle = "Block popups with per-site exceptions",
+                                onClick = onPopupBlocker
+                            )
+                        )
+                    }
+                }
+            }
+
+            items.forEachIndexed { index, item ->
+                SettingsNavItem(
+                    icon = item.icon,
+                    title = item.title,
+                    subtitle = item.subtitle,
+                    onClick = item.onClick
+                )
+                if (index < items.lastIndex) {
+                    HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+                }
+            }
 
             val versionName = remember {
                 try {
