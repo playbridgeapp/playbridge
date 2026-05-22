@@ -2,7 +2,7 @@ export const SITE = {
   name: 'PlayBridge',
   tagline: 'Your phone. Your TV. One bridge.',
   description:
-    'PlayBridge is an open-source casting suite. Browse on your phone, watch on your TV — no accounts, no telemetry, local network only.',
+    'PlayBridge is an open-source casting suite in active development. Browse on your phone, watch on your TV — no accounts, no telemetry, local network only.',
   url: 'https://playbridge.app',
   ogImage: '/og-image.png',
   twitter: '@playbridge',
@@ -98,6 +98,70 @@ export type InstallTab = {
   meta: Array<[string, string]>;
 };
 
+export type DesktopPlatform = {
+  id: 'macos' | 'windows' | 'linux';
+  label: string;
+  icon: 'apple' | 'windows' | 'linux';
+  title: string;
+  steps: Array<[string, string]>;
+  cmd: string;
+  meta: Array<[string, string]>;
+};
+
+export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
+  {
+    id: 'macos',
+    label: 'macOS',
+    icon: 'apple',
+    title: 'macOS Receiver',
+    steps: [
+      ['Download', 'Latest .zip from GitHub Releases.'],
+      ['Open', 'Extract and right-click → Open (unsigned build).'],
+      ['Approve devices', 'Allow the first sender that connects.']
+    ],
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
+    meta: [
+      ['sha256', '—'],
+      ['size', '86.1 MB'],
+      ['min', 'macOS 12']
+    ]
+  },
+  {
+    id: 'windows',
+    label: 'Windows',
+    icon: 'windows',
+    title: 'Windows Receiver',
+    steps: [
+      ['Download', 'Latest .zip from GitHub Releases.'],
+      ['Extract & run', 'Run playbridge_desktop.exe — no installer needed.'],
+      ['Approve devices', 'Allow the first sender that connects.']
+    ],
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
+    meta: [
+      ['sha256', '—'],
+      ['size', '86.1 MB'],
+      ['min', 'Windows 10']
+    ]
+  },
+  {
+    id: 'linux',
+    label: 'Linux',
+    icon: 'linux',
+    title: 'Linux Receiver',
+    steps: [
+      ['Download', 'Latest .tar.gz from GitHub Releases.'],
+      ['Extract & run', 'Run bundle/playbridge_desktop from the extracted folder.'],
+      ['Approve devices', 'Allow the first sender that connects.']
+    ],
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
+    meta: [
+      ['sha256', '—'],
+      ['size', '86.1 MB'],
+      ['min', 'libmpv2 required']
+    ]
+  }
+];
+
 export const INSTALL_TABS: InstallTab[] = [
   {
     id: 'android',
@@ -160,70 +224,26 @@ export const INSTALL_TABS: InstallTab[] = [
     icon: 'apple',
     title: 'Apple TV',
     steps: [
-      ['Download', 'Latest .ipa from GitHub Releases.'],
-      ['Sideload', 'Use Xcode or AltStore to install.'],
-      ['Approve devices', 'Allow the first phone that connects.']
+      ['Clone Repository', 'Clone the repository using the git command.'],
+      ['Open Xcode', 'Open tv/apple target folder in Xcode.'],
+      ['Run on Apple TV', 'Select your Apple TV as Xcode run destination.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases',
+    cmd: 'git clone https://github.com/playbridgeapp/PlayBridge.git',
     meta: [
-      ['sha256', '—'],
-      ['size', '38.1 MB'],
-      ['min', 'tvOS 16']
+      ['status', 'Active Development'],
+      ['platform', 'tvOS 16.0+'],
+      ['environment', 'Xcode 15+']
     ]
   },
   {
-    id: 'macos',
-    label: 'macOS',
+    id: 'desktop',
+    label: 'Desktop',
     role: 'player',
-    icon: 'apple',
-    title: 'macOS',
-    steps: [
-      ['Download', 'Latest .zip from GitHub Releases.'],
-      ['Open', 'Extract and right-click → Open (unsigned build).'],
-      ['Approve devices', 'Allow the first sender that connects.']
-    ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
-    meta: [
-      ['sha256', '—'],
-      ['size', '86.1 MB'],
-      ['min', 'macOS 12']
-    ]
-  },
-  {
-    id: 'windows',
-    label: 'Windows',
-    role: 'player',
-    icon: 'windows',
-    title: 'Windows',
-    steps: [
-      ['Download', 'Latest .zip from GitHub Releases.'],
-      ['Extract & run', 'Run playbridge_desktop.exe — no installer needed.'],
-      ['Approve devices', 'Allow the first sender that connects.']
-    ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
-    meta: [
-      ['sha256', '—'],
-      ['size', '86.1 MB'],
-      ['min', 'Windows 10']
-    ]
-  },
-  {
-    id: 'linux',
-    label: 'Linux',
-    role: 'player',
-    icon: 'linux',
-    title: 'Linux',
-    steps: [
-      ['Download', 'Latest .tar.gz from GitHub Releases.'],
-      ['Extract & run', 'Run bundle/playbridge_desktop from the extracted folder.'],
-      ['Approve devices', 'Allow the first sender that connects.']
-    ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
-    meta: [
-      ['sha256', '—'],
-      ['size', '86.1 MB'],
-      ['min', 'libmpv2 required']
-    ]
+    icon: 'desktop',
+    title: 'Desktop Receiver',
+    steps: [], // Loaded from DESKTOP_PLATFORMS dynamically
+    cmd: '',
+    meta: []
   },
   {
     id: 'firefox',
