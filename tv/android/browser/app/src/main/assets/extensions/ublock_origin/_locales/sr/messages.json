@@ -960,7 +960,7 @@
     "description": "Header of 'Report a filter issue' section in Support pane"
   },
   "supportS6P1S1": {
-    "message": "Да не бисте оптерећивали волонтере дуплим извештајима, проверите да ли је проблем већ пријављен.",
+    "message": "Да не бисте оптерећивали волонтере дуплим извештајима, проверите да ли је проблем већ пријављен. <b>Напомена:</b> кликом на дугме, адреса странице ће бити послата ГитХаб-у.",
     "description": "A paragraph in the filter issue reporter section"
   },
   "supportS6P2S1": {

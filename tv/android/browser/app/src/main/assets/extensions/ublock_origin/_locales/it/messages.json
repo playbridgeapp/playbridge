@@ -444,7 +444,7 @@
     "description": "English: Parse and enforce Adblock+ element hiding filters."
   },
   "3pParseAllABPHideFiltersInfo": {
-    "message": "\nI filtri cosmetici servono a nascondere gli elementi in una pagina web che sono considerati visivamente fastidiosi e che non possono essere bloccati dai motori di filtraggio basati sulle richieste di rete.",
+    "message": "I filtri cosmetici servono a nascondere elementi in una pagina web che sono considerati visivamente fastidiosi e che non possono essere bloccati dai motori di filtraggio basati sulle richieste di rete.",
     "description": "Describes the purpose of the 'Parse and enforce cosmetic filters' feature."
   },
   "3pIgnoreGenericCosmeticFilters": {
@@ -536,7 +536,7 @@
     "description": "used as a tooltip for error icon beside a list"
   },
   "1pTrustWarning": {
-    "message": "Non aggiungere filtri da fonti non affidabili.",
+    "message": "Non aggiungere filtri da fonti non attendibili.",
     "description": "Warning against copy-pasting filters from random sources"
   },
   "1pEnableMyFiltersLabel": {
@@ -1176,7 +1176,7 @@
     "description": "Button text to navigate to the blocked page"
   },
   "docblockedRedirectPrompt": {
-    "message": "La pagina bloccata vuole reindirizzare a un altro sito. Se scegli di procedere, navigherai direttamente a: {{url}}",
+    "message": "La pagina bloccata tenta di reindirizzare a un altro sito. Se scegli di procedere, navigherai direttamente verso: {{url}}",
     "description": "Text warning about an incoming redirect"
   },
   "docblockedReasonLabel": {
@@ -1304,7 +1304,7 @@
     "description": "Summary of number of errors as reported by the linter "
   },
   "unprocessedRequestTooltip": {
-    "message": "Non è stato effettuato correttamente il filtraggio all'avvio del browser.\nRicarica la pagina per garantire un filtraggio adeguato.",
+    "message": "Non è stato effettuato correttamente il filtraggio all'avvio del browser. Ricarica la pagina per garantire un filtraggio adeguato.",
     "description": "A warning which will appear in the popup panel if needed"
   },
   "dummy": {

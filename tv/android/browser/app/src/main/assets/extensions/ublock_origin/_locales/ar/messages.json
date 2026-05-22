@@ -100,7 +100,7 @@
     "description": "English: or"
   },
   "popupBlockedOnThisPage_v2": {
-    "message": "محجوب على هذه الصفحة",
+    "message": "محجوب في هذه الصفحة",
     "description": "For the new mobile-friendly popup design"
   },
   "popupBlockedSinceInstall_v2": {
@@ -188,7 +188,7 @@
     "description": "Tooltip for the no-scripting per-site switch"
   },
   "popupNoPopups_v2": {
-    "message": "نوافذ منبثقة",
+    "message": "النوافذ المنبثقة",
     "description": "Caption for the no-popups per-site switch"
   },
   "popupNoLargeMedia_v2": {
@@ -220,7 +220,7 @@
     "description": "Tooltip when hovering the top-most cell of the global-rules column."
   },
   "popupTipLocalRules": {
-    "message": "القواعد الموضعية: هذا العمود يتعلق بالقواعد التي تنطبق فقط على الموقع المزار حاليا.\nالقواعد الموضعية تحل محل القواعد العامة.",
+    "message": "الشروط المحلية: هذا العمود يحص القواعد التي تنطبق فقط على الموقع المزار حاليا.",
     "description": "Tooltip when hovering the top-most cell of the local-rules column."
   },
   "popupTipSaveRules": {
@@ -276,7 +276,7 @@
     "description": "Example of use: Version 1.26.4"
   },
   "popup3pScriptFilter": {
-    "message": "برنامَج نصي",
+    "message": "سكربت",
     "description": "Appears as an option to filter out firewall rows"
   },
   "popup3pFrameFilter": {
@@ -336,7 +336,7 @@
     "description": "English: Color-blind friendly"
   },
   "settingsAppearance": {
-    "message": "مظهر",
+    "message": "المظهر",
     "description": "Section for controlling user interface appearance"
   },
   "settingsThemeLabel": {
@@ -396,7 +396,7 @@
     "description": "background information: https://github.com/gorhill/uBlock/issues/3150"
   },
   "settingsUncloakCnamePrompt": {
-    "message": "فك الأسماء المتعارف عليها",
+    "message": "تعرية الأسماء المعروفة",
     "description": "background information: https://github.com/uBlockOrigin/uBlock-issues/issues/1513"
   },
   "settingsAdvanced": {
@@ -404,7 +404,7 @@
     "description": "Section for controlling advanced-user settings"
   },
   "settingsAdvancedSynopsis": {
-    "message": "ميزات مناسبة فقط للمستخدمين التقنيين",
+    "message": "ميزات مناسبة فقط للتقنيين",
     "description": "Description of section controlling advanced-user settings"
   },
   "settingsAdvancedUserSettings": {
@@ -444,7 +444,7 @@
     "description": "English: Parse and enforce Adblock+ element hiding filters."
   },
   "3pParseAllABPHideFiltersInfo": {
-    "message": "التشريحات التجميلية تعمل لإزالة العناصر في صفحة الويب التي تعتبر إزعاج بصريًا و تلك التي لا يمكن حجبها عن طريق محركات التشريحات القائمة على طلبات الشبكة.",
+    "message": "تعمل المرشحات التجميلية على إزالة العناصر من الصفحة التي تعد إزعاجا بصريا، ولا يمكن حجبها بمحركات الترشيح المبنية على طلبات الشبكة.",
     "description": "Describes the purpose of the 'Parse and enforce cosmetic filters' feature."
   },
   "3pIgnoreGenericCosmeticFilters": {
@@ -452,11 +452,11 @@
     "description": "This will cause uBO to ignore all generic cosmetic filters."
   },
   "3pIgnoreGenericCosmeticFiltersInfo": {
-    "message": "التشريحات التجميلية العمومية هي الفلاتر التجميلية التي تنطبق على كل مواقع الإنترنت. تفعيل هذا الخيار سوف يترك مساحة أقل من الذاكرة و قوة المعالجة للاستعمال من قبل صفحات الويب كنتيجة لمعالجة التشريحات التجميلية العمومية.\n\nمن الأفضل تفعيل هذا الخيار على الأجهزة الأقل قوة.",
+    "message": "المرشحات التجميلية العامة هي تلك التي تُطبّق على كل مواقع الإنترنت. تفعيل هذا الخيار سيحرر موارد الذاكرة والمعالجة التي تضاف للصفحات بسبب التعامل مع المرشحات التجميلية العامة.\n\nينصح بتفعيل هذا الخيار في الأجهزة الضعيفة.",
     "description": "Describes the purpose of the 'Ignore generic cosmetic filters' feature."
   },
   "3pSuspendUntilListsAreLoaded": {
-    "message": "تعليق نشاط الشبكة حتى يتم تحميل كافة قوائم عوامل التشريحات",
+    "message": "تعليق نشاط الشبكة إلى حين تحميل كافة قوائم المرشحات",
     "description": "A checkbox in the 'Filter lists' pane"
   },
   "3pListsOfBlockedHostsHeader": {
@@ -488,7 +488,7 @@
     "description": "Filter lists section name"
   },
   "3pGroupCookies": {
-    "message": "اشعارات ملفات تعريف الارتباط",
+    "message": "إشعارات معرفات الارتباط",
     "description": "Filter lists section name"
   },
   "3pGroupAnnoyances": {
@@ -508,7 +508,7 @@
     "description": "Filter lists section name"
   },
   "3pImport": {
-    "message": "استرجاع…",
+    "message": "استيراد…",
     "description": "The label for the checkbox used to import external filter lists"
   },
   "3pExternalListsHint": {
@@ -520,7 +520,7 @@
     "description": "used as a tooltip for the out-of-date icon beside a list"
   },
   "3pViewContent": {
-    "message": "اظهر المحتوى",
+    "message": "مشاهدة المحتوى",
     "description": "used as a tooltip for eye icon beside a list"
   },
   "3pLastUpdate": {
@@ -540,7 +540,7 @@
     "description": "Warning against copy-pasting filters from random sources"
   },
   "1pEnableMyFiltersLabel": {
-    "message": "مكّن تشريحاتي المخصصة",
+    "message": "تمكين المرشحات المخصصة",
     "description": "Label for the checkbox use to enable/disable 'My filters' list"
   },
   "1pTrustMyFiltersLabel": {
@@ -552,7 +552,7 @@
     "description": "Button in the 'My filters' pane"
   },
   "1pExport": {
-    "message": "تصدير",
+    "message": "تصدير…",
     "description": "Button in the 'My filters' pane"
   },
   "1pExportFilename": {
@@ -592,7 +592,7 @@
     "description": "Will discard manually-edited content and exit manual-edit mode"
   },
   "rulesImport": {
-    "message": "استورد من ملف…",
+    "message": "استيراد من ملف…",
     "description": ""
   },
   "rulesExport": {
@@ -616,7 +616,7 @@
     "description": "English: label for sort option."
   },
   "rulesSortByType": {
-    "message": "نوع القاعدة",
+    "message": "نوع الاشتراط",
     "description": "English: a sort option for list of rules."
   },
   "rulesSortBySource": {
@@ -888,7 +888,7 @@
     "description": "Label for radio-button to pick export format"
   },
   "loggerExportEncodePlain": {
-    "message": "واضح",
+    "message": "بسيط",
     "description": "Label for radio-button to pick export text format"
   },
   "loggerExportEncodeMarkdown": {
