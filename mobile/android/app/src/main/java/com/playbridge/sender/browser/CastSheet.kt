@@ -152,7 +152,7 @@ internal fun ChipDropdown(
                 }
             }
         }
-        DropdownMenu(
+        DropdownMenu( 
             expanded = expanded,
             onDismissRequest = { expanded = false },
             containerColor = if (themeColor != Color.Unspecified)

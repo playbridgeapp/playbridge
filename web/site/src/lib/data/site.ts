@@ -110,7 +110,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Allow install', 'Permit installs from unknown sources.'],
       ['Open & connect', 'Send to a player on your network.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=PlayBridge+Phone&expanded=true',
     meta: [
       ['sha256', 'a4f1…c2b9'],
       ['size', '28.4 MB'],
@@ -118,20 +118,38 @@ export const INSTALL_TABS: InstallTab[] = [
     ]
   },
   {
-    id: 'androidtv',
-    label: 'Android TV',
+    id: 'tvplayer',
+    label: 'TV Player',
     role: 'player',
     icon: 'tv',
-    title: 'Android TV',
+    title: 'Android TV Player',
     steps: [
-      ['Download', 'TV APK from GitHub Releases.'],
+      ['Download', 'TV Player APK from GitHub Releases.'],
       ['Sideload', 'adb install or Downloader app.'],
       ['Approve devices', 'Allow the first phone that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=PlayBridge+TV+Player&expanded=true',
     meta: [
-      ['sha256', 'b87e…1f04'],
-      ['size', '41.2 MB'],
+      ['sha256', '—'],
+      ['size', '—'],
+      ['min', 'Android TV 8']
+    ]
+  },
+  {
+    id: 'tvbrowser',
+    label: 'TV Browser',
+    role: 'player',
+    icon: 'tv',
+    title: 'Android TV Browser',
+    steps: [
+      ['Download', 'TV Browser APK from GitHub Releases.'],
+      ['Sideload', 'adb install or Downloader app.'],
+      ['Approve devices', 'Allow the first phone that connects.']
+    ],
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=PlayBridge+TV+Browser&expanded=true',
+    meta: [
+      ['sha256', '—'],
+      ['size', '—'],
       ['min', 'Android TV 8']
     ]
   },
@@ -164,7 +182,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Open', 'Extract and right-click → Open (unsigned build).'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=Desktop+Receiver&expanded=true',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -182,7 +200,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Extract & run', 'Run playbridge_desktop.exe — no installer needed.'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=Desktop+Receiver&expanded=true',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -200,7 +218,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Extract & run', 'Run bundle/playbridge_desktop from the extracted folder.'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=Desktop+Receiver&expanded=true',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -218,7 +236,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Install', 'Drag the .xpi onto Firefox.'],
       ['Right-click links', 'Send any link to a player.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=extension&expanded=true',
     meta: [
       ['sha256', '77fa…d3e2'],
       ['size', '3.2 MB'],
