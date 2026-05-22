@@ -39,7 +39,12 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
   void _initMpv() {
     final engine = widget.controller.engine;
     if (engine is MpvEngine) {
-      _mpvVideo = VideoController(engine.player);
+      _mpvVideo = VideoController(
+        engine.player,
+        configuration: const VideoControllerConfiguration(
+          enableHardwareAcceleration: false,
+        ),
+      );
       setState(() {});
     }
   }

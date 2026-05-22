@@ -218,6 +218,18 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         includeLoopback: false,
       );
       final addrs = ifaces
+          .where((i) {
+            final name = i.name.toLowerCase();
+            return !name.startsWith('br-') &&
+                   !name.startsWith('docker') &&
+                   !name.startsWith('veth') &&
+                   !name.startsWith('virbr') &&
+                   !name.startsWith('vboxnet') &&
+                   !name.startsWith('vmnet') &&
+                   !name.startsWith('tun') &&
+                   !name.startsWith('tap') &&
+                   !name.startsWith('wg');
+          })
           .expand((i) => i.addresses)
           .map((a) => a.address)
           .where((a) => !a.startsWith('169.254.'))

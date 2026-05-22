@@ -348,6 +348,7 @@ class _InfoLine extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
@@ -355,12 +356,14 @@ class _InfoLine extends StatelessWidget {
             child: Text(label,
                 style: const TextStyle(color: Colors.white38, fontSize: 13)),
           ),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 13,
-              color: error ? Colors.redAccent : Colors.white70,
-              fontFamily: 'monospace',
+          Flexible(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 13,
+                color: error ? Colors.redAccent : Colors.white70,
+                fontFamily: 'monospace',
+              ),
             ),
           ),
         ],

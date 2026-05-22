@@ -94,7 +94,11 @@ class TrayController with TrayListener {
             ? 'Playing: ${player.currentTitle ?? '—'}'
             : 'Paired · idle',
     };
-    await trayManager.setToolTip('PlayBridge\n$status');
+    try {
+      await trayManager.setToolTip('PlayBridge\n$status');
+    } catch (e) {
+      debugPrint('[tray] setToolTip failed: $e');
+    }
 
     final menu = Menu(items: [
       MenuItem(label: status, disabled: true),
