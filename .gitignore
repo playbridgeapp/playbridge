@@ -111,3 +111,11 @@ scratch/
 # Icon generation working artifacts (derived SVGs + intermediate PNGs)
 mobile/android/store/icon_variants/_generated/
 mobile/android/store/icon_variants/*.svg
+
+# Local AI, agent, and custom environment configurations
+.agents/
+.gemini/
+.kiro/
+.mcp.json
+.opencode.json
+.opencode/
