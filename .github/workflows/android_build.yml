@@ -338,6 +338,7 @@ jobs:
           tag_name: phone-v${{ steps.versions.outputs.phone }}
           name: PlayBridge Phone v${{ steps.versions.outputs.phone }}
           body: |
+            <!-- tag: pb-phone-app -->
             **Phone:** v${{ steps.versions.outputs.phone }}
 
             > `.aab` files are for Play Store. `.apk` files are for sideloading.
@@ -352,6 +353,7 @@ jobs:
           tag_name: tv-player-v${{ steps.versions.outputs.player }}
           name: PlayBridge TV Player v${{ steps.versions.outputs.player }}
           body: |
+            <!-- tag: pb-tv-player -->
             **TV Player:** v${{ steps.versions.outputs.player }}
 
             > `.aab` files are for Play Store. `.apk` files are for sideloading.
@@ -366,6 +368,7 @@ jobs:
           tag_name: tv-browser-v${{ steps.versions.outputs.browser }}
           name: PlayBridge TV Browser v${{ steps.versions.outputs.browser }}
           body: |
+            <!-- tag: pb-tv-browser -->
             **TV Browser:** v${{ steps.versions.outputs.browser }}
 
             > `.aab` files are for Play Store. `.apk` files are for sideloading.

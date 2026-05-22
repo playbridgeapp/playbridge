@@ -110,7 +110,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Allow install', 'Permit installs from unknown sources.'],
       ['Open & connect', 'Send to a player on your network.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=PlayBridge+Phone&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-phone-app&expanded=true',
     meta: [
       ['sha256', 'a4f1…c2b9'],
       ['size', '28.4 MB'],
@@ -128,7 +128,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Sideload', 'adb install or Downloader app.'],
       ['Approve devices', 'Allow the first phone that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=PlayBridge+TV+Player&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-tv-player&expanded=true',
     meta: [
       ['sha256', '—'],
       ['size', '—'],
@@ -146,7 +146,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Sideload', 'adb install or Downloader app.'],
       ['Approve devices', 'Allow the first phone that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=PlayBridge+TV+Browser&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-tv-browser&expanded=true',
     meta: [
       ['sha256', '—'],
       ['size', '—'],
@@ -182,7 +182,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Open', 'Extract and right-click → Open (unsigned build).'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=Desktop+Receiver&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -200,7 +200,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Extract & run', 'Run playbridge_desktop.exe — no installer needed.'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=Desktop+Receiver&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -218,7 +218,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Extract & run', 'Run bundle/playbridge_desktop from the extracted folder.'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=Desktop+Receiver&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -236,7 +236,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Install', 'Drag the .xpi onto Firefox.'],
       ['Right-click links', 'Send any link to a player.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=extension&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-firefox-extension&expanded=true',
     meta: [
       ['sha256', '77fa…d3e2'],
       ['size', '3.2 MB'],
