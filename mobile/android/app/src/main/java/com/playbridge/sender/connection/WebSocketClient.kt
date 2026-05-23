@@ -15,12 +15,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.*
 import okio.ByteString.Companion.toByteString
-import java.security.cert.CertificateException
-import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 
 private const val TAG = "WebSocketClient"
 
@@ -351,18 +348,9 @@ class WebSocketClient {
      * (first pairing) it accepts the cert trust-on-first-use.
      */
     private fun buildPinningClient(expectedPin: String?): OkHttpClient {
-        val trustManager = object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-            override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) {
-                val leaf = chain.firstOrNull() ?: throw CertificateException("No server certificate")
-                val presented = CertificatePinner.pin(leaf)
-                capturedServerPin = presented
-                if (expectedPin != null && presented != expectedPin) {
-                    pinMismatch = true
-                    throw CertificateException("PlayBridge TLS pin mismatch: expected=$expectedPin presented=$presented")
-                }
-            }
-            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        val trustManager = PinningTrustManager(expectedPin) { presented ->
+            capturedServerPin = presented
+            if (expectedPin != null && presented != expectedPin) pinMismatch = true
         }
         val sslContext = SSLContext.getInstance("TLS").apply {
             init(null, arrayOf<TrustManager>(trustManager), null)

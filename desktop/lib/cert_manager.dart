@@ -23,17 +23,18 @@ class CertManager {
   static const _keyFile = 'tls_key.pem';
   static const _pinFile = 'tls_pin.txt';
 
-  /// Loads the persisted identity, generating one on first run.
+  /// Loads the persisted identity, generating one on first run. [dir] overrides
+  /// the storage directory (defaults to the app-support `tls` dir) — used by tests.
   static Future<CertManager> loadOrCreate({
     String commonName = 'PlayBridge Desktop',
+    Directory? dir,
   }) async {
-    final base = await getApplicationSupportDirectory();
-    final dir = Directory('${base.path}/tls');
-    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final tlsDir = dir ?? Directory('${(await getApplicationSupportDirectory()).path}/tls');
+    if (!tlsDir.existsSync()) tlsDir.createSync(recursive: true);
 
-    final cert = File('${dir.path}/$_certFile');
-    final key = File('${dir.path}/$_keyFile');
-    final pin = File('${dir.path}/$_pinFile');
+    final cert = File('${tlsDir.path}/$_certFile');
+    final key = File('${tlsDir.path}/$_keyFile');
+    final pin = File('${tlsDir.path}/$_pinFile');
 
     final String certPem;
     final String keyPem;

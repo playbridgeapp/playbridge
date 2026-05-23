@@ -54,42 +54,14 @@ class NsdHelper(context: Context) {
                             Log.d(TAG, "Resolve Succeeded. ${serviceInfo}")
 
                             val host = serviceInfo.host ?: return
-                            var ip = host.hostAddress ?: return
-                            val port = serviceInfo.port
+                            val resolvedIp = host.hostAddress ?: return
                             val name = serviceInfo.serviceName.replace("\\\\032", " ") // Fix space encoding if present
-
-                            // Extract UUID and custom IP if present
-                            var uuid = ""
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                val uuidBytes = serviceInfo.attributes["uuid"]
-                                if (uuidBytes != null) {
-                                    uuid = String(uuidBytes)
-                                }
-
-                                val customIpBytes = serviceInfo.attributes["custom_ip"]
-                                if (customIpBytes != null) {
-                                    val customIp = String(customIpBytes)
-                                    if (customIp.isNotEmpty() && customIp != "auto") {
-                                        ip = customIp
-                                        Log.d(TAG, "Using custom IP from NSD attributes: $ip")
-                                    }
-                                }
-                            }
-
-                            var wssPort: Int? = null
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                val wssBytes = serviceInfo.attributes[NsdConstants.KEY_WSS_PORT]
-                                if (wssBytes != null) {
-                                    wssPort = String(wssBytes).toIntOrNull()
-                                }
-                            }
-
-                            val device = DiscoveredDevice(ip, port, name, uuid, wssPort)
+                            val device = parseDevice(name, resolvedIp, serviceInfo.port, serviceInfo.attributes)
 
                             // Update list
                             val currentList = _discoveredDevices.value.toMutableList()
                             // Remove existing entry for same IP if exists
-                            currentList.removeAll { it.ip == ip }
+                            currentList.removeAll { it.ip == device.ip }
                             currentList.add(device)
                             _discoveredDevices.value = currentList
                         }
@@ -141,5 +113,19 @@ class NsdHelper(context: Context) {
 
     companion object {
         private const val TAG = "NsdHelper"
+
+        /** Pure parse of a resolved service into a [DiscoveredDevice] (testable). */
+        fun parseDevice(
+            name: String,
+            resolvedIp: String,
+            port: Int,
+            attributes: Map<String, ByteArray?>,
+        ): DiscoveredDevice {
+            val uuid = attributes["uuid"]?.let { String(it) } ?: ""
+            val customIp = attributes["custom_ip"]?.let { String(it) }
+            val ip = if (!customIp.isNullOrEmpty() && customIp != "auto") customIp else resolvedIp
+            val wssPort = attributes[NsdConstants.KEY_WSS_PORT]?.let { String(it).toIntOrNull() }
+            return DiscoveredDevice(ip, port, name, uuid, wssPort)
+        }
     }
 }

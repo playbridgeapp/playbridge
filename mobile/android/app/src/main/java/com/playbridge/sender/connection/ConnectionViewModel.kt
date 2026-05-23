@@ -161,13 +161,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     fun connect(device: TvDevice) {
         viewModelScope.launch {
             // wss_port is a live property of the receiver; a saved/history entry may
-            // predate TLS, so prefer the port from current discovery (matched by uuid,
-            // falling back to ip/port). Keeps the device's token + certFingerprint.
-            val discovered = discoveredDevices.value.let { list ->
-                (if (device.uuid.isNotEmpty()) list.find { it.uuid == device.uuid } else null)
-                    ?: list.find { it.ip == device.ip && it.port == device.port }
-            }
-            val merged = device.copy(wssPort = discovered?.wssPort ?: device.wssPort)
+            // predate TLS, so prefer the port from current discovery.
+            val merged = ConnectionMerge.withDiscoveredWssPort(device, discoveredDevices.value)
             Log.d(TAG, "Connecting to: ${merged.name} at ${merged.ip}:${merged.port} (wss=${merged.wssPort})")
             hasAttemptedInitialConnect = true
             connectionStore.saveTvDevice(merged)

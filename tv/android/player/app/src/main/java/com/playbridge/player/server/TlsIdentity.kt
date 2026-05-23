@@ -1,6 +1,6 @@
 package com.playbridge.player.server
 
-import android.util.Base64
+import java.util.Base64
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
@@ -77,6 +77,6 @@ object TlsIdentity {
     /** X.509 `publicKey.encoded` is the DER SubjectPublicKeyInfo — the SPKI we pin. */
     private fun spkiPin(cert: X509Certificate): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(cert.publicKey.encoded)
-        return "sha256/" + Base64.encodeToString(digest, Base64.NO_WRAP)
+        return "sha256/" + Base64.getEncoder().encodeToString(digest)
     }
 }

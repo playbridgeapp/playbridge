@@ -130,6 +130,7 @@ dependencies {
     implementation(libs.androidx.media3.session)                 // Media session support
     implementation(libs.androidx.media3.effect)                  // Media effects support
 
+    testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
