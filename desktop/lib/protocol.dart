@@ -157,15 +157,25 @@ Command parseCommand(String json) {
 
 String pongJson() => jsonEncode({'type': 'pong'});
 
-String pairingApprovedJson(String token) =>
-    jsonEncode({'type': 'pairing_approved', 'token': token});
+String pairingApprovedJson(String token, {String? certFingerprint}) =>
+    jsonEncode({
+      'type': 'pairing_approved',
+      'token': token,
+      if (certFingerprint != null) 'certFingerprint': certFingerprint,
+    });
 
 String pairingDeniedJson() => jsonEncode({'type': 'pairing_denied'});
 
-String authResponseJson({required bool success, String? token}) => jsonEncode({
+String authResponseJson({
+  required bool success,
+  String? token,
+  String? certFingerprint,
+}) =>
+    jsonEncode({
       'type': 'auth_response',
       'success': success,
       if (token != null) 'token': token,
+      if (certFingerprint != null) 'certFingerprint': certFingerprint,
     });
 
 String contextJson(String active) => jsonEncode({'type': 'context', 'active': active});

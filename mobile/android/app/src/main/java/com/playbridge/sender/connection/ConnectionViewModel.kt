@@ -31,7 +31,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     // Map NsdHelper.DiscoveredDevice to TvDevice for simpler UI handling
     val discoveredDevices: StateFlow<List<TvDevice>> = nsdHelper.discoveredDevices.map { devices ->
-        devices.map { TvDevice(ip = it.ip, port = it.port, name = it.name, token = "", uuid = it.uuid) }
+        devices.map { TvDevice(ip = it.ip, port = it.port, name = it.name, token = "", uuid = it.uuid, wssPort = it.wssPort) }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     fun getSavedBluetoothMacForTv(tvUuid: String?): String? {
@@ -70,7 +70,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     state is WebSocketClient.ConnectionState.Disconnected) {
                     hasAttemptedInitialConnect = true
                     Log.d(TAG, "Auto-connecting to saved TV: ${device.name} at ${device.ip}:${device.port}")
-                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID)
+                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID, device.wssPort, device.certFingerprint)
                 }
             }
         }
@@ -94,28 +94,32 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             }.collect { (devices, savedDevice) ->
                 if (_autoConnectEnabled.value && savedDevice != null && savedDevice.uuid.isNotEmpty()) {
                     val matchedDevice = devices.find { it.uuid == savedDevice.uuid }
-                    if (matchedDevice != null && (matchedDevice.ip != savedDevice.ip || matchedDevice.port != savedDevice.port)) {
-                        Log.d(TAG, "NSD discovered saved TV at new IP: ${matchedDevice.ip}:${matchedDevice.port}. Updating and reconnecting.")
+                    if (matchedDevice != null && (matchedDevice.ip != savedDevice.ip || matchedDevice.port != savedDevice.port || matchedDevice.wssPort != savedDevice.wssPort)) {
+                        Log.d(TAG, "NSD discovered saved TV at new IP/port: ${matchedDevice.ip}:${matchedDevice.port} (wss=${matchedDevice.wssPort}). Updating and reconnecting.")
                         val updatedDevice = savedDevice.copy(
                             ip = matchedDevice.ip,
                             port = matchedDevice.port,
-                            name = matchedDevice.name
+                            name = matchedDevice.name,
+                            wssPort = matchedDevice.wssPort
                         )
                         connectionStore.saveTvDevice(updatedDevice)
                         connectionStore.addToHistory(updatedDevice)
-                        webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name, phoneDeviceName, phoneDeviceUUID)
+                        webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name, phoneDeviceName, phoneDeviceUUID, updatedDevice.wssPort, updatedDevice.certFingerprint)
                     }
                 }
             }
         }
 
-        // Listen for new auth tokens
+        // Listen for new auth tokens + cert pins issued by the receiver.
         viewModelScope.launch {
-            webSocketClient.newToken.collect { token ->
+            webSocketClient.newCredentials.collect { creds ->
                 val currentDevice = connectionStore.tvDevice.first()
                 if (currentDevice != null) {
-                    Log.i(TAG, "Updating stored token for ${currentDevice.ip}")
-                    val updatedDevice = currentDevice.copy(token = token)
+                    Log.i(TAG, "Updating stored token/pin for ${currentDevice.ip}")
+                    val updatedDevice = currentDevice.copy(
+                        token = creds.token,
+                        certFingerprint = creds.certFingerprint ?: currentDevice.certFingerprint
+                    )
                     connectionStore.saveTvDevice(updatedDevice)
                     connectionStore.addToHistory(updatedDevice)
                 }
@@ -148,7 +152,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             viewModelScope.launch {
                 val device = tvDevice.first()
                 if (device != null) {
-                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID)
+                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID, device.wssPort, device.certFingerprint)
                 }
             }
         }
@@ -156,11 +160,19 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     fun connect(device: TvDevice) {
         viewModelScope.launch {
-            Log.d(TAG, "Connecting to: ${device.name} at ${device.ip}:${device.port}")
+            // wss_port is a live property of the receiver; a saved/history entry may
+            // predate TLS, so prefer the port from current discovery (matched by uuid,
+            // falling back to ip/port). Keeps the device's token + certFingerprint.
+            val discovered = discoveredDevices.value.let { list ->
+                (if (device.uuid.isNotEmpty()) list.find { it.uuid == device.uuid } else null)
+                    ?: list.find { it.ip == device.ip && it.port == device.port }
+            }
+            val merged = device.copy(wssPort = discovered?.wssPort ?: device.wssPort)
+            Log.d(TAG, "Connecting to: ${merged.name} at ${merged.ip}:${merged.port} (wss=${merged.wssPort})")
             hasAttemptedInitialConnect = true
-            connectionStore.saveTvDevice(device)
-            connectionStore.addToHistory(device)
-            webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID)
+            connectionStore.saveTvDevice(merged)
+            connectionStore.addToHistory(merged)
+            webSocketClient.connect(merged.ip, merged.port, merged.token, merged.name, phoneDeviceName, phoneDeviceUUID, merged.wssPort, merged.certFingerprint)
         }
     }
 

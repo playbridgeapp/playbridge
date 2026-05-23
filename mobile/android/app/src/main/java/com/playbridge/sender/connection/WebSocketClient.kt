@@ -15,7 +15,12 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.*
 import okio.ByteString.Companion.toByteString
+import java.security.cert.CertificateException
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 private const val TAG = "WebSocketClient"
 
@@ -32,6 +37,14 @@ class WebSocketClient {
     
     @Volatile
     private var webSocket: WebSocket? = null
+
+    // SPKI pin the server presented during the current TLS handshake (captured by
+    // the pinning trust manager), and whether it failed to match the expected pin.
+    @Volatile private var capturedServerPin: String? = null
+    @Volatile private var pinMismatch: Boolean = false
+    // Whether the active connection is wss (true) vs plaintext ws (false).
+    @Volatile private var isSecure: Boolean = false
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -40,8 +53,8 @@ class WebSocketClient {
     private val _messages = MutableSharedFlow<String>(replay = 0)
     val messages = _messages.asSharedFlow()
 
-    private val _newToken = MutableSharedFlow<String>(replay = 0)
-    val newToken = _newToken.asSharedFlow()
+    private val _newCredentials = MutableSharedFlow<IssuedCredentials>(replay = 0)
+    val newCredentials = _newCredentials.asSharedFlow()
     
     private var retryCount = 0
     private val MAX_RETRIES = com.playbridge.shared.protocol.Config.MAX_RETRIES // 5 minutes
@@ -73,12 +86,17 @@ class WebSocketClient {
         val serverName: String,
         val deviceName: String,
         val deviceUUID: String,
+        val wssPort: Int? = null,
+        val pin: String? = null,
     )
+
+    /** Token + SPKI pin issued by the receiver, persisted together by the ViewModel. */
+    data class IssuedCredentials(val token: String, val certFingerprint: String?)
 
     sealed class ConnectionState {
         data object Disconnected : ConnectionState()
         data object Connecting : ConnectionState()
-        data class Connected(val serverName: String) : ConnectionState()
+        data class Connected(val serverName: String, val secure: Boolean = false) : ConnectionState()
         // Pairing request sent — waiting for the TV user to tap Allow.
         data class WaitingForApproval(val serverName: String) : ConnectionState()
         // TV user tapped Deny, or the 30s timeout elapsed.
@@ -88,12 +106,24 @@ class WebSocketClient {
         // Stale token rejected by TV (e.g. after TV reinstall). Distinct from Error so the
         // ViewModel can wipe the token and prompt re-pairing rather than showing a generic error.
         data object AuthFailed : ConnectionState()
+        // The receiver's TLS cert didn't match the pinned fingerprint — possible MITM.
+        // We refuse to connect and surface a re-pair prompt rather than retrying.
+        data class PinMismatch(val serverName: String) : ConnectionState()
     }
     
-    fun connect(ip: String, port: Int, token: String, serverName: String, deviceName: String, deviceUUID: String) {
+    fun connect(
+        ip: String,
+        port: Int,
+        token: String,
+        serverName: String,
+        deviceName: String,
+        deviceUUID: String,
+        wssPort: Int? = null,
+        certFingerprint: String? = null,
+    ) {
         retryCount = 0
         isUserDisconnect = false  // Reset so retries are allowed for genuine connectivity failures
-        targetConnection = TvConnectionInfo(ip, port, token, serverName, deviceName, deviceUUID)
+        targetConnection = TvConnectionInfo(ip, port, token, serverName, deviceName, deviceUUID, wssPort, certFingerprint)
         attemptConnection(ip, port, serverName)
     }
 
@@ -105,15 +135,23 @@ class WebSocketClient {
             try { webSocket?.close(1000, "Reconnecting") } catch(e: Exception) {}
             webSocket = null
         }
-        
-        val url = "ws://$ip:$port/"
+
+        capturedServerPin = null
+        pinMismatch = false
+
+        val conn = targetConnection
+        val wssPort = conn?.wssPort
+        val useTls = wssPort != null
+        isSecure = useTls
+        val url = if (useTls) "wss://$ip:$wssPort/" else "ws://$ip:$port/"
+        val httpClient = if (useTls) buildPinningClient(conn?.pin) else client
         if (retryCount == 0) Log.i(TAG, "Connecting to $url") else Log.d(TAG, "Retrying $url (attempt $retryCount)")
-        
+
         val request = Request.Builder()
             .url(url)
             .build()
-        
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+
+        webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (webSocket !== this@WebSocketClient.webSocket) {
                     Log.d(TAG, "Ignoring onOpen for stale socket")
@@ -162,14 +200,27 @@ class WebSocketClient {
                         val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
                         if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_approved") {
                             val token = json["token"]?.toString()?.replace("\"", "")
+                            val certFp = json["certFingerprint"]?.toString()?.replace("\"", "")
+                                ?.takeIf { it.isNotEmpty() && it != "null" }
                             Log.i(TAG, "Pairing approved by $serverName")
+                            // Bind the delivered pin to the cert actually served this handshake.
+                            val served = capturedServerPin
+                            if (certFp != null && served != null && certFp != served) {
+                                Log.e(TAG, "pairing_approved pin ($certFp) != served cert ($served) — refusing")
+                                pinMismatch = true
+                                isUserDisconnect = true
+                                _connectionState.value = ConnectionState.PinMismatch(serverName)
+                                webSocket.close(1000, "pin mismatch")
+                                return
+                            }
                             if (!token.isNullOrEmpty() && token != "null") {
                                 // Update in-memory connection info so retries after a network
                                 // blip send `auth` (not another `pairing_request`).
-                                targetConnection = targetConnection?.copy(token = token)
-                                scope.launch { _newToken.emit(token) }
+                                val pin = certFp ?: served
+                                targetConnection = targetConnection?.copy(token = token, pin = pin)
+                                scope.launch { _newCredentials.emit(IssuedCredentials(token, pin)) }
                             }
-                            _connectionState.value = ConnectionState.Connected(serverName)
+                            _connectionState.value = ConnectionState.Connected(serverName, isSecure)
                             return
                         }
                     } catch (e: Exception) {
@@ -201,11 +252,14 @@ class WebSocketClient {
                                 val success = json["success"].toString() == "true"
                                 if (success) {
                                     Log.i(TAG, "Authentication successful")
-                                    _connectionState.value = ConnectionState.Connected(serverName)
+                                    _connectionState.value = ConnectionState.Connected(serverName, isSecure)
                                     val token = json["token"]?.toString()?.replace("\"", "")
+                                    val certFp = json["certFingerprint"]?.toString()?.replace("\"", "")
+                                        ?.takeIf { it.isNotEmpty() && it != "null" }
                                     if (!token.isNullOrEmpty() && token != "null") {
-                                        targetConnection = targetConnection?.copy(token = token)
-                                        scope.launch { _newToken.emit(token) }
+                                        val pin = certFp ?: capturedServerPin ?: targetConnection?.pin
+                                        targetConnection = targetConnection?.copy(token = token, pin = pin)
+                                        scope.launch { _newCredentials.emit(IssuedCredentials(token, pin)) }
                                     }
                                 } else {
                                     Log.e(TAG, "Authentication failed — stale token")
@@ -256,6 +310,13 @@ class WebSocketClient {
                 if (webSocket === this@WebSocketClient.webSocket) {
                     this@WebSocketClient.webSocket = null
 
+                    if (pinMismatch) {
+                        Log.e(TAG, "TLS pin mismatch — refusing to connect (possible MITM)")
+                        isUserDisconnect = true
+                        _connectionState.value = ConnectionState.PinMismatch(serverName)
+                        return
+                    }
+
                     if (!isUserDisconnect && retryCount < MAX_RETRIES) {
                         retryCount++
                         Log.d(TAG, "Retrying ($retryCount/$MAX_RETRIES) in ${RETRY_DELAY_MS}ms")
@@ -283,6 +344,36 @@ class WebSocketClient {
         })
     }
     
+    /**
+     * OkHttp client for wss:// that trusts the receiver's self-signed cert by SPKI
+     * pin. Captures the presented pin (for pairing-time verification) and rejects a
+     * mismatch against [expectedPin] (possible MITM). When [expectedPin] is null
+     * (first pairing) it accepts the cert trust-on-first-use.
+     */
+    private fun buildPinningClient(expectedPin: String?): OkHttpClient {
+        val trustManager = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) {
+                val leaf = chain.firstOrNull() ?: throw CertificateException("No server certificate")
+                val presented = CertificatePinner.pin(leaf)
+                capturedServerPin = presented
+                if (expectedPin != null && presented != expectedPin) {
+                    pinMismatch = true
+                    throw CertificateException("PlayBridge TLS pin mismatch: expected=$expectedPin presented=$presented")
+                }
+            }
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+        val sslContext = SSLContext.getInstance("TLS").apply {
+            init(null, arrayOf<TrustManager>(trustManager), null)
+        }
+        return client.newBuilder()
+            .sslSocketFactory(sslContext.socketFactory, trustManager)
+            // Pinning replaces hostname/CA validation; the cert is bound by its SPKI.
+            .hostnameVerifier { _, _ -> true }
+            .build()
+    }
+
     fun send(message: String): Boolean {
         val ws = webSocket
         if (ws == null) {

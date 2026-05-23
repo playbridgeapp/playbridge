@@ -17,8 +17,8 @@ android {
         applicationId = "com.playbridge.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 55
-        versionName = "0.1.55"
+        versionCode = 56
+        versionName = "0.1.56"
 
         buildConfigField(
             "String",
@@ -91,11 +91,18 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
 
-    // Ktor WebSocket Server
+    // Ktor WebSocket Server (plaintext ws:// — loopback + opt-in external)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.websockets)
     implementation(libs.ktor.serialization.json)
+
+    // Java-WebSocket — TLS-capable wss:// server (CIO can't terminate TLS)
+    implementation("org.java-websocket:Java-WebSocket:1.5.7")
+
+    // BouncyCastle — build the self-signed cert for a software TLS key
+    // (AndroidKeyStore keys can't sign TLS handshakes via Conscrypt).
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.78.1")
 
     // QR Code Generation
     implementation(libs.zxing.core)

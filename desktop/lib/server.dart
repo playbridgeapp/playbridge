@@ -7,6 +7,7 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'cert_manager.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'protocol.dart';
@@ -43,10 +44,25 @@ class ReceiverServer extends ChangeNotifier {
   final PlayerController player;
   final PairingStore store;
 
-  HttpServer? _http;
+  final List<HttpServer> _servers = [];
   Timer? _statusTimer;
   Timer? _approvalTimeout;
   bool _disposed = false;
+
+  /// SPKI pin of our TLS cert, sent to senders at pairing. Null until the
+  /// wss:// listener starts.
+  String? _certFingerprint;
+
+  /// Set when the receiver is unreachable: wss:// failed to start and ws:// is
+  /// not enabled. Surfaced in the UI so the user knows to enable "Allow insecure".
+  String? tlsError;
+
+  /// Bound port of the wss:// listener, or null if TLS failed to start.
+  /// Advertised over mDNS so senders know where to connect.
+  int? _wssPort;
+  int? get wssPort => _wssPort;
+
+  int _port = kDefaultPort;
 
   // All connected channels — only authed ones receive status broadcasts
   // and can issue commands.
@@ -68,9 +84,8 @@ class ReceiverServer extends ChangeNotifier {
   PendingPairingRequest? get pendingPairingRequest => _pendingPairingRequest;
 
   Future<void> start({int port = kDefaultPort}) async {
-    final handler = webSocketHandler(_onClient);
-    _http = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
-    debugPrint('[server] listening on ${_http!.address.address}:${_http!.port}');
+    _port = port;
+    await _bindListeners();
 
     player.addListener(_broadcastStatus);
     player.indexChanges.addListener(_broadcastPlaylistStatus);
@@ -78,6 +93,61 @@ class ReceiverServer extends ChangeNotifier {
       const Duration(milliseconds: 500),
       (_) => _broadcastStatus(),
     );
+  }
+
+  /// (Re)binds the wss:// (always) and ws:// (opt-in) listeners. Re-runnable
+  /// after [reloadListeners] closes the previous sockets.
+  Future<void> _bindListeners() async {
+    final handler = webSocketHandler(_onClient);
+
+    // Encrypted wss:// on port+1 — the default, preferred transport.
+    var wssUp = false;
+    try {
+      final cert = await CertManager.loadOrCreate(commonName: store.deviceName);
+      _certFingerprint = cert.fingerprint;
+      final https = await shelf_io.serve(
+        handler,
+        InternetAddress.anyIPv4,
+        _port + 1,
+        securityContext: cert.securityContext,
+      );
+      _servers.add(https);
+      _wssPort = https.port;
+      wssUp = true;
+      debugPrint(
+        '[server] wss listening on ${https.address.address}:${https.port} '
+        '(pin ${cert.fingerprint})',
+      );
+    } catch (e) {
+      debugPrint('[server] TLS listener failed to start: $e');
+    }
+
+    // Plaintext ws:// only when the user explicitly opts into insecure connections.
+    // We do NOT auto-fall-back to ws on wss failure — that would be a silent
+    // plaintext downgrade. Instead we fail closed and surface a hint.
+    if (store.allowInsecure) {
+      final http = await shelf_io.serve(handler, InternetAddress.anyIPv4, _port);
+      _servers.add(http);
+      debugPrint('[server] ws  listening on ${http.address.address}:${http.port} (insecure allowed)');
+    }
+
+    tlsError = (!wssUp && !store.allowInsecure)
+        ? 'Secure server failed to start — enable "Allow insecure" in Settings to connect.'
+        : null;
+
+    // Notify so UI (e.g. the Cast screen address) reflects the bound wss port.
+    notifyListeners();
+  }
+
+  /// Rebinds listeners after the insecure-connection setting changes.
+  Future<void> reloadListeners() async {
+    for (final s in _servers) {
+      await s.close(force: true);
+    }
+    _servers.clear();
+    _wssPort = null;
+    await _bindListeners();
+    notifyListeners();
   }
 
   Future<void> stop() async {
@@ -93,7 +163,11 @@ class ReceiverServer extends ChangeNotifier {
     _all.clear();
     _authed.clear();
     _pendingPairingRequest = null;
-    await _http?.close(force: true);
+    for (final s in _servers) {
+      await s.close(force: true);
+    }
+    _servers.clear();
+    _wssPort = null;
   }
 
   int get connectedClientCount => _all.length;
@@ -181,7 +255,11 @@ class ReceiverServer extends ChangeNotifier {
 
       case AuthCmd(:final token):
         if (token != null && store.isTokenAuthorized(token)) {
-          channel.sink.add(authResponseJson(success: true, token: token));
+          channel.sink.add(authResponseJson(
+            success: true,
+            token: token,
+            certFingerprint: _certFingerprint,
+          ));
           unawaited(store.updateLastConnected(token));
           return true;
         }
@@ -210,9 +288,15 @@ class ReceiverServer extends ChangeNotifier {
     );
     unawaited(store.addPairedDevice(device));
 
-    pending.channel.sink.add(pairingApprovedJson(token));
+    pending.channel.sink.add(
+      pairingApprovedJson(token, certFingerprint: _certFingerprint),
+    );
     // Immediately treat as authed — phone won't send a separate auth after pairing_approved.
-    pending.channel.sink.add(authResponseJson(success: true, token: token));
+    pending.channel.sink.add(authResponseJson(
+      success: true,
+      token: token,
+      certFingerprint: _certFingerprint,
+    ));
     _authed.add(pending.channel);
     notifyListeners();
     _sendPlaylistStatusTo(pending.channel);
@@ -238,7 +322,10 @@ class ReceiverServer extends ChangeNotifier {
         channel.sink.add(pongJson());
       case AuthCmd():
         // Already authed — re-auth is a no-op success.
-        channel.sink.add(authResponseJson(success: true));
+        channel.sink.add(authResponseJson(
+          success: true,
+          certFingerprint: _certFingerprint,
+        ));
       case ContextQueryCmd():
         channel.sink.add(contextJson(player.state == 'idle' ? 'idle' : 'player'));
       case PlayCmd(:final payload):

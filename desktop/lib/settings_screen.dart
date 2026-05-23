@@ -149,6 +149,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 danger: true,
               ),
 
+            // — Security ————————————————————————————
+            _Section('Security'),
+            _Tile(
+              icon: Icons.lock,
+              title: 'Allow insecure connections (ws)',
+              subtitle: "Off = encrypted wss only. Enable for older senders that "
+                  "can't use TLS (e.g. the browser extension).",
+              trailing: Switch(
+                value: widget.store.allowInsecure,
+                onChanged: (v) async {
+                  await widget.store.setAllowInsecure(v);
+                  await widget.server.reloadListeners();
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+
             // — System ——————————————————————————————
             _Section('System'),
             if (!Platform.isWindows)
@@ -173,9 +190,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _Tile(
               icon: Icons.info_outline,
               title: 'PlayBridge Desktop',
-              trailing: const Text(
-                'v1.0.0  ·  port 8765',
-                style: TextStyle(color: Colors.white38, fontSize: 12),
+              trailing: Text(
+                'v1.0.0  ·  port ${widget.server.wssPort ?? kDefaultPort}',
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
               ),
             ),
           ],

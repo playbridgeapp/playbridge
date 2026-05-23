@@ -1,7 +1,7 @@
 name: playbridge_desktop
 description: "PlayBridge desktop receiver — accepts cast commands from the phone and plays via libmpv."
 publish_to: 'none'
-version: 1.0.7+8
+version: 1.0.8+9
 
 environment:
   sdk: ^3.6.0
@@ -33,6 +33,12 @@ dependencies:
   bonsoir: ^5.1.10
   shared_preferences: ^2.3.3
   uuid: ^4.5.1
+
+  # Self-signed TLS identity for wss:// (see ../WSS_MIGRATION_PLAN.md).
+  # basic_utils generates the cert+key (re-exports pointycastle types);
+  # crypto hashes the SPKI pin.
+  basic_utils: ^5.7.0
+  crypto: ^3.0.3
 
   # Service-like behavior: tray icon + programmatic window control.
   # Launch-at-login is implemented in lib/auto_launch.dart (no plugin).

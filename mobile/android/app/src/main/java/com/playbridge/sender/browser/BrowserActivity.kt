@@ -2225,6 +2225,7 @@ class BrowserActivity : ComponentActivity() {
                                             DashboardScreen(
                                                 currentScreen = lastMainScreen,
                                                 isConnected = isConnected,
+                                                isSecure = (connectionState as? WebSocketClient.ConnectionState.Connected)?.secure == true,
                                                 connectedDeviceName = tvDevice?.name,
                                                 onNavigate = { screen ->
                                                     currentScreen = screen

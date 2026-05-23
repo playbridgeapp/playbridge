@@ -78,7 +78,7 @@ struct PairingIdleView: View {
                     .foregroundColor(.white)
             }
 
-            Text("\(server.localIP):8765")
+            Text("\(server.localIP):\(String(server.wssPort ?? 8765))")
                 .font(.system(size: 32, design: .monospaced))
                 .foregroundColor(.white.opacity(0.6))
 

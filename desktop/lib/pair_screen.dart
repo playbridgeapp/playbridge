@@ -12,6 +12,7 @@ class PairScreen extends StatefulWidget {
     required this.port,
     required this.phase,
     required this.discoveryError,
+    this.tlsError,
     required this.pendingRequest,
     required this.onAllow,
     required this.onDeny,
@@ -23,6 +24,7 @@ class PairScreen extends StatefulWidget {
   final int port;
   final PairingPhase phase;
   final String? discoveryError;
+  final String? tlsError;
   final PendingPairingRequest? pendingRequest;
   final VoidCallback onAllow;
   final VoidCallback onDeny;
@@ -169,6 +171,8 @@ class _PairScreenState extends State<PairScreen> {
                       : 'failed: ${widget.discoveryError}',
                   error: widget.discoveryError != null,
                 ),
+                if (widget.tlsError != null)
+                  _InfoLine(label: 'Secure', value: widget.tlsError!, error: true),
                 if (_devices.isNotEmpty) ...[
                   const SizedBox(height: 24),
                   _ManageDevicesButton(
@@ -248,6 +252,8 @@ class _PairScreenState extends State<PairScreen> {
                       : 'failed: ${widget.discoveryError}',
                   error: widget.discoveryError != null,
                 ),
+                if (widget.tlsError != null)
+                  _InfoLine(label: 'Secure', value: widget.tlsError!, error: true),
                 if (_devices.isNotEmpty) ...[
                   const SizedBox(height: 24),
                   _ManageDevicesButton(

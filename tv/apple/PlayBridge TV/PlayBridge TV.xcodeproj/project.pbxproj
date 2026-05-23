@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		1CFFF07F44934837BC059A28 /* messages.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9556E50F0B149CF87E65874 /* messages.pb.swift */; };
 		9AA073877A4175267723B6CE /* Pods_PlayBridge_TV.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8FB972483704A0A2065F09C /* Pods_PlayBridge_TV.framework */; };
+		E6CD894E2FC0CD7B0092B4A3 /* X509 in Frameworks */ = {isa = PBXBuildFile; productRef = E6CD894D2FC0CD7B0092B4A3 /* X509 */; };
 		E6F46D7C2F9384E100653943 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 /* End PBXBuildFile section */
 
@@ -35,6 +36,7 @@
 			files = (
 				E6F46D7C2F9384E100653943 /* (null) in Frameworks */,
 				9AA073877A4175267723B6CE /* Pods_PlayBridge_TV.framework in Frameworks */,
+				E6CD894E2FC0CD7B0092B4A3 /* X509 in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -134,6 +136,9 @@
 			);
 			mainGroup = E6F46D3E2F937ABB00653943;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E6CD894C2FC0CD7B0092B4A3 /* XCRemoteSwiftPackageReference "swift-certificates" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E6F46D482F937ABC00653943 /* Products */;
 			projectDirPath = "";
@@ -342,7 +347,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsForMedia = YES;
@@ -375,7 +380,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsForMedia = YES;
@@ -423,6 +428,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		E6CD894C2FC0CD7B0092B4A3 /* XCRemoteSwiftPackageReference "swift-certificates" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-certificates.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.19.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E6CD894D2FC0CD7B0092B4A3 /* X509 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E6CD894C2FC0CD7B0092B4A3 /* XCRemoteSwiftPackageReference "swift-certificates" */;
+			productName = X509;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E6F46D3F2F937ABB00653943 /* Project object */;
 }

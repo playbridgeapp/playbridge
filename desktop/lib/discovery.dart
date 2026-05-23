@@ -20,12 +20,17 @@ class DiscoveryPublisher {
   BonsoirBroadcast? _broadcast;
   StreamSubscription? _eventsSub;
 
-  Future<void> start() async {
+  /// [wssPort] is advertised as the `wss_port` TXT attribute when non-null so
+  /// senders can find the encrypted endpoint. Older senders ignore it.
+  Future<void> start({int? wssPort}) async {
     final service = BonsoirService(
       name: serviceName,
       type: '_playbridge._tcp',
       port: port,
-      attributes: {'uuid': deviceId},
+      attributes: {
+        'uuid': deviceId,
+        if (wssPort != null) 'wss_port': '$wssPort',
+      },
     );
 
     final broadcast = BonsoirBroadcast(service: service);
@@ -35,7 +40,8 @@ class DiscoveryPublisher {
     });
     await broadcast.start();
     _broadcast = broadcast;
-    debugPrint('[discovery] published $serviceName on _playbridge._tcp.:$port (uuid=$deviceId)');
+    debugPrint('[discovery] published $serviceName on _playbridge._tcp.:$port '
+        '(uuid=$deviceId, wss_port=${wssPort ?? '-'})');
   }
 
   Future<void> stop() async {

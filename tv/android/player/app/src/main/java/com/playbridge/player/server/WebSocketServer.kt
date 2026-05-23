@@ -2,6 +2,7 @@ package com.playbridge.player.server
 
 import android.util.Log
 import com.playbridge.shared.protocol.IncomingMessage
+import com.playbridge.shared.protocol.createAuthResponseJson
 import com.playbridge.shared.protocol.createPairingApprovedJson
 import com.playbridge.shared.protocol.createPairingDeniedJson
 import com.playbridge.shared.protocol.createPongJson
@@ -35,7 +36,17 @@ class WebSocketServer(
     private val port: Int = com.playbridge.shared.protocol.Config.DEFAULT_PORT,
     private val isTokenAuthorized: suspend (String) -> Boolean,
     private val onPairingApproved: suspend (deviceName: String, deviceUUID: String) -> String,
-    private val subtitleDir: File? = null
+    private val subtitleDir: File? = null,
+    // App-private directory for the persisted TLS identity (PKCS12). wss:// is
+    // disabled if null.
+    private val tlsDir: File? = null,
+    // When false (default) external clients must use wss://; ws:// is bound to
+    // loopback only (for the same-device in-app browser). When true, ws:// also
+    // binds externally for legacy senders.
+    private val allowInsecure: Boolean = false,
+    // Invoked after the wss bind attempt with the bound port (null if it failed),
+    // so the caller advertises wss_port over NSD only when it's actually up.
+    private val onWssReady: ((Int?) -> Unit)? = null,
 ) {
     data class PairingRequest(
         val deviceName: String,
@@ -47,6 +58,18 @@ class WebSocketServer(
 
     // Connected clients
     private val clients = ConcurrentHashMap<String, WebSocketSession>()
+
+    // wss:// (Java-WebSocket) transport + its authenticated connections.
+    private var wssServer: WssTransport? = null
+    private val wssClients = ConcurrentHashMap.newKeySet<org.java_websocket.WebSocket>()
+
+    // SPKI pin of our TLS cert, sent to senders at pairing. Set when wss starts.
+    @Volatile var certFingerprint: String? = null
+        private set
+
+    // Bound wss port (advertised over NSD), or null if TLS didn't start.
+    @Volatile private var boundWssPort: Int? = null
+    fun getWssPort(): Int? = boundWssPort
 
     // Connection state
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Stopped)
@@ -99,7 +122,8 @@ class WebSocketServer(
                 server?.stop(1000, 2000)
                 server = null
 
-                server = embeddedServer(CIO, port = port) {
+                val bindHost = if (allowInsecure) "0.0.0.0" else "127.0.0.1"
+                server = embeddedServer(CIO, host = bindHost, port = port) {
                     install(WebSockets) {
                         pingPeriod = 15.seconds
                         timeout = 15.seconds
@@ -157,13 +181,19 @@ class WebSocketServer(
                 }.start(wait = false)
 
                 _connectionState.value = ConnectionState.Running(port)
-                FileLogger.i(TAG, "WebSocket server started on port $port")
+                FileLogger.i(TAG, "ws server on $bindHost:$port (insecure=$allowInsecure)")
+                startWssTransport()
+                onWssReady?.invoke(boundWssPort)
 
             } catch (e: java.net.BindException) {
                 FileLogger.w(TAG, "Port $port already in use. Assuming server from previous instance is still active.")
                 // If the port is in use, it's likely our own service from a previous run that hasn't fully released yet,
                 // or a separate instance. We'll mark as running for the UI.
                 _connectionState.value = ConnectionState.Running(port)
+                // The prior instance holds the ports and is serving wss on port+1; keep the
+                // service advertised (registerNsdService no-ops if already registered). We
+                // don't re-attempt the wss bind here — that'd just log a spurious failure.
+                onWssReady?.invoke(port + 1)
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Failed to start server", e)
                 _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
@@ -186,6 +216,11 @@ class WebSocketServer(
 
                 server?.stop(500, 1000)
                 server = null
+                try { wssServer?.stop(500) } catch (e: Exception) { FileLogger.e(TAG, "Error stopping wss", e) }
+                wssServer = null
+                wssClients.clear()
+                boundWssPort = null
+                certFingerprint = null
                 FileLogger.i(TAG, "Server stopped")
             }
             _connectionState.value = ConnectionState.Stopped
@@ -375,7 +410,181 @@ class WebSocketServer(
                 FileLogger.e(TAG, "Failed to send status", e)
             }
         }
+        wssClients.forEach { conn ->
+            try {
+                conn.send(statusJson)
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to send status (wss)", e)
+            }
+        }
     }
 
     fun getPort(): Int = port
+
+    private fun startWssTransport() {
+        val dir = tlsDir
+        if (dir == null) {
+            FileLogger.w(TAG, "No tlsDir provided — wss:// disabled")
+            signalUnreachableIfSecureOnly()
+            return
+        }
+        try {
+            val tls = TlsIdentity.loadOrCreate(dir)
+            certFingerprint = tls.fingerprint
+            val wssPort = port + 1
+            WssTransport(wssPort, tls.sslContext).also {
+                it.start()
+                wssServer = it
+                boundWssPort = wssPort
+            }
+            FileLogger.i(TAG, "wss server started on $wssPort (pin ${tls.fingerprint})")
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Failed to start wss transport", e)
+            signalUnreachableIfSecureOnly()
+        }
+    }
+
+    // wss failed and ws:// is loopback-only ⇒ unreachable by external senders.
+    // Surface a hint so the user knows to enable "Allow insecure" in Settings.
+    private fun signalUnreachableIfSecureOnly() {
+        if (!allowInsecure) {
+            _connectionState.value = ConnectionState.Error(
+                "Secure server failed — enable \"Allow insecure\" in Settings"
+            )
+        }
+    }
+
+    // Shared pairing approval: shows the prompt and awaits the user's Allow/Deny
+    // (auto-deny after 30s). Used by the wss transport; the CIO path inlines its own.
+    private suspend fun awaitPairingApproval(deviceName: String, deviceUUID: String): Boolean {
+        val approval = CompletableDeferred<Boolean>()
+        _pendingPairingRequest.value = PairingRequest(deviceName, deviceUUID, approval)
+        _connectionAttemptFlow.tryEmit(Unit)
+        val timeoutJob = scope.launch {
+            delay(30_000)
+            approval.complete(false)
+        }
+        val approved = approval.await()
+        timeoutJob.cancel()
+        _pendingPairingRequest.value = null
+        return approved
+    }
+
+    /** TLS-terminating wss:// transport — Ktor CIO can't terminate TLS. */
+    inner class WssTransport(
+        private val wssPort: Int,
+        sslContext: javax.net.ssl.SSLContext,
+    ) : org.java_websocket.server.WebSocketServer(java.net.InetSocketAddress(wssPort)) {
+
+        private val authed = ConcurrentHashMap.newKeySet<org.java_websocket.WebSocket>()
+
+        init {
+            setWebSocketFactory(org.java_websocket.server.DefaultSSLWebSocketServerFactory(sslContext))
+            isReuseAddr = true
+            connectionLostTimeout = 20
+        }
+
+        override fun onStart() {
+            FileLogger.i(TAG, "wss transport listening on $wssPort")
+        }
+
+        override fun onOpen(conn: org.java_websocket.WebSocket, handshake: org.java_websocket.handshake.ClientHandshake) {
+            FileLogger.i(TAG, "wss connection: ${conn.remoteSocketAddress}")
+        }
+
+        override fun onClose(conn: org.java_websocket.WebSocket, code: Int, reason: String?, remote: Boolean) {
+            authed.remove(conn)
+            if (wssClients.remove(conn)) refreshCount()
+        }
+
+        override fun onError(conn: org.java_websocket.WebSocket?, ex: Exception) {
+            FileLogger.e(TAG, "wss error", ex)
+        }
+
+        override fun onMessage(conn: org.java_websocket.WebSocket, message: String) {
+            if (authed.contains(conn)) {
+                try {
+                    when (val msg = parseIncomingMessage(message)) {
+                        is IncomingMessage.Ping -> conn.send(createPongJson())
+                        else -> scope.launch { _commands.emit(msg) }
+                    }
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "wss message error", e)
+                }
+                return
+            }
+            handlePreAuth(conn, message)
+        }
+
+        override fun onMessage(conn: org.java_websocket.WebSocket, message: java.nio.ByteBuffer) {
+            if (!authed.contains(conn)) return
+            val bytes = ByteArray(message.remaining()).also { message.get(it) }
+            if (bytes.size == 9) {
+                val unpacked = com.playbridge.shared.protocol.MousePacket.unpack(bytes) ?: return
+                scope.launch {
+                    _commands.emit(
+                        IncomingMessage.Mouse(
+                            playbridge.MousePayload(
+                                event = unpacked.event,
+                                dx = unpacked.dx,
+                                dy = unpacked.dy,
+                            )
+                        )
+                    )
+                }
+            }
+        }
+
+        private fun handlePreAuth(conn: org.java_websocket.WebSocket, text: String) {
+            if (text.contains("\"type\":\"ping\"") || text.contains("\"type\": \"ping\"")) {
+                conn.send(createPongJson())
+                return
+            }
+            if (text.contains("\"type\":\"pairing_request\"")) {
+                if (_pendingPairingRequest.value != null) {
+                    conn.send(createPairingDeniedJson()); conn.close(); return
+                }
+                val msg = (parseIncomingMessage(text) as? IncomingMessage.PairingRequest)?.msg
+                if (msg == null) {
+                    conn.send(createPairingDeniedJson()); conn.close(); return
+                }
+                scope.launch {
+                    val approved = awaitPairingApproval(msg.device_name, msg.device_uuid)
+                    if (approved) {
+                        val token = onPairingApproved(msg.device_name, msg.device_uuid)
+                        conn.send(createPairingApprovedJson(token, certFingerprint))
+                        registerAuthed(conn)
+                    } else {
+                        conn.send(createPairingDeniedJson()); conn.close()
+                    }
+                }
+                return
+            }
+            if (text.contains("\"type\":\"auth\"")) {
+                val token = (parseIncomingMessage(text) as? IncomingMessage.Auth)?.msg?.token
+                scope.launch {
+                    if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
+                        conn.send(createAuthResponseJson(success = true, certFingerprint = certFingerprint))
+                        registerAuthed(conn)
+                    } else {
+                        conn.send(createAuthResponseJson(success = false)); conn.close()
+                    }
+                }
+            }
+        }
+
+        private fun registerAuthed(conn: org.java_websocket.WebSocket) {
+            authed.add(conn)
+            wssClients.add(conn)
+            refreshCount()
+            _connectionState.value = ConnectionState.Connected(conn.remoteSocketAddress?.toString() ?: "wss")
+        }
+
+        private fun refreshCount() {
+            _connectedClientCount.value = clients.size + wssClients.size
+            if (clients.isEmpty() && wssClients.isEmpty()) {
+                _connectionState.value = ConnectionState.Running(port)
+            }
+        }
+    }
 }

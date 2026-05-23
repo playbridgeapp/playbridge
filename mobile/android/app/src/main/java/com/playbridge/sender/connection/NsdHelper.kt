@@ -24,7 +24,10 @@ class NsdHelper(context: Context) {
         val ip: String,
         val port: Int,
         val name: String,
-        val uuid: String = ""
+        val uuid: String = "",
+        // Port of the receiver's wss:// listener, advertised via the wss_port TXT
+        // attribute. Null when the receiver only serves plaintext ws://.
+        val wssPort: Int? = null
     )
 
     fun startDiscovery() {
@@ -73,7 +76,15 @@ class NsdHelper(context: Context) {
                                 }
                             }
 
-                            val device = DiscoveredDevice(ip, port, name, uuid)
+                            var wssPort: Int? = null
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                                val wssBytes = serviceInfo.attributes[NsdConstants.KEY_WSS_PORT]
+                                if (wssBytes != null) {
+                                    wssPort = String(wssBytes).toIntOrNull()
+                                }
+                            }
+
+                            val device = DiscoveredDevice(ip, port, name, uuid, wssPort)
 
                             // Update list
                             val currentList = _discoveredDevices.value.toMutableList()

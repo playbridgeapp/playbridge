@@ -116,8 +116,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _player.addListener(_handlePlayerChange);
     _player.playRequests.addListener(_handlePlayRequest);
 
-    _bootServer();
-    _bootDiscovery();
+    _bootServerThenDiscovery();
     _resolveHost();
     _initTrayAndWindow();
   }
@@ -194,6 +193,13 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     await windowManager.setFullScreen(!isFs);
   }
 
+  // Discovery starts after the server so it can advertise the actual bound
+  // wss port (only known once the TLS listener is up).
+  Future<void> _bootServerThenDiscovery() async {
+    await _bootServer();
+    await _bootDiscovery();
+  }
+
   Future<void> _bootServer() async {
     try {
       await _server.start();
@@ -204,7 +210,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   Future<void> _bootDiscovery() async {
     try {
-      await _discovery.start();
+      await _discovery.start(wssPort: _server.wssPort);
     } catch (e) {
       setState(() => _discoveryError = '$e');
     }
@@ -472,9 +478,10 @@ Widget build(BuildContext context) {
           store: widget.store,
           deviceName: widget.store.deviceName,
           hostInfo: _hostInfo,
-          port: kDefaultPort,
+          port: _server.wssPort ?? kDefaultPort,
           phase: _server.phase,
           discoveryError: _discoveryError,
+          tlsError: _server.tlsError,
           pendingRequest: _server.pendingPairingRequest,
           onAllow: _server.approvePairing,
           onDeny: _server.denyPairing,

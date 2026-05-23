@@ -54,6 +54,7 @@ fun SettingsScreen(
     var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
     var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
     var showIpDialog by remember { mutableStateOf(false) }
+    var allowInsecureWs by remember { mutableStateOf(prefs.getBoolean("allow_insecure_ws", false)) }
     var frameRateMatching by remember { mutableStateOf(prefs.getBoolean("frame_rate_matching", false)) }
     var tunneledPlayback by remember { mutableStateOf(prefs.getBoolean("tunneled_playback", false)) }
     var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
@@ -226,6 +227,18 @@ fun SettingsScreen(
                                 label = "Custom Network IP",
                                 description = if (customIp.isEmpty() || customIp == "auto") "Automatic" else customIp,
                                 onClick = { showIpDialog = true }
+                            )
+                        }
+                        item {
+                            SettingToggleItem(
+                                label = "Allow insecure connections (ws)",
+                                description = "Off = encrypted wss only. Enable for older senders that can't use TLS (e.g. the browser extension).",
+                                checked = allowInsecureWs,
+                                onCheckedChange = {
+                                    allowInsecureWs = it
+                                    prefs.edit().putBoolean("allow_insecure_ws", it).apply()
+                                    restartServer()
+                                }
                             )
                         }
                         item {

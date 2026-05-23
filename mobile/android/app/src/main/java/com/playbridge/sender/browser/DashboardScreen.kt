@@ -43,6 +43,7 @@ import kotlin.math.sin
 fun DashboardScreen(
     currentScreen: Screen,
     isConnected: Boolean,
+    isSecure: Boolean,
     connectedDeviceName: String?,
     onNavigate: (Screen) -> Unit
 ) {
@@ -223,15 +224,17 @@ fun DashboardScreen(
                 if (it.length > 18) it.take(15) + "..." else it
             } ?: "TV"
 
+            // Green when connected over wss, amber when connected over plain ws.
+            val accent = if (isSecure) Color(0xFF4CAF50) else Color(0xFFFFA000)
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = if (isConnected)
-                    Color(0xFF1B5E20).copy(alpha = 0.15f)
+                    accent.copy(alpha = 0.15f)
                 else
                     MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                 border = BorderStroke(
                     1.dp,
-                    if (isConnected) Color(0xFF4CAF50).copy(alpha = 0.3f)
+                    if (isConnected) accent.copy(alpha = 0.3f)
                     else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
                 ),
                 modifier = Modifier
@@ -264,7 +267,7 @@ fun DashboardScreen(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF4CAF50).copy(alpha = pulseAlpha))
+                                .background(accent.copy(alpha = pulseAlpha))
                         )
                     } else {
                         Box(
@@ -276,15 +279,16 @@ fun DashboardScreen(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isConnected)
-                            "Connected to $displayDeviceName"
-                        else
-                            "No device connected",
+                        text = when {
+                            isConnected && isSecure -> "Connected to $displayDeviceName securely"
+                            isConnected -> "Connected to $displayDeviceName"
+                            else -> "No device connected"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         color = if (isConnected)
-                            Color(0xFF4CAF50)
+                            accent
                         else
                             MaterialTheme.colorScheme.onSurfaceVariant
                     )

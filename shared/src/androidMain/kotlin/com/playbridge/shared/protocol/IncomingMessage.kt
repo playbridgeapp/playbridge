@@ -150,13 +150,26 @@ fun createPairingRequestJson(deviceName: String, deviceUUID: String): String =
         PairingRequestMessage(type = "pairing_request", device_name = deviceName, device_uuid = deviceUUID)
     )
 
-fun createPairingApprovedJson(token: String): String =
+fun createPairingApprovedJson(token: String, certFingerprint: String? = null): String =
     buildJsonObject {
         put("type", "pairing_approved")
         put("token", token)
+        if (certFingerprint != null) put("certFingerprint", certFingerprint)
     }.toString()
 
 fun createPairingDeniedJson(): String = """{"type":"pairing_denied"}"""
+
+fun createAuthResponseJson(
+    success: Boolean,
+    token: String? = null,
+    certFingerprint: String? = null,
+): String =
+    buildJsonObject {
+        put("type", "auth_response")
+        put("success", success)
+        if (token != null) put("token", token)
+        if (certFingerprint != null) put("certFingerprint", certFingerprint)
+    }.toString()
 
 fun createContextJson(active: String): String =
     buildJsonObject {

@@ -11,7 +11,10 @@ import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
 import com.playbridge.sender.R
@@ -76,6 +79,12 @@ fun ConnectionScreen(
             is WebSocketClient.ConnectionState.AuthFailed ->
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar("Connection lost — tap the TV to reconnect")
+                }
+            is WebSocketClient.ConnectionState.PinMismatch ->
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar(
+                        "Security warning: ${state.serverName}'s certificate changed. Forget the device and re-pair."
+                    )
                 }
             else -> Unit
         }
@@ -146,7 +155,8 @@ fun ConnectionScreen(
 
             // Connected TV Section
             if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                val serverName = (connectionState as WebSocketClient.ConnectionState.Connected).serverName
+                val connected = connectionState as WebSocketClient.ConnectionState.Connected
+                val serverName = connected.serverName
                 item {
                     Text(
                         text = "Connected TV",
@@ -189,9 +199,26 @@ fun ConnectionScreen(
                                     )
                                     if (tvDevice != null) {
                                         Text(
-                                            text = "${tvDevice?.ip}:${tvDevice?.port}",
+                                            text = "${tvDevice?.ip}:${if (connected.secure) (tvDevice?.wssPort ?: tvDevice?.port) else tvDevice?.port}",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (connected.secure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp),
+                                            tint = if (connected.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
+                                        )
+                                        Text(
+                                            text = if (connected.secure) "Secure (wss)" else "Not secure (ws)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (connected.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
                                         )
                                     }
                                 }

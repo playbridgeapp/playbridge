@@ -107,7 +107,7 @@ class ServerService : Service() {
         return START_STICKY
     }
 
-    private fun registerNsdService(port: Int) {
+    private fun registerNsdService(port: Int, wssPort: Int?) {
         if (registrationListener != null) return // Already registered
 
         val deviceName = android.provider.Settings.Global.getString(
@@ -124,6 +124,14 @@ class ServerService : Service() {
                 serviceType = com.playbridge.shared.protocol.NsdConstants.SERVICE_TYPE
                 setPort(port)
                 setAttribute("uuid", deviceId)
+                // Advertise wss_port only when the TLS listener actually bound, so
+                // senders don't get stranded preferring a wss port that isn't up.
+                if (wssPort != null) {
+                    setAttribute(
+                        com.playbridge.shared.protocol.NsdConstants.KEY_WSS_PORT,
+                        wssPort.toString()
+                    )
+                }
                 if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
                     setAttribute("custom_ip", preferredIp)
                 }
@@ -191,6 +199,8 @@ class ServerService : Service() {
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val port = pairingStore.serverPort.first()
             val ip = getLocalIpAddress(applicationContext) ?: "unknown"
+            val allowInsecure = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                .getBoolean("allow_insecure_ws", false)
 
             bluetoothServer = BluetoothServer(applicationContext) { command ->
                 handleMessage(command)
@@ -199,6 +209,7 @@ class ServerService : Service() {
             }
 
             val subtitleDir = java.io.File(cacheDir, "subtitles").also { it.mkdirs() }
+            val tlsDir = java.io.File(filesDir, "tls").also { it.mkdirs() }
             webSocketServer = WebSocketServer(
                 port = port,
                 isTokenAuthorized = { token -> pairingStore.isTokenAuthorized(token) },
@@ -215,12 +226,14 @@ class ServerService : Service() {
                     )
                     newToken
                 },
-                subtitleDir = subtitleDir
+                subtitleDir = subtitleDir,
+                tlsDir = tlsDir,
+                allowInsecure = allowInsecure,
+                // Register NSD once the wss bind result is known, advertising
+                // wss_port only if it actually came up.
+                onWssReady = { wssPort -> registerNsdService(port, wssPort) },
             ).also { server ->
                 server.start()
-
-                // Register NSD service
-                registerNsdService(port)
 
                 _serverInfo.value = ServerInfo(ip = ip, port = port, token = "")
 

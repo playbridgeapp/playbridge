@@ -14,6 +14,7 @@ struct PairingRequest {
 // MARK: - Server Logic
 class WebSocketServer: ObservableObject {
     private var listener: NWListener?
+    private var tlsListener: NWListener?
     private var connectedConnections: [NWConnection] = []
     private var historyStore: HistoryStore?
     var playlistStore: PlaylistStore?
@@ -25,6 +26,8 @@ class WebSocketServer: ObservableObject {
     @Published var connectedCount: Int = 0
     @Published var localIP: String = "0.0.0.0"
     @Published var serverState: String = "Stopped"
+    // Bound wss:// port (the port external senders connect to). Nil until TLS starts.
+    @Published var wssPort: UInt16?
 
     var deviceName: String { UIDevice.current.name }
     private let authorizedTokensKey = "pb_authorized_tokens"
@@ -35,6 +38,10 @@ class WebSocketServer: ObservableObject {
     private var keepaliveTimer: Timer?
     private var restartWork: DispatchWorkItem?
     private var restartAttempts = 0
+
+    /// SPKI pin of our TLS cert, sent to senders at pairing. Nil until the
+    /// wss:// listener starts.
+    private var certFingerprint: String?
 
     private var deviceUUID: String {
         if let uuid = UserDefaults.standard.string(forKey: deviceUUIDKey) { return uuid }
@@ -86,27 +93,68 @@ class WebSocketServer: ObservableObject {
         if serverState != "Ready to Connect" { restart() }
     }
 
-    func start(port: UInt16 = 8765) {
-        let tcpOptions = NWProtocolTCP.Options()
-        tcpOptions.enableKeepalive = true
-        tcpOptions.keepaliveIdle = 60
-        tcpOptions.keepaliveInterval = 30
-        tcpOptions.keepaliveCount = 3
-        let parameters = NWParameters(tls: nil, tcp: tcpOptions)
-        let wsOptions = NWProtocolWebSocket.Options()
-        wsOptions.autoReplyPing = true
-        parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
+    private let allowInsecureKey = "pb_allow_insecure"
 
-        do {
-            listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: port))
-            let txtDict: [String: Data] = [
-                "uuid": deviceUUID.data(using: .utf8)!,
-                "device_name": deviceName.data(using: .utf8)!,
-            ]
-            listener?.service = NWListener.Service(
-                name: deviceName, type: "_playbridge._tcp", domain: nil,
-                txtRecord: NetService.data(fromTXTRecord: txtDict))
-            listener?.stateUpdateHandler = { [weak self] state in
+    /// When false (default) the receiver serves wss:// only; ws:// is opt-in for
+    /// legacy senders that can't pin a self-signed cert.
+    var allowInsecure: Bool {
+        get { UserDefaults.standard.bool(forKey: allowInsecureKey) }
+        set { UserDefaults.standard.set(newValue, forKey: allowInsecureKey) }
+    }
+
+    func start(port: UInt16 = 8765) {
+        let wssPort = port + 1
+        let insecure = allowInsecure
+
+        // wss is the default transport. It carries the mDNS service unless ws is
+        // enabled, in which case ws carries it so legacy clients can reach 8765.
+        let tlsUp = startTLSListener(
+            port: wssPort,
+            service: insecure ? nil : makeBonjourService(wssPort: wssPort)
+        )
+
+        // ws only when explicitly opted in — no silent plaintext fallback.
+        if insecure {
+            startPlaintextListener(
+                port: port,
+                service: makeBonjourService(wssPort: tlsUp ? wssPort : nil)
+            )
+        } else if !tlsUp {
+            // Fail closed: no listener is running, so surface why.
+            DispatchQueue.main.async {
+                self.serverState = "Secure server failed — enable Allow Insecure in Settings"
+            }
+        }
+        startKeepalive()
+    }
+
+    private func makeBonjourService(wssPort: UInt16?) -> NWListener.Service {
+        var txtDict: [String: Data] = [
+            "uuid": deviceUUID.data(using: .utf8)!,
+            "device_name": deviceName.data(using: .utf8)!,
+        ]
+        if let wssPort {
+            txtDict["wss_port"] = String(wssPort).data(using: .utf8)!
+        }
+        return NWListener.Service(
+            name: deviceName, type: "_playbridge._tcp", domain: nil,
+            txtRecord: NetService.data(fromTXTRecord: txtDict))
+    }
+
+    private func makeTCPOptions() -> NWProtocolTCP.Options {
+        let tcp = NWProtocolTCP.Options()
+        tcp.enableKeepalive = true
+        tcp.keepaliveIdle = 60
+        tcp.keepaliveInterval = 30
+        tcp.keepaliveCount = 3
+        return tcp
+    }
+
+    /// The listener carrying the bonjour service is "primary" and drives the UI
+    /// serverState + restart; a secondary listener just logs.
+    private func makeStateHandler(label: String, primary: Bool) -> (NWListener.State) -> Void {
+        return { [weak self] state in
+            if primary {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     switch state {
@@ -123,13 +171,75 @@ class WebSocketServer: ObservableObject {
                     default: break
                     }
                 }
+            } else {
+                switch state {
+                case .ready: print("[\(label)] ready")
+                case .failed(let error): print("[\(label)] failed: \(error)")
+                default: break
+                }
             }
-            listener?.newConnectionHandler = { [weak self] connection in
+        }
+    }
+
+    private func startPlaintextListener(port: UInt16, service: NWListener.Service?) {
+        let parameters = NWParameters(tls: nil, tcp: makeTCPOptions())
+        let wsOptions = NWProtocolWebSocket.Options()
+        wsOptions.autoReplyPing = true
+        parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
+        do {
+            let l = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: port))
+            l.service = service
+            l.stateUpdateHandler = makeStateHandler(label: "ws", primary: service != nil)
+            l.newConnectionHandler = { [weak self] connection in
                 self?.handleNewConnection(connection)
             }
-            listener?.start(queue: .main)
-            startKeepalive()
+            l.start(queue: .main)
+            listener = l
+            print("[ws] listening on \(port)")
         } catch { print("Server error: \(error)") }
+    }
+
+    /// Starts the encrypted wss:// listener on [port], reusing the plaintext
+    /// connection handler. Returns false if the TLS identity is unavailable or
+    /// the listener fails to bind (in which case we serve ws:// only).
+    @discardableResult
+    private func startTLSListener(port: UInt16, service: NWListener.Service?) -> Bool {
+        let identity: TLSIdentity.Result
+        do {
+            identity = try TLSIdentity.loadOrCreate(commonName: deviceName)
+        } catch {
+            print("[wss] TLS identity unavailable — encrypted listener disabled: \(error)")
+            return false
+        }
+        certFingerprint = identity.fingerprint
+
+        let tlsOptions = NWProtocolTLS.Options()
+        sec_protocol_options_set_min_tls_protocol_version(
+            tlsOptions.securityProtocolOptions, .TLSv12)
+        sec_protocol_options_set_local_identity(
+            tlsOptions.securityProtocolOptions, identity.identity)
+
+        let parameters = NWParameters(tls: tlsOptions, tcp: makeTCPOptions())
+        let wsOptions = NWProtocolWebSocket.Options()
+        wsOptions.autoReplyPing = true
+        parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
+
+        do {
+            let l = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: port))
+            l.service = service
+            l.stateUpdateHandler = makeStateHandler(label: "wss", primary: service != nil)
+            l.newConnectionHandler = { [weak self] connection in
+                self?.handleNewConnection(connection)
+            }
+            l.start(queue: .main)
+            tlsListener = l
+            DispatchQueue.main.async { self.wssPort = port }
+            print("[wss] listening on \(port) (pin \(identity.fingerprint))")
+            return true
+        } catch {
+            print("[wss] listener error: \(error)")
+            return false
+        }
     }
 
     func stop() {
@@ -141,6 +251,11 @@ class WebSocketServer: ObservableObject {
         listener?.newConnectionHandler = nil
         listener?.cancel()
         listener = nil
+        tlsListener?.stateUpdateHandler = nil
+        tlsListener?.newConnectionHandler = nil
+        tlsListener?.cancel()
+        tlsListener = nil
+        certFingerprint = nil
         for connection in connectedConnections { connection.cancel() }
         connectedConnections.removeAll()
         DispatchQueue.main.async {
@@ -148,6 +263,7 @@ class WebSocketServer: ObservableObject {
             self.isAuthenticated = false
             self.pendingPairingRequest = nil
             self.serverState = "Stopped"
+            self.wssPort = nil
         }
     }
 
@@ -304,7 +420,9 @@ class WebSocketServer: ObservableObject {
         )
         savePairedDevice(device)
 
-        send(json: ["type": "pairing_approved", "token": token], to: request.connection)
+        var approved: [String: Any] = ["type": "pairing_approved", "token": token]
+        if let fp = certFingerprint { approved["certFingerprint"] = fp }
+        send(json: approved, to: request.connection)
         completeAuth(from: request.connection, token: token)
         pendingPairingRequest = nil
     }
@@ -338,7 +456,9 @@ class WebSocketServer: ObservableObject {
             self.isAuthenticated = true
             self.connectedConnections.append(connection)
             self.connectedCount = self.connectedConnections.count
-            self.send(json: ["type": "auth_response", "success": true, "token": token], to: connection)
+            var response: [String: Any] = ["type": "auth_response", "success": true, "token": token]
+            if let fp = self.certFingerprint { response["certFingerprint"] = fp }
+            self.send(json: response, to: connection)
         }
     }
 
