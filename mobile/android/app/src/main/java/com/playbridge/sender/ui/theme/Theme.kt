@@ -2,10 +2,12 @@ package com.playbridge.sender.ui.theme
 
 import android.app.Activity
 import android.content.Context
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -121,7 +123,15 @@ fun PlayBridgeTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = AppTypography,
-        content = content
-    )
+        typography = AppTypography
+    ) {
+        // Force the app font on bare Text() calls too. Without a style they use
+        // LocalTextStyle (TextStyle.Default → FontFamily.Default), which Samsung's
+        // FlipFont overrides with the system font.
+        CompositionLocalProvider(
+            LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = AppFontFamily)
+        ) {
+            content()
+        }
+    }
 }

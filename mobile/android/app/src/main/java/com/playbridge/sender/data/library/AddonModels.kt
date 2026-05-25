@@ -397,7 +397,11 @@ data class StremioVideo(
 /**
  * One horizontal row in the Home tab, representing a single addon catalog page.
  * [addonName] drives the source chip rendered beside the row title.
+ *
+ * Serializable so the assembled Home catalog list can be persisted to disk and
+ * served instantly (cache-first) on the next launch.
  */
+@Serializable
 data class AddonCatalogRow(
     val catalogName: String,     // entry.name — human-readable, e.g. "Cinemeta - Top movies"
     val addonName: String,       // addon.name — shown as the source chip, e.g. "Cinemeta"

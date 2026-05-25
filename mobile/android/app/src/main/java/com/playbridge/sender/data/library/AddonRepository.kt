@@ -109,6 +109,12 @@ class AddonRepository(
         Log.d(TAG, "Cleared stream cache for $cacheKey (and all addon-specific entries)")
     }
 
+    /** Drop all in-memory catalog pages so the next fetch goes to the network. */
+    fun clearCatalogCache() {
+        catalogCache.clear()
+        Log.d(TAG, "Cleared in-memory catalog cache")
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true

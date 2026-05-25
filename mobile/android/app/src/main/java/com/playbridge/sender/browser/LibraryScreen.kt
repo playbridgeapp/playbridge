@@ -14,6 +14,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -44,6 +46,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.animation.core.animateFloat
@@ -163,6 +167,7 @@ private fun LibraryScreenContent(
 
     // Discovery state
     val selectedGenres by viewModel.selectedGenres.collectAsState()
+    val excludedGenres by viewModel.excludedGenres.collectAsState()
     val matchAllGenres by viewModel.matchAllGenres.collectAsState()
 
     val discoveredMovies by viewModel.discoveredMovies.collectAsState()
@@ -174,10 +179,28 @@ private fun LibraryScreenContent(
     val hasMoreDiscoveredTvShows by viewModel.hasMoreDiscoveredTvShows.collectAsState()
 
     val selectedMediaType by viewModel.selectedMediaType.collectAsState()
-    val selectedSortBy by viewModel.selectedSortBy.collectAsState()
-    val selectedYear by viewModel.selectedYear.collectAsState()
+    val selectedSort by viewModel.selectedSort.collectAsState()
+    val selectedYearFrom by viewModel.selectedYearFrom.collectAsState()
+    val selectedYearTo by viewModel.selectedYearTo.collectAsState()
     val selectedLanguage by viewModel.selectedLanguage.collectAsState()
+    val selectedOriginCountry by viewModel.selectedOriginCountry.collectAsState()
     val selectedMinRating by viewModel.selectedMinRating.collectAsState()
+    val selectedMaxRating by viewModel.selectedMaxRating.collectAsState()
+    val selectedMinVotes by viewModel.selectedMinVotes.collectAsState()
+    val selectedRuntimeMin by viewModel.selectedRuntimeMin.collectAsState()
+    val selectedRuntimeMax by viewModel.selectedRuntimeMax.collectAsState()
+    val selectedWatchRegion by viewModel.selectedWatchRegion.collectAsState()
+    val selectedProviders by viewModel.selectedProviders.collectAsState()
+    val selectedMonetization by viewModel.selectedMonetization.collectAsState()
+    val watchProviders by viewModel.watchProviders.collectAsState()
+    val selectedCertification by viewModel.selectedCertification.collectAsState()
+    val selectedReleaseTypes by viewModel.selectedReleaseTypes.collectAsState()
+    val selectedTvStatuses by viewModel.selectedTvStatuses.collectAsState()
+    val selectedTvTypes by viewModel.selectedTvTypes.collectAsState()
+    val selectedKeywords by viewModel.selectedKeywords.collectAsState()
+    val keywordResults by viewModel.keywordResults.collectAsState()
+    val isSearchingKeywords by viewModel.isSearchingKeywords.collectAsState()
+    val includeAdult by viewModel.includeAdult.collectAsState()
 
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
 
@@ -193,6 +216,15 @@ private fun LibraryScreenContent(
 
     // Reset search source chip when search session ends
     LaunchedEffect(isSearching) { if (!isSearching) selectedSearchSource = "" }
+
+    // Focus the search field (and open the keyboard) when a search session starts.
+    val searchFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(isSearching) {
+        if (isSearching) {
+            delay(50) // let the TextField attach before requesting focus
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
     // Reset addon filter if the installed addons change (new addon installed, etc.)
     LaunchedEffect(catalogRows) {
         if (selectedAddonFilter != null &&
@@ -203,7 +235,6 @@ private fun LibraryScreenContent(
 
     var showFilterSheet by remember { mutableStateOf(false) }
     val selectedTab by viewModel.selectedTab.collectAsState()
-    var yearInput by remember(selectedYear) { mutableStateOf(selectedYear) }
 
     // Tracking sheet state
     var trackingTarget by remember { mutableStateOf<TrackingTarget?>(null) }
@@ -214,21 +245,29 @@ private fun LibraryScreenContent(
     // New episode detection
     val newEpisodeTmdbIds by viewModel.newEpisodeTmdbIds.collectAsState()
 
-    // Type and Sort are now inline chips — badge only counts genres + year + language + rating
+    // Badge counts every non-default filter that's currently active.
     val activeFilterCount = listOf(
+        selectedSort != "Popular",
         selectedGenres.isNotEmpty(),
-        selectedYear.isNotBlank(),
+        excludedGenres.isNotEmpty(),
+        selectedYearFrom.isNotBlank(),
+        selectedYearTo.isNotBlank(),
         selectedLanguage != null,
-        selectedMinRating > 0.0
+        selectedOriginCountry != null,
+        selectedMinRating > 0.0,
+        selectedMaxRating > 0.0,
+        selectedMinVotes > 0,
+        selectedRuntimeMin > 0,
+        selectedRuntimeMax > 0,
+        selectedProviders.isNotEmpty(),
+        selectedMonetization.isNotEmpty(),
+        selectedCertification != null,
+        selectedReleaseTypes.isNotEmpty(),
+        selectedTvStatuses.isNotEmpty(),
+        selectedTvTypes.isNotEmpty(),
+        selectedKeywords.isNotEmpty(),
+        includeAdult
     ).count { it }
-
-    // Debounce year input
-    LaunchedEffect(yearInput) {
-        if (yearInput != selectedYear) {
-            delay(500)
-            viewModel.setYear(yearInput)
-        }
-    }
 
     // Load initial data
     LaunchedEffect(Unit) {
@@ -236,93 +275,66 @@ private fun LibraryScreenContent(
     }
 
     if (showFilterSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showFilterSheet = false }
-        ) {
+        val isTv = selectedMediaType == LibraryMediaType.TV_SHOW
+        val isMovie = selectedMediaType == LibraryMediaType.MOVIE
+        var yearFromInput by remember(selectedYearFrom) { mutableStateOf(selectedYearFrom) }
+        var yearToInput by remember(selectedYearTo) { mutableStateOf(selectedYearTo) }
+        LaunchedEffect(yearFromInput) { if (yearFromInput != selectedYearFrom) { delay(500); viewModel.setYearFrom(yearFromInput) } }
+        LaunchedEffect(yearToInput) { if (yearToInput != selectedYearTo) { delay(500); viewModel.setYearTo(yearToInput) } }
+
+        ModalBottomSheet(onDismissRequest = { showFilterSheet = false }) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .padding(bottom = 16.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 32.dp)
             ) {
-                Text(
-                    "Filters",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-
-                // Type Filter
-                Text("Type", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                // Header
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val mediaTypes = listOf(
-                        LibraryMediaType.ALL to "All",
-                        LibraryMediaType.MOVIE to "Movies",
-                        LibraryMediaType.TV_SHOW to "TV Shows"
-                    )
-                    mediaTypes.forEach { (type, label) ->
-                        FilterChip(
-                            selected = selectedMediaType == type,
-                            onClick = { viewModel.setMediaType(type) },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-
-                // Sort By Filter
-                Text("Sort By", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val sortOptions = listOf(
-                        LibrarySortBy.POPULARITY_DESC to "Popular",
-                        LibrarySortBy.PRIMARY_RELEASE_DATE_DESC to "Newest"
-                    )
-                    sortOptions.forEach { (sort, label) ->
-                        FilterChip(
-                            selected = selectedSortBy == sort,
-                            onClick = { viewModel.setSortBy(sort) },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-
-                // Year filter
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Year", style = MaterialTheme.typography.titleMedium)
-
-                    OutlinedTextField(
-                        value = yearInput,
-                        onValueChange = {
-                            if (it.length <= 4) yearInput = it.filter { char -> char.isDigit() }
-                        },
-                        placeholder = { Text("YYYY") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
-                        modifier = Modifier.width(100.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        shape = CircleShape,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedBorderColor = Color.Transparent,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
+                    Text("Filters", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    if (activeFilterCount > 0) {
+                        TextButton(onClick = { viewModel.clearAllFilters() }) { Text("Clear all") }
+                    }
                 }
 
-                // Discovery by Genre
+                // Type (All / Movies / Shows) lives in the Discover header now.
+
+                // ── Sort ──
+                FilterSectionLabel("Sort by")
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val sorts = TmdbDiscoverSorts.list.filter { !(isTv && TmdbDiscoverSorts.forMovieOnly(it.label)) }
+                    items(sorts) { sort ->
+                        FilterChip(
+                            selected = selectedSort == sort.label,
+                            onClick = { viewModel.setSort(sort.label) },
+                            label = { Text(sort.label) }
+                        )
+                    }
+                }
+
+                // ── Year range ──
+                FilterSectionLabel("Year range")
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    YearField(yearFromInput, "From") { yearFromInput = it }
+                    Text("–", style = MaterialTheme.typography.bodyLarge)
+                    YearField(yearToInput, "To") { yearToInput = it }
+                }
+
+                // ── Genres (tap = include, long-press = exclude) ──
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -330,7 +342,7 @@ private fun LibraryScreenContent(
                     if (selectedGenres.size > 1) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                if (matchAllGenres) "Match All" else "Match Any",
+                                if (matchAllGenres) "Match all" else "Match any",
                                 style = MaterialTheme.typography.labelMedium,
                                 modifier = Modifier.padding(end = 8.dp)
                             )
@@ -342,69 +354,316 @@ private fun LibraryScreenContent(
                         }
                     }
                 }
-
+                Text(
+                    "Tap to include · long-press to exclude",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
                 LazyHorizontalGrid(
-                    rows = GridCells.Fixed(2),
-                    modifier = Modifier.height(100.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    rows = GridCells.Fixed(3),
+                    modifier = Modifier.height(150.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    gridItems(TmdbCommonGenres.list) { genre ->
-                        val isSelected = selectedGenres.contains(genre.id)
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { viewModel.toggleGenre(genre.id) },
-                            label = { Text(genre.name) },
-                            leadingIcon = if (isSelected) {
-                                {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(FilterChipDefaults.IconSize)
-                                    )
-                                }
-                            } else null
+                    gridItems(TmdbDiscoverGenres.list) { genre ->
+                        GenreChip(
+                            name = genre.name,
+                            included = genre.name in selectedGenres,
+                            excluded = genre.name in excludedGenres,
+                            onInclude = { viewModel.toggleGenre(genre.name) },
+                            onExclude = { viewModel.toggleExcludedGenre(genre.name) }
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(Modifier.height(16.dp))
 
-                // Language Filter
-                Text("Language", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                // ── Keywords (search TMDB, filter by with_keywords) ──
+                var keywordQuery by remember { mutableStateOf("") }
+                LaunchedEffect(keywordQuery) { viewModel.searchKeywords(keywordQuery) }
+                FilterSectionLabel("Keywords")
+                OutlinedTextField(
+                    value = keywordQuery,
+                    onValueChange = { keywordQuery = it },
+                    placeholder = { Text("Search keywords… (e.g. dystopia)") },
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (isSearchingKeywords) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else if (keywordQuery.isNotEmpty()) {
+                            IconButton(onClick = { keywordQuery = ""; viewModel.clearKeywordResults() }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = CircleShape,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+                // Search results — tap to add
+                if (keywordResults.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(keywordResults, key = { it.id }) { kw ->
+                            FilterChip(
+                                selected = false,
+                                onClick = {
+                                    viewModel.addKeyword(kw)
+                                    keywordQuery = ""
+                                },
+                                label = { Text(kw.name) },
+                                leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+                            )
+                        }
+                    }
+                }
+                // Selected keywords — tap to remove
+                if (selectedKeywords.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(selectedKeywords, key = { it.id }) { kw ->
+                            InputChip(
+                                selected = true,
+                                onClick = { viewModel.removeKeyword(kw.id) },
+                                label = { Text(kw.name) },
+                                trailingIcon = { Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // ── Language ──
+                FilterSectionLabel("Original language")
                 LazyRow(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     item {
-                        FilterChip(
-                            selected = selectedLanguage == null,
-                            onClick = { viewModel.setLanguage(null) },
-                            label = { Text("All") }
-                        )
+                        FilterChip(selected = selectedLanguage == null, onClick = { viewModel.setLanguage(null) }, label = { Text("All") })
                     }
                     items(TmdbLanguages.list) { language ->
                         FilterChip(
                             selected = selectedLanguage == language.code,
-                            onClick = { viewModel.setLanguage(language.code) },
+                            onClick = { viewModel.setLanguage(if (selectedLanguage == language.code) null else language.code) },
                             label = { Text(language.name) }
                         )
                     }
                 }
 
-                // Minimum Rating Filter
-                Text("Minimum Rating", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                // ── Origin country ──
+                FilterSectionLabel("Origin country")
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        FilterChip(selected = selectedOriginCountry == null, onClick = { viewModel.setOriginCountry(null) }, label = { Text("Any") })
+                    }
+                    items(TmdbDiscoverCountries.list) { country ->
+                        FilterChip(
+                            selected = selectedOriginCountry == country.code,
+                            onClick = { viewModel.setOriginCountry(if (selectedOriginCountry == country.code) null else country.code) },
+                            label = { Text(country.name) }
+                        )
+                    }
+                }
+
+                // ── Rating range ──
+                FilterSectionLabel("Minimum rating")
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(0.0 to "Any", 5.0 to "5+", 6.0 to "6+", 7.0 to "7+", 8.0 to "8+").forEach { (v, label) ->
+                        FilterChip(selected = selectedMinRating == v, onClick = { viewModel.setMinRating(v) }, label = { Text(label) })
+                    }
+                }
+                FilterSectionLabel("Maximum rating")
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val ratings = listOf(0.0 to "Any", 5.0 to "5+", 6.0 to "6+", 7.0 to "7+", 8.0 to "8+")
-                    ratings.forEach { (valRating, label) ->
+                    listOf(0.0 to "Any", 6.0 to "≤6", 7.0 to "≤7", 8.0 to "≤8", 9.0 to "≤9").forEach { (v, label) ->
+                        FilterChip(selected = selectedMaxRating == v, onClick = { viewModel.setMaxRating(v) }, label = { Text(label) })
+                    }
+                }
+
+                // ── Minimum votes ──
+                FilterSectionLabel("Minimum votes")
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(listOf(0 to "Any", 50 to "50+", 100 to "100+", 500 to "500+", 1000 to "1000+")) { (v, label) ->
+                        FilterChip(selected = selectedMinVotes == v, onClick = { viewModel.setMinVotes(v) }, label = { Text(label) })
+                    }
+                }
+
+                // ── Runtime ──
+                FilterSectionLabel("Min runtime (min)")
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(listOf(0 to "Any", 30 to "30+", 60 to "60+", 90 to "90+", 120 to "120+")) { (v, label) ->
+                        FilterChip(selected = selectedRuntimeMin == v, onClick = { viewModel.setRuntimeMin(v) }, label = { Text(label) })
+                    }
+                }
+                FilterSectionLabel("Max runtime (min)")
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(listOf(0 to "Any", 90 to "≤90", 120 to "≤120", 150 to "≤150", 180 to "≤180")) { (v, label) ->
+                        FilterChip(selected = selectedRuntimeMax == v, onClick = { viewModel.setRuntimeMax(v) }, label = { Text(label) })
+                    }
+                }
+
+                // ── Watch providers ──
+                FilterSectionLabel("Streaming region")
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(TmdbWatchRegions.list) { region ->
                         FilterChip(
-                            selected = selectedMinRating == valRating,
-                            onClick = { viewModel.setMinRating(valRating) },
-                            label = { Text(label) }
+                            selected = selectedWatchRegion == region.code,
+                            onClick = { viewModel.setWatchRegion(region.code) },
+                            label = { Text(region.code) }
                         )
+                    }
+                }
+                if (watchProviders.isNotEmpty()) {
+                    FilterSectionLabel("Available on")
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(watchProviders) { provider ->
+                            FilterChip(
+                                selected = provider.providerId in selectedProviders,
+                                onClick = { viewModel.toggleProvider(provider.providerId) },
+                                label = { Text(provider.providerName) },
+                                leadingIcon = provider.logoUrl?.let { url ->
+                                    {
+                                        AsyncImage(
+                                            model = url,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(FilterChipDefaults.IconSize).clip(RoundedCornerShape(4.dp))
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+                FilterSectionLabel("Monetization")
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(TmdbMonetizationTypes.list) { type ->
+                        FilterChip(
+                            selected = type in selectedMonetization,
+                            onClick = { viewModel.toggleMonetization(type) },
+                            label = { Text(type.replaceFirstChar { it.uppercase() }) }
+                        )
+                    }
+                }
+
+                // ── Include adult content ──
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Include adult content", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Show titles marked adult on TMDB",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = includeAdult,
+                        onCheckedChange = { viewModel.setIncludeAdult(it) }
+                    )
+                }
+
+                // ── Movie-only: certification + release type ──
+                if (!isTv) {
+                    FilterSectionLabel("Certification (US)")
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            FilterChip(selected = selectedCertification == null, onClick = { viewModel.setCertification(null) }, label = { Text("Any") })
+                        }
+                        items(TmdbMovieCertifications.list) { cert ->
+                            FilterChip(
+                                selected = selectedCertification == cert,
+                                onClick = { viewModel.setCertification(if (selectedCertification == cert) null else cert) },
+                                label = { Text(cert) }
+                            )
+                        }
+                    }
+                    FilterSectionLabel("Release type")
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(TmdbReleaseTypes.list) { rt ->
+                            FilterChip(
+                                selected = rt.value in selectedReleaseTypes,
+                                onClick = { viewModel.toggleReleaseType(rt.value) },
+                                label = { Text(rt.label) }
+                            )
+                        }
+                    }
+                }
+
+                // ── TV-only: status + type ──
+                if (!isMovie) {
+                    FilterSectionLabel("TV status")
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(TmdbTvStatuses.list) { status ->
+                            FilterChip(
+                                selected = status.value in selectedTvStatuses,
+                                onClick = { viewModel.toggleTvStatus(status.value) },
+                                label = { Text(status.label) }
+                            )
+                        }
+                    }
+                    FilterSectionLabel("TV type")
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(TmdbTvTypes.list) { type ->
+                            FilterChip(
+                                selected = type.value in selectedTvTypes,
+                                onClick = { viewModel.toggleTvType(type.value) },
+                                label = { Text(type.label) }
+                            )
+                        }
                     }
                 }
             }
@@ -418,16 +677,18 @@ private fun LibraryScreenContent(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         floatingActionButtonPosition = androidx.compose.material3.FabPosition.End,
         floatingActionButton = {
-            if (selectedTab == 1 && !isSearching) {
+            // Remote shortcut — available on every library tab when a TV is connected.
+            val onRemote = onRemoteClick
+            if (onRemote != null && !isSearching) {
                 FloatingActionButton(
-                    onClick = { showFilterSheet = true },
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                    onClick = onRemote,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 ) {
-                    BadgedBox(badge = {
-                        if (activeFilterCount > 0) Badge { Text("$activeFilterCount") }
-                    }) {
-                        Icon(Icons.Default.FilterList, "Filter")
-                    }
+                    Icon(
+                        Icons.Default.SettingsRemote,
+                        contentDescription = "Remote"
+                    )
                 }
             }
         },
@@ -460,19 +721,41 @@ private fun LibraryScreenContent(
                                     focusedIndicatorColor = Color.Transparent,
                                     unfocusedIndicatorColor = Color.Transparent
                                 ),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(searchFocusRequester)
                             )
                         } else {
-                            Text(
-                                text = when (selectedTab) {
-                                    0 -> "Home"
-                                    1 -> "Discover"
-                                    2 -> "Library"
-                                    else -> "Library"
-                                },
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
-                            )
+                            // Persistent search bar — fills the header and makes search a
+                            // primary, always-visible action instead of a hidden icon.
+                            Surface(
+                                onClick = { viewModel.setIsSearching(true) },
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(42.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 14.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = "Search",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(
+                                        text = "Search movies & shows…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
                         }
                     },
                 navigationIcon = {
@@ -524,9 +807,7 @@ private fun LibraryScreenContent(
                                 }
                             }
                         }
-                        IconButton(onClick = { viewModel.setIsSearching(true) }) {
-                            Icon(Icons.Default.Search, "Search")
-                        }
+                        // Search now lives in the persistent search bar in the title slot.
                     } // closes if
                 } // closes actions
             ) // closes TopAppBar
@@ -637,7 +918,7 @@ private fun LibraryScreenContent(
             SearchHistoryList(
                 history = searchHistory,
                 contentPadding = PaddingValues(
-                    top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
+                    top = innerPadding.calculateTopPadding() + 8.dp,
                     bottom = contentBottomPadding + 8.dp,
                     start = 16.dp,
                     end = 16.dp
@@ -675,7 +956,7 @@ private fun LibraryScreenContent(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(
-                                top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 4.dp,
+                                top = innerPadding.calculateTopPadding() + 4.dp,
                                 bottom = 4.dp
                             ),
                         contentPadding = PaddingValues(horizontal = 16.dp),
@@ -703,7 +984,7 @@ private fun LibraryScreenContent(
                     results = filteredAddon,
                     contentPadding = PaddingValues(
                         top = if (addonSources.isNotEmpty()) 4.dp
-                               else innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
+                               else innerPadding.calculateTopPadding() + 8.dp,
                         bottom = contentBottomPadding + 8.dp,
                         start = 8.dp,
                         end = 8.dp
@@ -756,22 +1037,30 @@ private fun LibraryScreenContent(
                 if (!isConfigured) {
                     ApiKeyPrompt()
                 } else {
-                    Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding() + WindowInsets.statusBars.asPaddingValues().calculateTopPadding())) {
-                        DiscoverGrid(
-                            movies = discoveredMovies,
-                            tvShows = discoveredTvShows,
-                            gridState = viewModel.discoverGridState,
+                    Column(modifier = Modifier.fillMaxSize().padding(top = innerPadding.calculateTopPadding())) {
+                        DiscoverTypeHeader(
                             selectedMediaType = selectedMediaType,
-                            isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
-                            hasMoreMovies = hasMoreDiscoveredMovies,
-                            isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
-                            hasMoreTvShows = hasMoreDiscoveredTvShows,
-                            isDiscoveryLoading = isDiscoveryLoading,
-                            onMovieClick = onMovieClick,
-                            onTvShowClick = onTvShowClick,
-                            onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
-                            onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() }
+                            onTypeSelect = { viewModel.setMediaType(it) },
+                            activeFilterCount = activeFilterCount,
+                            onFilterClick = { showFilterSheet = true }
                         )
+                        Box(modifier = Modifier.weight(1f)) {
+                            DiscoverGrid(
+                                movies = discoveredMovies,
+                                tvShows = discoveredTvShows,
+                                gridState = viewModel.discoverGridState,
+                                selectedMediaType = selectedMediaType,
+                                isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
+                                hasMoreMovies = hasMoreDiscoveredMovies,
+                                isLoadingMoreTvShows = isLoadingMoreDiscoveredTvShows,
+                                hasMoreTvShows = hasMoreDiscoveredTvShows,
+                                isDiscoveryLoading = isDiscoveryLoading,
+                                onMovieClick = onMovieClick,
+                                onTvShowClick = onTvShowClick,
+                                onLoadMoreMovies = { viewModel.loadMoreDiscoveredMovies() },
+                                onLoadMoreTvShows = { viewModel.loadMoreDiscoveredTvShows() }
+                            )
+                        }
                     }
                 }
             } else {
@@ -788,7 +1077,10 @@ private fun LibraryScreenContent(
                 LazyColumn(
                     state = viewModel.mainListState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = innerPadding.calculateTopPadding(), bottom = contentBottomPadding)
+                    contentPadding = PaddingValues(
+                        top = innerPadding.calculateTopPadding(),
+                        bottom = contentBottomPadding
+                    )
                 ) {
                     // Addon filter chips — shown when more than one addon is installed
                     if (addonNames.size > 1) {
@@ -908,6 +1200,50 @@ private fun LibraryScreenContent(
             }
         }
     }
+    }
+}
+
+/**
+ * Discover header row: a segmented All / Movies / Shows type selector with the
+ * Filter button (badged with the active filter count) pinned to its right.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DiscoverTypeHeader(
+    selectedMediaType: LibraryMediaType,
+    onTypeSelect: (LibraryMediaType) -> Unit,
+    activeFilterCount: Int,
+    onFilterClick: () -> Unit,
+) {
+    val types = listOf(
+        LibraryMediaType.ALL to "All",
+        LibraryMediaType.MOVIE to "Movies",
+        LibraryMediaType.TV_SHOW to "Shows"
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
+            types.forEachIndexed { index, (type, label) ->
+                SegmentedButton(
+                    selected = selectedMediaType == type,
+                    onClick = { onTypeSelect(type) },
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = types.size),
+                    label = { Text(label) }
+                )
+            }
+        }
+        IconButton(onClick = onFilterClick) {
+            BadgedBox(badge = {
+                if (activeFilterCount > 0) Badge { Text("$activeFilterCount") }
+            }) {
+                Icon(Icons.Default.FilterList, contentDescription = "Filters")
+            }
+        }
     }
 }
 
@@ -1720,6 +2056,83 @@ private fun SearchHistoryItem(
                 modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+// ==================== Discover filter sheet helpers ====================
+
+@Composable
+private fun FilterSectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.padding(bottom = 8.dp)
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun YearField(value: String, placeholder: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { if (it.length <= 4) onChange(it.filter { c -> c.isDigit() }) },
+        placeholder = { Text(placeholder) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+            imeAction = ImeAction.Done
+        ),
+        modifier = Modifier.width(110.dp),
+        textStyle = MaterialTheme.typography.bodyMedium,
+        shape = CircleShape,
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            unfocusedBorderColor = Color.Transparent,
+            focusedBorderColor = MaterialTheme.colorScheme.primary
+        )
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GenreChip(
+    name: String,
+    included: Boolean,
+    excluded: Boolean,
+    onInclude: () -> Unit,
+    onExclude: () -> Unit
+) {
+    val container = when {
+        included -> MaterialTheme.colorScheme.primary
+        excluded -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val content = when {
+        included -> MaterialTheme.colorScheme.onPrimary
+        excluded -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(
+        shape = CircleShape,
+        color = container,
+        modifier = Modifier.combinedClickable(onClick = onInclude, onLongClick = onExclude)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            if (included || excluded) {
+                Icon(
+                    imageVector = if (excluded) Icons.Default.Close else Icons.Default.Check,
+                    contentDescription = null,
+                    tint = content,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(name, color = content, style = MaterialTheme.typography.labelLarge, maxLines = 1)
         }
     }
 }

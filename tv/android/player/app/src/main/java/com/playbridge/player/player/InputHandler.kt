@@ -27,15 +27,60 @@ class InputHandler(
     fun handleControlCommand(command: String?) {
         Log.i(TAG, "Control command: $command")
 
+        // Absolute seek from the phone seekbar: "seek_to:<positionMs>"
+        if (command != null && command.startsWith("seek_to:")) {
+            val pos = command.substringAfter("seek_to:").toLongOrNull()
+            if (pos != null) {
+                val dur = engine.duration
+                val clamped = if (dur > 0) pos.coerceIn(0L, dur) else pos.coerceAtLeast(0L)
+                engine.seekTo(clamped)
+                controls.showSeekUI()
+            }
+            return
+        }
+
+        // Settings commands routed through the controls VM (engine-agnostic):
+        // playback speed, audio boost, subtitle offset, external subtitle.
+        if (command != null) {
+            when {
+                command.startsWith("speed:") -> {
+                    command.removePrefix("speed:").toFloatOrNull()?.let { controls.setPlaybackSpeed(it) }
+                    return
+                }
+                command.startsWith("sub_offset:") -> {
+                    command.removePrefix("sub_offset:").toLongOrNull()?.let { controls.adjustSubtitleDelay(it) }
+                    return
+                }
+                command.startsWith("add_subtitle:") -> {
+                    val url = command.removePrefix("add_subtitle:")
+                    if (url.isNotBlank()) controls.loadExternalSubtitle(url)
+                    return
+                }
+                command == "audio_boost" -> {
+                    controls.toggleAudioBoost()
+                    return
+                }
+            }
+        }
+
         when (command) {
-            "pause" -> engine.pause()
-            "play" -> engine.play()
+            // Drive play/pause through the controls VM so the on-screen overlay
+            // matches the play state: playing hides controls, pausing shows them —
+            // regardless of whether the command came from the phone or the TV remote.
+            "pause" -> {
+                engine.pause()
+                controls.setPlaying(false)
+                controls.showControls(full = true, playing = false)
+            }
+            "play" -> {
+                engine.play()
+                controls.setPlaying(true)
+                controls.hideControls()
+            }
             "stop" -> {
                 activity.finish()
             }
-            "toggle" -> {
-                if (engine.isPlaying) engine.pause() else engine.play()
-            }
+            "toggle" -> controls.togglePlayPause()
             "seek_back" -> {
                 val newPos = maxOf(0L, engine.currentPosition - 10_000L)
                 engine.seekTo(newPos)

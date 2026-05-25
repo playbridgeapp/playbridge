@@ -127,9 +127,11 @@ fun PlaylistPickerDialog(
                             color = if (isCurrent) Color(0xFF00D9FF) else Color.Gray
                         )
 
-                        // Title
+                        // Title — drop the redundant series-name prefix (e.g.
+                        // "Breaking Bad S2E5 - Breakage" -> "S2E5 - Breakage") so it
+                        // doesn't cut off in this narrow side panel.
                         Text(
-                            text = item.title ?: "Episode ${index + 1}",
+                            text = shortEpisodeLabel(item.title) ?: "Episode ${index + 1}",
                             fontSize = 14.sp,
                             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                             color = when {
@@ -149,4 +151,22 @@ fun PlaylistPickerDialog(
 
     // Back handler to dismiss
     androidx.activity.compose.BackHandler { onDismiss() }
+}
+
+private val EPISODE_MARKER = Regex("""S\d+\s*E\d+.*""", RegexOption.IGNORE_CASE)
+
+/**
+ * Drop the redundant series-name prefix from an episode title for this narrow
+ * side panel, e.g. "Breaking Bad S2E5 - Breakage" -> "S2E5 - Breakage". A leading
+ * "[FAILED]" marker is preserved; null/markerless titles pass through unchanged.
+ */
+private fun shortEpisodeLabel(title: String?): String? {
+    if (title == null) return null
+    val failedPrefix = "[FAILED] "
+    return if (title.startsWith(failedPrefix)) {
+        val rest = title.removePrefix(failedPrefix)
+        failedPrefix + (EPISODE_MARKER.find(rest)?.value ?: rest)
+    } else {
+        EPISODE_MARKER.find(title)?.value ?: title
+    }
 }

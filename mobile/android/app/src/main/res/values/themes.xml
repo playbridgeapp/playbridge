@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.PlayBridge" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.PlayBridge" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Pin the bundled font on framework views (toasts, dialogs) so they
+             don't fall back to the system font that Samsung's FlipFont overrides. -->
+        <item name="android:fontFamily">@font/space_grotesk</item>
+    </style>
 </resources>

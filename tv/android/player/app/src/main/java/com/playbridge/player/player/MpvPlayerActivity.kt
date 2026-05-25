@@ -293,21 +293,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         },
                         onSettingsTabSelected = { controlsViewModel.showSettings(it) },
                         onTrackSelected = { track ->
-                            when (track.type) {
-                                "audio" -> engine?.setAudioTrack(track.id)
-                                "video" -> engine?.setVideoTrack(track.id)
-                                "sub" -> {
-                                    currentSubtitleUrl = null
-                                    if (track.id == "none") engine?.setSubtitleTrack(null)
-                                    else engine?.setSubtitleTrack(track.id)
-                                }
-                                "external_sub" -> {
-                                    engine?.setSubtitleTrack(null)
-                                    currentSubtitleUrl = track.id
-                                    controlsViewModel.loadExternalSubtitle(track.id, currentHeaders)
-                                }
-                            }
-                            updateUnifiedTracks()
+                            applyMpvTrackSelection(track.type, track.id)
                         },
                         onSpeedSelected = { speed ->
                             engine?.setPlaybackSpeed(speed)
@@ -443,6 +429,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             addAction(ServerService.ACTION_QUEUE_ADD)
             addAction(ServerService.ACTION_PLAYLIST_JUMP)
             addAction(ServerService.ACTION_PLAY)
+            addAction(ServerService.ACTION_RESYNC)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(remoteReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -491,6 +478,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun onStart() {
         super.onStart()
+        // Stream now-playing status + available tracks to the phone (shared base impl).
+        startNowPlayingBroadcasts(controlsViewModel)
     }
 
     override fun onPause() {
@@ -708,7 +697,21 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 }
                 ServerService.ACTION_CONTROL -> {
                     val cmd = intent.getStringExtra(ServerService.EXTRA_COMMAND)
-                    handleControlCommand(cmd)
+                    when {
+                        cmd?.startsWith("audio_track:") == true ->
+                            applyMpvTrackSelection("audio", cmd.removePrefix("audio_track:"))
+                        cmd?.startsWith("sub_track:") == true -> {
+                            val id = cmd.removePrefix("sub_track:")
+                            val type = controlsViewModel.controlsState.value.subtitleTracks
+                                .firstOrNull { it.id == id }?.type ?: "sub"
+                            applyMpvTrackSelection(type, id)
+                        }
+                        cmd?.startsWith("scaling:") == true ->
+                            controlsViewModel.setVideoScaling(cmd.removePrefix("scaling:"))
+                        cmd?.startsWith("switch_player:") == true ->
+                            switchPlayer(cmd.removePrefix("switch_player:"))
+                        else -> handleControlCommand(cmd)
+                    }
                 }
                 ServerService.ACTION_QUEUE_ADD -> {
                     ServerService.drainPendingQueueItems().forEach { payload ->
@@ -724,6 +727,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         FileLogger.i(TAG, "Playlist jump to index: $index")
                         playItemAtIndex(index)
                     }
+                }
+                ServerService.ACTION_RESYNC -> {
+                    broadcastNowPlayingResync(controlsViewModel)
+                    broadcastPlaylistStatus()
                 }
                 ServerService.ACTION_PLAY -> {
                     val url = intent.getStringExtra(ServerService.EXTRA_URL)
@@ -760,6 +767,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         // Show playlist button when a playlist is active
         controlsViewModel.setPlaylistVisible(hasPlaylist)
+
+        // Sync the phone's episode list to this new content — refreshes it for a
+        // new playlist, or clears it when a single video replaces an earlier one.
+        broadcastPlaylistStatus()
 
         // Show streams button - currently disabled in dumb mode
 
@@ -1091,8 +1102,31 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         playItemAtIndex(playlistIndex + 1)
     }
 
+    /**
+     * Apply an audio/subtitle/video track selection by its [UnifiedTrack] id.
+     * Shared by the TV's own track dialog and phone `audio_track:`/`sub_track:` commands.
+     */
+    private fun applyMpvTrackSelection(type: String, id: String) {
+        when (type) {
+            "audio" -> engine?.setAudioTrack(id)
+            "video" -> engine?.setVideoTrack(id)
+            "sub" -> {
+                currentSubtitleUrl = null
+                if (id == "none") engine?.setSubtitleTrack(null)
+                else engine?.setSubtitleTrack(id)
+            }
+            "external_sub" -> {
+                engine?.setSubtitleTrack(null)
+                currentSubtitleUrl = id
+                controlsViewModel.loadExternalSubtitle(id, currentHeaders)
+            }
+        }
+        updateUnifiedTracks()
+    }
+
     private fun broadcastPlaylistStatus() {
-        if (playlistItems.isEmpty()) return
+        // Always send (even empty) so the phone clears a stale episode list when
+        // single/non-playlist content replaces an earlier playlist.
         try {
             val itemsArray = org.json.JSONArray()
             playlistItems.forEachIndexed { index, item ->
@@ -1104,7 +1138,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             val statusJson = org.json.JSONObject().apply {
                 put("type", "playlist_status")
                 put("items", itemsArray)
-                put("currentIndex", playlistIndex)
+                put("currentIndex", if (playlistItems.isEmpty()) 0 else playlistIndex)
                 put("totalCount", playlistItems.size)
             }.toString()
             ServerService.broadcastPlaylistStatus(statusJson)

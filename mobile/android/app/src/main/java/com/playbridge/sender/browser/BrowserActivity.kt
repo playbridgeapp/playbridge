@@ -339,6 +339,7 @@ class BrowserActivity : ComponentActivity() {
             val addonDao = remember { database.addonDao() }
             val addonRepository = remember { com.playbridge.sender.data.library.AddonRepository(addonDao, cacheDir) }
             val subtitleService = remember { com.playbridge.sender.data.library.StremioSubtitleService(addonRepository) }
+            val tmdbRepository = remember { com.playbridge.sender.data.library.TmdbRepository(this@BrowserActivity) }
             val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
 
             // Suggestions State
@@ -741,6 +742,13 @@ class BrowserActivity : ComponentActivity() {
             var tvActiveContext by remember { mutableStateOf("idle") } // "player", "browser", or "idle"
             // TV playlist state - updated via playlist_status messages from TV
             var tvPlaylistState by remember { mutableStateOf<PlaylistUiState?>(null) }
+            // TV playback status (state/position/duration/title) - updated via status messages from TV
+            var tvPlayback by remember { mutableStateOf<TvPlaybackStatus?>(null) }
+            // Available audio/subtitle tracks on the TV - updated via tracks messages
+            var tvAudioTracks by remember { mutableStateOf<List<MediaTrack>>(emptyList()) }
+            var tvSubtitleTracks by remember { mutableStateOf<List<MediaTrack>>(emptyList()) }
+            // TV player settings (speed/scaling/audio-boost/subtitle-offset/filter/engine)
+            var tvPlayerSettings by remember { mutableStateOf(TvPlayerSettings()) }
             // Now Playing context - set when a playlist play starts from LibraryDetailScreen
             var nowPlayingTvId by remember { mutableStateOf<Int?>(null) }
             var nowPlayingSeason by remember { mutableStateOf<Int?>(null) }
@@ -932,6 +940,19 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
+            // On (re)connect, ask the TV to re-broadcast its now-playing snapshot
+            // (context + playlist + tracks + status) so the remote screen repopulates
+            // after an app restart — these are otherwise only sent on change events.
+            LaunchedEffect(Unit) {
+                connectionViewModel.connectionState.collect { state ->
+                    if (state is WebSocketClient.ConnectionState.Connected) {
+                        connectionViewModel.webSocketClient.send(
+                            com.playbridge.shared.protocol.createContextQueryJson()
+                        )
+                    }
+                }
+            }
+
             // Listen for context messages from TV
             LaunchedEffect(Unit) {
                 launch {
@@ -944,14 +965,70 @@ class BrowserActivity : ComponentActivity() {
                                     // Clear playlist state when TV goes idle
                                     if (tvActiveContext == "idle") {
                                         tvPlaylistState = null
+                                        tvPlayback = null
+                                        tvAudioTracks = emptyList()
+                                        tvSubtitleTracks = emptyList()
+                                        tvPlayerSettings = TvPlayerSettings()
                                         nowPlayingTvId = null
                                         nowPlayingSeason = null
                                     }
                                 }
                                 "playlist_status" -> {
+                                    val itemsJson = json.optJSONArray("items")
+                                    val episodes = buildList {
+                                        if (itemsJson != null) {
+                                            for (i in 0 until itemsJson.length()) {
+                                                val o = itemsJson.optJSONObject(i) ?: continue
+                                                add(
+                                                    PlaylistEpisode(
+                                                        index = o.optInt("index", i),
+                                                        title = o.optString("title", "Item ${i + 1}")
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
                                     tvPlaylistState = PlaylistUiState(
                                         currentIndex = json.optInt("currentIndex", 0),
-                                        totalCount = json.optInt("totalCount", 0)
+                                        totalCount = json.optInt("totalCount", 0),
+                                        items = episodes
+                                    )
+                                }
+                                "status" -> {
+                                    tvPlayback = TvPlaybackStatus(
+                                        state = json.optString("state", "paused"),
+                                        positionMs = json.optLong("position", 0L),
+                                        durationMs = json.optLong("duration", 0L),
+                                        title = json.optString("title", "").ifEmpty { null }
+                                    )
+                                }
+                                "tracks" -> {
+                                    fun parseTracks(arr: org.json.JSONArray?): List<MediaTrack> =
+                                        buildList {
+                                            if (arr != null) {
+                                                for (i in 0 until arr.length()) {
+                                                    val o = arr.optJSONObject(i) ?: continue
+                                                    add(
+                                                        MediaTrack(
+                                                            id = o.optString("id"),
+                                                            name = o.optString("name", "Track ${i + 1}"),
+                                                            selected = o.optBoolean("selected", false)
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    tvAudioTracks = parseTracks(json.optJSONArray("audio"))
+                                    tvSubtitleTracks = parseTracks(json.optJSONArray("subtitle"))
+                                }
+                                "player_settings" -> {
+                                    tvPlayerSettings = TvPlayerSettings(
+                                        speed = json.optDouble("speed", 1.0).toFloat(),
+                                        scaling = json.optString("scaling", "Fit"),
+                                        audioBoost = json.optBoolean("audioBoost", false),
+                                        subtitleOffsetMs = json.optLong("subtitleOffsetMs", 0L),
+                                        filter = json.optString("filter", "NONE"),
+                                        engine = json.optString("engine", "")
                                     )
                                 }
                             }
@@ -1867,100 +1944,91 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
                                         Screen.Remote -> {
-                                            val btConnectionState by connectionViewModel.bluetoothClient.connectionState.collectAsState()
-                                            var pairedDevices by remember { mutableStateOf<List<android.bluetooth.BluetoothDevice>>(emptyList()) }
-                                            var savedMac by remember { mutableStateOf<String?>(null) }
-
-                                            fun initBluetooth() {
-                                                val devices = connectionViewModel.bluetoothClient.getBondedDevices()
-                                                pairedDevices = devices
-                                                val mac = connectionViewModel.getSavedBluetoothMacForTv(tvDevice?.uuid)
-                                                savedMac = mac
-                                                if (mac != null) {
-                                                    connectionViewModel.bluetoothClient.connect(mac)
-                                                } else if (devices.size == 1) {
-                                                    val onlyMac = devices[0].address
-                                                    savedMac = onlyMac
-                                                    connectionViewModel.saveBluetoothMacForTv(tvDevice?.uuid, onlyMac)
-                                                    connectionViewModel.bluetoothClient.connect(onlyMac)
-                                                }
-                                            }
-
-                                            val btPermissionLauncher = rememberLauncherForActivityResult(
-                                                ActivityResultContracts.RequestMultiplePermissions()
-                                            ) { permissions ->
-                                                if (permissions[Manifest.permission.BLUETOOTH_CONNECT] == true && permissions[Manifest.permission.BLUETOOTH_SCAN] == true) {
-                                                    initBluetooth()
-                                                }
-                                            }
-
-                                            LaunchedEffect(Unit) {
-                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                                    btPermissionLauncher.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN))
-                                                } else {
-                                                    initBluetooth()
-                                                }
-                                            }
-
                                             BackHandler {
-                                                connectionViewModel.bluetoothClient.disconnect()
                                                 currentScreen = lastMainScreen
                                             }
                                             RemoteControlScreen(
                                                 isMediaPlaying = tvActiveContext == "player",
-                                                btConnectionState = btConnectionState,
-                                                pairedDevices = pairedDevices,
-                                                savedBluetoothMac = savedMac,
-                                                onBluetoothDeviceSelected = { macAddress ->
-                                                    savedMac = macAddress
-                                                    connectionViewModel.saveBluetoothMacForTv(tvDevice?.uuid, macAddress)
-                                                    connectionViewModel.bluetoothClient.connect(macAddress)
+                                                playbackState = tvPlayback?.state,
+                                                positionMs = tvPlayback?.positionMs ?: 0L,
+                                                durationMs = tvPlayback?.durationMs ?: 0L,
+                                                mediaTitle = tvPlayback?.title,
+                                                episodes = tvPlaylistState?.items ?: emptyList(),
+                                                currentEpisodeIndex = tvPlaylistState?.currentIndex ?: 0,
+                                                audioTracks = tvAudioTracks,
+                                                subtitleTracks = tvSubtitleTracks,
+                                                onSeekTo = { positionMs ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("seek_to:$positionMs"))
+                                                },
+                                                onJumpToEpisode = { index ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistJumpCommandJson(index))
+                                                },
+                                                onSelectAudio = { id ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("audio_track:$id"))
+                                                },
+                                                onSelectSubtitle = { id ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("sub_track:$id"))
+                                                },
+                                                playerSettings = tvPlayerSettings,
+                                                onSetSpeed = { speed ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("speed:$speed"))
+                                                },
+                                                onSetScaling = { mode ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("scaling:$mode"))
+                                                },
+                                                onToggleAudioBoost = {
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("audio_boost"))
+                                                },
+                                                onAdjustSubtitleOffset = { delta ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("sub_offset:$delta"))
+                                                },
+                                                onSetFilter = { name ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("filter:$name"))
+                                                },
+                                                onSwitchEngine = { engineId ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("switch_player:$engineId"))
+                                                },
+                                                onAddSubtitleUrl = { url ->
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("add_subtitle:$url"))
+                                                },
+                                                onSearchSubtitles = nowPlayingTvId?.let { tvId ->
+                                                    {
+                                                        val isSeries = nowPlayingSeason != null
+                                                        val imdb = if (isSeries) tmdbRepository.getTvDetails(tvId)?.imdbId
+                                                                   else tmdbRepository.getMovieDetails(tvId)?.imdbId
+                                                        if (imdb == null) emptyList()
+                                                        else {
+                                                            val streams = if (isSeries) subtitleService.getSubtitlesForEpisode(
+                                                                imdb,
+                                                                nowPlayingSeason ?: 1,
+                                                                nowPlayingEpisodeStart + (tvPlaylistState?.currentIndex ?: 0)
+                                                            ) else subtitleService.getSubtitlesForMovie(imdb)
+                                                            streams.mapNotNull { s ->
+                                                                s.url?.let { u -> SubtitleOption(s.title ?: s.name ?: u.substringAfterLast('/'), u) }
+                                                            }
+                                                        }
+                                                    }
                                                 },
                                                 onBack = {
-                                                    connectionViewModel.bluetoothClient.disconnect()
                                                     currentScreen = lastMainScreen
                                                 },
                                                 onRemoteKey = { key ->
-                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
-                                                        connectionViewModel.bluetoothClient.sendRemoteCommand(key)
-                                                    } else {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createRemoteCommandJson(key))
-                                                    }
+                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createRemoteCommandJson(key))
                                                 },
                                                 onMouseMove = { dx, dy ->
-                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
-                                                        connectionViewModel.bluetoothClient.sendMouseCommand("move", dx, dy)
-                                                    } else {
-                                                        connectionViewModel.webSocketClient.sendMouseCommand("move", dx, dy)
-                                                    }
+                                                    connectionViewModel.webSocketClient.sendMouseCommand("move", dx, dy)
                                                 },
                                                 onMouseClick = {
-                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
-                                                        connectionViewModel.bluetoothClient.sendMouseCommand("click", 0f, 0f)
-                                                    } else {
-                                                        connectionViewModel.webSocketClient.sendMouseCommand("click", 0f, 0f)
-                                                    }
+                                                    connectionViewModel.webSocketClient.sendMouseCommand("click", 0f, 0f)
                                                 },
                                                 onMouseScroll = { dx, dy ->
-                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
-                                                        connectionViewModel.bluetoothClient.sendMouseCommand("scroll", dx, dy)
-                                                    } else {
-                                                        connectionViewModel.webSocketClient.sendMouseCommand("scroll", dx, dy)
-                                                    }
+                                                    connectionViewModel.webSocketClient.sendMouseCommand("scroll", dx, dy)
                                                 },
                                                 onMouseDown = {
-                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
-                                                        connectionViewModel.bluetoothClient.sendMouseCommand("down", 0f, 0f)
-                                                    } else {
-                                                        connectionViewModel.webSocketClient.sendMouseCommand("down", 0f, 0f)
-                                                    }
+                                                    connectionViewModel.webSocketClient.sendMouseCommand("down", 0f, 0f)
                                                 },
                                                 onMouseUp = {
-                                                    if (btConnectionState is com.playbridge.sender.connection.BluetoothClient.ConnectionState.Connected) {
-                                                        connectionViewModel.bluetoothClient.sendMouseCommand("up", 0f, 0f)
-                                                    } else {
-                                                        connectionViewModel.webSocketClient.sendMouseCommand("up", 0f, 0f)
-                                                    }
+                                                    connectionViewModel.webSocketClient.sendMouseCommand("up", 0f, 0f)
                                                 },
                                                 onBrowserControl = { action ->
                                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createBrowserControlCommandJson(action))
@@ -1997,6 +2065,12 @@ class BrowserActivity : ComponentActivity() {
                                             LibraryScreen(
                                                 viewModel = libraryViewModel,
                                                 onMenuClick = { currentScreen = Screen.Dashboard },
+                                                onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                                    {
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                        currentScreen = Screen.Remote
+                                                    }
+                                                } else null,
                                                 nowPlayingTvId = nowPlayingTvId,
                                                 nowPlayingSeason = nowPlayingSeason,
                                                 nowPlayingEpisode = nowPlayingEp,
@@ -2020,6 +2094,12 @@ class BrowserActivity : ComponentActivity() {
                                                 viewModel = libraryViewModel,
                                                 tvName = tvDevice?.name,
                                                 isTvConnected = connectionState is WebSocketClient.ConnectionState.Connected,
+                                                onOpenRemote = if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                                    {
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                        currentScreen = Screen.Remote
+                                                    }
+                                                } else null,
                                                 availableTvDevices = remember(discoveredDevices, history) {
                                                     (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
                                                 },
@@ -2216,7 +2296,10 @@ class BrowserActivity : ComponentActivity() {
                                                 onOpenUrl = { url ->
                                                     tabManager.createTab(url, store)
                                                     currentScreen = Screen.Browser
-                                                }
+                                                },
+                                                onRefreshCatalogs = { libraryViewModel.refreshCatalogsNow() },
+                                                onClearCatalogCache = { libraryViewModel.clearCatalogCache() },
+                                                onCatalogsChanged = { libraryViewModel.refreshCatalogsNow() }
                                             )
                                         }
                                         Screen.Dashboard -> {

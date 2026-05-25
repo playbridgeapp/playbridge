@@ -59,7 +59,13 @@ fun AddonSettingsScreen(
     onBack: () -> Unit,
     /** Called when the user taps "Open URL" so the parent can navigate to the browser. */
     onOpenUrl: (String) -> Unit = {},
-    showBack: Boolean = true
+    showBack: Boolean = true,
+    /** Re-fetch Home catalogs from the network now. */
+    onRefreshCatalogs: () -> Unit = {},
+    /** Wipe the persisted Home catalog cache. */
+    onClearCatalogCache: () -> Unit = {},
+    /** Called after an addon is installed/removed/reordered so Home can refresh. */
+    onCatalogsChanged: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -67,6 +73,20 @@ fun AddonSettingsScreen(
 
     var addonUrl by remember { mutableStateOf("") }
     var isInstalling by remember { mutableStateOf(false) }
+
+    // ── Catalog cache settings (persisted in browser_settings) ────────────────
+    val settingsPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
+    var autoRefreshCatalogs by remember {
+        mutableStateOf(settingsPrefs.getBoolean(LibraryViewModel.KEY_CATALOG_AUTO_REFRESH, true))
+    }
+    var refreshIntervalMin by remember {
+        mutableIntStateOf(
+            settingsPrefs.getInt(
+                LibraryViewModel.KEY_CATALOG_REFRESH_INTERVAL_MIN,
+                LibraryViewModel.DEFAULT_CATALOG_REFRESH_INTERVAL_MIN
+            )
+        )
+    }
 
     // ── Drag-to-reorder state ─────────────────────────────────────────────
     // Maintain a local snapshot so swaps are immediate in the UI.
@@ -151,6 +171,7 @@ fun AddonSettingsScreen(
                                     isInstalling = false
                                     if (result != null) {
                                         addonUrl = ""
+                                        onCatalogsChanged()
                                         Toast.makeText(
                                             context,
                                             "Installed: ${result.name}",
@@ -180,6 +201,102 @@ fun AddonSettingsScreen(
                                 Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Install Addon")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Catalog cache settings ───────────────────────────────────
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Catalog Cache",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Home catalogs load instantly from the last saved copy, then refresh in the background.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // Auto-refresh toggle
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Auto-refresh", style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "Periodically fetch fresh catalogs",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = autoRefreshCatalogs,
+                                onCheckedChange = {
+                                    autoRefreshCatalogs = it
+                                    settingsPrefs.edit()
+                                        .putBoolean(LibraryViewModel.KEY_CATALOG_AUTO_REFRESH, it)
+                                        .apply()
+                                }
+                            )
+                        }
+
+                        // Refresh interval
+                        Text(
+                            "Refresh every",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (autoRefreshCatalogs) MaterialTheme.colorScheme.onSurface
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            LibraryViewModel.CATALOG_REFRESH_INTERVAL_OPTIONS.forEach { minutes ->
+                                FilterChip(
+                                    selected = refreshIntervalMin == minutes,
+                                    enabled = autoRefreshCatalogs,
+                                    onClick = {
+                                        refreshIntervalMin = minutes
+                                        settingsPrefs.edit()
+                                            .putInt(LibraryViewModel.KEY_CATALOG_REFRESH_INTERVAL_MIN, minutes)
+                                            .apply()
+                                    },
+                                    label = { Text("$minutes min") }
+                                )
+                            }
+                        }
+
+                        // Manual actions
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    onRefreshCatalogs()
+                                    Toast.makeText(context, "Refreshing catalogs…", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Refresh now")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    onClearCatalogCache()
+                                    Toast.makeText(context, "Catalog cache cleared", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Clear cache")
                             }
                         }
                     }
@@ -271,7 +388,10 @@ fun AddonSettingsScreen(
                                 dragYOffset = 0f
                                 // Persist new order
                                 val snapshot = localList.toList()
-                                scope.launch { addonRepository.reorderAddons(snapshot) }
+                                scope.launch {
+                                    addonRepository.reorderAddons(snapshot)
+                                    onCatalogsChanged()
+                                }
                             },
                             onDragCancel = {
                                 draggingIndex = -1
@@ -293,18 +413,23 @@ fun AddonSettingsScreen(
                         }
                     },
                     onConfigure = { isEnabled, disabled ->
-                        scope.launch { addonRepository.configureAddon(addon, isEnabled, disabled) }
+                        scope.launch {
+                            addonRepository.configureAddon(addon, isEnabled, disabled)
+                            onCatalogsChanged()
+                        }
                     },
                     onRefresh = {
                         scope.launch {
                             val updated = addonRepository.refreshAddon(addon)
                             val msg = if (updated != null) "Refreshed: ${updated.name}" else "Refresh failed"
                             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            if (updated != null) onCatalogsChanged()
                         }
                     },
                     onDelete = {
                         scope.launch {
                             addonRepository.removeAddon(addon)
+                            onCatalogsChanged()
                             Toast.makeText(context, "Removed: ${addon.name}", Toast.LENGTH_SHORT).show()
                         }
                     }

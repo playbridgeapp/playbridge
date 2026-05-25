@@ -377,10 +377,26 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                 }
                 ServerService.ACTION_CONTROL -> {
                     val command = intent.getStringExtra(ServerService.EXTRA_COMMAND)
-                    when (command) {
-                        "loop_on"  -> setLooping(true)
-                        "loop_off" -> setLooping(false)
-                        else       -> inputHandler.handleControlCommand(command)
+                    when {
+                        command == "loop_on"  -> setLooping(true)
+                        command == "loop_off" -> setLooping(false)
+                        command?.startsWith("audio_track:") == true ->
+                            applyVlcTrackSelection("audio", command.removePrefix("audio_track:"))
+                        command?.startsWith("sub_track:") == true -> {
+                            val id = command.removePrefix("sub_track:")
+                            // Resolve embedded vs external subtitle from the track list.
+                            val type = controlsViewModel.controlsState.value.subtitleTracks
+                                .firstOrNull { it.id == id }?.type ?: "sub"
+                            applyVlcTrackSelection(type, id)
+                        }
+                        command?.startsWith("scaling:") == true -> {
+                            val mode = command.removePrefix("scaling:")
+                            engine?.setVideoScale(mode)
+                            controlsViewModel.setVideoScaling(mode)
+                        }
+                        command?.startsWith("switch_player:") == true ->
+                            switchPlayer(command.removePrefix("switch_player:"))
+                        else -> inputHandler.handleControlCommand(command)
                     }
                 }
                 ServerService.ACTION_PLAY -> {
@@ -407,6 +423,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                     if (index >= 0) {
                         playItemAtIndex(index) // broadcasts status internally
                     }
+                }
+                ServerService.ACTION_RESYNC -> {
+                    broadcastNowPlayingResync(controlsViewModel)
+                    broadcastPlaylistStatus()
                 }
             }
         }
@@ -471,20 +491,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
                         },
                         onSettingsTabSelected = { controlsViewModel.showSettings(it) },
                         onTrackSelected = { track ->
-                            when (track.type) {
-                                "audio" -> engine?.setAudioTrack(track.id)
-                                "video" -> engine?.setVideoTrack(track.id)
-                                "sub" -> {
-                                    subtitleUrl = null
-                                    engine?.setSubtitleTrack(track.id)
-                                }
-                                "external_sub" -> {
-                                    engine?.setSubtitleTrack(null)
-                                    currentSubtitleUrl = track.id
-                                    controlsViewModel.loadExternalSubtitle(track.id, currentHeaders)
-                                }
-                            }
-                            updateUnifiedTracks() // Refresh selection state
+                            applyVlcTrackSelection(track.type, track.id)
                         },
                         onSpeedSelected = { speed ->
                             engine?.setPlaybackSpeed(speed)
@@ -550,6 +557,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         controlsViewModel.setEngine(engineAdapter, "internal_vlc")
 
+        // Stream now-playing status + available tracks to the phone (shared base impl).
+        startNowPlayingBroadcasts(controlsViewModel)
+
         inputHandler = InputHandler(
             activity = this,
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
@@ -564,6 +574,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             addAction(ServerService.ACTION_QUEUE_ADD)
             addAction(ServerService.ACTION_PLAYLIST_JUMP)
             addAction(ServerService.ACTION_PLAY)
+            addAction(ServerService.ACTION_RESYNC)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -626,6 +637,10 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
         // Show playlist button when a playlist is active
         controlsViewModel.setPlaylistVisible(hasPlaylist)
+
+        // Sync the phone's episode list to this new content — refreshes it for a
+        // new playlist, or clears it when a single video replaces an earlier one.
+        broadcastPlaylistStatus()
 
         // Show navigation buttons if a playlist is active.
         controlsViewModel.setNavigationVisible(hasPlaylist)
@@ -718,9 +733,30 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
     /**
      * Broadcast current playlist state to the phone via WebSocket.
      */
-    private fun broadcastPlaylistStatus() {
-        if (playlistItems.isEmpty()) return
+    /**
+     * Apply an audio/subtitle/video track selection by its [UnifiedTrack] id.
+     * Shared by the TV's own track dialog and phone `audio_track:`/`sub_track:` commands.
+     */
+    private fun applyVlcTrackSelection(type: String, id: String) {
+        when (type) {
+            "audio" -> engine?.setAudioTrack(id)
+            "video" -> engine?.setVideoTrack(id)
+            "sub" -> {
+                subtitleUrl = null
+                engine?.setSubtitleTrack(id)
+            }
+            "external_sub" -> {
+                engine?.setSubtitleTrack(null)
+                currentSubtitleUrl = id
+                controlsViewModel.loadExternalSubtitle(id, currentHeaders)
+            }
+        }
+        updateUnifiedTracks() // Refresh selection state
+    }
 
+    private fun broadcastPlaylistStatus() {
+        // Always send (even empty) so the phone clears a stale episode list when
+        // single/non-playlist content replaces an earlier playlist.
         try {
             val itemsArray = org.json.JSONArray()
             playlistItems.forEachIndexed { index, item ->
@@ -732,7 +768,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             val statusJson = org.json.JSONObject().apply {
                 put("type", "playlist_status")
                 put("items", itemsArray)
-                put("currentIndex", playlistIndex)
+                put("currentIndex", if (playlistItems.isEmpty()) 0 else playlistIndex)
                 put("totalCount", playlistItems.size)
             }.toString()
 

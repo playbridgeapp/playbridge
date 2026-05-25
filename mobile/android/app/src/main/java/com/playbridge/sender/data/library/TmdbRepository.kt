@@ -50,24 +50,40 @@ class TmdbRepository(private val context: Context) {
 
     suspend fun discoverMovies(
         page: Int = 1,
-        withGenres: String? = null,
-        sortBy: String = "popularity.desc",
-        year: String? = null,
-        withOriginalLanguage: String? = null,
-        minRating: Double? = null
+        filters: DiscoverFilters = DiscoverFilters()
     ): TmdbPagedResponse<TmdbMovie> {
-        val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
-        val yearParam = year?.let { "&primary_release_year=$it" } ?: ""
-        val languageParam = withOriginalLanguage?.let { "&with_original_language=$it" } ?: ""
-        val ratingParam = minRating?.let { "&vote_average.gte=$it" } ?: ""
-        
-        // Stremio-style curation: Capping to today and adding relevance thresholds for newest
-        val relevanceParams = if (sortBy.contains("primary_release_date")) {
-            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-            "&primary_release_date.lte=$today&vote_count.gte=10"
-        } else ""
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        // Cap "Newest" to today and apply a small vote floor so unranked future titles don't dominate.
+        val dateLte = filters.dateLte ?: if (filters.sortBy.contains("primary_release_date")) today else null
+        val voteCountGte = filters.voteCountGte ?: if (filters.sortBy.contains("primary_release_date")) 10 else null
 
-        return fetchPaged("$BASE_URL/discover/movie?language=en-US&page=$page&sort_by=$sortBy$genresParam$yearParam$languageParam$ratingParam$relevanceParams&include_video=false&include_adult=false&with_runtime.gte=60")
+        val query = buildQuery(
+            "language" to "en-US",
+            "page" to page.toString(),
+            "include_adult" to filters.includeAdult.toString(),
+            "include_video" to "false",
+            "sort_by" to filters.sortBy,
+            "with_genres" to filters.withGenres,
+            "without_genres" to filters.withoutGenres,
+            "with_original_language" to filters.withOriginalLanguage,
+            "with_origin_country" to filters.withOriginCountry,
+            "vote_average.gte" to filters.voteAverageGte?.toString(),
+            "vote_average.lte" to filters.voteAverageLte?.toString(),
+            "vote_count.gte" to voteCountGte?.toString(),
+            "with_runtime.gte" to filters.runtimeGte?.toString(),
+            "with_runtime.lte" to filters.runtimeLte?.toString(),
+            "with_keywords" to filters.withKeywords,
+            "without_keywords" to filters.withoutKeywords,
+            "primary_release_date.gte" to filters.dateGte,
+            "primary_release_date.lte" to dateLte,
+            "watch_region" to filters.watchRegion,
+            "with_watch_providers" to filters.withWatchProviders,
+            "with_watch_monetization_types" to filters.withWatchMonetizationTypes,
+            "certification_country" to filters.certificationCountry,
+            "certification" to filters.certification,
+            "with_release_type" to filters.withReleaseType
+        )
+        return fetchPaged("$BASE_URL/discover/movie?$query")
     }
 
     suspend fun getPopularMovies(page: Int = 1): TmdbPagedResponse<TmdbMovie> {
@@ -95,25 +111,45 @@ class TmdbRepository(private val context: Context) {
 
     suspend fun discoverTvShows(
         page: Int = 1,
-        withGenres: String? = null,
-        sortBy: String = "popularity.desc",
-        year: String? = null,
-        withOriginalLanguage: String? = null,
-        minRating: Double? = null
+        filters: DiscoverFilters = DiscoverFilters()
     ): TmdbPagedResponse<TmdbTvShow> {
-        val genresParam = withGenres?.let { "&with_genres=$it" } ?: ""
-        val yearParam = year?.let { "&first_air_date_year=$it" } ?: ""
-        val languageParam = withOriginalLanguage?.let { "&with_original_language=$it" } ?: ""
-        val ratingParam = minRating?.let { "&vote_average.gte=$it" } ?: ""
-        val tvSortBy = if (sortBy == "primary_release_date.desc") "first_air_date.desc" else sortBy
-        
-        // Stremio-style curation: Capping to today and adding relevance thresholds
-        val relevanceParams = if (tvSortBy.contains("first_air_date")) {
-            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-            "&first_air_date.lte=$today&vote_count.gte=5"
-        } else ""
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val dateLte = filters.dateLte ?: if (filters.sortBy.contains("first_air_date")) today else null
+        val voteCountGte = filters.voteCountGte ?: if (filters.sortBy.contains("first_air_date")) 5 else null
 
-        return fetchPaged("$BASE_URL/discover/tv?language=en-US&page=$page&sort_by=$tvSortBy$genresParam$yearParam$languageParam$ratingParam$relevanceParams&include_video=false&include_adult=false")
+        val query = buildQuery(
+            "language" to "en-US",
+            "page" to page.toString(),
+            "include_adult" to filters.includeAdult.toString(),
+            "sort_by" to filters.sortBy,
+            "with_genres" to filters.withGenres,
+            "without_genres" to filters.withoutGenres,
+            "with_original_language" to filters.withOriginalLanguage,
+            "with_origin_country" to filters.withOriginCountry,
+            "vote_average.gte" to filters.voteAverageGte?.toString(),
+            "vote_average.lte" to filters.voteAverageLte?.toString(),
+            "vote_count.gte" to voteCountGte?.toString(),
+            "with_runtime.gte" to filters.runtimeGte?.toString(),
+            "with_runtime.lte" to filters.runtimeLte?.toString(),
+            "with_keywords" to filters.withKeywords,
+            "without_keywords" to filters.withoutKeywords,
+            "first_air_date.gte" to filters.dateGte,
+            "first_air_date.lte" to dateLte,
+            "watch_region" to filters.watchRegion,
+            "with_watch_providers" to filters.withWatchProviders,
+            "with_watch_monetization_types" to filters.withWatchMonetizationTypes,
+            "with_status" to filters.withStatus,
+            "with_type" to filters.withType
+        )
+        return fetchPaged("$BASE_URL/discover/tv?$query")
+    }
+
+    /** Available streaming providers for Discover filtering in [region] (movie or tv). */
+    suspend fun getDiscoverWatchProviders(mediaType: String, region: String): List<TmdbWatchProvider> {
+        val resp: TmdbWatchProviderListResponse =
+            fetch("$BASE_URL/watch/providers/$mediaType?language=en-US&watch_region=$region")
+                ?: return emptyList()
+        return resp.results.sortedBy { it.displayPriority }
     }
 
     suspend fun getPopularTvShows(page: Int = 1): TmdbPagedResponse<TmdbTvShow> {
@@ -156,6 +192,13 @@ class TmdbRepository(private val context: Context) {
     }
 
     // ==================== Search ====================
+
+    /** Search TMDB keywords for the Discover keyword filter. */
+    suspend fun searchKeywords(query: String): List<TmdbKeyword> {
+        if (query.isBlank()) return emptyList()
+        val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+        return fetchPaged<TmdbKeyword>("$BASE_URL/search/keyword?query=$encoded&page=1").results
+    }
 
     suspend fun searchMulti(query: String, page: Int = 1): TmdbPagedResponse<TmdbMultiSearchResult> {
         val encoded = java.net.URLEncoder.encode(query, "UTF-8")
@@ -219,4 +262,9 @@ class TmdbRepository(private val context: Context) {
         val separator = if ("?" in url) "&" else "?"
         return "${url}${separator}api_key=$apiKey"
     }
+
+    /** Builds a query string from key→value pairs, skipping null/blank values. */
+    private fun buildQuery(vararg params: Pair<String, String?>): String =
+        params.filter { !it.second.isNullOrBlank() }
+            .joinToString("&") { "${it.first}=${it.second}" }
 }

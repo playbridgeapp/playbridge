@@ -616,6 +616,10 @@ class ServerService : Service() {
                 scope.launch {
                     webSocketServer?.broadcastStatus(createContextJson(activeContext))
                 }
+                // Ask the running player to re-broadcast playlist/tracks/status so a
+                // freshly (re)connected phone can repopulate its remote screen — these
+                // are otherwise only sent on change events.
+                sendBroadcast(Intent(ACTION_RESYNC).setPackage(packageName))
             }
             is IncomingMessage.Playlist -> {
                 val payload = msg.payload
@@ -960,6 +964,9 @@ class ServerService : Service() {
         const val EXTRA_SKIP_PREPLAY = "skip_preplay"
         const val ACTION_QUEUE_ADD = "com.playbridge.player.ACTION_QUEUE_ADD"
         const val ACTION_PLAYLIST_JUMP = "com.playbridge.player.ACTION_PLAYLIST_JUMP"
+        // Asks the running player to re-broadcast its now-playing snapshot
+        // (playlist/tracks/status) — used to re-sync a freshly (re)connected phone.
+        const val ACTION_RESYNC = "com.playbridge.player.ACTION_RESYNC"
         // Sent to MainActivity (via startActivity) to navigate to the PairingScreen.
         // Fired whenever a new device starts a connection attempt while the app is backgrounded.
         const val ACTION_OPEN_PAIRING = "com.playbridge.player.ACTION_OPEN_PAIRING"
@@ -1007,6 +1014,14 @@ class ServerService : Service() {
          * Broadcast playlist_status to the phone from a player activity.
          */
         fun broadcastPlaylistStatus(statusJson: String) {
+            _staticInstance?.broadcastPlaylistStatusInternal(statusJson)
+        }
+
+        /**
+         * Broadcast playback status (state/position/duration/title) to the phone
+         * from a player activity. Reuses the generic JSON forwarder.
+         */
+        fun broadcastStatus(statusJson: String) {
             _staticInstance?.broadcastPlaylistStatusInternal(statusJson)
         }
 

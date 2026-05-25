@@ -1,6 +1,5 @@
 package com.playbridge.sender.browser
 
-import android.content.Context
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -14,7 +13,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -34,9 +32,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG_LIBRARY = "DebridLibraryScreen"
-
-private const val PREFS_DEBRID_UI = "debrid_ui_prefs"
-private const val KEY_FAVORITES = "favorite_torrent_ids"
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -66,17 +61,6 @@ fun DebridLibraryScreen(
     var showBottomSheet by remember { mutableStateOf(false) }
     var infoTorrent by remember { mutableStateOf<DebridTorrentInfo?>(null) }
 
-    // ── Favorites ───────────────────────────────────────────────────────────
-    val prefs = remember { context.getSharedPreferences(PREFS_DEBRID_UI, Context.MODE_PRIVATE) }
-    var favoriteIds by remember {
-        mutableStateOf(prefs.getStringSet(KEY_FAVORITES, emptySet())?.toSet() ?: emptySet())
-    }
-    fun toggleFavorite(id: String) {
-        val updated = if (id in favoriteIds) favoriteIds - id else favoriteIds + id
-        favoriteIds = updated
-        prefs.edit().putStringSet(KEY_FAVORITES, updated).apply()
-    }
-
     // ── Selection mode ──────────────────────────────────────────────────────
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val isSelectionMode = selectedIds.isNotEmpty()
@@ -86,17 +70,20 @@ fun DebridLibraryScreen(
     // ── Expand-in-place (tap to reveal full filename) ───────────────────────
     var expandedTorrentId by remember { mutableStateOf<String?>(null) }
 
-    // ── Search / tab ────────────────────────────────────────────────────────
-    var selectedTab by remember { mutableIntStateOf(0) }
+    // ── Search ────────────────────────────────────────────────────────────────
     var isSearching by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     val searchFocusRequester = remember { FocusRequester() }
 
+    // ── Provider switcher (tap the title to change active provider) ───────────
+    var activeProviderName by remember { mutableStateOf(repository.getConfiguredProviderName()) }
+    var showProviderSwitcher by remember { mutableStateOf(false) }
+    var configuredProviders by remember { mutableStateOf(repository.getConfiguredProviders()) }
+
     // ── Derived list ────────────────────────────────────────────────────────
-    val displayedTorrents = remember(torrents, favoriteIds, selectedTab, searchQuery) {
-        val base = if (selectedTab == 1) torrents.filter { it.id in favoriteIds } else torrents
-        if (searchQuery.isBlank()) base
-        else base.filter { it.filename.contains(searchQuery, ignoreCase = true) }
+    val displayedTorrents = remember(torrents, searchQuery) {
+        if (searchQuery.isBlank()) torrents
+        else torrents.filter { it.filename.contains(searchQuery, ignoreCase = true) }
     }
 
     // ── Data functions ──────────────────────────────────────────────────────
@@ -174,7 +161,64 @@ fun DebridLibraryScreen(
                                 .fillMaxWidth()
                                 .focusRequester(searchFocusRequester)
                         )
-                        else -> Text("Debrid Library")
+                        else -> {
+                            Box {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.clickable {
+                                        configuredProviders = repository.getConfiguredProviders()
+                                        showProviderSwitcher = true
+                                    }
+                                ) {
+                                    Text(
+                                        if (activeProviderName == DebridRepository.PROVIDER_NONE)
+                                            "Debrid Library"
+                                        else
+                                            activeProviderName
+                                    )
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = "Switch provider"
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showProviderSwitcher,
+                                    onDismissRequest = { showProviderSwitcher = false }
+                                ) {
+                                    if (configuredProviders.isEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text("No providers configured") },
+                                            enabled = false,
+                                            onClick = {}
+                                        )
+                                    } else {
+                                        configuredProviders.forEach { provider ->
+                                            DropdownMenuItem(
+                                                text = { Text(provider) },
+                                                leadingIcon = {
+                                                    if (provider == activeProviderName) {
+                                                        Icon(Icons.Default.Check, contentDescription = "Active")
+                                                    } else {
+                                                        Spacer(Modifier.size(24.dp))
+                                                    }
+                                                },
+                                                onClick = {
+                                                    showProviderSwitcher = false
+                                                    if (provider != activeProviderName) {
+                                                        repository.setActiveProvider(provider)
+                                                        activeProviderName = provider
+                                                        selectedIds = emptySet()
+                                                        isSearching = false
+                                                        searchQuery = ""
+                                                        loadTorrents()
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 },
                 navigationIcon = {
@@ -208,29 +252,6 @@ fun DebridLibraryScreen(
                                     expanded = showActionMenu,
                                     onDismissRequest = { showActionMenu = false }
                                 ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Favorite selected") },
-                                        leadingIcon = { Icon(Icons.Default.Star, contentDescription = null) },
-                                        onClick = {
-                                            showActionMenu = false
-                                            val updated = favoriteIds + selectedIds
-                                            favoriteIds = updated
-                                            prefs.edit().putStringSet(KEY_FAVORITES, updated).apply()
-                                            selectedIds = emptySet()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Unfavorite selected") },
-                                        leadingIcon = { Icon(Icons.Outlined.Star, contentDescription = null) },
-                                        onClick = {
-                                            showActionMenu = false
-                                            val updated = favoriteIds - selectedIds
-                                            favoriteIds = updated
-                                            prefs.edit().putStringSet(KEY_FAVORITES, updated).apply()
-                                            selectedIds = emptySet()
-                                        }
-                                    )
-                                    HorizontalDivider()
                                     DropdownMenuItem(
                                         text = {
                                             Text(
@@ -278,22 +299,6 @@ fun DebridLibraryScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // ── Tabs ──────────────────────────────────────────────────────────
-            TabRow(selectedTabIndex = selectedTab) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("All") },
-                    icon = { Icon(Icons.Default.List, contentDescription = null) }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("Favorites") },
-                    icon = { Icon(Icons.Default.Star, contentDescription = null) }
-                )
-            }
-
             // ── Content ───────────────────────────────────────────────────────
             when {
                 isLoading && torrents.isEmpty() -> {
@@ -322,11 +327,10 @@ fun DebridLibraryScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = when {
-                                        selectedTab == 1 -> "No favorites yet.\nTap ⋮ on a torrent to save it here."
-                                        searchQuery.isNotBlank() -> "No results for \"$searchQuery\""
-                                        else -> "No recent torrents found."
-                                    },
+                                    text = if (searchQuery.isNotBlank())
+                                        "No results for \"$searchQuery\""
+                                    else
+                                        "No recent torrents found.",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -341,7 +345,7 @@ fun DebridLibraryScreen(
                                 }
                             }
                             LaunchedEffect(shouldLoadMore) {
-                                if (shouldLoadMore && selectedTab == 0 && hasMorePages && !isLoadingMore && !isLoading) {
+                                if (shouldLoadMore && hasMorePages && !isLoadingMore && !isLoading) {
                                     loadMoreTorrents()
                                 }
                             }
@@ -353,7 +357,6 @@ fun DebridLibraryScreen(
                                 items(displayedTorrents, key = { it.id }) { torrent ->
                                     val isExpanded = expandedTorrentId == torrent.id
                                     val isSelected = torrent.id in selectedIds
-                                    val isFavorite = torrent.id in favoriteIds
 
                                     ListItem(
                                         headlineContent = {
@@ -398,24 +401,12 @@ fun DebridLibraryScreen(
                                             }
                                         },
                                         trailingContent = if (isSelectionMode) null else ({
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                if (isFavorite) {
-                                                    Icon(
-                                                        Icons.Default.Star,
-                                                        contentDescription = "Favorited",
-                                                        tint = MaterialTheme.colorScheme.primary,
-                                                        modifier = Modifier
-                                                            .size(16.dp)
-                                                            .padding(end = 2.dp)
-                                                    )
-                                                }
-                                                IconButton(onClick = { infoTorrent = torrent }) {
-                                                    Icon(
-                                                        Icons.Default.Info,
-                                                        contentDescription = "Info",
-                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
+                                            IconButton(onClick = { infoTorrent = torrent }) {
+                                                Icon(
+                                                    Icons.Default.Info,
+                                                    contentDescription = "Info",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
                                             }
                                         }),
                                         modifier = Modifier.combinedClickable(
@@ -455,7 +446,7 @@ fun DebridLibraryScreen(
                                     HorizontalDivider(thickness = 0.5.dp)
                                 }
 
-                                if (isLoadingMore && selectedTab == 0) {
+                                if (isLoadingMore) {
                                     item {
                                         Box(
                                             modifier = Modifier
@@ -480,7 +471,6 @@ fun DebridLibraryScreen(
 
     // ── Info dialog ───────────────────────────────────────────────────────────
     infoTorrent?.let { t ->
-        val isFav = t.id in favoriteIds
         AlertDialog(
             onDismissRequest = { infoTorrent = null },
             title = { Text("Torrent Info") },
@@ -499,17 +489,6 @@ fun DebridLibraryScreen(
             },
             confirmButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = {
-                        toggleFavorite(t.id)
-                    }) {
-                        Icon(
-                            imageVector = if (isFav) Icons.Default.Star else Icons.Outlined.Star,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (isFav) "Unfavorite" else "Favorite")
-                    }
                     if (t.status == TorrentStatus.READY) {
                         Button(onClick = {
                             infoTorrent = null
@@ -567,11 +546,6 @@ fun DebridLibraryScreen(
                                 }
                             }
                             torrents = torrents.filter { it.id !in toDelete }
-                            val updated = favoriteIds - toDelete
-                            if (updated != favoriteIds) {
-                                favoriteIds = updated
-                                prefs.edit().putStringSet(KEY_FAVORITES, updated).apply()
-                            }
                             if (anyFailed) {
                                 Toast.makeText(context, "Some items could not be deleted.", Toast.LENGTH_SHORT).show()
                             }

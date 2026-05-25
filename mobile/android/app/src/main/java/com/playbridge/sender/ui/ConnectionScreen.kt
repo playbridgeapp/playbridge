@@ -1,16 +1,18 @@
 package com.playbridge.sender.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Gamepad
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
@@ -24,7 +26,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.semantics.contentDescription
@@ -46,16 +47,55 @@ fun ConnectionScreen(
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
 
-    // Filter out devices that are already in Known Devices to avoid duplicates
-    val knownUuids = history.map { it.uuid }.filter { it.isNotEmpty() }.toSet()
-    val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
-    val newDiscoveredDevices = discoveredDevices.filter { device ->
-        if (device.uuid.isNotEmpty()) device.uuid !in knownUuids
-        else "${device.ip}:${device.port}" !in knownIpPorts
-    }
     val connectionState by viewModel.connectionState.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
+
+    // Build a single "Your TVs" list: saved devices annotated with live online
+    // status, plus any freshly-discovered TVs that aren't saved yet. This replaces
+    // the old split Discovered/Known sections, whose dedup left "Discovered" stuck
+    // on an endless "Searching…" spinner once every TV on the network was saved.
+    val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
+    val isConnecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
+        connectionState is WebSocketClient.ConnectionState.WaitingForApproval
+    val isScanning = !isConnected && !isConnecting
+
+    fun liveMatch(device: TvDevice): TvDevice? =
+        if (device.uuid.isNotEmpty()) discoveredDevices.find { it.uuid == device.uuid }
+        else discoveredDevices.find { it.ip == device.ip && it.port == device.port }
+
+    val knownUuids = history.mapNotNull { it.uuid.takeIf(String::isNotEmpty) }.toSet()
+    val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
+
+    val knownDevices = history.map { saved ->
+        val live = liveMatch(saved)
+        UnifiedDevice(
+            // A saved entry's IP/port can go stale; prefer the live mDNS values when online.
+            connectDevice = if (live != null)
+                saved.copy(ip = live.ip, port = live.port, wssPort = live.wssPort ?: saved.wssPort)
+            else saved,
+            historyEntry = saved,
+            isOnline = live != null,
+            lastConnected = saved.lastConnected
+        )
+    }
+    val newDevices = discoveredDevices
+        .filter { d -> if (d.uuid.isNotEmpty()) d.uuid !in knownUuids else "${d.ip}:${d.port}" !in knownIpPorts }
+        .map { UnifiedDevice(connectDevice = it, historyEntry = null, isOnline = true, lastConnected = null) }
+
+    val unifiedDevices = (newDevices + knownDevices)
+        // The currently-connected TV has its own card above; don't list it twice.
+        .filterNot { u ->
+            isConnected && tvDevice?.let { c ->
+                (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
+                    (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
+            } == true
+        }
+        .sortedWith(
+            compareByDescending<UnifiedDevice> { it.isOnline }
+                // Newly-discovered (no lastConnected) sort to the top of the online group.
+                .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
+        )
     
     // Start discovery when screen is visible
     DisposableEffect(Unit) {
@@ -290,81 +330,76 @@ fun ConnectionScreen(
                 }
             }
 
-            // Discovered Devices Section
-            item {
-                Text(
-                    text = "Discovered Devices",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            if (newDiscoveredDevices.isEmpty()) {
+            // Your TVs — unified list of saved + currently-discovered devices.
+            if (unifiedDevices.isNotEmpty() || isScanning) {
                 item {
-                    Card(
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        )
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
+                        Text(
+                            text = "Your TVs",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (isScanning) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Text(
+                                    "Scanning…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("Searching for TVs...", style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
                 }
-            } else {
-                items(newDiscoveredDevices) { device ->
-                    DeviceItem(
-                        name = device.name,
-                        ip = device.ip,
-                        port = device.port,
-                        icon = Icons.Default.Tv,
-                        uuid = device.uuid,
-                        onClick = { onDeviceSelected(device.ip, device.port, device.name, device.uuid) }
-                    )
-                }
-            }
 
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Spacer(modifier = Modifier.height(12.dp))
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            // History Section
-            if (history.isNotEmpty()) {
-                item {
-                    Text(
-                        text = "Known Devices",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                
-                items(history) { device ->
-                    DeviceItem(
-                        name = device.name,
-                        ip = device.ip,
-                        port = device.port,
-                        icon = Icons.Default.History,
-                        uuid = device.uuid,
-                        onClick = { viewModel.connect(device) },
-                        onRemove = { viewModel.removeDeviceFromHistory(device) }
-                    )
+                if (unifiedDevices.isEmpty()) {
+                    // First run: nothing saved and nothing discovered on the network yet.
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Looking for TVs on your network…",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    items(unifiedDevices) { device ->
+                        TvDeviceRow(
+                            device = device,
+                            onClick = {
+                                onDeviceSelected(
+                                    device.connectDevice.ip,
+                                    device.connectDevice.port,
+                                    device.connectDevice.name,
+                                    device.connectDevice.uuid
+                                )
+                            },
+                            onRemove = device.historyEntry?.let { entry ->
+                                { viewModel.removeDeviceFromHistory(entry) }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -383,16 +418,38 @@ fun ConnectionScreen(
     }
 }
 
+/**
+ * A device in the unified "Your TVs" list: the device to connect with, whether it's
+ * currently reachable on the network, and (if saved) its history entry + last-connected
+ * time so the row can show "Online" vs. "Last seen …".
+ */
+data class UnifiedDevice(
+    val connectDevice: TvDevice,
+    val historyEntry: TvDevice?,
+    val isOnline: Boolean,
+    val lastConnected: Long?
+) {
+    val isKnown: Boolean get() = historyEntry != null
+}
+
+private fun formatLastSeen(millis: Long): String {
+    val diff = System.currentTimeMillis() - millis
+    return when {
+        diff < 60_000L -> "Last seen just now"
+        diff < 3_600_000L -> "Last seen ${diff / 60_000L}m ago"
+        diff < 86_400_000L -> "Last seen ${diff / 3_600_000L}h ago"
+        diff < 7 * 86_400_000L -> "Last seen ${diff / 86_400_000L}d ago"
+        else -> "Saved"
+    }
+}
+
 @Composable
-fun DeviceItem(
-    name: String,
-    ip: String,
-    port: Int,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    uuid: String = "",
+fun TvDeviceRow(
+    device: UnifiedDevice,
     onClick: () -> Unit,
     onRemove: (() -> Unit)? = null
 ) {
+    val onlineColor = Color(0xFF4CAF50)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -406,42 +463,60 @@ fun DeviceItem(
                 .padding(16.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween // Use SpaceBetween to push delete button to end
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.weight(1f) // Take available space
+                modifier = Modifier.weight(1f)
             ) {
                 Icon(
-                    imageVector = icon,
+                    imageVector = Icons.Default.Tv,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(32.dp)
                 )
-                
-                Column {
+
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = name,
+                        text = device.connectDevice.name,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "$ip:$port",
+                        text = "${device.connectDevice.ip}:${device.connectDevice.port}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (uuid.isNotEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        val dotColor = if (device.isOnline) onlineColor
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                        )
+                        val statusText = when {
+                            device.isOnline && !device.isKnown -> "Online · New"
+                            device.isOnline -> "Online"
+                            device.lastConnected != null -> formatLastSeen(device.lastConnected)
+                            else -> "Saved"
+                        }
                         Text(
-                            text = "ID: $uuid",
+                            text = statusText,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            fontSize = 10.sp
+                            color = if (device.isOnline) onlineColor
+                                else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
-            
+
             if (onRemove != null) {
                 IconButton(
                     onClick = onRemove,

@@ -19,7 +19,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val TAG = "ConnectionViewModel"
 
     val webSocketClient = WebSocketClient()
-    val bluetoothClient = BluetoothClient(application)
     private val connectionStore = ConnectionStore(application)
     private val nsdHelper = NsdHelper(application)
     private val prefs = application.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
@@ -33,16 +32,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     val discoveredDevices: StateFlow<List<TvDevice>> = nsdHelper.discoveredDevices.map { devices ->
         devices.map { TvDevice(ip = it.ip, port = it.port, name = it.name, token = "", uuid = it.uuid, wssPort = it.wssPort) }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    fun getSavedBluetoothMacForTv(tvUuid: String?): String? {
-        if (tvUuid.isNullOrEmpty()) return null
-        return prefs.getString("tv_bt_mac_$tvUuid", null)
-    }
-
-    fun saveBluetoothMacForTv(tvUuid: String?, macAddress: String) {
-        if (tvUuid.isNullOrEmpty()) return
-        prefs.edit().putString("tv_bt_mac_$tvUuid", macAddress).apply()
-    }
 
     val deviceHistory: Flow<List<TvDevice>> = connectionStore.deviceHistory
 
@@ -216,7 +205,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     override fun onCleared() {
         super.onCleared()
         webSocketClient.destroy()
-        bluetoothClient.destroy()
         nsdHelper.stopDiscovery()
     }
 }

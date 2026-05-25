@@ -97,6 +97,7 @@ fun LibraryDetailScreen(
     onBack: () -> Unit,
     onShare: (title: String, imdbId: String?) -> Unit = { _, _ -> },
     forcedSource: String? = null,
+    onOpenRemote: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val subtitleService = remember { StremioSubtitleService(addonRepository) }
@@ -1088,6 +1089,35 @@ fun LibraryDetailScreen(
                 scrolledContainerColor = Color.Transparent
             )
         )
+
+        // Remote shortcut — shown only when a TV is connected (gated by a non-null callback).
+        // Matches the back/more buttons: circular, filled with the poster's dominant color.
+        onOpenRemote?.let { openRemote ->
+            val fabBg = dominantColor ?: Color.Black
+            val fabIcon = if (fabBg.luminance() > 0.5f) Color.Black else Color.White
+            Surface(
+                onClick = openRemote,
+                shape = CircleShape,
+                color = fabBg,
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(20.dp)
+                    .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
+            ) {
+                Box(
+                    modifier = Modifier.size(56.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.SettingsRemote,
+                        contentDescription = "Remote",
+                        tint = fabIcon,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
+        }
     }
 }
 // ==================== Shared Components ====================

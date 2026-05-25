@@ -49,6 +49,9 @@ object BackupUtils {
         val exported = ExportedSettings(
             debridProvider = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
             debridApiKey = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
+            debridApiKeys = DebridRepository.ALL_PROVIDERS.associateWith {
+                tmdbPrefs.getString(DebridRepository.apiKeyPrefName(it), "") ?: ""
+            }.filterValues { it.isNotBlank() },
             tmdbApiKey = tmdbPrefs.getString("tmdb_api_key", ""),
             omdbApiKey = tmdbPrefs.getString("omdb_api_key", ""),
             tvPlayerMode = prefs.getString("tv_player_mode", "tv"),
@@ -84,6 +87,9 @@ object BackupUtils {
                 if (imported.omdbApiKey != null) putString("omdb_api_key", imported.omdbApiKey)
                 if (imported.debridProvider != null) putString(DebridRepository.KEY_DEBRID_PROVIDER, imported.debridProvider)
                 if (imported.debridApiKey != null) putString(DebridRepository.KEY_DEBRID_API_KEY, imported.debridApiKey)
+                imported.debridApiKeys?.forEach { (provider, key) ->
+                    putString(DebridRepository.apiKeyPrefName(provider), key)
+                }
                 if (imported.mediaflowProxyUrl != null) putString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_URL, imported.mediaflowProxyUrl)
                 if (imported.mediaflowProxyPassword != null) putString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_PASSWORD, imported.mediaflowProxyPassword)
                 apply()

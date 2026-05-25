@@ -18,10 +18,16 @@ import android.view.SurfaceView
 import androidx.annotation.RequiresApi
 
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import com.playbridge.player.ui.player.PlayerControlsState
 import com.playbridge.player.ui.player.PlayerControlsViewModel
+import com.playbridge.player.ui.player.UnifiedTrack
 
 abstract class PlayerActivity : ComponentActivity() {
 
@@ -49,6 +55,143 @@ abstract class PlayerActivity : ComponentActivity() {
             FileLogger.i("PlayerActivity", "Watchdog cancelled — playback started successfully.")
         }
         watchdogJob?.cancel()
+    }
+
+    private var nowPlayingJob: Job? = null
+
+    /**
+     * Stream now-playing state to the phone for the lifetime of this activity:
+     * a periodic playback `status` (state/position/duration/title) plus the
+     * available audio/subtitle `tracks`. Engine-agnostic — everything is read
+     * from the shared [PlayerControlsViewModel] state (kept live by its progress
+     * loop), so all engines (Exo/VLC/MPV) get the same phone now-playing surface.
+     *
+     * Call once (e.g. from onStart); it self-manages start/stop with the lifecycle.
+     * Playlist (`playlist_status`) stays engine-owned because controlsState only
+     * carries the playlist when the picker overlay is open.
+     */
+    protected fun startNowPlayingBroadcasts(controls: PlayerControlsViewModel) {
+        if (nowPlayingJob != null) return
+        nowPlayingJob = lifecycleScope.launch {
+            // Periodic playback status (covers live position).
+            launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    while (true) {
+                        broadcastNowPlayingStatus(controls.controlsState.value)
+                        delay(1000)
+                    }
+                }
+            }
+            // Immediate status push when play/pause flips (no up-to-1s lag).
+            launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    controls.controlsState
+                        .map { it.isPlaying to it.isBuffering }
+                        .distinctUntilChanged()
+                        .collect { broadcastNowPlayingStatus(controls.controlsState.value) }
+                }
+            }
+            // Available tracks — broadcast whenever the lists change.
+            launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    controls.controlsState
+                        .map { it.audioTracks to it.subtitleTracks }
+                        .distinctUntilChanged()
+                        .collect { (audio, subs) -> broadcastTracks(audio, subs) }
+                }
+            }
+            // Player settings (speed/scaling/audio-boost/subtitle-offset/filter) — on change.
+            launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    controls.controlsState
+                        .map { PlayerSettingsKey(it.playbackSpeed, it.videoScalingMode, it.isAudioBoostEnabled, it.subtitleDelayMs, it.currentFilter, it.engineType) }
+                        .distinctUntilChanged()
+                        .collect { broadcastPlayerSettings(controls.controlsState.value) }
+                }
+            }
+        }
+    }
+
+    private data class PlayerSettingsKey(
+        val speed: Float,
+        val scaling: String,
+        val audioBoost: Boolean,
+        val subtitleOffsetMs: Long,
+        val filter: com.playbridge.shared.player.VideoFilter,
+        val engine: String
+    )
+
+    private fun broadcastPlayerSettings(s: PlayerControlsState) {
+        try {
+            val json = org.json.JSONObject().apply {
+                put("type", "player_settings")
+                put("speed", s.playbackSpeed.toDouble())
+                put("scaling", s.videoScalingMode)
+                put("audioBoost", s.isAudioBoostEnabled)
+                put("subtitleOffsetMs", s.subtitleDelayMs)
+                put("filter", s.currentFilter.name)
+                put("engine", s.engineType)
+            }.toString()
+            ServerService.broadcastStatus(json)
+        } catch (e: Exception) {
+            FileLogger.e("PlayerActivity", "Failed to broadcast player settings: ${e.message}")
+        }
+    }
+
+    /**
+     * Immediately push the current playback status + available tracks to the phone.
+     * Used to re-sync a freshly (re)connected client (status/tracks are otherwise
+     * event-driven). Playlist is re-broadcast separately by each engine.
+     */
+    protected fun broadcastNowPlayingResync(controls: PlayerControlsViewModel) {
+        val s = controls.controlsState.value
+        broadcastNowPlayingStatus(s)
+        broadcastTracks(s.audioTracks, s.subtitleTracks)
+        broadcastPlayerSettings(s)
+    }
+
+    private fun broadcastNowPlayingStatus(s: PlayerControlsState) {
+        try {
+            val state = when {
+                s.isBuffering -> "buffering"
+                s.isPlaying -> "playing"
+                else -> "paused"
+            }
+            val duration = if (s.duration < 0L) 0L else s.duration
+            val title = s.title.ifBlank { null }
+            val json = org.json.JSONObject().apply {
+                put("type", "status")
+                put("state", state)
+                put("position", s.currentPosition.coerceAtLeast(0L))
+                put("duration", duration)
+                if (title != null) put("title", title)
+            }.toString()
+            ServerService.broadcastStatus(json)
+        } catch (e: Exception) {
+            FileLogger.e("PlayerActivity", "Failed to broadcast status: ${e.message}")
+        }
+    }
+
+    private fun broadcastTracks(audio: List<UnifiedTrack>, subtitles: List<UnifiedTrack>) {
+        try {
+            fun toArray(list: List<UnifiedTrack>) = org.json.JSONArray().apply {
+                list.forEach { t ->
+                    put(org.json.JSONObject().apply {
+                        put("id", t.id)
+                        put("name", t.name)
+                        put("selected", t.isSelected)
+                    })
+                }
+            }
+            val json = org.json.JSONObject().apply {
+                put("type", "tracks")
+                put("audio", toArray(audio))
+                put("subtitle", toArray(subtitles))
+            }.toString()
+            ServerService.broadcastStatus(json)
+        } catch (e: Exception) {
+            FileLogger.e("PlayerActivity", "Failed to broadcast tracks: ${e.message}")
+        }
     }
 
     // Common abstract properties and functions for player controls

@@ -1,6 +1,5 @@
 package com.playbridge.sender.browser
 
-import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,25 +23,20 @@ import com.playbridge.sender.data.debrid.DebridRepository
 @Composable
 fun DebridSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val tmdbPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
+    val repository = remember { DebridRepository(context) }
 
-    var debridProvider by remember {
-        mutableStateOf(
-            tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE)
-                ?: DebridRepository.PROVIDER_NONE
-        )
+    var activeProvider by remember { mutableStateOf(repository.getConfiguredProviderName()) }
+    var providerExpanded by remember { mutableStateOf(false) }
+    val providerOptions = remember {
+        listOf(DebridRepository.PROVIDER_NONE) + DebridRepository.ALL_PROVIDERS
     }
-    var debridApiKey by remember {
-        mutableStateOf(tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, "") ?: "")
+
+    // One editable key per provider, seeded from storage.
+    val apiKeys = remember {
+        mutableStateMapOf<String, String>().apply {
+            DebridRepository.ALL_PROVIDERS.forEach { put(it, repository.getApiKeyFor(it)) }
+        }
     }
-    var debridExpanded by remember { mutableStateOf(false) }
-    val debridOptions = listOf(
-        DebridRepository.PROVIDER_NONE,
-        DebridRepository.PROVIDER_REAL_DEBRID,
-        DebridRepository.PROVIDER_ALL_DEBRID,
-        DebridRepository.PROVIDER_PREMIUMIZE,
-        DebridRepository.PROVIDER_TORBOX
-    )
 
     Scaffold(
         topBar = {
@@ -64,17 +58,18 @@ fun DebridSettingsScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // ── Active provider selector ────────────────────────────────────────
             Box(modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     readOnly = true,
-                    value = debridProvider,
+                    value = activeProvider,
                     onValueChange = {},
                     label = { Text("Active Provider") },
                     trailingIcon = {
-                        IconButton(onClick = { debridExpanded = !debridExpanded }) {
+                        IconButton(onClick = { providerExpanded = !providerExpanded }) {
                             Icon(
-                                if (debridExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                                contentDescription = if (debridExpanded) "Collapse" else "Expand"
+                                if (providerExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                                contentDescription = if (providerExpanded) "Collapse" else "Expand"
                             )
                         }
                     },
@@ -83,43 +78,55 @@ fun DebridSettingsScreen(onBack: () -> Unit) {
                 Spacer(
                     modifier = Modifier
                         .matchParentSize()
-                        .clickable { debridExpanded = !debridExpanded }
+                        .clickable { providerExpanded = !providerExpanded }
                 )
                 DropdownMenu(
-                    expanded = debridExpanded,
-                    onDismissRequest = { debridExpanded = false },
+                    expanded = providerExpanded,
+                    onDismissRequest = { providerExpanded = false },
                     modifier = Modifier.fillMaxWidth(0.9f)
                 ) {
-                    debridOptions.forEach { option ->
+                    providerOptions.forEach { option ->
                         DropdownMenuItem(
                             text = { Text(option) },
                             onClick = {
-                                debridProvider = option
-                                debridExpanded = false
-                                tmdbPrefs.edit().putString(DebridRepository.KEY_DEBRID_PROVIDER, option).apply()
+                                activeProvider = option
+                                providerExpanded = false
+                                repository.setActiveProvider(option)
                             }
                         )
                     }
                 }
             }
 
-            if (debridProvider != DebridRepository.PROVIDER_NONE) {
-                var showDebridKey by remember { mutableStateOf(false) }
+            // ── Per-provider API keys ───────────────────────────────────────────
+            Text(
+                "API Keys",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Text(
+                "Enter a key for each provider you use. Tap the title in the Debrid Library to switch between configured providers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            DebridRepository.ALL_PROVIDERS.forEach { provider ->
+                var visible by remember { mutableStateOf(false) }
                 OutlinedTextField(
-                    value = debridApiKey,
+                    value = apiKeys[provider] ?: "",
                     onValueChange = { newKey ->
-                        debridApiKey = newKey
-                        tmdbPrefs.edit().putString(DebridRepository.KEY_DEBRID_API_KEY, newKey.trim()).apply()
+                        apiKeys[provider] = newKey
+                        repository.saveApiKeyFor(provider, newKey)
                     },
-                    label = { Text("$debridProvider API Key") },
+                    label = { Text("$provider API Key") },
                     placeholder = { Text("Enter API key") },
                     singleLine = true,
-                    visualTransformation = if (showDebridKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
-                        IconButton(onClick = { showDebridKey = !showDebridKey }) {
+                        IconButton(onClick = { visible = !visible }) {
                             Icon(
-                                if (showDebridKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = if (showDebridKey) "Hide key" else "Show key"
+                                if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (visible) "Hide key" else "Show key"
                             )
                         }
                     },

@@ -1,22 +1,26 @@
-# PlayBridge Architecture Review & Open-Source Recommendations
+# PlayBridge Architecture
+_Last verified: 2026-05-23_
 
-This document provides a comprehensive architecture review of the PlayBridge project and actionable recommendations before open-sourcing.
+This document provides a project-wide architecture overview of PlayBridge. Per-module deep dives are linked at the bottom.
 
 ---
 
 ## Project Overview
 
-**PlayBridge** is a multi-platform casting suite enabling Android phones and desktop browsers to send video URLs and control commands to TV receivers. The project leverages Kotlin Multiplatform (KMP) for shared logic across platforms.
+**PlayBridge** is a multi-platform casting suite: an Android phone or desktop browser **sends** video URLs and control commands to a TV/desktop **receiver** over the LAN. A self-hostable **Hub** adds catalogs, metadata, and stream resolution. Shared logic is in a Kotlin Multiplatform (KMP) library; the wire protocol is a protobuf schema kept in a git submodule and code-generated into every language.
 
 | Module | Path | Role |
 | :--- | :--- | :--- |
-| **Phone (Sender)** | `phone/` | Android shell with GeckoView; hosts the Hub UI |
-| **Integrated Hub** | `hub/` | Unified Logic Hub (Go Backend + Svelte UI) for catalogs & resolution |
-| **TV (Android)** | `tv/player/` | Android TV receiver (Dumb player: ExoPlayer/MPV/VLC) |
-| **TV Browser** | `tv/browser/` | Android TV standalone browser |
-| **TV (Apple)** | `tv/apple-tv/` | Native tvOS receiver (Dumb player: AVPlayer/VLC) |
-| **Shared (Core)** | `shared/` | KMP library: Protocol and cross-platform bridge logic |
-| **Extension** | `extension/` | Desktop Firefox extension; interfaces with the Hub |
+| **Phone (Sender)** | `mobile/android/` | Android shell (GeckoView browser + Hub UI); casts to receivers |
+| **Desktop (Receiver)** | `desktop/` | Flutter app (macOS/Windows/Linux); libmpv player; runs a wss server |
+| **Integrated Hub** | `hub/` | Self-hostable content hub (Go backend + SvelteKit UI) |
+| **TV (Android)** | `tv/android/player/` | Android TV receiver (dumb player: ExoPlayer/MPV/VLC) |
+| **TV Browser** | `tv/android/browser/` | Standalone Android TV browser |
+| **TV (Apple)** | `tv/apple/` | Native tvOS receiver (dumb player: AVPlayer/VLC) |
+| **Shared (Core)** | `shared/` | KMP library: player engines + business logic |
+| **Protocol** | `protocol/` | **git submodule** — protobuf source of truth + generated bindings |
+| **Extension** | `extension/` | Firefox desktop extension (TypeScript) |
+| **Web** | `web/site/` | SvelteKit marketing/landing site |
 
 ---
 
@@ -24,66 +28,61 @@ This document provides a comprehensive architecture review of the PlayBridge pro
 
 ```mermaid
 graph TB
-    subgraph Senders ["Senders (Shells)"]
+    subgraph Senders ["Senders"]
         subgraph Phone ["Phone App (Android)"]
             GeckoView[GeckoView Shell]
-            WSClient[WebSocket Client]
+            WSClient[WebSocket Client + SPKI Pinning]
             JSBridge[JavaScript Bridge]
         end
-        
-        subgraph Extension ["Desktop Extension"]
-            ExtBackground[background.js]
+        subgraph Extension ["Firefox Extension"]
+            ExtBackground[background.ts]
         end
     end
 
-    subgraph Hub ["Integrated Smart Hub (Go + Svelte)"]
+    subgraph Hub ["Self-hostable Hub (Go + Svelte)"]
         HubUI[SvelteKit UI: Catalogs/Settings]
         GoServer[Go Backend: Resolver/Redirector]
         SQLite[(SQLite: History/Resume)]
         AddonClient[Stremio Addon Client]
     end
 
+    subgraph Protocol ["protocol/ (git submodule)"]
+        Proto[messages.proto → generated bindings]
+    end
+
     subgraph Shared ["Shared Core (KMP)"]
-        Protocol[Protocol: Commands]
-        SharedBridge[Bridge Middleware]
+        Engines[Player Engines: Exo/VLC/MPV/AV]
+        SharedVM[Player ViewModels]
+        LegacyMsg[Legacy JSON Message.kt]
     end
 
     subgraph Receivers ["Receivers (Dumb Players)"]
-        subgraph AndroidTV ["Android TV"]
-            WSServerAndroid[Ktor WS Server]
-            PlayerAndroid[ExoPlayer / LibVLC / MPV]
-        end
-
-        subgraph AppleTV ["Apple TV (tvOS)"]
-            WSServerApple[Swift WS Server]
-            PlayerApple[AVPlayer / LibVLC]
-        end
+        AndroidTV["Android TV: Ktor/Java-WS + ExoPlayer/VLC/MPV"]
+        AppleTV["Apple TV: NWListener + AVPlayer/VLC"]
+        Desktop["Desktop: shelf + libmpv (media_kit/fvp)"]
     end
 
-    %% Hub Internal
     HubUI <--> GoServer
     GoServer --> SQLite
     GoServer --> AddonClient
 
-    %% Functional Flow
     GeckoView -- Hosts --> HubUI
-    HubUI -- Cast Command --> JSBridge
+    HubUI -- Cast --> JSBridge
     JSBridge --> WSClient
-    ExtBackground -- Cast URL --> GoServer
+    ExtBackground -- Cast --> AndroidTV
 
-    %% Protocol Glue
-    Hub -.-> Protocol
-    Receivers -.-> Protocol
-    
-    %% Communication
-    WSClient <-->|Play / Mouse / Control| WSServerAndroid
-    WSClient <-->|Play / Mouse / Control| WSServerApple
+    Protocol -.codegen.-> Shared
+    Protocol -.codegen.-> Receivers
+    Protocol -.codegen.-> ExtBackground
+    Protocol -.codegen.-> GoServer
 
-    %% Internal Connections
-    WSServerAndroid --> PlayerAndroid
-    WSServerApple --> PlayerApple
-    PlayerAndroid -- Hits --> GoServer
-    PlayerApple -- Hits --> GoServer
+    WSClient <-->|wss:// Play/Control/Mouse| AndroidTV
+    WSClient <-->|wss://| AppleTV
+    WSClient <-->|wss://| Desktop
+
+    AndroidTV -- 302 follow --> GoServer
+    AppleTV -- 302 follow --> GoServer
+    Desktop -- 302 follow --> GoServer
 ```
 
 ---
@@ -92,117 +91,85 @@ graph TB
 
 ```
 PlayBridge/
-├── phone/               # Android Shell (Phone)
-├── hub/                 # Integrated Smart Hub (Go + Svelte)
+├── mobile/android/      # Android Phone (Sender) — standalone Gradle build (PlayBridgePhone)
+├── desktop/             # Flutter desktop receiver (macOS/Windows/Linux)
+├── hub/                 # Self-hostable Hub (Go backend + SvelteKit UI)
 ├── tv/
-│   ├── player/          # Android TV Player App (Receiver)
-│   ├── browser/         # Android TV Browser App (Standalone)
-│   └── apple-tv/        # Native Apple TV (tvOS) App
-├── shared/              # Kotlin Multiplatform Core (Protocol/Logic)
-├── extension/           # Firefox Desktop Extension
-├── scripts/             # Maintenance & automation scripts
-├── libs/                # Local libraries (mpv-android, etc.)
-└── docs/                # Project documentation
+│   ├── android/         # Android TV — standalone Gradle build (PlayBridgeTV)
+│   │   ├── player/      #   TV receiver (player app)
+│   │   └── browser/     #   standalone TV browser
+│   └── apple/           # Native Apple TV (tvOS) app
+├── shared/              # Kotlin Multiplatform core (engines + logic); included by consumers
+├── protocol/            # git submodule: protobuf schema + generated bindings (5 langs)
+├── extension/           # Firefox desktop extension (TypeScript)
+├── web/site/            # SvelteKit marketing site
+├── scripts/             # maintenance & automation
+└── libs/                # local libraries (mpv-android, etc.)
 ```
 
----
-
-## Hub Architecture
-👉 [Integrated Smart Hub Architecture](hub/ARCHITECTURE.md)
+> **Build topology note:** `mobile/android` and `tv/android` are *independent* Gradle builds (each has its own `gradlew`/`settings.gradle.kts`) that both include `shared` via `project(":shared").projectDir = File("../../shared")`. There is no root-level Gradle build.
 
 ---
 
-## Phone App Architecture
-👉 [Phone App Architecture](phone/ARCHITECTURE.md)
+## Secure Transport (wss/TLS)
+
+The phone↔receiver control channel carries `Cookie`/`Authorization` headers and signed URLs in `PlayPayload`, so it is moving from plaintext `ws://` to `wss://` with **trust-on-first-use SPKI pinning** bootstrapped at pairing:
+
+- Each receiver self-signs a long-lived cert on first run and advertises its **SPKI pin** (`sha256/<base64>`) in `PairingApprovedMessage` / `AuthResponse` (and a `wss_port` mDNS TXT hint).
+- Senders persist the pin next to the auth token and validate the presented cert on every connection; a mismatch is refused (possible MITM).
+- Receivers default to **wss-only** (port 8766); plaintext `ws://` (8765) runs only when "Allow insecure" is enabled or for the same-device loopback in-app browser.
+- The Firefox extension cannot pin a self-signed LAN cert and is treated as out-of-scope for v1.
+
+Full per-platform status and remaining work: [`WSS_MIGRATION_PLAN.md`](WSS_MIGRATION_PLAN.md).
 
 ---
 
-## TV App Architecture
-👉 [Android TV Architecture](tv/ARCHITECTURE.md)
-👉 [Apple TV Architecture](tv/apple-tv/ARCHITECTURE.md)
+## Per-Module Architecture
+- 👉 [Phone (Android) Architecture](mobile/android/ARCHITECTURE.md)
+- 👉 [Desktop (Flutter) Architecture](desktop/ARCHITECTURE.md)
+- 👉 [Hub Architecture](hub/ARCHITECTURE.md)
+- 👉 [Android TV Architecture](tv/ARCHITECTURE.md)
+- 👉 [Apple TV Architecture](tv/apple/ARCHITECTURE.md)
+- 👉 [Shared (KMP) Architecture](shared/ARCHITECTURE.md)
+- 👉 [Protocol Architecture](protocol/ARCHITECTURE.md)
+- 👉 [Extension Architecture](extension/ARCHITECTURE.md)
+- 👉 [Web Site Architecture](web/site/ARCHITECTURE.md)
 
 ---
 
-## Shared Module Architecture
-👉 [Shared Architecture](shared/ARCHITECTURE.md)
-
----
-
-## Standalone Browser Extension
-👉 [Extension Architecture](extension/ARCHITECTURE.md)
-
----
-
-## Issues & Refactoring Recommendations
-
-### 🔴 Critical Issues (Play Store Blockers)
-(None currently identified)
-
-### 🟡 Moderate Issues
-
-#### 5. Missing Error Handling in Extensions
-- Browser extension silently catches errors in `background.js`
-- **Recommendation**: Add proper error logging/reporting
-
-### 🟢 Minor Improvements
-
-#### 6. Components.kt is Not True DI
-- Uses lazy singletons, not proper dependency injection
-- **Recommendation**: Consider Hilt/Koin for testability
-
-#### 7. ProGuard Rules Minimal
-- Default ProGuard rules may strip needed Kotlin serialization classes
-- **Recommendation**: Add rules for kotlinx.serialization, Ktor, etc.
-
----
-
-## Open-Source Preparation Checklist
+## Open-Source / Play Store Readiness
 
 ### ✅ Already Good
 - [x] Network security config scoped to local network only
-- [x] Fix SSL bypass for Play Store (scope to private IPs)
-- [x] Unified shared module — single source of truth for protocol and shared logic
-- [x] PIN + Token authentication for discovery
+- [x] Unified shared module — single source of truth for player engines/logic
+- [x] Protobuf protocol submodule — single source of truth for the wire format
+- [x] PIN + token authentication for pairing/discovery
+- [x] **Encrypted control channel (wss + SPKI pinning), wss-only by default**
 - [x] GitHub Actions CI for all modules
-- [x] Multi-engine support on both Phone and TV
-- [x] Cross-platform support (Android, tvOS, Firefox)
+- [x] Multi-engine support across senders/receivers
+- [x] Cross-platform reach (Android, tvOS, Firefox, desktop Flutter)
 
-### ❌ Missing for Open-Source
-- [ ] Review commit history for accidentally committed secrets
-
-### ❌ Missing for Play Store (TV App)
----
-
-## Priority Recommendations
-
-| Priority | Task | Effort |
-|----------|------|--------|
-| 🟡 Medium | Create & host Privacy Policy | 2-4 hours |
-| 🟡 Medium | Fill out Play Console (data safety, content rating, listing) | 2-3 hours |
-| 🟢 Low | Enable ProGuard for release | 2-4 hours |
+### ❌ Outstanding
+- [ ] Review commit history for accidentally committed secrets before going public
+- [ ] wss interop test matrix + MITM/sniff validation (`WSS_MIGRATION_PLAN.md` Phase 4)
+- [ ] Decide the browser-extension secure-transport story (loopback-only vs drop)
+- [ ] Play Store (TV app): privacy policy, data-safety form, content rating, AAB build, R8 keep-rules — see [`tv/ARCHITECTURE.md`](tv/ARCHITECTURE.md)
 
 ---
 
 ## Summary
 
-**Strengths:**
-- Clean architecture with clear separation between sender/receiver
-- Modern tech stack (Compose, Kotlin Serialization, Coroutines, GeckoView v150, Media3 v1.9)
-- Well-designed protocol with extensible command structure (play, browser, control, remote, mouse, browser_control, context_query)
-- Good use of sealed classes for type-safe command handling
-- Feature-rich phone app with remote control, touchpad, HLS quality parsing, extension management, tab management, download support (standard + HLS), browsing history (Room DB), bookmarks, tab persistence, desktop mode, SSL lock indicator, and native Debrid integration
-- TV app has dual-engine browser (SystemWebView/GeckoView) with runtime switching, comprehensive ad blocking (EasyList + cosmetic filtering + popup blocking), video maximize/restore via JS injection, subtitle support (SRT/VTT), track selection dialog, context broadcasting, settings, and foreground service architecture
-- AdBlocker is a singleton preloaded at app startup for instant protection when browser opens
-- Authentication fully implemented with PIN + token flow via mDNS/NSD pairing
-- NSD auto-discovery for seamless phone-to-TV connection
+**Strengths**
+- Clean sender/receiver separation with a "dumb receiver" model and a single resolving Hub.
+- Modern stack: Compose/Compose-TV, Kotlin Serialization + protobuf, Coroutines, GeckoView, Media3; Flutter + libmpv on desktop; SwiftUI + AVFoundation on tvOS.
+- One protobuf schema generates bindings for Kotlin, Swift, Dart, TypeScript, and Go.
+- Feature-rich phone sender (browser, Debrid, library/TMDB, HLS, downloads, history, bookmarks) and capable receivers (multi-engine playback, ad blocking, subtitles, track selection, filters).
+- Encrypted, pinned control channel — the most security-sensitive piece — is largely in place.
 
-**Key Actions Before Open-Sourcing:**
-1. Review commit history for accidentally committed secrets
+**Key actions before open-sourcing**
+1. Audit commit history for secrets.
+2. Finish the wss interop/validation matrix.
 
-**Key Actions Before Play Store (TV App):**
-1. Remove global cleartext traffic permission
-2. Remove unused CAMERA/RECORD_AUDIO permissions
-3. Create and host a Privacy Policy
-4. Complete Play Console setup (data safety, content rating, store listing)
-
-The codebase is in good shape for open-sourcing with relatively minor documentation additions. Play Store publishing requires addressing several security policy items first — see `tv/ARCHITECTURE.md` for the full readiness checklist.
+**Key actions before Play Store (TV app)**
+1. Remove any global cleartext-traffic permission once wss cutover completes.
+2. Remove unused permissions; create/host a Privacy Policy; complete Play Console (data safety, content rating, listing); ship AAB with R8 keep-rules.

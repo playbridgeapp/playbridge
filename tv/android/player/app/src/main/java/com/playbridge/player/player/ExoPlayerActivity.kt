@@ -144,10 +144,22 @@ class ExoPlayerActivity : PlayerActivity() {
             when (intent?.action) {
                 ServerService.ACTION_CONTROL -> {
                     val command = intent.getStringExtra(ServerService.EXTRA_COMMAND)
-                    when (command) {
-                        "loop_on"  -> setLooping(true)
-                        "loop_off" -> setLooping(false)
-                        else       -> inputHandler.handleControlCommand(command)
+                    when {
+                        command == "loop_on"  -> setLooping(true)
+                        command == "loop_off" -> setLooping(false)
+                        command?.startsWith("audio_track:") == true ->
+                            applyUnifiedTrackSelection("audio", command.removePrefix("audio_track:"))
+                        command?.startsWith("sub_track:") == true ->
+                            applyUnifiedTrackSelection("sub", command.removePrefix("sub_track:"))
+                        command?.startsWith("scaling:") == true ->
+                            applyExoScaling(command.removePrefix("scaling:"))
+                        command?.startsWith("filter:") == true ->
+                            applyExoFilter(command.removePrefix("filter:"))
+                        command?.startsWith("filter_custom:") == true ->
+                            applyExoCustomFilter(command.removePrefix("filter_custom:"))
+                        command?.startsWith("switch_player:") == true ->
+                            switchPlayer(command.removePrefix("switch_player:"))
+                        else -> inputHandler.handleControlCommand(command)
                     }
                 }
                 ServerService.ACTION_REMOTE -> {
@@ -184,6 +196,10 @@ class ExoPlayerActivity : PlayerActivity() {
                         FileLogger.i(TAG, "Playlist jump to index: $index")
                         playItemAtIndex(index) // broadcasts status internally after updating playlistIndex
                     }
+                }
+                ServerService.ACTION_RESYNC -> {
+                    broadcastNowPlayingResync(controlsViewModel)
+                    broadcastPlaylistStatus()
                 }
             }
         }
@@ -252,46 +268,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         },
                         onSettingsTabSelected = { controlsViewModel.showSettings(it) },
                         onTrackSelected = { track ->
-                            val player = engine?.getExoPlayer() ?: return@PlayerControlsOverlay
-                            when (track.type) {
-                                "audio", "video", "sub" -> {
-                                    if (track.id == "auto" || track.id == "off") {
-                                        val type = when(track.type) {
-                                            "audio" -> androidx.media3.common.C.TRACK_TYPE_AUDIO
-                                            "video" -> androidx.media3.common.C.TRACK_TYPE_VIDEO
-                                            else -> androidx.media3.common.C.TRACK_TYPE_TEXT
-                                        }
-                                        player.trackSelectionParameters = player.trackSelectionParameters
-                                            .buildUpon()
-                                            .setTrackTypeDisabled(type, track.id == "off")
-                                            .clearOverridesOfType(type)
-                                            .build()
-                                    } else {
-                                        // Composite ID: "groupIndex:trackIndex"
-                                        val parts = track.id.split(":")
-                                        if (parts.size == 2) {
-                                            val groupIdx = parts[0].toInt()
-                                            val trackIdx = parts[1].toInt()
-                                            val group = player.currentTracks.groups[groupIdx]
-                                            player.trackSelectionParameters = player.trackSelectionParameters
-                                                .buildUpon()
-                                                .setTrackTypeDisabled(group.type, false)
-                                                .setOverrideForType(
-                                                    androidx.media3.common.TrackSelectionOverride(
-                                                        group.mediaTrackGroup,
-                                                        trackIdx
-                                                    )
-                                                )
-                                                .build()
-                                        }
-                                    }
-                                }
-                                "external_sub" -> {
-                                    // Handle external sub selection logic if needed
-                                    // For now, Exo handles them via side-loading in playVideo
-                                }
-                            }
-                            updateUnifiedTracks()
+                            applyUnifiedTrackSelection(track.type, track.id)
                         },
                         onSpeedSelected = { speed ->
                             engine?.getExoPlayer()?.setPlaybackSpeed(speed)
@@ -420,6 +397,7 @@ class ExoPlayerActivity : PlayerActivity() {
             addAction(ServerService.ACTION_PLAY)
             addAction(ServerService.ACTION_QUEUE_ADD)
             addAction(ServerService.ACTION_PLAYLIST_JUMP)
+            addAction(ServerService.ACTION_RESYNC)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(controlReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -471,6 +449,11 @@ class ExoPlayerActivity : PlayerActivity() {
 
         // Show playlist button when a playlist is active
         controlsViewModel.setPlaylistVisible(hasPlaylist)
+
+        // Sync the phone's episode list to this new content immediately — refreshes
+        // it for a new playlist, or clears it when a single video replaces an
+        // earlier one (startPlayback also re-broadcasts after the async sniff).
+        broadcastPlaylistStatus()
 
         // Ensure prev/next buttons are visible if a playlist is active.
         if (hasPlaylist) {
@@ -645,6 +628,11 @@ class ExoPlayerActivity : PlayerActivity() {
         } else {
             FileLogger.i(TAG, "engine is NOT null")
         }
+
+        // Re-sync the phone's now-playing surface for this new item: refresh the
+        // episode list (or clear it for a single video) so it doesn't keep showing
+        // the previous series.
+        broadcastPlaylistStatus()
 
         // Build playlist JSON for history persistence
         val plistJson = if (playlistItems.isNotEmpty()) {
@@ -1004,6 +992,9 @@ class ExoPlayerActivity : PlayerActivity() {
         if (engine?.getExoPlayer() == null) {
             initializePlayer()
         }
+        // Stream now-playing status + available tracks to the phone (shared,
+        // engine-agnostic — works the same for Exo/VLC/MPV).
+        startNowPlayingBroadcasts(controlsViewModel)
     }
 
     private var cachedBitmap: android.graphics.Bitmap? = null
@@ -1267,8 +1258,8 @@ class ExoPlayerActivity : PlayerActivity() {
      * Broadcast current playlist state to the phone via WebSocket.
      */
     private fun broadcastPlaylistStatus() {
-        if (playlistItems.isEmpty()) return
-
+        // Always send — even when empty — so the phone clears a stale episode list
+        // when new (single/non-playlist) content replaces an earlier playlist.
         try {
             val itemsArray = org.json.JSONArray()
             playlistItems.forEachIndexed { index, item ->
@@ -1280,7 +1271,7 @@ class ExoPlayerActivity : PlayerActivity() {
             val statusJson = org.json.JSONObject().apply {
                 put("type", "playlist_status")
                 put("items", itemsArray)
-                put("currentIndex", playlistIndex)
+                put("currentIndex", if (playlistItems.isEmpty()) 0 else playlistIndex)
                 put("totalCount", playlistItems.size)
             }.toString()
 
@@ -1288,6 +1279,89 @@ class ExoPlayerActivity : PlayerActivity() {
         } catch (e: Exception) {
             FileLogger.e(TAG, "Failed to broadcast playlist status: ${e.message}")
         }
+    }
+
+    /**
+     * Apply an audio/subtitle/video track selection by its [UnifiedTrack] id
+     * ("off", "auto", or "groupIndex:trackIndex"). Shared by the TV's own track
+     * dialog and phone-originated `audio_track:`/`sub_track:` commands.
+     */
+    private fun applyUnifiedTrackSelection(type: String, id: String) {
+        val player = engine?.getExoPlayer() ?: return
+        when (type) {
+            "audio", "video", "sub" -> {
+                if (id == "auto" || id == "off") {
+                    val trackType = when (type) {
+                        "audio" -> androidx.media3.common.C.TRACK_TYPE_AUDIO
+                        "video" -> androidx.media3.common.C.TRACK_TYPE_VIDEO
+                        else -> androidx.media3.common.C.TRACK_TYPE_TEXT
+                    }
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(trackType, id == "off")
+                        .clearOverridesOfType(trackType)
+                        .build()
+                } else {
+                    // Composite ID: "groupIndex:trackIndex"
+                    val parts = id.split(":")
+                    if (parts.size == 2) {
+                        val groupIdx = parts[0].toIntOrNull() ?: return
+                        val trackIdx = parts[1].toIntOrNull() ?: return
+                        val group = player.currentTracks.groups.getOrNull(groupIdx) ?: return
+                        player.trackSelectionParameters = player.trackSelectionParameters
+                            .buildUpon()
+                            .setTrackTypeDisabled(group.type, false)
+                            .setOverrideForType(
+                                androidx.media3.common.TrackSelectionOverride(
+                                    group.mediaTrackGroup,
+                                    trackIdx
+                                )
+                            )
+                            .build()
+                    }
+                }
+            }
+            "external_sub" -> {
+                // Exo handles external subs via side-loading in playVideo.
+            }
+        }
+        updateUnifiedTracks()
+    }
+
+    /** Apply a video scaling mode (shared by the TV dialog and phone `scaling:` commands). */
+    private fun applyExoScaling(mode: String) {
+        playerView.resizeMode = when (mode) {
+            "Fit" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+            "Fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+            "Zoom" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            "Fixed Width" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+            "Fixed Height" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT
+            else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
+        controlsViewModel.setVideoScaling(mode)
+    }
+
+    /** Apply a preset video filter by enum name (from a phone `filter:` command). */
+    private fun applyExoFilter(name: String) {
+        val filter = try { VideoFilter.valueOf(name) } catch (e: Exception) { return }
+        videoFilterManager.applyFilter(filter)
+        controlsViewModel.setVideoFilterState(
+            filter,
+            videoFilterManager.customBrightness,
+            videoFilterManager.customContrast,
+            videoFilterManager.customSaturation
+        )
+    }
+
+    /** Apply a custom video filter "brightness:contrast:saturation" (from a phone `filter_custom:` command). */
+    private fun applyExoCustomFilter(args: String) {
+        val parts = args.split(":")
+        if (parts.size != 3) return
+        val b = parts[0].toFloatOrNull() ?: return
+        val c = parts[1].toFloatOrNull() ?: return
+        val s = parts[2].toFloatOrNull() ?: return
+        videoFilterManager.applyCustom(b, c, s)
+        controlsViewModel.setVideoFilterState(VideoFilter.CUSTOM, b, c, s)
     }
 
     /**
@@ -1636,6 +1710,8 @@ class ExoPlayerActivity : PlayerActivity() {
             return list
         }
 
+        // Tracks are broadcast to the phone by the shared collector in
+        // PlayerActivity, which observes these controlsViewModel updates.
         controlsViewModel.updateTracks(
             audio = mapTracks(androidx.media3.common.C.TRACK_TYPE_AUDIO, "audio"),
             subtitles = mapTracks(androidx.media3.common.C.TRACK_TYPE_TEXT, "sub"),

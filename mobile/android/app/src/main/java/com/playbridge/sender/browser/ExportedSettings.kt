@@ -31,6 +31,7 @@ data class ExportedWatchlist(
 data class ExportedSettings(
     val debridProvider: String? = null,
     val debridApiKey: String? = null,
+    val debridApiKeys: Map<String, String>? = null,
     val tmdbApiKey: String? = null,
     val omdbApiKey: String? = null,
     val tvPlayerMode: String? = null,

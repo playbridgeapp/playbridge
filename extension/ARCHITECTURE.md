@@ -1,40 +1,50 @@
-# Standalone Browser Extension
+# Standalone Browser Extension Architecture
+_Last verified: 2026-05-23_
 
-A standalone extension architecture exists in the `extension/` directory to bring PlayBridge casting capabilities to desktop browsers.
-This is a natively built Web Extension specifically targeted for **Firefox (Desktop)** (Manifest V2, direct WebSocket connection to TV, injected Shadow DOM UI).
+The `extension/` directory is a standalone Web Extension that brings PlayBridge casting to **Firefox (Desktop)**. It is written in **TypeScript**, bundled with **esbuild** into `dist/`, and connects directly to a receiver over WebSockets (injected Shadow DOM UI + popup).
 
-*(Note: The Android Phone app uses its own dedicated, lightweight legacy extension found in `phone/app/src/main/assets/extensions/video_detector` for internal GeckoView communication).*
+*(The Android phone app uses its own lightweight bundled extension at `mobile/android/app/src/main/assets/extensions/video_detector` for internal GeckoView communication — separate from this one.)*
 
 ## Package Structure
 ```
-extension/src/
-├── background.js        (Video detection logic, WebSocket client for direct TV connection, TV commands)
-├── config.js            (Shared configuration constants)
-├── content.js           (In-page video UI, Shadow DOM floating button)
-├── hls-parser.js        (Parses HLS manifests for quality selection)
-├── icon.png             (Extension icon)
-├── manifest.json        (Firefox Manifest V2 configuration)
-└── ui/                  (Extension popup user interface)
-    ├── fonts/           (Outfit fonts and CSS)
-    │   ├── outfit-latin-ext.woff2
-    │   ├── outfit-latin.woff2
-    │   └── outfit.css   (Outfit font face CSS definitions)
-    ├── popup.css        (Popup styling)
-    ├── popup.html       (Popup layout)
-    └── popup.js         (Popup logic: Video list view, Subtitles view, URLs sender, and TV connection settings)
+extension/
+├── build.mjs              (esbuild bundler — bundles .ts entry points into dist/, copies statics)
+├── tsconfig.json
+├── manifests/
+│   └── firefox.json       (Firefox manifest → copied to dist/manifest.json)
+├── src/
+│   ├── background.ts       (video detection, WebSocket client, context-menu/cast commands)
+│   ├── content.ts          (in-page video UI, Shadow DOM floating button)
+│   ├── hls-parser.ts       (HLS manifest parsing for quality selection)
+│   ├── config.ts           (shared constants)
+│   ├── icon.png
+│   └── ui/
+│       ├── popup.ts         (popup logic: video list, subtitles, URL sender, connection settings)
+│       ├── popup.html / popup.css
+│       └── fonts/           (Outfit woff2 + outfit.css)
+└── dist/                   (esbuild output — packaged into the .xpi)
 ```
+
+> The `*.js` files committed beside the `*.ts` sources are esbuild outputs; edit the TypeScript.
 
 ## Key Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| Background Script | `extension/src/background.js` | Video detection logic, WebSocket client for direct TV connection, sends TV commands |
-| Content Script | `extension/src/content.js` | In-page video UI (Shadow DOM floating button) |
-| HLS Parser | `extension/src/hls-parser.js` | Parses HLS manifests for quality selection |
-| Extension UI | `extension/src/ui/popup.*` | Video list view, Subtitles view, URLs sender, and TV connection settings |
-| Context Menu | `extension/src/background.js` | Right-click "PlayBridge" menu with "Play on TV" (links, video/audio elements) and "Open on TV" (links or current tab) |
+| Background Script | `src/background.ts` | Request interception, WebSocket client, TV commands, right-click "PlayBridge" context menu ("Play on TV" / "Open on TV") |
+| Content Script | `src/content.ts` | In-page video UI (Shadow DOM floating button) |
+| HLS Parser | `src/hls-parser.ts` | HLS manifest parsing for quality selection |
+| Popup UI | `src/ui/popup.*` | Video list, subtitles, URL sender, connection settings |
+| Protocol types | `@bufbuild/protobuf` | Consumes the generated TS binding from `protocol/generated/typescript` |
 
 ## Build & Release
+- **Local**: `npm run build` (or `npm run watch`) → runs `build.mjs` (esbuild, target `firefox102`), emitting `dist/` and copying `manifests/firefox.json` → `dist/manifest.json`.
+- **CI**: `.github/workflows/extension_build.yml` packages the build into a `.xpi` (Firefox extension package) and attaches it to the GitHub Release when the version is bumped.
 
-The extension is continuously integrated and released alongside the Android apps via GitHub Actions.
-When a new release is triggered (via merging into `main` and updating the version), the `.github/workflows/extension_build.yml` workflow automatically packages the contents of the `extension/src/` directory into a `.xpi` file (Firefox extension package) and attaches it to the newly created GitHub Release.
+## Dependencies
+- **esbuild** — bundler (`build.mjs`).
+- **TypeScript** — source language.
+- **@bufbuild/protobuf** v2 — runtime for the generated protobuf message types.
+
+## Secure transport note
+Receivers now default to **wss-only**, but a secure-context extension page cannot pin a self-signed `wss://` LAN cert. Until resolved, the extension only reaches a receiver that has "Allow insecure (ws)" enabled. See `WSS_MIGRATION_PLAN.md` (Phase 2b) for the open decision (loopback-only `ws://` vs. drop).
