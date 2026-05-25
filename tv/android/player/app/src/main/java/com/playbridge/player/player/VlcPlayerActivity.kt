@@ -593,7 +593,7 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             playlistItems.add(payload)
             FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
         }
-        if (playlistItems.isNotEmpty()) {
+        if (playlistItems.size > 1) {
             controlsViewModel.setPlaylistVisible(true)
             broadcastPlaylistStatus()
         }
@@ -633,7 +633,9 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             playlistItems = mutableListOf()
         }
 
-        val hasPlaylist = playlistItems.isNotEmpty()
+        // A single video is modelled as a one-item playlist; only surface playlist UI
+        // (panel + prev/next nav) once there's more than one item.
+        val hasPlaylist = playlistItems.size > 1
 
         // Show playlist button when a playlist is active
         controlsViewModel.setPlaylistVisible(hasPlaylist)

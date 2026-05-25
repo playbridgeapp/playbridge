@@ -328,24 +328,21 @@ class ReceiverServer extends ChangeNotifier {
         ));
       case ContextQueryCmd():
         channel.sink.add(contextJson(player.state == 'idle' ? 'idle' : 'player'));
-      case PlayCmd(:final payload):
-        final url = payload.url;
+      case PlaylistCmd(:final items, :final startIndex):
+        // A single video arrives as a one-item playlist (the `play` command was removed).
+        // Keep the old single-video duplicate-cast guard for that case.
+        final startUrl = (startIndex >= 0 && startIndex < items.length)
+            ? items[startIndex].url
+            : (items.isNotEmpty ? items.first.url : null);
         final now = DateTime.now();
-        if (url == _lastPlayUrl &&
+        if (items.length == 1 &&
+            startUrl == _lastPlayUrl &&
             now.difference(_lastPlayAt) < const Duration(seconds: 2)) {
-          debugPrint('[server] dropping duplicate play for $url');
+          debugPrint('[server] dropping duplicate play for $startUrl');
           break;
         }
-        _lastPlayUrl = url;
+        _lastPlayUrl = startUrl;
         _lastPlayAt = now;
-        unawaited(player.playUrl(
-          url,
-          title: payload.titleOrNull,
-          headers: payload.headersOrNull,
-          subtitles: payload.subtitlesOrNull,
-          isRemote: true,
-        ));
-      case PlaylistCmd(:final items, :final startIndex):
         unawaited(player.playPlaylist(
           items
               .map((p) => (

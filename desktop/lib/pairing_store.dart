@@ -44,6 +44,7 @@ class PairingStore {
   static const _kEngineType = 'pb.engine_type';
   static const _kPairedDevices = 'pb.paired_devices';
   static const _kAllowInsecure = 'pb.allow_insecure';
+  static const _kShowStats = 'pb.show_stats';
 
   final SharedPreferences _prefs;
 
@@ -94,6 +95,13 @@ class PairingStore {
 
   Future<void> setAllowInsecure(bool value) =>
       _prefs.setBool(_kAllowInsecure, value);
+
+  /// Whether the live playback-stats overlay is shown (toggleable via the `i`
+  /// hotkey or the Settings switch).
+  bool get showStats => _prefs.getBool(_kShowStats) ?? false;
+
+  Future<void> setShowStats(bool value) =>
+      _prefs.setBool(_kShowStats, value);
 
   // ─── Paired devices ──────────────────────────────────────────────────────
 

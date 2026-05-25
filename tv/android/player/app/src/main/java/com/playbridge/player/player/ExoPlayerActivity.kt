@@ -414,7 +414,7 @@ class ExoPlayerActivity : PlayerActivity() {
             playlistItems.add(payload)
             FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
         }
-        if (playlistItems.isNotEmpty()) {
+        if (playlistItems.size > 1) {
             controlsViewModel.setPlaylistVisible(true)
             broadcastPlaylistStatus()
         }
@@ -444,8 +444,10 @@ class ExoPlayerActivity : PlayerActivity() {
             playlistItems = mutableListOf()
         }
 
-        // Update button visibility based on playlist
-        val hasPlaylist = playlistItems.isNotEmpty()
+        // Update button visibility based on playlist. A single video is now modelled as a
+        // one-item playlist, so only treat it as a "playlist" (prev/next nav + panel) once
+        // there's more than one item.
+        val hasPlaylist = playlistItems.size > 1
 
         // Show playlist button when a playlist is active
         controlsViewModel.setPlaylistVisible(hasPlaylist)
@@ -509,7 +511,7 @@ class ExoPlayerActivity : PlayerActivity() {
             val baseTitle = title
 
             val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
-            val displayTitle = if (playlistItems.isNotEmpty() && baseTitle?.contains(suffix) != true) {
+            val displayTitle = if (playlistItems.size > 1 && baseTitle?.contains(suffix) != true) {
                 "$baseTitle $suffix"
             } else {
                 baseTitle

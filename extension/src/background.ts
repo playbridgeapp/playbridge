@@ -238,7 +238,13 @@ function connectWebSocket(ip: string, pin: string) {
 
 function sendPlayCommand(payload: PlayPayload): boolean {
   if (wsStatus !== "connected" || !wsConnection) return false;
-  const command = { type: "command", action: "play", payload };
+  // The standalone `play` command was removed — a single video is sent as a
+  // one-item playlist so the TV always sets up a queue.
+  const command = {
+    type: "command",
+    action: "playlist",
+    payload: { items: [payload], startIndex: 0 },
+  };
   wsConnection.send(JSON.stringify(command));
   return true;
 }

@@ -107,6 +107,7 @@ class MpvEngine extends PlayerEngine {
   @override
   Future<void> dispose() async {
     _statsTimer?.cancel();
+    stats.dispose();
     for (final s in _subs) {
       await s.cancel();
     }
@@ -114,7 +115,6 @@ class MpvEngine extends PlayerEngine {
     super.dispose();
   }
 
-  Timer? _statsTimer;
   Future<void> _configureMpv() async {
     final native = player.platform;
     if (native is NativePlayer) {
@@ -127,19 +127,74 @@ class MpvEngine extends PlayerEngine {
       } catch (e) {
         debugPrint('[mpv] failed to tune: $e');
       }
-      _startStatsLogger(native);
     }
   }
 
-  void _startStatsLogger(NativePlayer native) {
-    _statsTimer?.cancel();
-    _statsTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (player.state.position == Duration.zero) return;
+  // ─── Live playback stats (driven on-demand by the stats overlay) ───────────
+
+  /// Latest sampled stats, or null while collection is off. Sampled ~1/sec only
+  /// while [setStatsCollecting] is enabled, so there's zero cost when hidden.
+  final ValueNotifier<PlaybackStats?> stats = ValueNotifier<PlaybackStats?>(null);
+  Timer? _statsTimer;
+
+  void setStatsCollecting(bool active) {
+    if (active) {
+      if (_statsTimer != null) return;
+      unawaited(_pollStats());
+      _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) => _pollStats());
+    } else {
+      _statsTimer?.cancel();
+      _statsTimer = null;
+      stats.value = null;
+    }
+  }
+
+  Future<void> _pollStats() async {
+    final native = player.platform;
+    if (native is! NativePlayer) return;
+
+    Future<String?> read(String prop) async {
       try {
-        final hw = await native.getProperty('hwdec-current');
-        final br = await native.getProperty('video-bitrate');
-        debugPrint('[mpv stats] hw=$hw | br=$br');
-      } catch (_) {}
-    });
+        final v = await native.getProperty(prop);
+        return v.isEmpty ? null : v;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    int? asInt(String? s) => s == null ? null : int.tryParse(s.split('.').first);
+    double? asDouble(String? s) => s == null ? null : double.tryParse(s);
+
+    final r = await Future.wait([
+      read('frame-drop-count'),          // 0  dropped by VO
+      read('decoder-frame-drop-count'),  // 1  dropped by decoder
+      read('estimated-vf-fps'),          // 2
+      read('container-fps'),             // 3
+      read('estimated-display-fps'),     // 4
+      read('video-bitrate'),             // 5
+      read('audio-bitrate'),             // 6
+      read('hwdec-current'),             // 7
+      read('avsync'),                    // 8
+      read('width'),                     // 9
+      read('height'),                    // 10
+      read('video-codec'),               // 11
+      read('demuxer-cache-duration'),    // 12
+    ]);
+
+    stats.value = PlaybackStats(
+      droppedVo: asInt(r[0]) ?? 0,
+      droppedDecoder: asInt(r[1]) ?? 0,
+      fps: asDouble(r[2]),
+      containerFps: asDouble(r[3]),
+      displayFps: asDouble(r[4]),
+      videoBitrate: asDouble(r[5]),
+      audioBitrate: asDouble(r[6]),
+      hwdec: r[7],
+      avsync: asDouble(r[8]),
+      width: asInt(r[9]),
+      height: asInt(r[10]),
+      videoCodec: r[11],
+      cacheDuration: asDouble(r[12]),
+    );
   }
 }

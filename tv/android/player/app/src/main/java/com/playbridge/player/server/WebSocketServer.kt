@@ -352,8 +352,9 @@ class WebSocketServer(
                             is IncomingMessage.Ping -> {
                                 session.send(Frame.Text(createPongJson()))
                             }
-                            is IncomingMessage.Play -> {
-                                FileLogger.i(TAG, "Play command parsed - URL: ${msg.payload.url}, Title: ${msg.payload.title}")
+                            is IncomingMessage.Playlist -> {
+                                val start = msg.payload.items.getOrNull(msg.payload.start_index)
+                                FileLogger.i(TAG, "Playlist command parsed - ${msg.payload.items.size} item(s), start: ${start?.url}, Title: ${start?.title}")
                                 FileLogger.i(TAG, "Raw JSON body: $text")
                                 _commands.emit(msg)
                             }

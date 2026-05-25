@@ -447,7 +447,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             playlistItems.add(payload)
             FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
         }
-        if (playlistItems.isNotEmpty()) {
+        if (playlistItems.size > 1) {
             controlsViewModel.setPlaylistVisible(true)
             broadcastPlaylistStatus()
         }
@@ -762,8 +762,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             playlistItems = mutableListOf()
         }
 
-        // Update button visibility based on playlist
-        val hasPlaylist = playlistItems.isNotEmpty()
+        // Update button visibility based on playlist. A single video is modelled as a
+        // one-item playlist, so only treat it as a "playlist" once there's >1 item.
+        val hasPlaylist = playlistItems.size > 1
 
         // Show playlist button when a playlist is active
         controlsViewModel.setPlaylistVisible(hasPlaylist)

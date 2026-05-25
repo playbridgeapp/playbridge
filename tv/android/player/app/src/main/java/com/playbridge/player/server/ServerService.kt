@@ -342,156 +342,6 @@ class ServerService : Service() {
         }
 
         when (msg) {
-            is IncomingMessage.Play -> {
-                FileLogger.i(TAG, "=== PLAY COMMAND ===")
-                val payload = msg.payload
-
-                com.playbridge.player.player.PlaylistStore.currentPlaylist = null
-
-                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-                val tvPref = if (prefs.contains("player_mode")) {
-                    prefs.getString("player_mode", "phone") ?: "phone"
-                } else {
-                    if (prefs.getBoolean("use_external_player", false)) "external" else "phone"
-                }
-
-                val finalMode = if (tvPref == "phone") {
-                    val phoneMode = payload.player_mode
-                    if (phoneMode != null && phoneMode != "tv") {
-                        phoneMode
-                    } else {
-                        "internal" // Default if no phone mode provided
-                    }
-                } else {
-                    tvPref
-                }
-
-                val useExternalPlayer = finalMode == "external"
-                val useExternalMpv = finalMode == "external_mpv"
-
-                if (useExternalMpv) {
-                    activeContext = "external_player"
-                    broadcastContext()
-
-                    // Download subtitles on the TV side (with the video's headers) before launching
-                    // MPV. Serving them via the local HTTP server guarantees MPV can access them
-                    // regardless of auth, redirects, or SSL quirks on the original URL.
-                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        val subs = payload.subtitles
-                        val localSubUrls = if (subs.isNotEmpty()) {
-                            val serverPort = _serverInfo.value?.port
-                            val localFiles = downloadSubtitlesToCache(subs, payload.headers)
-                            if (localFiles.isNotEmpty() && serverPort != null) {
-                                localFiles.map { "http://127.0.0.1:$serverPort/subtitle/${it.name}" }
-                            } else subs // fallback to original URLs if download failed
-                        } else emptyList()
-
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            setClassName("is.xyz.mpv", "is.xyz.mpv.MPVActivity")
-                            data = android.net.Uri.parse(payload.url)
-
-                            payload.title?.let { title ->
-                                putExtra(Intent.EXTRA_TITLE, title)
-                                putExtra("title", title)
-                            }
-
-                            if (localSubUrls.size == 1) {
-                                putExtra("sub", localSubUrls[0])
-                            } else if (localSubUrls.size > 1) {
-                                putExtra("sub-files", localSubUrls.joinToString("\n"))
-                            }
-
-                            val hdrs = payload.headers
-                            if (hdrs.isNotEmpty()) {
-                                val headersStr = hdrs.map { (key, value) ->
-                                    val escapedValue = value.replace(",", "\\,")
-                                    "$key: $escapedValue"
-                                }.joinToString(",")
-                                putExtra("http-header-fields", headersStr)
-                            }
-
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        }
-
-                        launchActivityFromBackground(intent, "Playing media in MPV")
-                    }
-                } else if (useExternalPlayer) {
-                    activeContext = "external_player"
-                    broadcastContext()
-
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        // Force a generic video/* mime type so that all video players show up in the chooser,
-                        // rather than just the ones explicitly registering for strict mime types like application/x-mpegURL
-                        setDataAndType(android.net.Uri.parse(payload.url), "video/*")
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
-                        // Pass title to external player (many players read this specifically)
-                        payload.title?.let { title ->
-                            putExtra(Intent.EXTRA_TITLE, title)
-                            // MX Player specific title extra
-                            putExtra("title", title)
-                        }
-
-                        // Pass headers to external player if supported
-                        if (payload.headers.isNotEmpty()) {
-                            val bundle = android.os.Bundle()
-                            payload.headers.forEach { (key, value) ->
-                                bundle.putString(key, value)
-                            }
-                            putExtra(android.provider.Browser.EXTRA_HEADERS, bundle)
-                            // MX Player specific headers array
-                            val headersArray = payload.headers.flatMap { listOf(it.key, it.value) }.toTypedArray()
-                            putExtra("headers", headersArray)
-                        }
-                    }
-
-                    val chooserIntent = Intent.createChooser(intent, "Open video with...")
-                    chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    launchActivityFromBackground(chooserIntent, "Playing media in external app")
-                } else {
-                    activeContext = "player"
-                    broadcastContext()
-
-                    val activityClass = when (finalMode) {
-                        "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
-                        "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
-                        else           -> com.playbridge.player.player.ExoPlayerActivity::class.java
-                    }
-
-                    val playerIntent = Intent(this, activityClass).apply {
-                        putExtra(EXTRA_URL, payload.url)
-                        putExtra(EXTRA_TITLE, payload.title)
-                        putExtra(EXTRA_CONTENT_TYPE, payload.content_type)
-                        payload.detected_by?.let { detectedBy ->
-                            putExtra(EXTRA_DETECTED_BY, detectedBy)
-                        }
-                        if (payload.subtitles.isNotEmpty()) {
-                            putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(payload.subtitles))
-                        }
-                        if (payload.headers.isNotEmpty()) {
-                            putExtra(EXTRA_HEADERS, HashMap(payload.headers))
-                        }
-                        payload.preferred_audio_language?.let { lang ->
-                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, lang)
-                        }
-                        payload.preferred_subtitle_language?.let { lang ->
-                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, lang)
-                        }
-                        payload.default_video_quality?.let { quality ->
-                            putExtra("default_video_quality", quality)
-                        }
-                        payload.max_bitrate_cap_mbps?.let { cap ->
-                            putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, cap)
-                        }
-                        payload.visual_metadata?.let { visualMetadata ->
-                            putExtra(EXTRA_VISUAL_METADATA, visualMetadata.encode())
-                        }
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    }
-                    launchActivityFromBackground(playerIntent, "Playing media")
-                }
-            }
-
             is IncomingMessage.Browser -> {
                 val url = msg.payload.url
                 val browserMode = msg.payload.browser_mode ?: "webview"
@@ -628,53 +478,159 @@ class ServerService : Service() {
                 com.playbridge.player.player.PlaylistStore.currentPlaylist = payload.items
 
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-                val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
+                // Mirror the legacy single-play preference resolution: an explicit
+                // player_mode pref wins, otherwise fall back to the old use_external_player flag.
+                val tvPref = if (prefs.contains("player_mode")) {
+                    prefs.getString("player_mode", "phone") ?: "phone"
+                } else {
+                    if (prefs.getBoolean("use_external_player", false)) "external" else "phone"
+                }
+
+                val firstItem = payload.items.getOrNull(payload.start_index) ?: payload.items.firstOrNull()
                 val playlistMode = if (tvPref == "phone") {
-                    val phoneMode = payload.items.firstOrNull()?.player_mode
+                    val phoneMode = firstItem?.player_mode
                     if (phoneMode != null && phoneMode != "tv") phoneMode else "internal"
                 } else {
                     tvPref
                 }
 
-                activeContext = if (playlistMode == "external_mpv") "external_player" else "player"
-                broadcastContext()
+                // External players can't accept a queue/playlist (we hand off to another app),
+                // so only honour them for a genuine single video. Real multi-item playlists
+                // always use an internal player.
+                val isSingle = payload.items.size <= 1
+                val useExternalMpv = isSingle && playlistMode == "external_mpv" && firstItem != null
+                val useExternalPlayer = isSingle && playlistMode == "external" && firstItem != null
 
-                val activityClass = when (playlistMode) {
-                    "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
-                    "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
-                    else           -> com.playbridge.player.player.ExoPlayerActivity::class.java
-                }
+                if (useExternalMpv) {
+                    com.playbridge.player.player.PlaylistStore.currentPlaylist = null
+                    activeContext = "external_player"
+                    broadcastContext()
 
-                val playerIntent = Intent(this, activityClass).apply {
-                    val firstItem = payload.items.getOrNull(payload.start_index) ?: payload.items.firstOrNull()
-                    if (firstItem != null) {
-                        putExtra(EXTRA_URL, firstItem.url)
-                        putExtra(EXTRA_TITLE, firstItem.title)
-                        putExtra(EXTRA_CONTENT_TYPE, firstItem.content_type)
-                        if (firstItem.preferred_audio_language != null) {
-                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, firstItem.preferred_audio_language)
+                    // Download subtitles on the TV side (with the video's headers) before launching
+                    // MPV. Serving them via the local HTTP server guarantees MPV can access them
+                    // regardless of auth, redirects, or SSL quirks on the original URL.
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val subs = firstItem!!.subtitles
+                        val localSubUrls = if (subs.isNotEmpty()) {
+                            val serverPort = _serverInfo.value?.port
+                            val localFiles = downloadSubtitlesToCache(subs, firstItem.headers)
+                            if (localFiles.isNotEmpty() && serverPort != null) {
+                                localFiles.map { "http://127.0.0.1:$serverPort/subtitle/${it.name}" }
+                            } else subs // fallback to original URLs if download failed
+                        } else emptyList()
+
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setClassName("is.xyz.mpv", "is.xyz.mpv.MPVActivity")
+                            data = android.net.Uri.parse(firstItem.url)
+
+                            firstItem.title?.let { title ->
+                                putExtra(Intent.EXTRA_TITLE, title)
+                                putExtra("title", title)
+                            }
+
+                            if (localSubUrls.size == 1) {
+                                putExtra("sub", localSubUrls[0])
+                            } else if (localSubUrls.size > 1) {
+                                putExtra("sub-files", localSubUrls.joinToString("\n"))
+                            }
+
+                            val hdrs = firstItem.headers
+                            if (hdrs.isNotEmpty()) {
+                                val headersStr = hdrs.map { (key, value) ->
+                                    val escapedValue = value.replace(",", "\\,")
+                                    "$key: $escapedValue"
+                                }.joinToString(",")
+                                putExtra("http-header-fields", headersStr)
+                            }
+
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         }
-                        if (firstItem.preferred_subtitle_language != null) {
-                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, firstItem.preferred_subtitle_language)
+
+                        launchActivityFromBackground(intent, "Playing media in MPV")
+                    }
+                } else if (useExternalPlayer) {
+                    com.playbridge.player.player.PlaylistStore.currentPlaylist = null
+                    activeContext = "external_player"
+                    broadcastContext()
+
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        // Force a generic video/* mime type so that all video players show up in the chooser,
+                        // rather than just the ones explicitly registering for strict mime types like application/x-mpegURL
+                        setDataAndType(android.net.Uri.parse(firstItem!!.url), "video/*")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                        // Pass title to external player (many players read this specifically)
+                        firstItem.title?.let { title ->
+                            putExtra(Intent.EXTRA_TITLE, title)
+                            // MX Player specific title extra
+                            putExtra("title", title)
                         }
-                        if (firstItem.default_video_quality != null) {
-                            putExtra("default_video_quality", firstItem.default_video_quality)
-                        }
-                        if (firstItem.max_bitrate_cap_mbps != null) {
-                            putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, firstItem.max_bitrate_cap_mbps)
+
+                        // Pass headers to external player if supported
+                        if (firstItem.headers.isNotEmpty()) {
+                            val bundle = android.os.Bundle()
+                            firstItem.headers.forEach { (key, value) ->
+                                bundle.putString(key, value)
+                            }
+                            putExtra(android.provider.Browser.EXTRA_HEADERS, bundle)
+                            // MX Player specific headers array
+                            val headersArray = firstItem.headers.flatMap { listOf(it.key, it.value) }.toTypedArray()
+                            putExtra("headers", headersArray)
                         }
                     }
-                    putExtra(EXTRA_IS_PLAYLIST, true)
-                    putExtra(EXTRA_PLAYLIST_INDEX, payload.start_index)
 
-                    payload.visual_metadata?.let { visualMetadata ->
-                        putExtra(EXTRA_VISUAL_METADATA, visualMetadata.encode())
+                    val chooserIntent = Intent.createChooser(intent, "Open video with...")
+                    chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    launchActivityFromBackground(chooserIntent, "Playing media in external app")
+                } else {
+                    activeContext = "player"
+                    broadcastContext()
+
+                    val activityClass = when (playlistMode) {
+                        "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
+                        "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
+                        else           -> com.playbridge.player.player.ExoPlayerActivity::class.java
                     }
 
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    val playerIntent = Intent(this, activityClass).apply {
+                        if (firstItem != null) {
+                            putExtra(EXTRA_URL, firstItem.url)
+                            putExtra(EXTRA_TITLE, firstItem.title)
+                            putExtra(EXTRA_CONTENT_TYPE, firstItem.content_type)
+                            firstItem.detected_by?.let { putExtra(EXTRA_DETECTED_BY, it) }
+                            if (firstItem.subtitles.isNotEmpty()) {
+                                putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(firstItem.subtitles))
+                            }
+                            if (firstItem.headers.isNotEmpty()) {
+                                putExtra(EXTRA_HEADERS, HashMap(firstItem.headers))
+                            }
+                            firstItem.preferred_audio_language?.let {
+                                putExtra(EXTRA_PREFERRED_AUDIO_LANG, it)
+                            }
+                            firstItem.preferred_subtitle_language?.let {
+                                putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, it)
+                            }
+                            firstItem.default_video_quality?.let {
+                                putExtra("default_video_quality", it)
+                            }
+                            firstItem.max_bitrate_cap_mbps?.let {
+                                putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, it)
+                            }
+                        }
+                        putExtra(EXTRA_IS_PLAYLIST, true)
+                        putExtra(EXTRA_PLAYLIST_INDEX, payload.start_index)
+
+                        // Playlist-level metadata wins; fall back to the start item's (single videos
+                        // carry it on the item, not the playlist wrapper).
+                        (payload.visual_metadata ?: firstItem?.visual_metadata)?.let { visualMetadata ->
+                            putExtra(EXTRA_VISUAL_METADATA, visualMetadata.encode())
+                        }
+
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    pendingQueueItems.clear() // discard any stale items from a previous session
+                    launchActivityFromBackground(playerIntent, "Playing playlist (${payload.items.size} items)")
                 }
-                pendingQueueItems.clear() // discard any stale items from a previous session
-                launchActivityFromBackground(playerIntent, "Playing playlist (${payload.items.size} items)")
             }
             is IncomingMessage.QueueAdd -> {
                 val item = msg.payload.item

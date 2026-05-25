@@ -32,7 +32,6 @@ sealed class IncomingMessage {
     data object Ping : IncomingMessage()
     data class PairingRequest(val msg: playbridge.PairingRequestMessage) : IncomingMessage()
     data class Auth(val msg: playbridge.AuthMessage) : IncomingMessage()
-    data class Play(val payload: playbridge.PlayPayload) : IncomingMessage()
     data class Playlist(val payload: playbridge.PlaylistPayload) : IncomingMessage()
     data class QueueAdd(val payload: playbridge.QueueAddPayload) : IncomingMessage()
     data class PlaylistJump(val payload: playbridge.PlaylistJumpPayload) : IncomingMessage()
@@ -49,7 +48,6 @@ private val moshi: Moshi = Moshi.Builder()
     .add(WireJsonAdapterFactory())
     .build()
 
-private val playAdapter = moshi.adapter(PlayPayload::class.java)
 private val playlistAdapter = moshi.adapter(PlaylistPayload::class.java)
 private val queueAddAdapter = moshi.adapter(QueueAddPayload::class.java)
 private val playlistJumpAdapter = moshi.adapter(PlaylistJumpPayload::class.java)
@@ -102,11 +100,16 @@ private fun envelope(action: String, payloadJson: String): String =
         put("payload", Json.parseToJsonElement(payloadJson))
     }.toString()
 
-fun createPlayCommandJson(payload: PlayPayload): String =
-    envelope("play", playAdapter.toJson(payload))
-
 fun createPlaylistCommandJson(payload: PlaylistPayload): String =
     envelope("playlist", playlistAdapter.toJson(payload))
+
+/**
+ * Send a single video. There is no standalone `play` command anymore — a single video
+ * is just a one-item playlist, so the TV always sets up a queue and `queue_add` can
+ * append after it.
+ */
+fun createSingleVideoCommandJson(payload: PlayPayload): String =
+    createPlaylistCommandJson(PlaylistPayload(items = listOf(payload)))
 
 fun createQueueAddCommandJson(item: PlayPayload): String =
     envelope("queue_add", queueAddAdapter.toJson(QueueAddPayload(item = item)))
@@ -248,7 +251,6 @@ private fun parseCommandAction(action: String, payloadJson: String?, raw: String
     if (action == "context_query") return IncomingMessage.ContextQuery
     if (payloadJson == null) return IncomingMessage.Unknown("missing_payload_for_$action", raw)
     return when (action) {
-        "play" -> playAdapter.fromJson(payloadJson)?.let { IncomingMessage.Play(it) }
         "playlist" -> playlistAdapter.fromJson(payloadJson)?.let { IncomingMessage.Playlist(it) }
         "queue_add" -> queueAddAdapter.fromJson(payloadJson)?.let { IncomingMessage.QueueAdd(it) }
         "playlist_jump" -> playlistJumpAdapter.fromJson(payloadJson)?.let { IncomingMessage.PlaylistJump(it) }

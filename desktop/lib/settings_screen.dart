@@ -14,12 +14,14 @@ class SettingsScreen extends StatefulWidget {
     required this.server,
     required this.store,
     required this.player,
+    required this.showStats,
     required this.onNavigateToCast,
   });
 
   final ReceiverServer server;
   final PairingStore store;
   final PlayerController player;
+  final ValueNotifier<bool> showStats;
   final VoidCallback onNavigateToCast;
 
   @override
@@ -107,6 +109,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     await widget.player.switchEngine(type);
                   }
                 },
+              ),
+            ),
+            _Tile(
+              icon: Icons.insights,
+              title: 'Show playback stats',
+              subtitle: 'Overlay dropped frames, fps, bitrate… (toggle with the I key). '
+                  'Internal MPV only.',
+              trailing: ValueListenableBuilder<bool>(
+                valueListenable: widget.showStats,
+                builder: (context, on, _) => Switch(
+                  value: on,
+                  onChanged: (v) => widget.showStats.value = v,
+                ),
               ),
             ),
 

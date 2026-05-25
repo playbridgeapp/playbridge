@@ -94,10 +94,6 @@ fun LibraryScreen(
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
-    nowPlayingTvId: Int? = null,
-    nowPlayingSeason: Int? = null,
-    nowPlayingEpisode: Int? = null,
-    onNowPlayingClick: () -> Unit = {},
     onRemoteClick: (() -> Unit)? = null,
     onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
 ) {
@@ -121,10 +117,6 @@ fun LibraryScreen(
             onMenuClick = onMenuClick,
             onMovieClick = onMovieClick,
             onTvShowClick = onTvShowClick,
-            nowPlayingTvId = nowPlayingTvId,
-            nowPlayingSeason = nowPlayingSeason,
-            nowPlayingEpisode = nowPlayingEpisode,
-            onNowPlayingClick = onNowPlayingClick,
             onRemoteClick = onRemoteClick,
             onAddonItemClick = onAddonItemClick,
         )
@@ -138,10 +130,6 @@ private fun LibraryScreenContent(
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
-    nowPlayingTvId: Int? = null,
-    nowPlayingSeason: Int? = null,
-    nowPlayingEpisode: Int? = null,
-    onNowPlayingClick: () -> Unit = {},
     onRemoteClick: (() -> Unit)? = null,
     onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
 ) {
@@ -726,8 +714,7 @@ private fun LibraryScreenContent(
                                     .focusRequester(searchFocusRequester)
                             )
                         } else {
-                            // Persistent search bar — fills the header and makes search a
-                            // primary, always-visible action instead of a hidden icon.
+                            // Persistent search bar — fills the header; magnifier on the right.
                             Surface(
                                 onClick = { viewModel.setIsSearching(true) },
                                 shape = CircleShape,
@@ -738,21 +725,24 @@ private fun LibraryScreenContent(
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 14.dp)
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp)
                                 ) {
-                                    Icon(
-                                        Icons.Default.Search,
-                                        contentDescription = "Search",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(Modifier.width(10.dp))
                                     Text(
                                         text = "Search movies & shows…",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = "Search",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
@@ -779,37 +769,7 @@ private fun LibraryScreenContent(
                         }
                     }
                 },
-                actions = {
-                    if (!isSearching) {
-                        // Now Playing button — only visible when a season is being queued
-                        if (nowPlayingTvId != null) {
-                            val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse")
-                            val pulseAlpha by infiniteTransition.animateFloat(
-                                initialValue = 0.6f,
-                                targetValue = 1f,
-                                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                                    animation = androidx.compose.animation.core.tween(800),
-                                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-                                ),
-                                label = "pulseAlpha"
-                            )
-                            IconButton(onClick = onNowPlayingClick) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.alpha(pulseAlpha)
-                                ) {
-                                    Icon(
-                                        Icons.Default.PlayCircle,
-                                        contentDescription = "Now Playing",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(26.dp)
-                                    )
-                                }
-                            }
-                        }
-                        // Search now lives in the persistent search bar in the title slot.
-                    } // closes if
-                } // closes actions
+                actions = {} // closes actions
             ) // closes TopAppBar
             } // closes Column
         } // closes topBar

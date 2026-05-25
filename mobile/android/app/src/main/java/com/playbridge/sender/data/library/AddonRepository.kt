@@ -290,6 +290,13 @@ class AddonRepository(
     }
 
     /**
+     * Observe the installed-addon set. Emits on every change (install, remove, refresh,
+     * reorder, enable/disable) so the Home screen can keep its catalogs in sync without
+     * relying on callers to remember to trigger a refresh.
+     */
+    fun observeInstalledAddons(): Flow<List<InstalledAddonEntity>> = addonDao.getAll()
+
+    /**
      * Enumerate all catalogs available across all installed addons.
      * Returns a list of (addon, contentType, catalogId).
      */

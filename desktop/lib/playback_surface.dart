@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'player_engine.dart';
@@ -41,8 +43,8 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
     if (engine is MpvEngine) {
       _mpvVideo = VideoController(
         engine.player,
-        configuration: const VideoControllerConfiguration(
-          enableHardwareAcceleration: false,
+        configuration: VideoControllerConfiguration(
+          enableHardwareAcceleration: !Platform.isLinux,
         ),
       );
       setState(() {});

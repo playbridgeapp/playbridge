@@ -24,14 +24,6 @@ sealed class Command {
   const Command();
 }
 
-/// Discriminator variant for a single play command. The full proto payload is
-/// preserved so any field added to messages.proto is immediately accessible
-/// downstream without touching this file.
-class PlayCmd extends Command {
-  final PlayPayload payload;
-  PlayCmd(this.payload);
-}
-
 class ControlCmd extends Command {
   final String command;
   const ControlCmd(this.command);
@@ -123,9 +115,6 @@ Command parseCommand(String json) {
         final action = root['action'] as String?;
         final payload = root['payload'];
         switch (action) {
-          case 'play':
-            if (payload is Map<String, dynamic>) return PlayCmd(_parsePlayPayload(payload));
-            return const UnknownCmd('play_no_payload');
           case 'control':
             return ControlCmd((payload?['command'] ?? '') as String);
           case 'context_query':

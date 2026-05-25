@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
@@ -880,9 +882,35 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     init {
         checkConfigAndLoadInitialData()
         observeNewEpisodes()
-        loadCatalogRows()
+        observeAddonsForCatalogs()
         startCatalogAutoRefresh()
         loadWatchProviders()
+    }
+
+    /**
+     * Keep Home catalogs in sync with the installed-addon set. The first emission drives
+     * the initial (cache-first) load; later changes — addon installed/removed/refreshed/
+     * reordered/enabled — force a reload so new catalogs appear immediately. This also
+     * covers addons that land in the DB after this (activity-scoped) ViewModel's init ran,
+     * which previously left Home stuck on the "No addons installed" empty state until a
+     * manual refresh in the Addons screen.
+     */
+    private fun observeAddonsForCatalogs() {
+        viewModelScope.launch {
+            var firstEmission = true
+            addonRepository.observeInstalledAddons()
+                .map { addons ->
+                    // Signature that changes when an addon's catalogs or enabled state change.
+                    addons.joinToString("|") { "${it.manifestUrl}#${it.catalogsJson}#${it.disabledFeatures}" }
+                }
+                .distinctUntilChanged()
+                .collect {
+                    // Force a network refresh on real changes; the in-memory cache would
+                    // otherwise be served back without the newly installed addon's rows.
+                    loadCatalogRows(forceRefresh = !firstEmission)
+                    firstEmission = false
+                }
+        }
     }
 
     // ---------------------------------------------------------------------------

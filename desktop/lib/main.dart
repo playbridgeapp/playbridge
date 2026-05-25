@@ -8,6 +8,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'discovery.dart';
+import 'engines/mpv_engine.dart';
 import 'favorites_screen.dart';
 import 'history_screen.dart';
 import 'history_store.dart';
@@ -19,6 +20,7 @@ import 'playback_surface.dart';
 import 'server.dart';
 import 'settings_screen.dart';
 import 'shader_background.dart';
+import 'stats_overlay.dart';
 import 'tray_controller.dart';
 
 Future<void> main() async {
@@ -46,6 +48,7 @@ class SeekForwardIntent extends Intent { const SeekForwardIntent(); }
 class SeekBackwardIntent extends Intent { const SeekBackwardIntent(); }
 class VolumeUpIntent extends Intent { const VolumeUpIntent(); }
 class VolumeDownIntent extends Intent { const VolumeDownIntent(); }
+class StatsToggleIntent extends Intent { const StatsToggleIntent(); }
 
 // Navigation destinations — nowPlaying is a mode, not a persistent screen.
 enum _Dest { cast, history, favorites, settings }
@@ -77,6 +80,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   bool _showingVideo = false;
   bool _isFullScreen = false;
 
+  // Live playback-stats overlay. Toggled by the `i` hotkey or the Settings
+  // switch; both mutate this notifier and the change is persisted via the store.
+  late final ValueNotifier<bool> _showStats;
+
   // Controls visibility for the video overlay
   bool _videoHovered = false;
   int _menusOpen = 0;
@@ -103,6 +110,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   @override
   void initState() {
     super.initState();
+    _showStats = ValueNotifier<bool>(widget.store.showStats);
+    _showStats.addListener(() => widget.store.setShowStats(_showStats.value));
     _player = PlayerController(initialEngine: widget.store.engineType);
     _server = ReceiverServer(player: _player, store: widget.store);
     _discovery = DiscoveryPublisher(
@@ -256,6 +265,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _discovery.stop();
     _server.stop();
     _player.dispose();
+    _showStats.dispose();
     super.dispose();
   }
 @override
@@ -274,6 +284,7 @@ Widget build(BuildContext context) {
         const SingleActivator(LogicalKeyboardKey.arrowLeft): const SeekBackwardIntent(),
         const SingleActivator(LogicalKeyboardKey.arrowUp): const VolumeUpIntent(),
         const SingleActivator(LogicalKeyboardKey.arrowDown): const VolumeDownIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyI): const StatsToggleIntent(),
       },
       child: Actions(
         actions: {
@@ -304,13 +315,19 @@ Widget build(BuildContext context) {
               return null;
             },
           ),
+          StatsToggleIntent: CallbackAction<StatsToggleIntent>(
+            onInvoke: (_) {
+              _showStats.value = !_showStats.value;
+              return null;
+            },
+          ),
         },
         child: Focus(
           autofocus: true,
           child: Scaffold(
             backgroundColor: Colors.transparent,
             body: AnimatedBuilder(
-              animation: Listenable.merge([_server, _player]),
+              animation: Listenable.merge([_server, _player, _showStats]),
               builder: (context, _) {
             final hasMedia = _player.queue.isNotEmpty;
             final hasQueue = _player.queue.length > 1;
@@ -408,6 +425,17 @@ Widget build(BuildContext context) {
                                     ),
                                   ),                                  if (!_showingVideo)
                                     Positioned.fill(child: _buildScreen()),
+                                  if (_showingVideo &&
+                                      hasMedia &&
+                                      _showStats.value &&
+                                      _player.engine is MpvEngine)
+                                    Positioned(
+                                      top: 16,
+                                      left: 16,
+                                      child: StatsOverlay(
+                                        engine: _player.engine as MpvEngine,
+                                      ),
+                                    ),
                                   if (_showingVideo && hasMedia)
                                     Positioned(
                                       left: 0,
@@ -500,6 +528,7 @@ Widget build(BuildContext context) {
           server: _server,
           store: widget.store,
           player: _player,
+          showStats: _showStats,
           onNavigateToCast: () => setState(() => _dest = _Dest.cast),
         ),
     };
