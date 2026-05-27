@@ -6,4 +6,13 @@
              don't fall back to the system font that Samsung's FlipFont overrides. -->
         <item name="android:fontFamily">@font/space_grotesk</item>
     </style>
+
+    <!-- Fullscreen dark theme for the in-app video player (PlayerActivity).
+         Black window background avoids a white flash before the surface attaches. -->
+    <style name="Theme.PlayBridge.Player" parent="android:Theme.Material.NoActionBar">
+        <item name="android:fontFamily">@font/space_grotesk</item>
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+    </style>
 </resources>

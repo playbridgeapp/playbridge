@@ -1,4 +1,6 @@
 package com.playbridge.sender.browser
+import com.playbridge.sender.library.*
+import com.playbridge.sender.cast.*
 
 import android.os.Bundle
 import android.util.Log
@@ -93,8 +95,18 @@ import mozilla.components.lib.state.Store
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.connection.NsdHelper
+import com.playbridge.sender.history.BookmarksScreen
+import com.playbridge.sender.history.CastHistoryScreen
+import com.playbridge.sender.history.HistoryScreen
+import com.playbridge.sender.settings.SettingsScreen
+import com.playbridge.sender.downloads.DownloadConfirmDialog
+import com.playbridge.sender.downloads.DownloadUtils
+import com.playbridge.sender.downloads.DownloadsScreen
+import com.playbridge.sender.downloads.PendingDownload
+import com.playbridge.sender.downloads.PendingPopup
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.ConnectionScreen
+import com.playbridge.sender.ui.DashboardScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import mozilla.components.lib.state.ext.flow
 import com.playbridge.sender.data.history.DatabaseProvider
@@ -2815,23 +2827,4 @@ class BrowserActivity : ComponentActivity() {
             )
         }
     }
-}
-
-sealed class Screen {
-    object Browser : Screen()
-    object Tabs : Screen()
-    object Extensions : Screen()
-    object Connection : Screen()
-    object Downloads : Screen()
-    object Settings : Screen()
-    object History : Screen()
-    object CastHistory : Screen()
-    object Bookmarks : Screen()
-    object Home : Screen()
-    object Remote : Screen()
-    object Library : Screen()
-    object DebridLibrary : Screen()
-    object AddonSettings : Screen()
-    data class LibraryDetail(val id: String, val type: String, val source: String? = null) : Screen()
-    object Dashboard : Screen()
 }
