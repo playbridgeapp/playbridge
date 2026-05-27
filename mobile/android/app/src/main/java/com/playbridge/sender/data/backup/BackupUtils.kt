@@ -2,10 +2,10 @@ package com.playbridge.sender.data.backup
 
 import android.content.Context
 import com.playbridge.sender.browser.Components
-import com.playbridge.sender.browser.ExportedBookmark
-import com.playbridge.sender.browser.ExportedSettings
-import com.playbridge.sender.browser.ExportedTab
-import com.playbridge.sender.browser.ExportedWatchlist
+import com.playbridge.sender.settings.ExportedBookmark
+import com.playbridge.sender.settings.ExportedSettings
+import com.playbridge.sender.settings.ExportedTab
+import com.playbridge.sender.settings.ExportedWatchlist
 import com.playbridge.sender.data.debrid.DebridRepository
 import com.playbridge.sender.data.history.BookmarkEntity
 import com.playbridge.sender.data.history.DatabaseProvider
@@ -60,8 +60,8 @@ object BackupUtils {
             tabs = currentTabs,
             bookmarks = currentBookmarks,
             watchlist = currentWatchlist,
-            mediaflowProxyUrl = tmdbPrefs.getString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_URL, ""),
-            mediaflowProxyPassword = tmdbPrefs.getString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_PASSWORD, ""),
+            mediaflowProxyUrl = tmdbPrefs.getString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_URL, ""),
+            mediaflowProxyPassword = tmdbPrefs.getString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_PASSWORD, ""),
         )
 
         Json { prettyPrint = true; encodeDefaults = false }.encodeToString(exported)
@@ -90,8 +90,8 @@ object BackupUtils {
                 imported.debridApiKeys?.forEach { (provider, key) ->
                     putString(DebridRepository.apiKeyPrefName(provider), key)
                 }
-                if (imported.mediaflowProxyUrl != null) putString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_URL, imported.mediaflowProxyUrl)
-                if (imported.mediaflowProxyPassword != null) putString(com.playbridge.sender.browser.MediaflowProxy.PREFS_KEY_PASSWORD, imported.mediaflowProxyPassword)
+                if (imported.mediaflowProxyUrl != null) putString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_URL, imported.mediaflowProxyUrl)
+                if (imported.mediaflowProxyPassword != null) putString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_PASSWORD, imported.mediaflowProxyPassword)
                 apply()
             }
 

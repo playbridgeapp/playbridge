@@ -39,8 +39,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".player.PlayerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.PlayBridge.Player"
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
         <service
-            android:name=".browser.MediaDownloadService"
+            android:name=".downloads.MediaDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync">
             <intent-filter>
@@ -49,11 +57,11 @@
             </intent-filter>
         </service>
         <service
-            android:name=".browser.HlsExportService"
+            android:name=".cast.HlsExportService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
         <service
-            android:name=".browser.MediaPlaybackService"
+            android:name=".cast.MediaPlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
