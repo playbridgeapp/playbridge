@@ -376,8 +376,8 @@ internal fun SplitPlayButton(
             ChipDropdown(
                 selectedLabel = if (watchOnTv) {
                     if (!tvName.isNullOrBlank()) "TV ($tvName)" else "TV"
-                } else "Phone",
-                options = listOf("phone" to "Phone") + availableTvDevices.map { (it.uuid.ifBlank { it.ip }) to (it.name.ifBlank { it.ip }) },
+                } else "This Device",
+                options = listOf("phone" to "This Device") + availableTvDevices.map { (it.uuid.ifBlank { it.ip }) to (it.name.ifBlank { it.ip }) },
                 selectedValue = if (watchOnTv) (selectedTvDevice?.uuid ?: selectedTvDevice?.ip ?: "tv") else "phone",
                 onSelect = { value ->
                     if (value == "phone") {

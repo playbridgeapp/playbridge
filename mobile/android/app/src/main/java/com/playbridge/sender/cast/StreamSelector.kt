@@ -144,6 +144,21 @@ object StreamSelector {
     }
 
     /**
+     * Find the stream matching a given Stremio `behaviorHints.bingeGroup`, used to keep the
+     * same release/source/quality across episodes of a series. Returns null when [bingeGroup]
+     * is blank or no stream advertises it, so callers can fall back to [selectBest].
+     *
+     * When several streams share the group (e.g. mirrors of the same release) the largest by
+     * estimated size wins, matching how [selectBestFromPool] breaks ties.
+     */
+    fun matchBingeGroup(streams: List<ResolvedStream>, bingeGroup: String?): ResolvedStream? {
+        if (bingeGroup.isNullOrBlank()) return null
+        return streams
+            .filter { it.stream.behaviorHints?.bingeGroup == bingeGroup }
+            .maxByOrNull { it.stream.effectiveVideoSizeBytes ?: 0L }
+    }
+
+    /**
      * Internal: applies quality + source-type + bitrate filtering to a pool without addon filtering.
      */
     private fun selectBestFromPool(

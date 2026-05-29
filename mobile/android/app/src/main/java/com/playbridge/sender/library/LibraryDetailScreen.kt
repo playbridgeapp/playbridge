@@ -343,6 +343,44 @@ fun LibraryDetailScreen(
         )
     }
 
+    /**
+     * Launch the in-app phone player for a just-resolved stream. For a series episode we
+     * hand the player the whole show (ordered episode stream IDs) so it can resolve and
+     * auto-advance episode-to-episode even without a Hub/play-endpoint addon — mirroring
+     * [buildHubPlaylist]'s episode selection. Movies / single episodes play directly.
+     */
+    fun launchPhonePlayback(streamUrl: String, resTitle: String, episode: StremioVideo?, bingeGroup: String? = null) {
+        val videos = addonMeta?.videos
+            ?.filter { it.season != null && it.episode != null && it.season > 0 }
+            ?.distinctBy { Pair(it.season, it.episode) }
+            ?.sortedWith(compareBy({ it.season }, { it.episode }))
+        if (isSeries && episode != null && videos != null && videos.size > 1) {
+            val currentImdbId = resolvedImdbId
+            val streamType = if (currentImdbId != null) "series" else addonType
+            val streamIds = videos.map { vid ->
+                if (currentImdbId != null) "$currentImdbId:${vid.season}:${vid.episode}" else vid.id
+            }
+            val titles = videos.map { vid ->
+                "$displayTitle S${vid.season}E${vid.episode}${if (vid.title.isNotBlank()) " - ${vid.title}" else ""}"
+            }
+            val startIdx = videos.indexOfFirst {
+                it.season == episode.season && it.episode == episode.episode
+            }.coerceAtLeast(0)
+            com.playbridge.sender.player.PlayerLauncher.startLazyEpisodes(
+                context = context,
+                firstUrl = streamUrl,
+                streamIds = streamIds,
+                titles = titles,
+                streamType = streamType,
+                startIndex = startIdx,
+                forcedSource = forcedSource,
+                bingeGroup = bingeGroup
+            )
+        } else {
+            com.playbridge.sender.player.PlayerLauncher.start(context, streamUrl, resTitle)
+        }
+    }
+
     val startResolution: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = start@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
         if (!canResolveStreams) return@start
 
@@ -385,7 +423,7 @@ fun LibraryDetailScreen(
                     val streamUrl = finalSelection.stream.url
                     if (streamUrl != null) {
                         if (forPhone) {
-                            com.playbridge.sender.player.PlayerLauncher.start(context, streamUrl, resTitle)
+                            launchPhonePlayback(streamUrl, resTitle, episode, finalSelection.stream.behaviorHints?.bingeGroup)
                         } else {
                             // Send to TV with metadata
                             val payload = playbridge.PlayPayload(
@@ -536,7 +574,7 @@ fun LibraryDetailScreen(
                 val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
 
                 if (forPhone) {
-                    com.playbridge.sender.player.PlayerLauncher.start(context, streamUrl, streamPickerTitle)
+                    launchPhonePlayback(streamUrl, streamPickerTitle, currentEpisodeSelection, resolved.stream.behaviorHints?.bingeGroup)
                 } else {
                     val payload = playbridge.PlayPayload(
                         url = streamUrl,

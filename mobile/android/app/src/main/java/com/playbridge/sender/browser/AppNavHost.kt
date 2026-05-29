@@ -753,6 +753,13 @@ fun AppNavHost(
                         tvIp = tvDevice?.ip,
                         tvPort = tvDevice?.port,
                         tvName = tvDevice?.name,
+                        availableTvDevices = remember(discoveredDevices, history) {
+                            (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
+                        },
+                        selectedTvDevice = tvDevice,
+                        connectionState = connectionState,
+                        onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
+                        onDisconnectTv = { connectionViewModel.disconnect() },
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
                         onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
                             {

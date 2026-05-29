@@ -119,10 +119,19 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.lifecycle.lifecycleScope
 import com.playbridge.sender.R
+import com.playbridge.sender.cast.QualityFilter
+import com.playbridge.sender.cast.SourceTypeFilter
+import com.playbridge.sender.cast.StreamSelector
 import com.playbridge.sender.cast.openInExternalPlayer
+import com.playbridge.sender.data.library.AddonRepository
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.koin.android.ext.android.inject
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -151,6 +160,7 @@ class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
     private var isBackgroundModeEnabled = false
     private val isInPipModeState = mutableStateOf(false)
+    private val addonRepository: AddonRepository by inject()
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
@@ -160,6 +170,8 @@ class PlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val lazyStreamIds = intent.getStringArrayListExtra(EXTRA_LAZY_STREAM_IDS)
+        val isLazy = !lazyStreamIds.isNullOrEmpty()
         val playlistUrls = intent.getStringArrayListExtra(EXTRA_PLAYLIST_URLS)
         val isPlaylist = !playlistUrls.isNullOrEmpty()
 
@@ -199,7 +211,31 @@ class PlayerActivity : ComponentActivity() {
         this.player = exo
 
         val initialTitle: String?
-        if (isPlaylist) {
+        var episodeController: LazyEpisodeController? = null
+        if (isLazy) {
+            // Series auto-play without a Hub/play-endpoint addon: only the first episode's
+            // stream URL is known. We play it immediately and resolve each subsequent episode
+            // on demand (see [LazyEpisodeController]) so the player still advances on its own.
+            val titles = intent.getStringArrayListExtra(EXTRA_PLAYLIST_TITLES).orEmpty()
+            val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0)
+                .coerceIn(0, lazyStreamIds!!.lastIndex.coerceAtLeast(0))
+            exo.setMediaItem(buildMediaItem(url!!, contentType, titles.getOrNull(startIndex), subtitles))
+            val ctrl = LazyEpisodeController(
+                player = exo,
+                scope = lifecycleScope,
+                repo = addonRepository,
+                streamType = intent.getStringExtra(EXTRA_LAZY_STREAM_TYPE) ?: "series",
+                forcedSource = intent.getStringExtra(EXTRA_FORCED_SOURCE),
+                bingeGroup = intent.getStringExtra(EXTRA_BINGE_GROUP),
+                streamIds = lazyStreamIds,
+                titles = titles,
+                startIndex = startIndex,
+                prefs = AutoPickPrefs.fromContext(this)
+            )
+            ctrl.prefetch(startIndex + 1)
+            episodeController = ctrl
+            initialTitle = titles.getOrNull(startIndex)
+        } else if (isPlaylist) {
             // Series auto-play: load every episode so ExoPlayer advances on its own.
             val titles = intent.getStringArrayListExtra(EXTRA_PLAYLIST_TITLES).orEmpty()
             val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0)
@@ -224,6 +260,7 @@ class PlayerActivity : ComponentActivity() {
                     title = initialTitle,
                     externalHeaders = headers,
                     externalContentType = contentType,
+                    episodeController = episodeController,
                     onClose = { finish() },
                     onEnded = { finish() },
                     isInPip = isInPip,
@@ -258,6 +295,10 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_PLAYLIST_URLS = "playlist_urls"
         const val EXTRA_PLAYLIST_TITLES = "playlist_titles"
         const val EXTRA_START_INDEX = "start_index"
+        const val EXTRA_LAZY_STREAM_IDS = "lazy_stream_ids"
+        const val EXTRA_LAZY_STREAM_TYPE = "lazy_stream_type"
+        const val EXTRA_FORCED_SOURCE = "forced_source"
+        const val EXTRA_BINGE_GROUP = "binge_group"
 
         private const val DEFAULT_UA =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -295,7 +336,7 @@ class PlayerActivity : ComponentActivity() {
                 .build()
         }
 
-        private fun buildMediaItem(
+        internal fun buildMediaItem(
             url: String,
             contentType: String?,
             title: String?,
@@ -388,6 +429,145 @@ object PlayerLauncher {
         }
         context.startActivity(intent)
     }
+
+    /**
+     * Launches [PlayerActivity] for a series when there is no Hub/play-endpoint addon to
+     * build a deterministic playlist from. Only [firstUrl] (the already-resolved start
+     * episode) is supplied; [streamIds] identify the remaining episodes, which the player
+     * resolves on demand as it advances. See [LazyEpisodeController].
+     */
+    fun startLazyEpisodes(
+        context: Context,
+        firstUrl: String,
+        streamIds: List<String>,
+        titles: List<String>,
+        streamType: String,
+        startIndex: Int,
+        forcedSource: String? = null,
+        bingeGroup: String? = null
+    ) {
+        if (firstUrl.isBlank()) return
+        // Single episode (or missing list): no point in lazy mode.
+        if (streamIds.size <= 1) {
+            start(context, firstUrl, titles.getOrNull(startIndex))
+            return
+        }
+        val intent = Intent(context, PlayerActivity::class.java).apply {
+            putExtra(PlayerActivity.EXTRA_URL, firstUrl)
+            putExtra(PlayerActivity.EXTRA_TITLE, titles.getOrNull(startIndex))
+            putStringArrayListExtra(PlayerActivity.EXTRA_LAZY_STREAM_IDS, ArrayList(streamIds))
+            putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_TITLES, ArrayList(titles))
+            putExtra(PlayerActivity.EXTRA_LAZY_STREAM_TYPE, streamType)
+            putExtra(PlayerActivity.EXTRA_START_INDEX, startIndex)
+            if (!forcedSource.isNullOrBlank()) putExtra(PlayerActivity.EXTRA_FORCED_SOURCE, forcedSource)
+            if (!bingeGroup.isNullOrBlank()) putExtra(PlayerActivity.EXTRA_BINGE_GROUP, bingeGroup)
+        }
+        context.startActivity(intent)
+    }
+}
+
+/**
+ * Auto-pick preferences mirrored from `browser_prefs` — the same keys the library detail
+ * screen uses when it auto-selects a stream. Read once when the player launches.
+ */
+data class AutoPickPrefs(
+    val qualityKey: String,
+    val maxMbps: Double?,
+    val addonKey: String,
+    val sourceTypes: Set<SourceTypeFilter>
+) {
+    companion object {
+        fun fromContext(context: Context): AutoPickPrefs {
+            val bp = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+            // Mid-playback we can't surface the manual picker, so fall back to "Auto"
+            // (quality-agnostic, bitrate-ranked) when auto-select is off.
+            val quality =
+                if (bp.getBoolean("auto_select_enabled", false))
+                    bp.getString("default_video_quality", "Auto") ?: "Auto"
+                else "Auto"
+            return AutoPickPrefs(
+                qualityKey = quality,
+                maxMbps = bp.getString("auto_stream_max_mbps", "")?.toDoubleOrNull(),
+                addonKey = bp.getString("auto_stream_addon", "") ?: "",
+                sourceTypes = SourceTypeFilter.parseCsv(bp.getString("auto_stream_source_types", ""))
+            )
+        }
+    }
+}
+
+/**
+ * Drives lazy, on-demand episode playback for series without a Hub/play-endpoint addon.
+ *
+ * The player holds a single media item at a time; [goTo] resolves the requested episode's
+ * best stream (via [AddonRepository] + [StreamSelector]) and swaps it in. Auto-advance,
+ * the next/previous controls and the episode sheet all route through [goTo]. [prefetch]
+ * warms the stream cache for an upcoming episode so the swap is near-instant.
+ */
+class LazyEpisodeController(
+    private val player: ExoPlayer,
+    private val scope: CoroutineScope,
+    private val repo: AddonRepository,
+    private val streamType: String,
+    private val forcedSource: String?,
+    private val bingeGroup: String?,
+    val streamIds: List<String>,
+    val titles: List<String>,
+    startIndex: Int,
+    private val prefs: AutoPickPrefs
+) {
+    val currentIndex = mutableIntStateOf(startIndex)
+    val isLoading = mutableStateOf(false)
+    val errorMessage = mutableStateOf<String?>(null)
+
+    val count: Int get() = streamIds.size
+
+    private var loadJob: Job? = null
+
+    /** Resolve [index]'s best stream, swap it into the player, and start playback. */
+    fun goTo(index: Int) {
+        if (index < 0 || index >= streamIds.size) return
+        loadJob?.cancel()
+        currentIndex.intValue = index
+        errorMessage.value = null
+        isLoading.value = true
+        loadJob = scope.launch {
+            val streamUrl = resolveBest(index)
+            isLoading.value = false
+            if (streamUrl == null) {
+                errorMessage.value = "No stream found for ${titles.getOrNull(index) ?: "this episode"}."
+                return@launch
+            }
+            player.setMediaItem(
+                PlayerActivity.buildMediaItem(streamUrl, null, titles.getOrNull(index), emptyList())
+            )
+            player.prepare()
+            player.playWhenReady = true
+            prefetch(index + 1)
+        }
+    }
+
+    /** Resolve an upcoming episode in the background to warm the stream cache. */
+    fun prefetch(index: Int) {
+        if (index < 0 || index >= streamIds.size) return
+        scope.launch { runCatching { resolveBest(index) } }
+    }
+
+    private suspend fun resolveBest(index: Int): String? {
+        val streams = repo.resolveStreamsOnce(streamType, streamIds[index], forcedSource)
+        // Prefer the same release the user started with (Stremio bingeGroup) so audio/video,
+        // source and quality stay consistent across episodes; fall back to the usual auto-pick.
+        val best = StreamSelector.matchBingeGroup(streams, bingeGroup)
+            ?: StreamSelector.selectBest(
+                streams = streams,
+                preferredQuality = QualityFilter.fromKey(prefs.qualityKey) ?: QualityFilter.ALL,
+                maxMbps = prefs.maxMbps,
+                runtimeMinutes = 45,
+                preferredAddon = prefs.addonKey.takeIf { it.isNotEmpty() },
+                preferredSourceTypes = prefs.sourceTypes
+            )
+            ?: streams.firstOrNull()
+        return best?.stream?.url
+    }
 }
 
 /** Which vertical/horizontal drag the user is currently performing. */
@@ -405,6 +585,7 @@ private fun PlayerScreen(
     title: String?,
     externalHeaders: Map<String, String>,
     externalContentType: String?,
+    episodeController: LazyEpisodeController? = null,
     onClose: () -> Unit,
     onEnded: () -> Unit,
     isInPip: Boolean,
@@ -488,15 +669,40 @@ private fun PlayerScreen(
         }
     }
 
-    // Playlist (series) state, derived from the player's timeline.
-    val episodeTitles = remember {
-        (0 until player.mediaItemCount).map {
+    // Playlist (series) state. With a lazy controller the full episode list is known up
+    // front (titles supplied); otherwise it's derived from the player's static timeline.
+    val isLazy = episodeController != null
+    val episodeTitles = remember(episodeController) {
+        episodeController?.titles ?: (0 until player.mediaItemCount).map {
             player.getMediaItemAt(it).mediaMetadata.title?.toString() ?: "Episode ${it + 1}"
         }
     }
     val isPlaylist = episodeTitles.size > 1
-    var currentIndex by remember { mutableIntStateOf(player.currentMediaItemIndex) }
+    var nativeIndex by remember { mutableIntStateOf(player.currentMediaItemIndex) }
+    val currentIndex = if (isLazy) episodeController!!.currentIndex.intValue else nativeIndex
     var showEpisodes by remember { mutableStateOf(false) }
+
+    /** Navigate to an episode: lazy resolve-and-swap, or a native timeline seek. */
+    fun goToEpisode(index: Int) {
+        if (index < 0 || index >= episodeTitles.size) return
+        errorMessage = null
+        if (isLazy) {
+            episodeController!!.goTo(index)
+        } else {
+            player.seekTo(index, 0L)
+            player.play()
+        }
+    }
+
+    // Surface lazy-resolution failures ("No stream found…") in the existing error overlay.
+    val controllerError = episodeController?.errorMessage?.value
+    LaunchedEffect(controllerError) {
+        if (controllerError != null) errorMessage = controllerError
+    }
+
+    // While the next episode's stream is being resolved there is no player state change,
+    // so fold the controller's loading flag into the buffering indicator.
+    val isResolvingEpisode = episodeController?.isLoading?.value == true
 
     // Gesture HUD state
     var dragMode by remember { mutableStateOf(DragMode.NONE) }
@@ -535,7 +741,7 @@ private fun PlayerScreen(
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // Title + index follow the current playlist item (e.g. next episode on auto-advance).
                 currentTitle = mediaItem?.mediaMetadata?.title?.toString() ?: title
-                currentIndex = player.currentMediaItemIndex
+                nativeIndex = player.currentMediaItemIndex
 
                 // On media item transition (seeking to previous/next or auto-advance), certain hardware
                 // decoders fail to hand off the SurfaceView correctly, causing a black screen.
@@ -553,8 +759,16 @@ private fun PlayerScreen(
                     val d = player.duration
                     if (d > 0) durationMs = d
                 }
-                // End of all content (playlist exhausted, or a single item finished): exit.
-                if (state == Player.STATE_ENDED) onEnded()
+                // End of the current item. In lazy mode advance to (and resolve) the next
+                // episode; otherwise this is the end of all content, so exit.
+                if (state == Player.STATE_ENDED) {
+                    val ctrl = episodeController
+                    if (ctrl != null && ctrl.currentIndex.intValue < ctrl.count - 1) {
+                        ctrl.goTo(ctrl.currentIndex.intValue + 1)
+                    } else {
+                        onEnded()
+                    }
+                }
             }
             override fun onPlayerError(error: PlaybackException) {
                 errorMessage = error.message ?: "Playback error"
@@ -772,7 +986,7 @@ private fun PlayerScreen(
             }
 
             // Buffering spinner (suppressed while a gesture HUD is showing).
-            if (isBuffering && dragMode == DragMode.NONE && errorMessage == null) {
+            if ((isBuffering || isResolvingEpisode) && dragMode == DragMode.NONE && errorMessage == null) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
                     color = Color.White
@@ -894,11 +1108,14 @@ private fun PlayerScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = onClose) { Text("Close", color = Color.White.copy(alpha = 0.8f)) }
                             if (isPlaylist && currentIndex < episodeTitles.size - 1) {
-                                TextButton(onClick = { errorMessage = null; player.seekToNextMediaItem() }) {
+                                TextButton(onClick = { goToEpisode(currentIndex + 1) }) {
                                     Text("Next episode", color = Color.White)
                                 }
                             }
-                            Button(onClick = { errorMessage = null; player.prepare() }) { Text("Retry") }
+                            Button(onClick = {
+                                errorMessage = null
+                                if (isLazy) goToEpisode(currentIndex) else player.prepare()
+                            }) { Text("Retry") }
                         }
                     }
                 }
@@ -996,7 +1213,7 @@ private fun PlayerScreen(
                     ) {
                         if (isPlaylist) {
                             GlassControl(
-                                onClick = { player.seekToPreviousMediaItem(); markInteraction() },
+                                onClick = { goToEpisode(currentIndex - 1); markInteraction() },
                                 diameter = 56.dp,
                                 enabled = currentIndex > 0
                             ) {
@@ -1022,7 +1239,7 @@ private fun PlayerScreen(
                         }
                         if (isPlaylist) {
                             GlassControl(
-                                onClick = { player.seekToNextMediaItem(); markInteraction() },
+                                onClick = { goToEpisode(currentIndex + 1); markInteraction() },
                                 diameter = 56.dp,
                                 enabled = currentIndex < episodeTitles.size - 1
                             ) {
@@ -1325,7 +1542,7 @@ private fun PlayerScreen(
                 EpisodeSheet(
                     titles = episodeTitles,
                     currentIndex = currentIndex,
-                    onSelect = { idx -> player.seekTo(idx, 0L); player.play() },
+                    onSelect = { idx -> goToEpisode(idx) },
                     onDismiss = { showEpisodes = false }
                 )
             }

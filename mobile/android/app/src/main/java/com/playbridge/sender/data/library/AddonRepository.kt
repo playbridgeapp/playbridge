@@ -912,6 +912,14 @@ class AddonRepository(
     }
 
     /**
+     * One-shot, cache-aware stream resolution. Used by the in-app player to lazily
+     * resolve the next episode when there is no play-endpoint ("Hub") addon to build
+     * a deterministic playlist URL from.
+     */
+    suspend fun resolveStreamsOnce(type: String, id: String, forcedSource: String? = null): List<ResolvedStream> =
+        resolveStreams(type, id, forcedSource)
+
+    /**
      * Resolve streams incrementally — emits results from each addon as soon as it completes.
      * This allows the UI to show streams progressively.
      */

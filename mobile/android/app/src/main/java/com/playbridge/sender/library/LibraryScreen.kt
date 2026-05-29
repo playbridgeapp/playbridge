@@ -71,6 +71,9 @@ import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
 import com.playbridge.sender.settings.SettingsScreen
+import com.playbridge.sender.cast.ChipDropdown
+import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.connection.WebSocketClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -99,6 +102,11 @@ fun LibraryScreen(
     tvIp: String?,
     tvPort: Int?,
     tvName: String? = null,
+    availableTvDevices: List<TvDevice> = emptyList(),
+    selectedTvDevice: TvDevice? = null,
+    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
+    onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
+    onDisconnectTv: (() -> Unit)? = null,
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
@@ -137,6 +145,11 @@ fun LibraryScreen(
             tvIp = tvIp,
             tvPort = tvPort,
             tvName = tvName,
+            availableTvDevices = availableTvDevices,
+            selectedTvDevice = selectedTvDevice,
+            connectionState = connectionState,
+            onTvDeviceSelect = onTvDeviceSelect,
+            onDisconnectTv = onDisconnectTv,
             onMenuClick = onMenuClick,
             onMovieClick = onMovieClick,
             onTvShowClick = onTvShowClick,
@@ -165,6 +178,11 @@ private fun LibraryScreenContent(
     tvIp: String?,
     tvPort: Int?,
     tvName: String?,
+    availableTvDevices: List<TvDevice> = emptyList(),
+    selectedTvDevice: TvDevice? = null,
+    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
+    onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
+    onDisconnectTv: (() -> Unit)? = null,
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
@@ -180,6 +198,21 @@ private fun LibraryScreenContent(
     onSearchFocused: () -> Unit,
     onStartSearch: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
+
+    LaunchedEffect(connectionState) {
+        if (connectionState is WebSocketClient.ConnectionState.Connected) {
+            browserPrefs.edit().putBoolean("watch_on_tv", true).apply()
+        } else if (connectionState is WebSocketClient.ConnectionState.Disconnected ||
+                   connectionState is WebSocketClient.ConnectionState.Error ||
+                   connectionState is WebSocketClient.ConnectionState.AuthFailed ||
+                   connectionState is WebSocketClient.ConnectionState.PairingDenied ||
+                   connectionState is WebSocketClient.ConnectionState.PinMismatch) {
+            browserPrefs.edit().putBoolean("watch_on_tv", false).apply()
+        }
+    }
+
     val keyboardController = LocalSoftwareKeyboardController.current
 
     // Check if API key is configured (only needed for Browse/search)
@@ -385,36 +418,65 @@ private fun LibraryScreenContent(
                                         .focusRequester(searchFocusRequester)
                                 )
                             } else {
-                                // Centered title with Connected TV details
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
-                                ) {
-                                    Text(
-                                        text = "PlayBridge",
-                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.Center
-                                    ) {
-                                        val isConnected = !tvName.isNullOrBlank()
-                                        Icon(
-                                            imageVector = if (isConnected) Icons.Default.Tv else Icons.Default.Smartphone,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(12.dp),
-                                            tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = if (isConnected) "Watching on: $tvName" else "Watching on: Phone",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                                            color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                        )
-                                    }
+                                val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
+                                val isConnecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
+                                                   connectionState is WebSocketClient.ConnectionState.Retrying ||
+                                                   connectionState is WebSocketClient.ConnectionState.WaitingForApproval
+
+                                val selectedLabel = when {
+                                    isConnected -> "Watching on: $tvName"
+                                    isConnecting -> "Connecting to: $tvName..."
+                                    else -> "Watching on: This Device"
                                 }
+
+                                val connectedGreen = Color(0xFF4CAF50)
+                                val connectingOrange = Color(0xFFFF9800)
+
+                                val leadingIconVector = when {
+                                    isConnected -> Icons.Default.Tv
+                                    isConnecting -> Icons.Default.Tv
+                                    else -> Icons.Default.Smartphone
+                                }
+
+                                val leadingIconTint = when {
+                                    isConnected -> connectedGreen
+                                    isConnecting -> connectingOrange
+                                    else -> Color.White.copy(alpha = 0.7f)
+                                }
+
+                                val chipLabelColor = when {
+                                    isConnected -> connectedGreen
+                                    isConnecting -> connectingOrange
+                                    else -> Color.Unspecified
+                                }
+
+                                ChipDropdown(
+                                    selectedLabel = selectedLabel,
+                                    options = listOf("phone" to "This Device") + availableTvDevices.map { 
+                                        (it.uuid.ifBlank { it.ip }) to (it.name.ifBlank { it.ip }) 
+                                    },
+                                    selectedValue = if (isConnected || isConnecting) (selectedTvDevice?.uuid ?: selectedTvDevice?.ip ?: "tv") else "phone",
+                                    onSelect = { value ->
+                                        if (value == "phone") {
+                                            onDisconnectTv?.invoke()
+                                            browserPrefs.edit().putBoolean("watch_on_tv", false).apply()
+                                        } else {
+                                            browserPrefs.edit().putBoolean("watch_on_tv", true).apply()
+                                            availableTvDevices.find { it.uuid == value || it.ip == value }?.let {
+                                                onTvDeviceSelect?.invoke(it)
+                                            }
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = leadingIconVector,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp),
+                                            tint = leadingIconTint
+                                        )
+                                    },
+                                    chipLabelColor = chipLabelColor
+                                )
                             }
                         },
                         navigationIcon = {
