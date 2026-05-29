@@ -736,13 +736,15 @@ private fun StreamItem(
                         }
                     }
 
-                    // Addon source
-                    Text(
-                        text = "via ${resolvedStream.addonName}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = subTextColor
-                    )
                 }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                // Addon source on a new line
+                Text(
+                    text = "via ${resolvedStream.addonName}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = subTextColor
+                )
             }
         }
     }
