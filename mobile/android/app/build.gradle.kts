@@ -141,5 +141,9 @@ dependencies {
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.effect) // HDR→SDR tone mapping via the playback effects pipeline
 
+    // Koin Dependency Injection
+    implementation(libs.koin.android)
+    implementation(libs.koin.compose)
+
     implementation(project(":shared"))
 }

@@ -236,8 +236,33 @@ fun StreamPickerSheet(
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                if (selectedFilter != QualityFilter.ALL || selectedProvider != null || selectedSourceTypes.isNotEmpty()) {
+                    FilterChip(
+                        selected = true,
+                        onClick = {
+                            selectedFilter = QualityFilter.ALL
+                            selectedProvider = null
+                            selectedSourceTypes = emptySet()
+                        },
+                        label = {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear all filters",
+                                modifier = Modifier.size(18.dp),
+                                tint = contentColor
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = if (isDynamic) contentColor.copy(alpha = 0.2f) else MaterialTheme.colorScheme.secondaryContainer,
+                            selectedLabelColor = contentColor
+                        ),
+                        border = null
+                    )
+                }
+
                 // Quality: single-select.
                 DropdownFilterChip(
                     label = "Quality",

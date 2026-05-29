@@ -1,6 +1,8 @@
 package com.playbridge.sender.cast
 
 import android.content.Context
+import org.koin.compose.koinInject
+import com.playbridge.sender.data.settings.SettingsRepository
 import android.os.Environment
 import android.widget.Toast
 import androidx.compose.foundation.clickable
@@ -36,13 +38,12 @@ fun TVSettingsScreen(
     tvPort: Int? = null
 ) {
     val context = LocalContext.current
+    val settingsRepository: SettingsRepository = koinInject()
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
     val isTvAvailable = tvIp != null && tvPort != null
 
-    var playerMode by remember {
-        mutableStateOf(prefs.getString("tv_player_mode", "tv") ?: "tv")
-    }
+    val playerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
     var playerExpanded by remember { mutableStateOf(false) }
     val playerOptions = listOf(
         "tv" to "TV Default",
@@ -119,9 +120,8 @@ fun TVSettingsScreen(
                         DropdownMenuItem(
                             text = { Text(optionName) },
                             onClick = {
-                                playerMode = optionId
                                 playerExpanded = false
-                                prefs.edit().putString("tv_player_mode", optionId).apply()
+                                scope.launch { settingsRepository.setTvPlayerMode(optionId) }
                             }
                         )
                     }
@@ -171,9 +171,7 @@ fun TVSettingsScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             // Auto-switch to Remote
-            var autoSwitchToRemote by remember {
-                mutableStateOf(prefs.getBoolean("auto_switch_to_remote", false))
-            }
+            val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsState(initial = true)
             ListItem(
                 headlineContent = { Text("Auto Switch to Remote") },
                 supportingContent = { Text("Automatically open remote control after casting content") },
@@ -181,8 +179,7 @@ fun TVSettingsScreen(
                     Switch(
                         checked = autoSwitchToRemote,
                         onCheckedChange = {
-                            autoSwitchToRemote = it
-                            prefs.edit().putBoolean("auto_switch_to_remote", it).apply()
+                            scope.launch { settingsRepository.setAutoSwitchToRemote(it) }
                         }
                     )
                 },

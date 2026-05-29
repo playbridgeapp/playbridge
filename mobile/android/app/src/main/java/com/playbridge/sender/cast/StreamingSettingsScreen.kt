@@ -1,6 +1,9 @@
 package com.playbridge.sender.cast
 
 import android.content.Context
+import org.koin.compose.koinInject
+import com.playbridge.sender.data.settings.SettingsRepository
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -26,12 +29,12 @@ import com.playbridge.sender.data.library.*
 @Composable
 fun StreamingSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val settingsRepository: SettingsRepository = koinInject()
+    val scope = rememberCoroutineScope()
     val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
 
     // --- Unified Quality & Selection ---
-    var preferredResolution by remember {
-        mutableStateOf(browserPrefs.getString("default_video_quality", "Auto") ?: "Auto")
-    }
+    val preferredResolution by settingsRepository.defaultVideoQuality.collectAsState(initial = "Auto")
     var resolutionExpanded by remember { mutableStateOf(false) }
 
     var autoSelectEnabled by remember {
@@ -56,14 +59,10 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
     }
 
     // --- Language Preferences ---
-    var preferredAudioLang by remember {
-        mutableStateOf(browserPrefs.getString("preferred_audio_lang", "") ?: "")
-    }
+    val preferredAudioLang by settingsRepository.preferredAudioLang.collectAsState(initial = "")
     var audioExpanded by remember { mutableStateOf(false) }
 
-    var preferredSubLang by remember {
-        mutableStateOf(browserPrefs.getString("preferred_subtitle_lang", "") ?: "")
-    }
+    val preferredSubLang by settingsRepository.preferredSubtitleLang.collectAsState(initial = "")
     var subExpanded by remember { mutableStateOf(false) }
 
     var minSizeText by remember {
@@ -75,8 +74,12 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
     var minBitrateText by remember {
         mutableStateOf(browserPrefs.getString("auto_stream_min_mbps", "") ?: "")
     }
-    var maxBitrateText by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_max_mbps", "") ?: "")
+
+    val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
+    var maxBitrateText by remember { mutableStateOf("") }
+    
+    LaunchedEffect(maxBitrateCapMbps) {
+        maxBitrateText = if (maxBitrateCapMbps > 0.0) maxBitrateCapMbps.toString() else ""
     }
 
     Scaffold(
@@ -133,8 +136,8 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                         DropdownMenuItem(
                             text = { Text(label) },
                             onClick = {
-                                preferredResolution = code
                                 resolutionExpanded = false
+                                scope.launch { settingsRepository.setDefaultVideoQuality(code) }
                                 browserPrefs.edit().putString("default_video_quality", code).apply()
                             }
                         )
@@ -182,6 +185,10 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                     onValueChange = { raw ->
                         if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
                             maxBitrateText = raw
+                            scope.launch {
+                                val doubleValue = raw.toDoubleOrNull() ?: 0.0
+                                settingsRepository.setMaxBitrateCapMbps(doubleValue)
+                            }
                             browserPrefs.edit().putString("auto_stream_max_mbps", raw.trim()).apply()
                         }
                     },
@@ -352,8 +359,8 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                         DropdownMenuItem(
                             text = { Text(label) },
                             onClick = {
-                                preferredAudioLang = code
                                 audioExpanded = false
+                                scope.launch { settingsRepository.setPreferredAudioLang(code) }
                                 browserPrefs.edit().putString("preferred_audio_lang", code).apply()
                             }
                         )
@@ -392,8 +399,8 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                         DropdownMenuItem(
                             text = { Text(label) },
                             onClick = {
-                                preferredSubLang = code
                                 subExpanded = false
+                                scope.launch { settingsRepository.setPreferredSubtitleLang(code) }
                                 browserPrefs.edit().putString("preferred_subtitle_lang", code).apply()
                             }
                         )

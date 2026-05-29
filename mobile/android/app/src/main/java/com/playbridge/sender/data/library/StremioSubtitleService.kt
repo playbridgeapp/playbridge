@@ -19,7 +19,11 @@ import java.util.concurrent.TimeUnit
  * Duplicates are eliminated by (url, lang) pair.
  */
 class StremioSubtitleService(
-    private val addonRepository: AddonRepository? = null
+    private val addonRepository: AddonRepository? = null,
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
 ) {
 
     companion object {
@@ -31,11 +35,6 @@ class StremioSubtitleService(
         ignoreUnknownKeys = true
         isLenient = true
     }
-
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
 
     /**
      * Fetch subtitles for a movie.

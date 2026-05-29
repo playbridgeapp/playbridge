@@ -13,6 +13,7 @@ import com.playbridge.sender.data.library.AddonRepository
 import com.playbridge.sender.data.library.WatchlistEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
@@ -22,6 +23,7 @@ import mozilla.components.browser.state.state.TabSessionState
 object BackupUtils {
 
     suspend fun createExportJson(context: Context): String = withContext(Dispatchers.IO) {
+        val settingsRepository = org.koin.core.context.GlobalContext.get().get<com.playbridge.sender.data.settings.SettingsRepository>()
         val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
         val tmdbPrefs = context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE)
         val database = DatabaseProvider.getDatabase(context)
@@ -54,7 +56,7 @@ object BackupUtils {
             }.filterValues { it.isNotBlank() },
             tmdbApiKey = tmdbPrefs.getString("tmdb_api_key", ""),
             omdbApiKey = tmdbPrefs.getString("omdb_api_key", ""),
-            tvPlayerMode = prefs.getString("tv_player_mode", "tv"),
+            tvPlayerMode = settingsRepository.tvPlayerMode.first(),
             tvBrowserMode = prefs.getString("tv_browser_mode", "tv"),
             addonUrls = addons.map { it.manifestUrl },
             tabs = currentTabs,
@@ -69,6 +71,7 @@ object BackupUtils {
 
     suspend fun importFromJson(context: Context, jsonString: String): ImportResult = withContext(Dispatchers.IO) {
         try {
+            val settingsRepository = org.koin.core.context.GlobalContext.get().get<com.playbridge.sender.data.settings.SettingsRepository>()
             val imported = Json { ignoreUnknownKeys = true }.decodeFromString<ExportedSettings>(jsonString)
             
             val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
@@ -77,9 +80,12 @@ object BackupUtils {
             val addonRepository = AddonRepository(database.addonDao())
 
             prefs.edit().apply {
-                if (imported.tvPlayerMode != null) putString("tv_player_mode", imported.tvPlayerMode)
                 if (imported.tvBrowserMode != null) putString("tv_browser_mode", imported.tvBrowserMode)
                 apply()
+            }
+
+            if (imported.tvPlayerMode != null) {
+                settingsRepository.setTvPlayerMode(imported.tvPlayerMode)
             }
 
             tmdbPrefs.edit().apply {
