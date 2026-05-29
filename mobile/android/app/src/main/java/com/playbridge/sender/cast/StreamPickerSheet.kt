@@ -240,27 +240,25 @@ fun StreamPickerSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (selectedFilter != QualityFilter.ALL || selectedProvider != null || selectedSourceTypes.isNotEmpty()) {
-                    FilterChip(
-                        selected = true,
+                    Surface(
                         onClick = {
                             selectedFilter = QualityFilter.ALL
                             selectedProvider = null
                             selectedSourceTypes = emptySet()
                         },
-                        label = {
+                        shape = RoundedCornerShape(percent = 50),
+                        color = if (isDynamic) contentColor.copy(alpha = 0.2f) else MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Clear all filters",
-                                modifier = Modifier.size(18.dp),
-                                tint = contentColor
+                                modifier = Modifier.size(16.dp)
                             )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = if (isDynamic) contentColor.copy(alpha = 0.2f) else MaterialTheme.colorScheme.secondaryContainer,
-                            selectedLabelColor = contentColor
-                        ),
-                        border = null
-                    )
+                        }
+                    }
                 }
 
                 // Quality: single-select.
@@ -541,7 +539,10 @@ private fun DropdownFilterChip(
             selected = isCustom,
             onClick = { expanded = true },
             enabled = enabled,
-            label = { Text("$label: $valueText", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            label = {
+                val displayText = if (isCustom) valueText else label
+                Text(displayText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            },
             trailingIcon = {
                 Icon(
                     Icons.Default.ArrowDropDown,
@@ -703,6 +704,35 @@ private fun StreamItem(
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 color = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+
+                    // Binge Group
+                    stream.behaviorHints?.bingeGroup?.let { bingeGroup ->
+                        if (bingeGroup.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = if (isDynamic) contentColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                contentColor = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Layers,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(10.dp),
+                                        tint = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = bingeGroup,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isDynamic) contentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
 
