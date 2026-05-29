@@ -154,7 +154,7 @@ fun BrowserToolbar(
                             modifier = Modifier.size(40.dp)
                         ) {
                             Icon(
-                                imageVector = if (isSecure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                painter = painterResource(id = R.drawable.ic_chrome_tune),
                                 contentDescription = if (isSecure) "Secure connection" else "Insecure connection",
                                 tint = if (isSecure) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(20.dp)

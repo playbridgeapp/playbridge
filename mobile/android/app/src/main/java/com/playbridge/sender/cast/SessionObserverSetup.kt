@@ -30,7 +30,11 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.MediaSession
 import com.playbridge.sender.data.history.HistoryDao
 import com.playbridge.sender.data.history.HistoryEntity
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
+import org.koin.compose.koinInject
 
 private val REGEX_PLAYBRIDGE_TITLE = Regex("\\[PlayBridge:(\\d+)\\]")
 
@@ -52,7 +56,6 @@ fun SessionObserverSetup(
     isLoading: MutableState<Boolean>,
     contextMenuUrl: MutableState<String?>,
     previousUrl: MutableState<String>,
-    historyDao: HistoryDao,
     pendingDownload: MutableState<PendingDownload?>,
     isDesktopMode: Boolean,
     detectVideosEnabled: Boolean,
@@ -66,6 +69,16 @@ fun SessionObserverSetup(
     onFullScreenChange: (Boolean, Boolean) -> Unit
 ) {
     val context = LocalContext.current
+    val historyDao: HistoryDao = koinInject()
+    val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = koinInject()
+    val blockPopups by settingsRepository.blockPopups.collectAsState(initial = true)
+    val whitelist by settingsRepository.popupWhitelist.collectAsState(initial = emptySet())
+    val blacklist by settingsRepository.popupBlacklist.collectAsState(initial = emptySet())
+
+    val blockPopupsState = rememberUpdatedState(blockPopups)
+    val whitelistState = rememberUpdatedState(whitelist)
+    val blacklistState = rememberUpdatedState(blacklist)
+    val selectedTabState = rememberUpdatedState(selectedTab)
 
     // Apply desktop user agent when the session changes (tab switch) — no reload,
     // since the page isn't loaded in desktop mode yet anyway.
@@ -256,8 +269,6 @@ fun SessionObserverSetup(
                         gs.mediaSessionDelegate = MediaSessionDelegate(context, tid, tabManager)
                     }
 
-                    val popupPrefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-
                     val navProxy = java.lang.reflect.Proxy.newProxyInstance(
                         GeckoSession.NavigationDelegate::class.java.classLoader,
                         arrayOf(GeckoSession.NavigationDelegate::class.java)
@@ -265,16 +276,21 @@ fun SessionObserverSetup(
                         if (method.name == "onNewSession" && args != null && args.size >= 2) {
                             val uri = args[1] as? String
                             if (uri != null) {
-                                val openerUrl = selectedTab?.content?.url ?: ""
+                                val openerUrl = currentUrl.value
                                 val openerHost = try {
                                     java.net.URI(openerUrl).host ?: openerUrl
                                 } catch (e: Exception) { openerUrl }
 
-                                val blockPopups = popupPrefs.getBoolean("block_popups", true)
-                                val whitelist = popupPrefs.getStringSet("popup_whitelist", emptySet()) ?: emptySet()
-                                val isWhitelisted = whitelist.contains(openerHost)
+                                val isWhitelisted = isHostMatch(openerHost, whitelistState.value)
+                                val isBlacklisted = isHostMatch(openerHost, blacklistState.value)
 
-                                if (blockPopups && !isWhitelisted) {
+                                val shouldBlock = when {
+                                    isWhitelisted -> false
+                                    isBlacklisted -> true
+                                    else -> blockPopupsState.value
+                                }
+
+                                if (shouldBlock) {
                                     Log.d(TAG, "Popup blocked from $openerHost: $uri")
                                     val rawGeckoSession = GeckoSession()
                                     val newEngineSession = GeckoEngineSession(
@@ -282,13 +298,15 @@ fun SessionObserverSetup(
                                         geckoSessionProvider = { rawGeckoSession },
                                         openGeckoSession = false
                                     )
-                                    scope.launch(Dispatchers.Main) {
-                                        pendingPopup.value = PendingPopup(
-                                            openerHost = openerHost,
-                                            popupUrl = uri,
-                                            rawGeckoSession = rawGeckoSession,
-                                            engineSession = newEngineSession,
-                                        )
+                                    if (!isBlacklisted) {
+                                        scope.launch(Dispatchers.Main) {
+                                            pendingPopup.value = PendingPopup(
+                                                openerHost = openerHost,
+                                                popupUrl = uri,
+                                                rawGeckoSession = rawGeckoSession,
+                                                engineSession = newEngineSession,
+                                            )
+                                        }
                                     }
                                     return@newProxyInstance GeckoResult.fromValue(rawGeckoSession)
                                 }
@@ -308,6 +326,21 @@ fun SessionObserverSetup(
                                         select = true
                                     )
                                     tabManager.sessions[tabId] = newEngineSession
+
+                                    // Register standard observer for popup tab
+                                    newEngineSession.register(object : EngineSession.Observer {
+                                        override fun onStateUpdated(state: mozilla.components.concept.engine.EngineSessionState) {
+                                            tabManager.engineStates[tabId] = state
+                                            tabManager.onAnyStateUpdated?.invoke(tabId)
+                                        }
+                                        override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
+                                            val current = tabManager.navigationStates[tabId] ?: TabNavigationState()
+                                            tabManager.navigationStates[tabId] = current.copy(
+                                                canGoBack = canGoBack ?: current.canGoBack,
+                                                canGoForward = canGoForward ?: current.canGoForward
+                                            )
+                                        }
+                                    })
                                 }
                                 return@newProxyInstance GeckoResult.fromValue(rawGeckoSession)
                             }
@@ -725,5 +758,14 @@ private fun parseCN(principal: String): String? =
         .map { it.trim() }
         .firstOrNull { it.startsWith("CN=") }
         ?.removePrefix("CN=")
+
+private fun isHostMatch(host: String, list: Set<String>): Boolean {
+    val trimmedHost = host.trim().lowercase()
+    if (trimmedHost.isBlank()) return false
+    return list.any { exception ->
+        val trimmedException = exception.trim().lowercase()
+        trimmedException.isNotBlank() && (trimmedHost == trimmedException || trimmedHost.endsWith(".$trimmedException"))
+    }
+}
 
 private const val TAG = "SessionObserver"

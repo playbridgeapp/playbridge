@@ -23,8 +23,6 @@ import com.playbridge.sender.data.library.TmdbMovieCertifications
 import com.playbridge.sender.data.library.TmdbWatchProvider
 import com.playbridge.sender.data.library.TmdbKeyword
 import kotlinx.coroutines.Job
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.grid.LazyGridState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +31,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -48,15 +49,44 @@ import java.io.File
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.library.WatchlistEntity
 import com.playbridge.sender.data.library.WatchlistStatus
-class LibraryViewModel(application: Application) : AndroidViewModel(application) {
-    val tmdb = TmdbRepository(application)
-    private val database = DatabaseProvider.getDatabase(application)
-    private val watchlistDao = database.watchlistDao()
-    private val searchHistoryDao = database.searchHistoryDao()
-    private val addonRepository = AddonRepository(
+
+data class DiscoveryFiltersState(
+    val mediaType: LibraryMediaType = LibraryMediaType.ALL,
+    val sort: String = "Popular",
+    val yearFrom: String = "",
+    val yearTo: String = "",
+    val selectedGenres: Set<String> = emptySet(),
+    val excludedGenres: Set<String> = emptySet(),
+    val matchAllGenres: Boolean = false,
+    val language: String? = null,
+    val originCountry: String? = null,
+    val minRating: Double = 0.0,
+    val maxRating: Double = 0.0,
+    val minVotes: Int = 0,
+    val runtimeMin: Int = 0,
+    val runtimeMax: Int = 0,
+    val watchRegion: String = "US",
+    val selectedProviders: Set<Int> = emptySet(),
+    val selectedMonetization: Set<String> = emptySet(),
+    val certification: String? = null,
+    val selectedReleaseTypes: Set<Int> = emptySet(),
+    val selectedTvStatuses: Set<Int> = emptySet(),
+    val selectedTvTypes: Set<Int> = emptySet(),
+    val selectedKeywords: List<TmdbKeyword> = emptyList(),
+    val includeAdult: Boolean = false
+)
+
+class LibraryViewModel(
+    application: Application,
+    val tmdb: TmdbRepository = TmdbRepository(application),
+    private val database: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
+    private val addonRepository: AddonRepository = AddonRepository(
         addonDao = database.addonDao(),
         cacheDir = application.cacheDir
     )
+) : AndroidViewModel(application) {
+    private val watchlistDao = database.watchlistDao()
+    private val searchHistoryDao = database.searchHistoryDao()
 
     /**
      * Serialises all watchlist write operations so that rapid taps cannot
@@ -66,24 +96,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     val watchlist: StateFlow<List<WatchlistEntity>> = watchlistDao.getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    // UI Scroll States
-    val mainListState = LazyListState()
-    val discoveredMoviesListState = LazyListState()
-    val discoveredTvShowsListState = LazyListState()
-    val discoverGridState = LazyGridState()
-    val searchResultsListState = LazyListState()
-
-    /**
-     * Per-row horizontal scroll states for addon catalog rows, keyed by
-     * "${addonBaseUrl}:${type}:${catalogId}".
-     * Stored in the ViewModel so position is preserved across recompositions
-     * and tab switches.
-     */
-    private val _catalogRowScrollStates = java.util.concurrent.ConcurrentHashMap<String, LazyListState>()
-
-    fun catalogRowScrollState(key: String): LazyListState =
-        _catalogRowScrollStates.getOrPut(key) { LazyListState() }
 
     private val _isConfigured = MutableStateFlow(tmdb.isConfigured())
     val isConfigured: StateFlow<Boolean> = _isConfigured.asStateFlow()
@@ -95,12 +107,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
 
-
     private val _isSearchLoading = MutableStateFlow(false)
     val isSearchLoading: StateFlow<Boolean> = _isSearchLoading.asStateFlow()
 
     // Addon search results — grouped by addon so the UI can show per-source filter chips.
-    // Use .flatMap { it.items } to get the flat list if needed.
     private val _addonSearchGroups = MutableStateFlow<List<AddonSearchResultGroup>>(emptyList())
     val addonSearchGroups: StateFlow<List<AddonSearchResultGroup>> = _addonSearchGroups.asStateFlow()
 
@@ -116,26 +126,13 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         _selectedTab.value = tab
     }
 
-    // Discovery state
-    private val _selectedMediaType = MutableStateFlow(LibraryMediaType.ALL)
-    val selectedMediaType: StateFlow<LibraryMediaType> = _selectedMediaType.asStateFlow()
+    // Consolidated Discovery filters state
+    private val _filters = MutableStateFlow(DiscoveryFiltersState())
+    val filters: StateFlow<DiscoveryFiltersState> = _filters.asStateFlow()
 
-    private val _selectedSort = MutableStateFlow("Popular")  // label from TmdbDiscoverSorts
-    val selectedSort: StateFlow<String> = _selectedSort.asStateFlow()
-
-    private val _selectedYearFrom = MutableStateFlow("")
-    val selectedYearFrom: StateFlow<String> = _selectedYearFrom.asStateFlow()
-    private val _selectedYearTo = MutableStateFlow("")
-    val selectedYearTo: StateFlow<String> = _selectedYearTo.asStateFlow()
-
-    private val _selectedGenres = MutableStateFlow<Set<String>>(emptySet())  // genre names
-    val selectedGenres: StateFlow<Set<String>> = _selectedGenres.asStateFlow()
-
-    private val _excludedGenres = MutableStateFlow<Set<String>>(emptySet())  // genre names
-    val excludedGenres: StateFlow<Set<String>> = _excludedGenres.asStateFlow()
-
-    private val _matchAllGenres = MutableStateFlow(false)
-    val matchAllGenres: StateFlow<Boolean> = _matchAllGenres.asStateFlow()
+    fun updateFilters(update: (DiscoveryFiltersState) -> DiscoveryFiltersState) {
+        _filters.update { update(it) }
+    }
 
     private val _discoveredMovies = MutableStateFlow<List<TmdbMovie>>(emptyList())
     val discoveredMovies: StateFlow<List<TmdbMovie>> = _discoveredMovies.asStateFlow()
@@ -152,59 +149,15 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val isLoadingMoreDiscoveredTvShows: StateFlow<Boolean> = _isLoadingMoreDiscoveredTvShows.asStateFlow()
     private val _hasMoreDiscoveredTvShows = MutableStateFlow(true)
     val hasMoreDiscoveredTvShows: StateFlow<Boolean> = _hasMoreDiscoveredTvShows.asStateFlow()
-    
-    private val _selectedLanguage = MutableStateFlow<String?>(null)
-    val selectedLanguage: StateFlow<String?> = _selectedLanguage.asStateFlow()
 
-    private val _selectedOriginCountry = MutableStateFlow<String?>(null)
-    val selectedOriginCountry: StateFlow<String?> = _selectedOriginCountry.asStateFlow()
-
-    private val _selectedMinRating = MutableStateFlow(0.0)
-    val selectedMinRating: StateFlow<Double> = _selectedMinRating.asStateFlow()
-    private val _selectedMaxRating = MutableStateFlow(0.0)   // 0 = no max
-    val selectedMaxRating: StateFlow<Double> = _selectedMaxRating.asStateFlow()
-
-    private val _selectedMinVotes = MutableStateFlow(0)
-    val selectedMinVotes: StateFlow<Int> = _selectedMinVotes.asStateFlow()
-
-    private val _selectedRuntimeMin = MutableStateFlow(0)    // minutes, 0 = unset
-    val selectedRuntimeMin: StateFlow<Int> = _selectedRuntimeMin.asStateFlow()
-    private val _selectedRuntimeMax = MutableStateFlow(0)    // minutes, 0 = unset
-    val selectedRuntimeMax: StateFlow<Int> = _selectedRuntimeMax.asStateFlow()
-
-    // Watch providers (streaming)
-    private val _selectedWatchRegion = MutableStateFlow("US")
-    val selectedWatchRegion: StateFlow<String> = _selectedWatchRegion.asStateFlow()
-    private val _selectedProviders = MutableStateFlow<Set<Int>>(emptySet())
-    val selectedProviders: StateFlow<Set<Int>> = _selectedProviders.asStateFlow()
-    private val _selectedMonetization = MutableStateFlow<Set<String>>(emptySet())
-    val selectedMonetization: StateFlow<Set<String>> = _selectedMonetization.asStateFlow()
     private val _watchProviders = MutableStateFlow<List<TmdbWatchProvider>>(emptyList())
     val watchProviders: StateFlow<List<TmdbWatchProvider>> = _watchProviders.asStateFlow()
 
-    // Movie-only
-    private val _selectedCertification = MutableStateFlow<String?>(null)
-    val selectedCertification: StateFlow<String?> = _selectedCertification.asStateFlow()
-    private val _selectedReleaseTypes = MutableStateFlow<Set<Int>>(emptySet())
-    val selectedReleaseTypes: StateFlow<Set<Int>> = _selectedReleaseTypes.asStateFlow()
-
-    // TV-only
-    private val _selectedTvStatuses = MutableStateFlow<Set<Int>>(emptySet())
-    val selectedTvStatuses: StateFlow<Set<Int>> = _selectedTvStatuses.asStateFlow()
-    private val _selectedTvTypes = MutableStateFlow<Set<Int>>(emptySet())
-    val selectedTvTypes: StateFlow<Set<Int>> = _selectedTvTypes.asStateFlow()
-
-    // Keywords (searched against TMDB, filtered via with_keywords)
-    private val _selectedKeywords = MutableStateFlow<List<TmdbKeyword>>(emptyList())
-    val selectedKeywords: StateFlow<List<TmdbKeyword>> = _selectedKeywords.asStateFlow()
     private val _keywordResults = MutableStateFlow<List<TmdbKeyword>>(emptyList())
     val keywordResults: StateFlow<List<TmdbKeyword>> = _keywordResults.asStateFlow()
     private val _isSearchingKeywords = MutableStateFlow(false)
     val isSearchingKeywords: StateFlow<Boolean> = _isSearchingKeywords.asStateFlow()
     private var keywordSearchJob: Job? = null
-
-    private val _includeAdult = MutableStateFlow(false)
-    val includeAdult: StateFlow<Boolean> = _includeAdult.asStateFlow()
 
     private val _isDiscoveryLoading = MutableStateFlow(false)
     val isDiscoveryLoading: StateFlow<Boolean> = _isDiscoveryLoading.asStateFlow()
@@ -248,8 +201,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             }
 
             // Flatten to an ordered list of (addon, catalogEntry) pairs.
-            // Order = addon order (the sortOrder shown on the Addons page) then the
-            // catalog order declared within each addon's manifest.
             val slots = addons
                 .filter { it.isFeatureEnabled("catalog") }
                 .flatMap { addon ->
@@ -258,8 +209,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                         .map { entry -> addon to entry }
                 }
 
-            // Stable, ordered working list initialised to loading skeletons. Each slot keeps
-            // its index so parallel fetches can fill results in place without reordering.
+            // Stable, ordered working list initialised to loading skeletons.
             val ordered = slots.map { (addon, entry) ->
                 val (provider, cleanTitle) = parseCatalogTitle(addon.name, entry.name.ifBlank { entry.id })
                 AddonCatalogRow(
@@ -272,15 +222,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 )
             }.toMutableList()
 
-            // Show loading skeletons only on a cold start (nothing cached). When cached rows
-            // are already on screen, refresh silently and swap in the result at the end.
+            // Show loading skeletons only on a cold start.
             val showProgressive = cached == null
             fun emitOrdered() {
                 _catalogRows.value = ordered.filterNot { !it.isLoading && it.items.isEmpty() }
             }
             if (showProgressive) emitOrdered()
 
-            // Fetch catalogs in parallel; place each result at its fixed index as it lands.
+            // Fetch catalogs in parallel.
             val mutex = kotlinx.coroutines.sync.Mutex()
             val deferreds = slots.mapIndexed { index, (addon, entry) ->
                 async {
@@ -321,7 +270,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         catalogCacheTime = 0L
         _catalogRows.value = emptyList()
         viewModelScope.launch {
-            // Delete the cache file before reloading so the reload doesn't re-hydrate stale rows.
             withContext(Dispatchers.IO) { runCatching { catalogCacheFile()?.delete() } }
             loadCatalogRows(forceRefresh = true)
         }
@@ -366,7 +314,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             if (!file.exists()) return@withContext null
             runCatching {
                 val p = catalogCacheJson.decodeFromString<PersistedCatalogCache>(file.readText())
-                // Cached rows are complete content, never loading skeletons.
                 p.rows.map { it.copy(isLoading = false) } to p.timestamp
             }.getOrNull()
         }
@@ -382,12 +329,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     /**
      * Appends the next page (skip + 100) for a single addon catalog row.
-     * Safe to call repeatedly — guards against concurrent fetches via [isLoadingMore]
-     * and stops automatically once a page comes back empty ([hasMore] = false).
-     *
-     * Since [viewModelScope] dispatches on [Dispatchers.Main], the guard check and
-     * the [isLoadingMore] flag update both happen before the first suspension point,
-     * so there is no risk of two concurrent fetches for the same row.
      */
     fun loadMoreAddonRow(addonBaseUrl: String, type: String, catalogId: String) {
         viewModelScope.launch {
@@ -399,7 +340,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             val row = currentRows[rowIndex]
             if (!row.hasMore || row.isLoadingMore) return@launch
 
-            // Mark as loading before the first suspension so the guard holds.
             _catalogRows.value = currentRows.toMutableList().apply {
                 this[rowIndex] = row.copy(isLoadingMore = true)
             }
@@ -446,17 +386,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     companion object {
-        // Catalog-cache settings (stored in the "browser_settings" SharedPreferences).
         const val KEY_CATALOG_AUTO_REFRESH = "catalog_auto_refresh_enabled"
         const val KEY_CATALOG_REFRESH_INTERVAL_MIN = "catalog_refresh_interval_min"
         const val DEFAULT_CATALOG_REFRESH_INTERVAL_MIN = 30
         val CATALOG_REFRESH_INTERVAL_OPTIONS = listOf(15, 30, 60)
 
-        // Shared across ViewModel instances within the same process lifetime.
         @Volatile private var catalogCache: List<AddonCatalogRow>? = null
         @Volatile private var catalogCacheTime: Long = 0L
 
-        /** Call when addons are installed/removed to force a fresh fetch on next load. */
         fun invalidateCatalogCache() {
             catalogCache = null
             catalogCacheTime = 0L
@@ -467,10 +404,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     // New-episode detection
     // ---------------------------------------------------------------------------
 
-    /**
-     * Set of TMDB IDs (TV shows only) for which a new episode has aired since
-     * the item was added to the watchlist. Refreshed whenever the Watching list changes.
-     */
     private val _newEpisodeTmdbIds = MutableStateFlow<Set<Int>>(emptySet())
     val newEpisodeTmdbIds: StateFlow<Set<Int>> = _newEpisodeTmdbIds.asStateFlow()
 
@@ -485,32 +418,21 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 val ids = mutableSetOf<Int>()
                 tvItems.forEach { entity ->
                     try {
-                        // Only flag shows where the user has explicitly set a progress position
                         val userSeason = entity.seasonProgress ?: return@forEach
                         val userEp    = entity.episodeProgress ?: return@forEach
 
                         val details = tmdb.getTvDetails(entity.tmdbId) ?: return@forEach
 
                         val hasAvailable = when (val next = details.nextEpisodeToAir) {
-                            // Show is actively airing — everything before nextEpisodeToAir has aired.
-                            // Badge if the user's position is at least one episode behind that boundary.
                             null -> {
-                                // Show is on hiatus or ended.
-                                // Approximate: flag if lastAirDate is after the user started tracking
-                                // (best we can do without fetching full season details).
                                 val lastAirMs = parseIsoDate(details.lastAirDate ?: return@forEach)
                                     ?: return@forEach
                                 val referenceMs = entity.startedAt ?: entity.addedAt
                                 lastAirMs > referenceMs
                             }
                             else -> when {
-                                // User is in an earlier season than where the show currently is —
-                                // there are definitely aired episodes in later seasons ahead of them.
                                 userSeason < next.seasonNumber -> true
-                                // Same season: badge only when the next-to-air ep is at least
-                                // two ahead of the user, meaning at least one ep has aired since their progress.
                                 userSeason == next.seasonNumber -> userEp < next.episodeNumber - 1
-                                // User is somehow past the boundary (shouldn't happen) — no badge.
                                 else -> false
                             }
                         }
@@ -529,21 +451,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     /**
      * Re-checks whether a TMDB API key is configured and fires the initial
-     * Discovery query (Browse tab). The Home tab is addon-driven and loads
-     * independently via [loadCatalogRows].
+     * Discovery query (Browse tab).
      */
     fun checkConfigAndLoadInitialData() {
         _isConfigured.value = tmdb.isConfigured()
-        // Only kick off the initial Discovery query when nothing has been loaded yet.
-        // Re-running it on every screen entry (e.g. returning from a detail page) would
-        // reset the lists to page 1, discarding lazy-loaded pages and the saved scroll
-        // position. Filter changes still reset deliberately via triggerDiscovery().
-        if (_isConfigured.value &&
-            _discoveredMovies.value.isEmpty() &&
-            _discoveredTvShows.value.isEmpty()
-        ) {
-            triggerDiscovery()
-        }
     }
 
     // Search
@@ -567,16 +478,13 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             _isSearchLoading.value = true
             _addonSearchGroups.value = emptyList()
 
-            // Save to history
             runCatching {
                 searchHistoryDao.insert(com.playbridge.sender.data.history.SearchHistoryEntity(query, System.currentTimeMillis()))
             }
 
-            // Addons: each catalog publishes its group as soon as it responds
             try {
                 addonRepository.searchAllCatalogsGroupedStreaming(query) { groups ->
                     _addonSearchGroups.value = groups
-                    // Clear loading spinner once we have at least one response
                     _isSearchLoading.value = false
                 }
             } catch (e: Exception) {
@@ -599,62 +507,75 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // ── Discovery filter setters (each re-runs the query) ───────────────────────
+    // ── Discovery filter setters ───────────────────────
     fun toggleGenre(name: String) {
-        _selectedGenres.value = _selectedGenres.value.let { if (name in it) it - name else it + name }
-        // A genre can't be both included and excluded.
-        if (name in _selectedGenres.value) _excludedGenres.value = _excludedGenres.value - name
-        triggerDiscovery()
+        updateFilters { current ->
+            val nextGenres = if (name in current.selectedGenres) current.selectedGenres - name else current.selectedGenres + name
+            val nextExcluded = if (name in nextGenres) current.excludedGenres - name else current.excludedGenres
+            current.copy(selectedGenres = nextGenres, excludedGenres = nextExcluded)
+        }
     }
 
     fun toggleExcludedGenre(name: String) {
-        _excludedGenres.value = _excludedGenres.value.let { if (name in it) it - name else it + name }
-        if (name in _excludedGenres.value) _selectedGenres.value = _selectedGenres.value - name
-        triggerDiscovery()
+        updateFilters { current ->
+            val nextExcluded = if (name in current.excludedGenres) current.excludedGenres - name else current.excludedGenres + name
+            val nextGenres = if (name in nextExcluded) current.selectedGenres - name else current.selectedGenres
+            current.copy(selectedGenres = nextGenres, excludedGenres = nextExcluded)
+        }
     }
 
-    fun setMatchAllGenres(matchAll: Boolean) { _matchAllGenres.value = matchAll; triggerDiscovery() }
-    fun setMediaType(mediaType: LibraryMediaType) { _selectedMediaType.value = mediaType; triggerDiscovery() }
-    fun setSort(label: String) { _selectedSort.value = label; triggerDiscovery() }
-    fun setYearFrom(year: String) { _selectedYearFrom.value = year; triggerDiscovery() }
-    fun setYearTo(year: String) { _selectedYearTo.value = year; triggerDiscovery() }
-    fun setLanguage(code: String?) { _selectedLanguage.value = code; triggerDiscovery() }
-    fun setOriginCountry(code: String?) { _selectedOriginCountry.value = code; triggerDiscovery() }
-    fun setMinRating(rating: Double) { _selectedMinRating.value = rating; triggerDiscovery() }
-    fun setMaxRating(rating: Double) { _selectedMaxRating.value = rating; triggerDiscovery() }
-    fun setMinVotes(votes: Int) { _selectedMinVotes.value = votes; triggerDiscovery() }
-    fun setRuntimeMin(min: Int) { _selectedRuntimeMin.value = min; triggerDiscovery() }
-    fun setRuntimeMax(max: Int) { _selectedRuntimeMax.value = max; triggerDiscovery() }
-    fun setCertification(cert: String?) { _selectedCertification.value = cert; triggerDiscovery() }
-    fun setIncludeAdult(include: Boolean) { _includeAdult.value = include; triggerDiscovery() }
+    fun setMatchAllGenres(matchAll: Boolean) { updateFilters { it.copy(matchAllGenres = matchAll) } }
+    fun setMediaType(mediaType: LibraryMediaType) { updateFilters { it.copy(mediaType = mediaType) } }
+    fun setSort(label: String) { updateFilters { it.copy(sort = label) } }
+    fun setYearFrom(year: String) { updateFilters { it.copy(yearFrom = year) } }
+    fun setYearTo(year: String) { updateFilters { it.copy(yearTo = year) } }
+    fun setLanguage(code: String?) { updateFilters { it.copy(language = code) } }
+    fun setOriginCountry(code: String?) { updateFilters { it.copy(originCountry = code) } }
+    fun setMinRating(rating: Double) { updateFilters { it.copy(minRating = rating) } }
+    fun setMaxRating(rating: Double) { updateFilters { it.copy(maxRating = rating) } }
+    fun setMinVotes(votes: Int) { updateFilters { it.copy(minVotes = votes) } }
+    fun setRuntimeMin(min: Int) { updateFilters { it.copy(runtimeMin = min) } }
+    fun setRuntimeMax(max: Int) { updateFilters { it.copy(runtimeMax = max) } }
+    fun setCertification(cert: String?) { updateFilters { it.copy(certification = cert) } }
+    fun setIncludeAdult(include: Boolean) { updateFilters { it.copy(includeAdult = include) } }
 
     fun toggleProvider(id: Int) {
-        _selectedProviders.value = _selectedProviders.value.let { if (id in it) it - id else it + id }
-        triggerDiscovery()
+        updateFilters { current ->
+            val nextProviders = if (id in current.selectedProviders) current.selectedProviders - id else current.selectedProviders + id
+            current.copy(selectedProviders = nextProviders)
+        }
     }
     fun toggleMonetization(type: String) {
-        _selectedMonetization.value = _selectedMonetization.value.let { if (type in it) it - type else it + type }
-        triggerDiscovery()
+        updateFilters { current ->
+            val nextMonetization = if (type in current.selectedMonetization) current.selectedMonetization - type else current.selectedMonetization + type
+            current.copy(selectedMonetization = nextMonetization)
+        }
     }
     fun toggleReleaseType(value: Int) {
-        _selectedReleaseTypes.value = _selectedReleaseTypes.value.let { if (value in it) it - value else it + value }
-        triggerDiscovery()
+        updateFilters { current ->
+            val nextReleaseTypes = if (value in current.selectedReleaseTypes) current.selectedReleaseTypes - value else current.selectedReleaseTypes + value
+            current.copy(selectedReleaseTypes = nextReleaseTypes)
+        }
     }
     fun toggleTvStatus(value: Int) {
-        _selectedTvStatuses.value = _selectedTvStatuses.value.let { if (value in it) it - value else it + value }
-        triggerDiscovery()
+        updateFilters { current ->
+            val nextTvStatuses = if (value in current.selectedTvStatuses) current.selectedTvStatuses - value else current.selectedTvStatuses + value
+            current.copy(selectedTvStatuses = nextTvStatuses)
+        }
     }
     fun toggleTvType(value: Int) {
-        _selectedTvTypes.value = _selectedTvTypes.value.let { if (value in it) it - value else it + value }
-        triggerDiscovery()
+        updateFilters { current ->
+            val nextTvTypes = if (value in current.selectedTvTypes) current.selectedTvTypes - value else current.selectedTvTypes + value
+            current.copy(selectedTvTypes = nextTvTypes)
+        }
     }
 
     fun setWatchRegion(region: String) {
-        if (region == _selectedWatchRegion.value) return
-        _selectedWatchRegion.value = region
-        _selectedProviders.value = emptySet()  // provider ids are region-specific
+        if (region == _filters.value.watchRegion) return
+        updateFilters { current ->
+            current.copy(watchRegion = region, selectedProviders = emptySet())
+        }
         loadWatchProviders()
-        triggerDiscovery()
     }
 
     /** Debounced keyword search against TMDB for the keyword filter. */
@@ -669,22 +590,24 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             _isSearchingKeywords.value = true
             delay(350)
             _keywordResults.value = runCatching { tmdb.searchKeywords(query) }.getOrDefault(emptyList())
-                .filter { kw -> _selectedKeywords.value.none { it.id == kw.id } }
+                .filter { kw -> _filters.value.selectedKeywords.none { it.id == kw.id } }
             _isSearchingKeywords.value = false
         }
     }
 
     fun addKeyword(keyword: TmdbKeyword) {
-        if (_selectedKeywords.value.none { it.id == keyword.id }) {
-            _selectedKeywords.value = _selectedKeywords.value + keyword
+        if (_filters.value.selectedKeywords.none { it.id == keyword.id }) {
+            updateFilters { current ->
+                current.copy(selectedKeywords = current.selectedKeywords + keyword)
+            }
             _keywordResults.value = emptyList()
-            triggerDiscovery()
         }
     }
 
     fun removeKeyword(id: Int) {
-        _selectedKeywords.value = _selectedKeywords.value.filterNot { it.id == id }
-        triggerDiscovery()
+        updateFilters { current ->
+            current.copy(selectedKeywords = current.selectedKeywords.filterNot { it.id == id })
+        }
     }
 
     fun clearKeywordResults() {
@@ -695,36 +618,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     /** Clears every Discover filter back to defaults. */
     fun clearAllFilters() {
-        _selectedSort.value = "Popular"
-        _selectedYearFrom.value = ""
-        _selectedYearTo.value = ""
-        _selectedGenres.value = emptySet()
-        _excludedGenres.value = emptySet()
-        _matchAllGenres.value = false
-        _selectedLanguage.value = null
-        _selectedOriginCountry.value = null
-        _selectedMinRating.value = 0.0
-        _selectedMaxRating.value = 0.0
-        _selectedMinVotes.value = 0
-        _selectedRuntimeMin.value = 0
-        _selectedRuntimeMax.value = 0
-        _selectedProviders.value = emptySet()
-        _selectedMonetization.value = emptySet()
-        _selectedCertification.value = null
-        _selectedReleaseTypes.value = emptySet()
-        _selectedTvStatuses.value = emptySet()
-        _selectedTvTypes.value = emptySet()
-        _selectedKeywords.value = emptyList()
+        _filters.update { DiscoveryFiltersState() }
         _keywordResults.value = emptyList()
-        _includeAdult.value = false
-        triggerDiscovery()
     }
 
     /** Loads the streaming-provider list for the current watch region. */
     fun loadWatchProviders() {
         viewModelScope.launch {
-            val region = _selectedWatchRegion.value
-            // Movie list is the broadest; it covers the common providers shown as chips.
+            val region = _filters.value.watchRegion
             val providers = runCatching { tmdb.getDiscoverWatchProviders("movie", region) }
                 .getOrDefault(emptyList())
             _watchProviders.value = providers
@@ -732,86 +633,85 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** Builds the movie filter set from current selections. */
-    private fun movieFilters(): DiscoverFilters {
-        val sort = TmdbDiscoverSorts.list.firstOrNull { it.label == _selectedSort.value }
-        val providers = _selectedProviders.value
+    private fun movieFilters(f: DiscoveryFiltersState = _filters.value): DiscoverFilters {
+        val sort = TmdbDiscoverSorts.list.firstOrNull { it.label == f.sort }
+        val providers = f.selectedProviders
         return DiscoverFilters(
             sortBy = sort?.movieValue ?: "popularity.desc",
-            includeAdult = _includeAdult.value,
-            withGenres = TmdbDiscoverGenres.movieGenreParam(_selectedGenres.value, _matchAllGenres.value),
-            withoutGenres = TmdbDiscoverGenres.movieGenreParam(_excludedGenres.value, matchAll = false),
-            withOriginalLanguage = _selectedLanguage.value,
-            withOriginCountry = _selectedOriginCountry.value,
-            voteAverageGte = _selectedMinRating.value.takeIf { it > 0 },
-            voteAverageLte = _selectedMaxRating.value.takeIf { it > 0 },
-            voteCountGte = _selectedMinVotes.value.takeIf { it > 0 },
-            runtimeGte = _selectedRuntimeMin.value.takeIf { it > 0 },
-            runtimeLte = _selectedRuntimeMax.value.takeIf { it > 0 },
-            withKeywords = _selectedKeywords.value.takeIf { it.isNotEmpty() }?.joinToString("|") { it.id.toString() },
-            dateGte = _selectedYearFrom.value.takeIf { it.isNotBlank() }?.let { "$it-01-01" },
-            dateLte = _selectedYearTo.value.takeIf { it.isNotBlank() }?.let { "$it-12-31" },
-            watchRegion = _selectedWatchRegion.value.takeIf { providers.isNotEmpty() || _selectedMonetization.value.isNotEmpty() },
+            includeAdult = f.includeAdult,
+            withGenres = TmdbDiscoverGenres.movieGenreParam(f.selectedGenres, f.matchAllGenres),
+            withoutGenres = TmdbDiscoverGenres.movieGenreParam(f.excludedGenres, matchAll = false),
+            withOriginalLanguage = f.language,
+            withOriginCountry = f.originCountry,
+            voteAverageGte = f.minRating.takeIf { it > 0 },
+            voteAverageLte = f.maxRating.takeIf { it > 0 },
+            voteCountGte = f.minVotes.takeIf { it > 0 },
+            runtimeGte = f.runtimeMin.takeIf { it > 0 },
+            runtimeLte = f.runtimeMax.takeIf { it > 0 },
+            withKeywords = f.selectedKeywords.takeIf { it.isNotEmpty() }?.joinToString("|") { it.id.toString() },
+            dateGte = f.yearFrom.takeIf { it.isNotBlank() }?.let { "$it-01-01" },
+            dateLte = f.yearTo.takeIf { it.isNotBlank() }?.let { "$it-12-31" },
+            watchRegion = f.watchRegion.takeIf { providers.isNotEmpty() || f.selectedMonetization.isNotEmpty() },
             withWatchProviders = providers.takeIf { it.isNotEmpty() }?.joinToString("|"),
-            withWatchMonetizationTypes = _selectedMonetization.value.takeIf { it.isNotEmpty() }?.joinToString("|"),
-            certificationCountry = _selectedCertification.value?.let { TmdbMovieCertifications.COUNTRY },
-            certification = _selectedCertification.value,
-            withReleaseType = _selectedReleaseTypes.value.takeIf { it.isNotEmpty() }?.sorted()?.joinToString("|")
+            withWatchMonetizationTypes = f.selectedMonetization.takeIf { it.isNotEmpty() }?.joinToString("|"),
+            certificationCountry = f.certification?.let { TmdbMovieCertifications.COUNTRY },
+            certification = f.certification,
+            withReleaseType = f.selectedReleaseTypes.takeIf { it.isNotEmpty() }?.sorted()?.joinToString("|")
         )
     }
 
     /** Builds the TV filter set from current selections. */
-    private fun tvFilters(): DiscoverFilters {
-        val sort = TmdbDiscoverSorts.list.firstOrNull { it.label == _selectedSort.value }
-        val providers = _selectedProviders.value
+    private fun tvFilters(f: DiscoveryFiltersState = _filters.value): DiscoverFilters {
+        val sort = TmdbDiscoverSorts.list.firstOrNull { it.label == f.sort }
+        val providers = f.selectedProviders
         return DiscoverFilters(
             sortBy = sort?.tvValue ?: "popularity.desc",
-            includeAdult = _includeAdult.value,
-            withGenres = TmdbDiscoverGenres.tvGenreParam(_selectedGenres.value, _matchAllGenres.value),
-            withoutGenres = TmdbDiscoverGenres.tvGenreParam(_excludedGenres.value, matchAll = false),
-            withOriginalLanguage = _selectedLanguage.value,
-            withOriginCountry = _selectedOriginCountry.value,
-            voteAverageGte = _selectedMinRating.value.takeIf { it > 0 },
-            voteAverageLte = _selectedMaxRating.value.takeIf { it > 0 },
-            voteCountGte = _selectedMinVotes.value.takeIf { it > 0 },
-            runtimeGte = _selectedRuntimeMin.value.takeIf { it > 0 },
-            runtimeLte = _selectedRuntimeMax.value.takeIf { it > 0 },
-            withKeywords = _selectedKeywords.value.takeIf { it.isNotEmpty() }?.joinToString("|") { it.id.toString() },
-            dateGte = _selectedYearFrom.value.takeIf { it.isNotBlank() }?.let { "$it-01-01" },
-            dateLte = _selectedYearTo.value.takeIf { it.isNotBlank() }?.let { "$it-12-31" },
-            watchRegion = _selectedWatchRegion.value.takeIf { providers.isNotEmpty() || _selectedMonetization.value.isNotEmpty() },
+            includeAdult = f.includeAdult,
+            withGenres = TmdbDiscoverGenres.tvGenreParam(f.selectedGenres, f.matchAllGenres),
+            withoutGenres = TmdbDiscoverGenres.tvGenreParam(f.excludedGenres, matchAll = false),
+            withOriginalLanguage = f.language,
+            withOriginCountry = f.originCountry,
+            voteAverageGte = f.minRating.takeIf { it > 0 },
+            voteAverageLte = f.maxRating.takeIf { it > 0 },
+            voteCountGte = f.minVotes.takeIf { it > 0 },
+            runtimeGte = f.runtimeMin.takeIf { it > 0 },
+            runtimeLte = f.runtimeMax.takeIf { it > 0 },
+            withKeywords = f.selectedKeywords.takeIf { it.isNotEmpty() }?.joinToString("|") { it.id.toString() },
+            dateGte = f.yearFrom.takeIf { it.isNotBlank() }?.let { "$it-01-01" },
+            dateLte = f.yearTo.takeIf { it.isNotBlank() }?.let { "$it-12-31" },
+            watchRegion = f.watchRegion.takeIf { providers.isNotEmpty() || f.selectedMonetization.isNotEmpty() },
             withWatchProviders = providers.takeIf { it.isNotEmpty() }?.joinToString("|"),
-            withWatchMonetizationTypes = _selectedMonetization.value.takeIf { it.isNotEmpty() }?.joinToString("|"),
-            withStatus = _selectedTvStatuses.value.takeIf { it.isNotEmpty() }?.sorted()?.joinToString("|"),
-            withType = _selectedTvTypes.value.takeIf { it.isNotEmpty() }?.sorted()?.joinToString("|")
+            withWatchMonetizationTypes = f.selectedMonetization.takeIf { it.isNotEmpty() }?.joinToString("|"),
+            withStatus = f.selectedTvStatuses.takeIf { it.isNotEmpty() }?.sorted()?.joinToString("|"),
+            withType = f.selectedTvTypes.takeIf { it.isNotEmpty() }?.sorted()?.joinToString("|")
         )
     }
 
-    private fun triggerDiscovery() {
-        val mediaType = _selectedMediaType.value
-        viewModelScope.launch {
-            _isDiscoveryLoading.value = true
-            try {
-                discoveredMoviesPage = 1
-                discoveredTvShowsPage = 1
-                _hasMoreDiscoveredMovies.value = true
-                _hasMoreDiscoveredTvShows.value = true
+    private suspend fun discover(f: DiscoveryFiltersState) {
+        _isDiscoveryLoading.value = true
+        try {
+            discoveredMoviesPage = 1
+            discoveredTvShowsPage = 1
+            _hasMoreDiscoveredMovies.value = true
+            _hasMoreDiscoveredTvShows.value = true
 
-                if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.MOVIE) {
-                    _discoveredMovies.value = tmdb.discoverMovies(page = 1, filters = movieFilters()).results
-                } else {
-                    _discoveredMovies.value = emptyList()
-                    _hasMoreDiscoveredMovies.value = false
-                }
+            val mediaType = f.mediaType
 
-                if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.TV_SHOW) {
-                    _discoveredTvShows.value = tmdb.discoverTvShows(page = 1, filters = tvFilters()).results
-                } else {
-                    _discoveredTvShows.value = emptyList()
-                    _hasMoreDiscoveredTvShows.value = false
-                }
-            } finally {
-                _isDiscoveryLoading.value = false
+            if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.MOVIE) {
+                _discoveredMovies.value = tmdb.discoverMovies(page = 1, filters = movieFilters(f)).results
+            } else {
+                _discoveredMovies.value = emptyList()
+                _hasMoreDiscoveredMovies.value = false
             }
+
+            if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.TV_SHOW) {
+                _discoveredTvShows.value = tmdb.discoverTvShows(page = 1, filters = tvFilters(f)).results
+            } else {
+                _discoveredTvShows.value = emptyList()
+                _hasMoreDiscoveredTvShows.value = false
+            }
+        } finally {
+            _isDiscoveryLoading.value = false
         }
     }
 
@@ -820,7 +720,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _isLoadingMoreDiscoveredMovies.value = true
             try {
-                if (_selectedMediaType.value == LibraryMediaType.TV_SHOW) return@launch
+                if (_filters.value.mediaType == LibraryMediaType.TV_SHOW) return@launch
                 val nextPage = discoveredMoviesPage + 1
                 val newMovies = tmdb.discoverMovies(page = nextPage, filters = movieFilters())
                 if (newMovies.results.isNotEmpty()) {
@@ -840,7 +740,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _isLoadingMoreDiscoveredTvShows.value = true
             try {
-                if (_selectedMediaType.value == LibraryMediaType.MOVIE) return@launch
+                if (_filters.value.mediaType == LibraryMediaType.MOVIE) return@launch
                 val nextPage = discoveredTvShowsPage + 1
                 val newTvShows = tmdb.discoverTvShows(page = nextPage, filters = tvFilters())
                 if (newTvShows.results.isNotEmpty()) {
@@ -885,28 +785,30 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         observeAddonsForCatalogs()
         startCatalogAutoRefresh()
         loadWatchProviders()
+
+        // Drive discovery reactively to eliminate request storms and races
+        viewModelScope.launch {
+            @OptIn(kotlinx.coroutines.FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+            filters
+                .debounce(300)
+                .distinctUntilChanged()
+                .collectLatest { f ->
+                    if (isConfigured.value) {
+                        discover(f)
+                    }
+                }
+        }
     }
 
-    /**
-     * Keep Home catalogs in sync with the installed-addon set. The first emission drives
-     * the initial (cache-first) load; later changes — addon installed/removed/refreshed/
-     * reordered/enabled — force a reload so new catalogs appear immediately. This also
-     * covers addons that land in the DB after this (activity-scoped) ViewModel's init ran,
-     * which previously left Home stuck on the "No addons installed" empty state until a
-     * manual refresh in the Addons screen.
-     */
     private fun observeAddonsForCatalogs() {
         viewModelScope.launch {
             var firstEmission = true
             addonRepository.observeInstalledAddons()
                 .map { addons ->
-                    // Signature that changes when an addon's catalogs or enabled state change.
                     addons.joinToString("|") { "${it.manifestUrl}#${it.catalogsJson}#${it.disabledFeatures}" }
                 }
                 .distinctUntilChanged()
                 .collect {
-                    // Force a network refresh on real changes; the in-memory cache would
-                    // otherwise be served back without the newly installed addon's rows.
                     loadCatalogRows(forceRefresh = !firstEmission)
                     firstEmission = false
                 }
@@ -927,13 +829,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     // Tracking — writes
     // ---------------------------------------------------------------------------
 
-    /**
-     * Adds an item to the tracked list with the given initial status, or updates
-     * the status if it is already tracked.
-     *
-     * Uses [watchlistMutex] and reads the current DB row directly so that rapid
-     * successive calls cannot race on a stale StateFlow snapshot.
-     */
     fun upsertTracked(
         tmdbId: Int,
         mediaType: String,
@@ -967,10 +862,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /**
-     * Changes the status of an already-tracked item and auto-stamps
-     * startedAt / completedAt on the relevant transitions.
-     */
     fun setStatus(tmdbId: Int, status: WatchlistStatus) {
         viewModelScope.launch {
             watchlistMutex.withLock {
@@ -992,44 +883,35 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
         val completedAt = when {
             newStatus == WatchlistStatus.COMPLETED && existing.completedAt == null -> now
-            newStatus != WatchlistStatus.COMPLETED -> null   // un-complete clears the stamp
+            newStatus != WatchlistStatus.COMPLETED -> null
             else -> existing.completedAt
         }
         watchlistDao.updateStatus(tmdbId, newStatus.value, startedAt, completedAt)
     }
 
-    /** Sets season + episode progress for a TV show. */
     fun setEpisodeProgress(tmdbId: Int, season: Int, episode: Int) {
         viewModelScope.launch {
             watchlistDao.updateProgress(tmdbId, season, episode)
         }
     }
 
-    /** Sets the user's personal rating (1–10). Pass null to clear. */
     fun setUserRating(tmdbId: Int, rating: Int?) {
         viewModelScope.launch {
             watchlistDao.updateRating(tmdbId, rating)
         }
     }
 
-    /** Updates the free-text note. Pass null to clear. */
     fun setNotes(tmdbId: Int, notes: String?) {
         viewModelScope.launch {
             watchlistDao.updateNotes(tmdbId, notes)
         }
     }
 
-    /** Removes an item from tracking entirely. */
     fun removeTracked(tmdbId: Int) {
         viewModelScope.launch {
             watchlistDao.deleteById(tmdbId)
         }
     }
-
-    // ---------------------------------------------------------------------------
-    // Toggle (used by detail screen) — serialised through watchlistMutex so rapid
-    // taps cannot observe a stale StateFlow and fire duplicate operations.
-    // ---------------------------------------------------------------------------
 
     fun toggleWatchlist(
         tmdbId: Int,
@@ -1041,7 +923,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     ) {
         viewModelScope.launch {
             watchlistMutex.withLock {
-                // Read the true current DB state, not the potentially-stale StateFlow.
                 val existing = watchlistDao.getByIdSync(tmdbId)
                 if (existing != null) {
                     watchlistDao.delete(existing)

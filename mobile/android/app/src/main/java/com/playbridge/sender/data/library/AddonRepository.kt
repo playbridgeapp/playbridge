@@ -29,7 +29,12 @@ import java.util.concurrent.TimeUnit
  */
 class AddonRepository(
     private val addonDao: AddonDao,
-    private val cacheDir: File? = null
+    private val cacheDir: File? = null,
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
 ) {
 
     companion object {
@@ -119,12 +124,6 @@ class AddonRepository(
         ignoreUnknownKeys = true
         isLenient = true
     }
-
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
 
     /**
      * Check if a URL returns a successful response (2xx).

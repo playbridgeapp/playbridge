@@ -1,0 +1,40 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <!-- Top track line left section -->
+  <path
+      android:pathData="M3,9 L6,9"
+      android:strokeWidth="2"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"/>
+  <!-- Top track line right section -->
+  <path
+      android:pathData="M10,9 L21,9"
+      android:strokeWidth="2"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"/>
+  <!-- Top slider knob/circle at X=8, Y=9 -->
+  <path
+      android:pathData="M8,9m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0"
+      android:strokeWidth="2"
+      android:strokeColor="#FF000000"/>
+  <!-- Bottom track line left section -->
+  <path
+      android:pathData="M3,15 L14,15"
+      android:strokeWidth="2"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"/>
+  <!-- Bottom track line right section -->
+  <path
+      android:pathData="M18,15 L21,15"
+      android:strokeWidth="2"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"/>
+  <!-- Bottom slider knob/circle at X=16, Y=15 -->
+  <path
+      android:pathData="M16,15m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0"
+      android:strokeWidth="2"
+      android:strokeColor="#FF000000"/>
+</vector>

@@ -1,6 +1,5 @@
 package com.playbridge.sender.browser
 
-import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,26 +12,48 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import org.koin.compose.koinInject
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
-
-    var blockPopups by remember { mutableStateOf(prefs.getBoolean("block_popups", true)) }
-    var whitelist by remember {
-        mutableStateOf(prefs.getStringSet("popup_whitelist", emptySet())!!.toSortedSet().toList())
-    }
-    var showAddDialog by remember { mutableStateOf(false) }
+    val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = koinInject()
+    
+    // Observe global settings and exceptions lists
+    val blockPopups by settingsRepository.blockPopups.collectAsState(initial = true)
+    val whitelistSet by settingsRepository.popupWhitelist.collectAsState(initial = emptySet())
+    val blacklistSet by settingsRepository.popupBlacklist.collectAsState(initial = emptySet())
+    
+    val whitelist = remember(whitelistSet) { whitelistSet.toSortedSet().toList() }
+    val blacklist = remember(blacklistSet) { blacklistSet.toSortedSet().toList() }
+    
+    val coroutineScope = rememberCoroutineScope()
+    
+    // Add Dialog states
+    var showAddAllowedDialog by remember { mutableStateOf(false) }
+    var showAddBlockedDialog by remember { mutableStateOf(false) }
     var newHost by remember { mutableStateOf("") }
 
-    fun saveWhitelist(updated: List<String>) {
-        prefs.edit().putStringSet("popup_whitelist", updated.toSet()).apply()
-        whitelist = updated.sorted()
+    fun normalizeAndAddHost(hostInput: String, isAllowedList: Boolean) {
+        val host = hostInput.lowercase()
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .trimEnd('/')
+            .trim()
+        if (host.isNotBlank()) {
+            coroutineScope.launch {
+                if (isAllowedList) {
+                    settingsRepository.addPopupWhitelist(host)
+                    settingsRepository.removePopupBlacklist(host)
+                } else {
+                    settingsRepository.addPopupBlacklist(host)
+                    settingsRepository.removePopupWhitelist(host)
+                }
+            }
+        }
     }
 
     Scaffold(
@@ -45,13 +66,6 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
                     }
                 }
             )
-        },
-        floatingActionButton = {
-            if (blockPopups) {
-                FloatingActionButton(onClick = { showAddDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "Add site")
-                }
-            }
         }
     ) { innerPadding ->
         LazyColumn(
@@ -59,6 +73,7 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            // 1. Global Blocker Toggle Row
             item {
                 Row(
                     modifier = Modifier
@@ -78,74 +93,167 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
                     Switch(
                         checked = blockPopups,
                         onCheckedChange = { checked ->
-                            blockPopups = checked
-                            prefs.edit().putBoolean("block_popups", checked).apply()
+                            coroutineScope.launch {
+                                settingsRepository.setBlockPopups(checked)
+                            }
                         }
                     )
                 }
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider()
             }
 
-            if (blockPopups) {
-                item {
+            // 2. Allowed Sites (Whitelist Exception List)
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Text(
                         "Allowed Sites",
                         style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                        color = MaterialTheme.colorScheme.primary
                     )
-                }
-
-                if (whitelist.isEmpty()) {
-                    item {
-                        Text(
-                            "No exceptions. Tap + to allow a site.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    IconButton(onClick = { showAddAllowedDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add allowed site exception",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
-                } else {
-                    items(whitelist, key = { it }) { host ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                host,
-                                style = MaterialTheme.typography.bodyLarge,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(onClick = {
-                                saveWhitelist(whitelist.filter { it != host })
-                            }) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "Remove $host",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
+                }
+            }
+
+            if (whitelist.isEmpty()) {
+                item {
+                    Text(
+                        "No exceptions. Tap + to always allow popups on a site.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+            } else {
+                items(whitelist, key = { "allowed_$it" }) { host ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            host,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        IconButton(onClick = {
+                            coroutineScope.launch {
+                                settingsRepository.removePopupWhitelist(host)
                             }
+                        }) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Remove $host",
+                                tint = MaterialTheme.colorScheme.error
+                            )
                         }
-                        HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+                }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+            }
+
+            // 3. Blocked Sites (Blacklist Exception List)
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "Blocked Sites",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    IconButton(onClick = { showAddBlockedDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add blocked site exception",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
+            }
+
+            if (blacklist.isEmpty()) {
+                item {
+                    Text(
+                        "No exceptions. Tap + to always block popups on a site.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+            } else {
+                items(blacklist, key = { "blocked_$it" }) { host ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            host,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        IconButton(onClick = {
+                            coroutineScope.launch {
+                                settingsRepository.removePopupBlacklist(host)
+                            }
+                        }) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Remove $host",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+                }
+            }
+            
+            item {
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
 
-    if (showAddDialog) {
+    // Allowed exceptions dialog
+    if (showAddAllowedDialog) {
         AlertDialog(
             onDismissRequest = {
-                showAddDialog = false
+                showAddAllowedDialog = false
                 newHost = ""
             },
-            title = { Text("Allow Site") },
+            title = { Text("Always Allow Site") },
             text = {
                 OutlinedTextField(
                     value = newHost,
-                    onValueChange = { newHost = it.trim() },
+                    onValueChange = { newHost = it },
                     label = { Text("Hostname (e.g. example.com)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -154,21 +262,50 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val host = newHost.lowercase()
-                            .removePrefix("https://")
-                            .removePrefix("http://")
-                            .trimEnd('/')
-                        if (host.isNotBlank() && !whitelist.contains(host)) {
-                            saveWhitelist(whitelist + host)
-                        }
-                        showAddDialog = false
+                        normalizeAndAddHost(newHost, isAllowedList = true)
+                        showAddAllowedDialog = false
                         newHost = ""
                     }
                 ) { Text("Add") }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    showAddDialog = false
+                    showAddAllowedDialog = false
+                    newHost = ""
+                }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Blocked exceptions dialog
+    if (showAddBlockedDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showAddBlockedDialog = false
+                newHost = ""
+            },
+            title = { Text("Always Block Site") },
+            text = {
+                OutlinedTextField(
+                    value = newHost,
+                    onValueChange = { newHost = it },
+                    label = { Text("Hostname (e.g. example.com)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        normalizeAndAddHost(newHost, isAllowedList = false)
+                        showAddBlockedDialog = false
+                        newHost = ""
+                    }
+                ) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showAddBlockedDialog = false
                     newHost = ""
                 }) { Text("Cancel") }
             }

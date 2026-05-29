@@ -16,12 +16,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.ui.theme.AppTheme
+import org.koin.compose.koinInject
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppearanceSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
+    val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = koinInject()
+    val maxAliveTabsRepository by settingsRepository.maxAliveTabs.collectAsState(initial = 5)
+    val coroutineScope = rememberCoroutineScope()
     var selectedTheme by remember { mutableStateOf(AppTheme.fromPrefs(context)) }
 
     Scaffold(
@@ -79,7 +84,10 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(bottom = 4.dp)
             )
 
-            var maxTabs by remember { mutableFloatStateOf(prefs.getInt("max_alive_tabs", 5).toFloat()) }
+            var maxTabs by remember { mutableFloatStateOf(5f) }
+            LaunchedEffect(maxAliveTabsRepository) {
+                maxTabs = maxAliveTabsRepository.toFloat()
+            }
 
             Column {
                 Row(
@@ -104,7 +112,9 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
                     value = maxTabs,
                     onValueChange = { maxTabs = it },
                     onValueChangeFinished = {
-                        prefs.edit().putInt("max_alive_tabs", maxTabs.toInt()).apply()
+                        coroutineScope.launch {
+                            settingsRepository.setMaxAliveTabs(maxTabs.toInt())
+                        }
                     },
                     valueRange = 1f..15f,
                     steps = 13

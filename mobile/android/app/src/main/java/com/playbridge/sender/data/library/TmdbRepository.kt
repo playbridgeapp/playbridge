@@ -13,7 +13,13 @@ import java.util.concurrent.TimeUnit
  * TMDB API v3 client. 
  * API key is read from SharedPreferences ("browser_settings" / "tmdb_api_key").
  */
-class TmdbRepository(private val context: Context) {
+class TmdbRepository(
+    private val context: Context,
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+) {
 
     companion object {
         private const val TAG = "TmdbRepository"
@@ -26,11 +32,6 @@ class TmdbRepository(private val context: Context) {
         ignoreUnknownKeys = true
         isLenient = true
     }
-
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
 
     /**
      * Get the user-configured TMDB API key, or null if not set.

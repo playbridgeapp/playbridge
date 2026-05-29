@@ -5,7 +5,13 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
-class DebridRepository(private val context: Context) {
+class DebridRepository(
+    private val context: Context,
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+) {
     companion object {
         const val PREFS_NAME = "browser_settings"
         const val KEY_DEBRID_PROVIDER = "debrid_provider"
@@ -35,11 +41,6 @@ class DebridRepository(private val context: Context) {
         ignoreUnknownKeys = true
         isLenient = true
     }
-
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
 
     private fun prefs() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 

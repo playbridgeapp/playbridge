@@ -33,6 +33,7 @@ tvMaterial = "1.0.1"
 libvlc = "4.0.0-eap24"
 composeUiTextGoogleFonts = "1.6.4"
 wire = "5.1.0"
+koin = "3.5.6"
 
 [libraries]
 androidx-palette-ktx = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
@@ -147,6 +148,10 @@ ktor-server-websockets = { group = "io.ktor", name = "ktor-server-websockets", v
 
 # LibVLC
 libvlc-all = { group = "org.videolan.android", name = "libvlc-all", version.ref = "libvlc" }
+
+# Koin DI
+koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
+koin-compose = { module = "io.insert-koin:koin-androidx-compose", version.ref = "koin" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

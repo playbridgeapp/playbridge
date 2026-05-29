@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
@@ -69,6 +70,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
+import com.playbridge.sender.settings.SettingsScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -91,11 +93,25 @@ val LocalShowCardTextOverlay = compositionLocalOf { false }
 @Composable
 fun LibraryScreen(
     viewModel: LibraryViewModel,
+    addonRepository: AddonRepository,
+    installedAddons: List<InstalledAddonEntity>,
+    onOpenUrl: (String) -> Unit,
+    tvIp: String?,
+    tvPort: Int?,
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
     onRemoteClick: (() -> Unit)? = null,
     onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
+    mainListState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
+    discoveredMoviesListState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
+    discoveredTvShowsListState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
+    discoverGridState: LazyGridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() },
+    searchResultsListState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
+    catalogRowScrollStates: MutableMap<String, LazyListState> = remember { mutableStateMapOf() },
+    shouldFocusSearch: Boolean = false,
+    onSearchFocused: () -> Unit = {},
+    onStartSearch: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val browserPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
@@ -114,11 +130,25 @@ fun LibraryScreen(
     CompositionLocalProvider(LocalShowCardTextOverlay provides showCardTextOverlay) {
         LibraryScreenContent(
             viewModel = viewModel,
+            addonRepository = addonRepository,
+            installedAddons = installedAddons,
+            onOpenUrl = onOpenUrl,
+            tvIp = tvIp,
+            tvPort = tvPort,
             onMenuClick = onMenuClick,
             onMovieClick = onMovieClick,
             onTvShowClick = onTvShowClick,
             onRemoteClick = onRemoteClick,
             onAddonItemClick = onAddonItemClick,
+            mainListState = mainListState,
+            discoveredMoviesListState = discoveredMoviesListState,
+            discoveredTvShowsListState = discoveredTvShowsListState,
+            discoverGridState = discoverGridState,
+            searchResultsListState = searchResultsListState,
+            catalogRowScrollStates = catalogRowScrollStates,
+            shouldFocusSearch = shouldFocusSearch,
+            onSearchFocused = onSearchFocused,
+            onStartSearch = onStartSearch,
         )
     }
 }
@@ -127,11 +157,25 @@ fun LibraryScreen(
 @Composable
 private fun LibraryScreenContent(
     viewModel: LibraryViewModel,
+    addonRepository: AddonRepository,
+    installedAddons: List<InstalledAddonEntity>,
+    onOpenUrl: (String) -> Unit,
+    tvIp: String?,
+    tvPort: Int?,
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
     onRemoteClick: (() -> Unit)? = null,
     onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
+    mainListState: LazyListState,
+    discoveredMoviesListState: LazyListState,
+    discoveredTvShowsListState: LazyListState,
+    discoverGridState: LazyGridState,
+    searchResultsListState: LazyListState,
+    catalogRowScrollStates: MutableMap<String, LazyListState>,
+    shouldFocusSearch: Boolean,
+    onSearchFocused: () -> Unit,
+    onStartSearch: () -> Unit,
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -153,10 +197,14 @@ private fun LibraryScreenContent(
     val addonSearchResults = remember(addonSearchGroups) { addonSearchGroups.flatMap { it.items }.distinctBy { it.id } }
     val searchHistory by viewModel.searchHistory.collectAsState()
 
-    // Discovery state
-    val selectedGenres by viewModel.selectedGenres.collectAsState()
-    val excludedGenres by viewModel.excludedGenres.collectAsState()
-    val matchAllGenres by viewModel.matchAllGenres.collectAsState()
+
+
+    // Discovery state - Collected from a single unified filters StateFlow
+    val filters by viewModel.filters.collectAsState()
+
+    val selectedGenres = filters.selectedGenres
+    val excludedGenres = filters.excludedGenres
+    val matchAllGenres = filters.matchAllGenres
 
     val discoveredMovies by viewModel.discoveredMovies.collectAsState()
     val isLoadingMoreDiscoveredMovies by viewModel.isLoadingMoreDiscoveredMovies.collectAsState()
@@ -166,31 +214,32 @@ private fun LibraryScreenContent(
     val isLoadingMoreDiscoveredTvShows by viewModel.isLoadingMoreDiscoveredTvShows.collectAsState()
     val hasMoreDiscoveredTvShows by viewModel.hasMoreDiscoveredTvShows.collectAsState()
 
-    val selectedMediaType by viewModel.selectedMediaType.collectAsState()
-    val selectedSort by viewModel.selectedSort.collectAsState()
-    val selectedYearFrom by viewModel.selectedYearFrom.collectAsState()
-    val selectedYearTo by viewModel.selectedYearTo.collectAsState()
-    val selectedLanguage by viewModel.selectedLanguage.collectAsState()
-    val selectedOriginCountry by viewModel.selectedOriginCountry.collectAsState()
-    val selectedMinRating by viewModel.selectedMinRating.collectAsState()
-    val selectedMaxRating by viewModel.selectedMaxRating.collectAsState()
-    val selectedMinVotes by viewModel.selectedMinVotes.collectAsState()
-    val selectedRuntimeMin by viewModel.selectedRuntimeMin.collectAsState()
-    val selectedRuntimeMax by viewModel.selectedRuntimeMax.collectAsState()
-    val selectedWatchRegion by viewModel.selectedWatchRegion.collectAsState()
-    val selectedProviders by viewModel.selectedProviders.collectAsState()
-    val selectedMonetization by viewModel.selectedMonetization.collectAsState()
+    val selectedMediaType = filters.mediaType
+    val selectedSort = filters.sort
+    val selectedYearFrom = filters.yearFrom
+    val selectedYearTo = filters.yearTo
+    val selectedLanguage = filters.language
+    val selectedOriginCountry = filters.originCountry
+    val selectedMinRating = filters.minRating
+    val selectedMaxRating = filters.maxRating
+    val selectedMinVotes = filters.minVotes
+    val selectedRuntimeMin = filters.runtimeMin
+    val selectedRuntimeMax = filters.runtimeMax
+    val selectedWatchRegion = filters.watchRegion
+    val selectedProviders = filters.selectedProviders
+    val selectedMonetization = filters.selectedMonetization
     val watchProviders by viewModel.watchProviders.collectAsState()
-    val selectedCertification by viewModel.selectedCertification.collectAsState()
-    val selectedReleaseTypes by viewModel.selectedReleaseTypes.collectAsState()
-    val selectedTvStatuses by viewModel.selectedTvStatuses.collectAsState()
-    val selectedTvTypes by viewModel.selectedTvTypes.collectAsState()
-    val selectedKeywords by viewModel.selectedKeywords.collectAsState()
+    val selectedCertification = filters.certification
+    val selectedReleaseTypes = filters.selectedReleaseTypes
+    val selectedTvStatuses = filters.selectedTvStatuses
+    val selectedTvTypes = filters.selectedTvTypes
+    val selectedKeywords = filters.selectedKeywords
     val keywordResults by viewModel.keywordResults.collectAsState()
     val isSearchingKeywords by viewModel.isSearchingKeywords.collectAsState()
-    val includeAdult by viewModel.includeAdult.collectAsState()
+    val includeAdult = filters.includeAdult
 
     val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
+    val selectedTab by viewModel.selectedTab.collectAsState()
 
     // Home tab: which addon is selected in the filter chip row (null = All)
     var selectedAddonFilter by remember { mutableStateOf<String?>(null) }
@@ -202,15 +251,22 @@ private fun LibraryScreenContent(
         selectedSearchSource = ""
     }
 
+    BackHandler(enabled = selectedTab != 0 && !isSearching) {
+        viewModel.setSelectedTab(0)
+    }
+
     // Reset search source chip when search session ends
     LaunchedEffect(isSearching) { if (!isSearching) selectedSearchSource = "" }
 
     // Focus the search field (and open the keyboard) when a search session starts.
     val searchFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(isSearching) {
-        if (isSearching) {
+    LaunchedEffect(shouldFocusSearch) {
+        if (shouldFocusSearch && isSearching) {
             delay(50) // let the TextField attach before requesting focus
-            runCatching { searchFocusRequester.requestFocus() }
+            val success = runCatching { searchFocusRequester.requestFocus() }.isSuccess
+            if (success) {
+                onSearchFocused()
+            }
         }
     }
     // Reset addon filter if the installed addons change (new addon installed, etc.)
@@ -222,7 +278,6 @@ private fun LibraryScreenContent(
     }
 
     var showFilterSheet by remember { mutableStateOf(false) }
-    val selectedTab by viewModel.selectedTab.collectAsState()
 
     // Tracking sheet state
     var trackingTarget by remember { mutableStateOf<TrackingTarget?>(null) }
@@ -279,7 +334,7 @@ private fun LibraryScreenContent(
         floatingActionButton = {
             // Remote shortcut — available on every library tab when a TV is connected.
             val onRemote = onRemoteClick
-            if (onRemote != null && !isSearching) {
+            if (onRemote != null && !isSearching && selectedTab < 3) {
                 FloatingActionButton(
                     onClick = onRemote,
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -293,98 +348,151 @@ private fun LibraryScreenContent(
             }
         },
         topBar = {
-            Column {
-                CenterAlignedTopAppBar(
-                    scrollBehavior = scrollBehavior,
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Transparent,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
-                        titleContentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    title = {
-                        if (isSearching) {
-                            TextField(
-                                value = searchQuery,
-                                onValueChange = { viewModel.setSearchQuery(it) },
-                                placeholder = { Text("Search movies & TV shows...") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(
-                                    onSearch = {
-                                        keyboardController?.hide()
-                                        viewModel.performSearch()
-                                    }
-                                ),
-                                colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    focusedIndicatorColor = Color.Transparent,
-                                    unfocusedIndicatorColor = Color.Transparent
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(searchFocusRequester)
-                            )
-                        } else {
-                            // Persistent search bar — fills the header; magnifier on the right.
-                            Surface(
-                                onClick = { viewModel.setIsSearching(true) },
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(42.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
+            if (selectedTab < 3) {
+                Column {
+                    CenterAlignedTopAppBar(
+                        scrollBehavior = scrollBehavior,
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = Color.Transparent,
+                            scrolledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                            titleContentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        title = {
+                            if (isSearching) {
+                                TextField(
+                                    value = searchQuery,
+                                    onValueChange = { viewModel.setSearchQuery(it) },
+                                    placeholder = { Text("Search movies & TV shows...") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                    keyboardActions = KeyboardActions(
+                                        onSearch = {
+                                            keyboardController?.hide()
+                                            viewModel.performSearch()
+                                        }
+                                    ),
+                                    colors = TextFieldDefaults.colors(
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent,
+                                        focusedIndicatorColor = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent
+                                    ),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 14.dp)
+                                        .focusRequester(searchFocusRequester)
+                                )
+                            } else {
+                                // Persistent search bar — fills the header; magnifier on the right.
+                                Surface(
+                                    onClick = {
+                                        onStartSearch()
+                                        viewModel.setIsSearching(true)
+                                    },
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(42.dp)
                                 ) {
-                                    Text(
-                                        text = "Search movies & shows…",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Spacer(Modifier.width(10.dp))
-                                    Icon(
-                                        Icons.Default.Search,
-                                        contentDescription = "Search",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(20.dp)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 14.dp)
+                                    ) {
+                                        Text(
+                                            text = "Search movies & shows…",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Icon(
+                                            Icons.Default.Search,
+                                            contentDescription = "Search",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        navigationIcon = {
+                            IconButton(
+                                onClick = {
+                                    if (isSearching) {
+                                        viewModel.setIsSearching(false)
+                                    } else {
+                                        onMenuClick()
+                                    }
+                                }
+                            ) {
+                                if (isSearching) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                                } else {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.ic_playbridge_logo),
+                                        contentDescription = "PlayBridge",
+                                        modifier = Modifier.size(24.dp)
                                     )
                                 }
                             }
-                        }
-                    },
-                navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            if (isSearching) {
-                                viewModel.setIsSearching(false)
-                            } else {
-                                onMenuClick()
-                            }
-                        }
-                    ) {
-                        if (isSearching) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                        } else {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_playbridge_logo),
-                                contentDescription = "PlayBridge",
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-                },
-                actions = {} // closes actions
-            ) // closes TopAppBar
-            } // closes Column
-        } // closes topBar
+                        },
+                        actions = {} // closes actions
+                    ) // closes TopAppBar
+                } // closes Column
+            }
+        },
+        bottomBar = {
+            if (!isSearching) {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    tonalElevation = 8.dp
+                ) {
+                    // 1. Home
+                    NavigationBarItem(
+                        selected = selectedTab == 0,
+                        onClick = { viewModel.setSelectedTab(0) },
+                        icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                        label = { Text("Home") }
+                    )
+
+                    // 2. Discover
+                    NavigationBarItem(
+                        selected = selectedTab == 1,
+                        onClick = { viewModel.setSelectedTab(1) },
+                        icon = { Icon(Icons.Default.Explore, contentDescription = "Discover") },
+                        label = { Text("Discover") }
+                    )
+
+                    // 3. Library
+                    NavigationBarItem(
+                        selected = selectedTab == 2,
+                        onClick = { viewModel.setSelectedTab(2) },
+                        icon = { Icon(Icons.Default.Bookmark, contentDescription = "Library") },
+                        label = { Text("Library") }
+                    )
+
+                    // 4. Addons
+                    NavigationBarItem(
+                        selected = selectedTab == 3,
+                        onClick = { viewModel.setSelectedTab(3) },
+                        icon = { Icon(Icons.Default.Extension, contentDescription = "Addons") },
+                        label = { Text("Addons") }
+                    )
+
+                    // 5. Settings
+                    NavigationBarItem(
+                        selected = selectedTab == 4,
+                        onClick = { viewModel.setSelectedTab(4) },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                        label = { Text("Settings") }
+                    )
+                }
+            }
+        }
     ) { innerPadding ->
         Box(
             modifier = Modifier
@@ -552,7 +660,7 @@ private fun LibraryScreenContent(
                 }
 
                 AddonSearchResultsList(
-                    listState = viewModel.searchResultsListState,
+                    listState = searchResultsListState,
                     results = filteredAddon,
                     contentPadding = PaddingValues(
                         top = if (addonSources.isNotEmpty()) 4.dp
@@ -584,7 +692,38 @@ private fun LibraryScreenContent(
             modifier = Modifier.fillMaxSize(),
             label = "TabAnimation"
         ) { tab ->
-            if (tab == 2) {
+            if (tab == 3) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = innerPadding.calculateBottomPadding())
+                ) {
+                    AddonSettingsScreen(
+                        addonRepository = addonRepository,
+                        installedAddons = installedAddons,
+                        onBack = { viewModel.setSelectedTab(0) },
+                        onOpenUrl = onOpenUrl,
+                        showBack = false,
+                        onRefreshCatalogs = { viewModel.refreshCatalogsNow() },
+                        onClearCatalogCache = { viewModel.clearCatalogCache() },
+                        onCatalogsChanged = { viewModel.refreshCatalogsNow() }
+                    )
+                }
+            } else if (tab == 4) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = innerPadding.calculateBottomPadding())
+                ) {
+                    SettingsScreen(
+                        onBack = { viewModel.setSelectedTab(0) },
+                        tvIp = tvIp,
+                        tvPort = tvPort,
+                        showBack = false,
+                        isFromLibrary = true
+                    )
+                }
+            } else if (tab == 2) {
                 MyListTab(
                     watchlist = watchlistAll,
                     newEpisodeTmdbIds = newEpisodeTmdbIds,
@@ -620,7 +759,7 @@ private fun LibraryScreenContent(
                             DiscoverGrid(
                                 movies = discoveredMovies,
                                 tvShows = discoveredTvShows,
-                                gridState = viewModel.discoverGridState,
+                                gridState = discoverGridState,
                                 selectedMediaType = selectedMediaType,
                                 isLoadingMoreMovies = isLoadingMoreDiscoveredMovies,
                                 hasMoreMovies = hasMoreDiscoveredMovies,
@@ -647,7 +786,7 @@ private fun LibraryScreenContent(
                 }
 
                 LazyColumn(
-                    state = viewModel.mainListState,
+                    state = mainListState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         top = innerPadding.calculateTopPadding(),
@@ -727,7 +866,7 @@ private fun LibraryScreenContent(
                             item(key = rowKey) {
                                 AddonMediaRow(
                                     row = row,
-                                    listState = viewModel.catalogRowScrollState(rowKey),
+                                    listState = catalogRowScrollStates.getOrPut(rowKey) { LazyListState() },
                                     onItemClick = { item -> onAddonItemClick(item.id, item.type, row.addonName) },
                                     onLoadMore = {
                                         viewModel.loadMoreAddonRow(row.addonBaseUrl, row.type, row.catalogId)

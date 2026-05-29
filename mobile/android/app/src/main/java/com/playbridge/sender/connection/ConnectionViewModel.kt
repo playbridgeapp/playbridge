@@ -14,15 +14,16 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-class ConnectionViewModel(application: Application) : AndroidViewModel(application) {
+class ConnectionViewModel(
+    application: Application,
+    val webSocketClient: WebSocketClient = WebSocketClient(),
+    private val connectionStore: ConnectionStore = ConnectionStore(application),
+    private val nsdHelper: NsdHelper = NsdHelper(application),
+    private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application)
+) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"
-
-    val webSocketClient = WebSocketClient()
-    private val connectionStore = ConnectionStore(application)
-    private val nsdHelper = NsdHelper(application)
     private val prefs = application.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-    private val commandHistoryDb = DatabaseProvider.getDatabase(application)
 
     // Exposed Flows
     val connectionState: StateFlow<WebSocketClient.ConnectionState> = webSocketClient.connectionState

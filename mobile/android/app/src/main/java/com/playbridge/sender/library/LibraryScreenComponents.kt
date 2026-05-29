@@ -1017,32 +1017,34 @@ internal fun LibraryFilterSheet(
     activeFilterCount: Int,
     onDismiss: () -> Unit,
 ) {
-    val selectedMediaType by viewModel.selectedMediaType.collectAsState()
-    val selectedSort by viewModel.selectedSort.collectAsState()
-    val selectedYearFrom by viewModel.selectedYearFrom.collectAsState()
-    val selectedYearTo by viewModel.selectedYearTo.collectAsState()
-    val selectedGenres by viewModel.selectedGenres.collectAsState()
-    val excludedGenres by viewModel.excludedGenres.collectAsState()
-    val matchAllGenres by viewModel.matchAllGenres.collectAsState()
-    val selectedLanguage by viewModel.selectedLanguage.collectAsState()
-    val selectedOriginCountry by viewModel.selectedOriginCountry.collectAsState()
-    val selectedMinRating by viewModel.selectedMinRating.collectAsState()
-    val selectedMaxRating by viewModel.selectedMaxRating.collectAsState()
-    val selectedMinVotes by viewModel.selectedMinVotes.collectAsState()
-    val selectedRuntimeMin by viewModel.selectedRuntimeMin.collectAsState()
-    val selectedRuntimeMax by viewModel.selectedRuntimeMax.collectAsState()
-    val selectedWatchRegion by viewModel.selectedWatchRegion.collectAsState()
-    val selectedProviders by viewModel.selectedProviders.collectAsState()
-    val selectedMonetization by viewModel.selectedMonetization.collectAsState()
+    val filters by viewModel.filters.collectAsState()
+
+    val selectedMediaType = filters.mediaType
+    val selectedSort = filters.sort
+    val selectedYearFrom = filters.yearFrom
+    val selectedYearTo = filters.yearTo
+    val selectedGenres = filters.selectedGenres
+    val excludedGenres = filters.excludedGenres
+    val matchAllGenres = filters.matchAllGenres
+    val selectedLanguage = filters.language
+    val selectedOriginCountry = filters.originCountry
+    val selectedMinRating = filters.minRating
+    val selectedMaxRating = filters.maxRating
+    val selectedMinVotes = filters.minVotes
+    val selectedRuntimeMin = filters.runtimeMin
+    val selectedRuntimeMax = filters.runtimeMax
+    val selectedWatchRegion = filters.watchRegion
+    val selectedProviders = filters.selectedProviders
+    val selectedMonetization = filters.selectedMonetization
     val watchProviders by viewModel.watchProviders.collectAsState()
-    val selectedCertification by viewModel.selectedCertification.collectAsState()
-    val includeAdult by viewModel.includeAdult.collectAsState()
-    val selectedKeywords by viewModel.selectedKeywords.collectAsState()
+    val selectedCertification = filters.certification
+    val includeAdult = filters.includeAdult
+    val selectedKeywords = filters.selectedKeywords
     val keywordResults by viewModel.keywordResults.collectAsState()
     val isSearchingKeywords by viewModel.isSearchingKeywords.collectAsState()
-    val selectedReleaseTypes by viewModel.selectedReleaseTypes.collectAsState()
-    val selectedTvStatuses by viewModel.selectedTvStatuses.collectAsState()
-    val selectedTvTypes by viewModel.selectedTvTypes.collectAsState()
+    val selectedReleaseTypes = filters.selectedReleaseTypes
+    val selectedTvStatuses = filters.selectedTvStatuses
+    val selectedTvTypes = filters.selectedTvTypes
 
         val isTv = selectedMediaType == LibraryMediaType.TV_SHOW
         val isMovie = selectedMediaType == LibraryMediaType.MOVIE

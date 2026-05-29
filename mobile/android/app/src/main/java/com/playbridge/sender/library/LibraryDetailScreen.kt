@@ -151,7 +151,8 @@ fun LibraryDetailScreen(
     }
 
     // Player mode (mirrors CastSheet; persisted to browser_prefs/tv_player_mode)
-    var playerMode by remember { mutableStateOf(browserPrefs.getString("tv_player_mode", "tv") ?: "tv") }
+    val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
+    val playerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
 
     // Mediaflow proxy config (read once — user reopens the screen to pick up changes)
     val mediaflowProxyUrl by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_URL, "") ?: "") }
@@ -677,8 +678,9 @@ fun LibraryDetailScreen(
                                 },
                                 playerMode = playerMode,
                                 onPlayerModeChange = { mode ->
-                                    playerMode = mode
-                                    browserPrefs.edit().putString("tv_player_mode", mode).apply()
+                                    scope.launch {
+                                        settingsRepository.setTvPlayerMode(mode)
+                                    }
                                 },
                                 proxyAvailable = proxyAvailable,
                                 proxyMode = proxyMode,
@@ -750,8 +752,9 @@ fun LibraryDetailScreen(
                                     },
                                     playerMode = playerMode,
                                     onPlayerModeChange = { mode ->
-                                        playerMode = mode
-                                        browserPrefs.edit().putString("tv_player_mode", mode).apply()
+                                        scope.launch {
+                                            settingsRepository.setTvPlayerMode(mode)
+                                        }
                                     },
                                     proxyAvailable = proxyAvailable,
                                     proxyMode = proxyMode,
