@@ -98,6 +98,7 @@ fun LibraryScreen(
     onOpenUrl: (String) -> Unit,
     tvIp: String?,
     tvPort: Int?,
+    tvName: String? = null,
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
@@ -135,6 +136,7 @@ fun LibraryScreen(
             onOpenUrl = onOpenUrl,
             tvIp = tvIp,
             tvPort = tvPort,
+            tvName = tvName,
             onMenuClick = onMenuClick,
             onMovieClick = onMovieClick,
             onTvShowClick = onTvShowClick,
@@ -162,6 +164,7 @@ private fun LibraryScreenContent(
     onOpenUrl: (String) -> Unit,
     tvIp: String?,
     tvPort: Int?,
+    tvName: String?,
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
@@ -382,38 +385,33 @@ private fun LibraryScreenContent(
                                         .focusRequester(searchFocusRequester)
                                 )
                             } else {
-                                // Persistent search bar — fills the header; magnifier on the right.
-                                Surface(
-                                    onClick = {
-                                        onStartSearch()
-                                        viewModel.setIsSearching(true)
-                                    },
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(42.dp)
+                                // Centered title with Connected TV details
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
                                 ) {
+                                    Text(
+                                        text = "PlayBridge",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 14.dp)
+                                        horizontalArrangement = Arrangement.Center
                                     ) {
-                                        Text(
-                                            text = "Search movies & shows…",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        Spacer(Modifier.width(10.dp))
+                                        val isConnected = !tvName.isNullOrBlank()
                                         Icon(
-                                            Icons.Default.Search,
-                                            contentDescription = "Search",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(20.dp)
+                                            imageVector = if (isConnected) Icons.Default.Tv else Icons.Default.Smartphone,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(12.dp),
+                                            tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = if (isConnected) "Watching on: $tvName" else "Watching on: Phone",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                            color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                         )
                                     }
                                 }
@@ -440,7 +438,22 @@ private fun LibraryScreenContent(
                                 }
                             }
                         },
-                        actions = {} // closes actions
+                        actions = {
+                            if (!isSearching) {
+                                IconButton(
+                                    onClick = {
+                                        onStartSearch()
+                                        viewModel.setIsSearching(true)
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = "Search",
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
                     ) // closes TopAppBar
                 } // closes Column
             }

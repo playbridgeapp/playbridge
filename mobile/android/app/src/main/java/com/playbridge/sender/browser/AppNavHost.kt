@@ -752,6 +752,7 @@ fun AppNavHost(
                         },
                         tvIp = tvDevice?.ip,
                         tvPort = tvDevice?.port,
+                        tvName = tvDevice?.name,
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
                         onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
                             {
