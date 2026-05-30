@@ -64,7 +64,7 @@ abstract class PlayerActivity : ComponentActivity() {
      * a periodic playback `status` (state/position/duration/title) plus the
      * available audio/subtitle `tracks`. Engine-agnostic — everything is read
      * from the shared [PlayerControlsViewModel] state (kept live by its progress
-     * loop), so all engines (Exo/VLC/MPV) get the same phone now-playing surface.
+     * loop), so all engines (Exo/MPV) get the same phone now-playing surface.
      *
      * Call once (e.g. from onStart); it self-manages start/stop with the lifecycle.
      * Playlist (`playlist_status`) stays engine-owned because controlsState only
@@ -191,6 +191,38 @@ abstract class PlayerActivity : ComponentActivity() {
             ServerService.broadcastStatus(json)
         } catch (e: Exception) {
             FileLogger.e("PlayerActivity", "Failed to broadcast tracks: ${e.message}")
+        }
+    }
+
+    /**
+     * Broadcast the current queue to the phone as `playlist_status`. Shared by both engine
+     * Activities (fed from their [PlaybackCoordinator]). Always sends — even when empty — so the
+     * phone clears a stale episode list when single/non-playlist content replaces a playlist.
+     * Echoes each item's series-resolution context so the phone can resume queueing later
+     * episodes after an app restart (no phone-side persistence).
+     */
+    protected fun broadcastPlaylistStatus(items: List<playbridge.PlayPayload>, index: Int) {
+        try {
+            val itemsArray = org.json.JSONArray()
+            items.forEachIndexed { i, item ->
+                itemsArray.put(org.json.JSONObject().apply {
+                    put("index", i)
+                    put("title", item.title ?: "Item ${i + 1}")
+                    item.visual_metadata?.season?.let { put("season", it) }
+                    item.visual_metadata?.episode?.let { put("episode", it) }
+                    item.visual_metadata?.imdb_id?.let { put("imdbId", it) }
+                    item.binge_group?.let { put("bingeGroup", it) }
+                })
+            }
+            val statusJson = org.json.JSONObject().apply {
+                put("type", "playlist_status")
+                put("items", itemsArray)
+                put("currentIndex", if (items.isEmpty()) 0 else index)
+                put("totalCount", items.size)
+            }.toString()
+            ServerService.broadcastPlaylistStatus(statusJson)
+        } catch (e: Exception) {
+            FileLogger.e("PlayerActivity", "Failed to broadcast playlist status: ${e.message}")
         }
     }
 
@@ -468,7 +500,6 @@ abstract class PlayerActivity : ComponentActivity() {
         }
 
         val activityClass = when (newMode) {
-            "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
             "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
             else -> com.playbridge.player.player.ExoPlayerActivity::class.java
         }

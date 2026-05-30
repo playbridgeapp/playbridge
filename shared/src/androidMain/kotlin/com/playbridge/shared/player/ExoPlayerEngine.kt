@@ -281,6 +281,11 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             .setMediaSourceFactory(mediaSourceFactory)
             .setSeekForwardIncrementMs(10_000)
             .setReleaseTimeoutMs(3_000) // Prevent hanging during engine transitions
+            // Many proxy/debrid streams reach the end without signalling EOS, so the player sits
+            // "playing but not ending" and Media3's default 60s STUCK_PLAYING_NOT_ENDING timeout
+            // delays end-of-episode auto-advance. Lower it so the timeout (handled as end-of-stream
+            // in the player Activity) fires quickly. This case only triggers at the end of content.
+            .setStuckPlayingNotEndingTimeoutMs(6_000)
             .build()
             .also { exoPlayer ->
                 logger.i(TAG, "ExoPlayer instance created")

@@ -29,7 +29,6 @@ fun SwitchPlayerDialog(
 ) {
     val players = listOf(
         Pair("internal_exo", "ExoPlayer (Internal)"),
-        Pair("internal_vlc", "VLC (Internal)"),
         Pair("internal_mpv", "MPV (Internal)"),
         Pair("external", "External Player")
     )

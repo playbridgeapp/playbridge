@@ -51,7 +51,10 @@ fun SettingsScreen(
     var selectedCategory by remember { mutableStateOf(SettingsCategory.PLAYER) }
 
     // Settings States
-    var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
+    // VLC was removed; migrate any persisted internal_vlc preference to ExoPlayer.
+    var playerMode by remember {
+        mutableStateOf((prefs.getString("player_mode", "phone") ?: "phone").let { if (it == "internal_vlc") "internal" else it })
+    }
     var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
     var showIpDialog by remember { mutableStateOf(false) }
     var allowInsecureWs by remember { mutableStateOf(prefs.getBoolean("allow_insecure_ws", false)) }
@@ -102,6 +105,10 @@ fun SettingsScreen(
             val mode = if (oldExternal) "external" else "phone"
             prefs.edit().putString("player_mode", mode).apply()
             playerMode = mode
+        } else if (prefs.getString("player_mode", null) == "internal_vlc") {
+            // VLC engine was removed — fall back to the internal ExoPlayer.
+            prefs.edit().putString("player_mode", "internal").apply()
+            playerMode = "internal"
         }
     }
 
@@ -175,7 +182,6 @@ fun SettingsScreen(
                                 options = listOf(
                                     "phone" to "Use Phone Setting",
                                     "internal" to "Internal (ExoPlayer)",
-                                    "internal_vlc" to "Internal (LibVLC)",
                                     "internal_mpv" to "Internal (MPV)",
                                     "external_mpv" to "External (MPV)",
                                     "external" to "External Player",

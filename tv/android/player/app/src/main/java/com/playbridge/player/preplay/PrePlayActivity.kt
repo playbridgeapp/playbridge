@@ -14,7 +14,6 @@ import androidx.lifecycle.lifecycleScope
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.player.ExoPlayerActivity
 import com.playbridge.player.player.MpvPlayerActivity
-import com.playbridge.player.player.VlcPlayerActivity
 import com.playbridge.player.server.ServerService
 import playbridge.PlayPayload
 import playbridge.PlaylistPayload
@@ -199,7 +198,6 @@ class PrePlayActivity : ComponentActivity() {
         }
 
         val activityClass = when (finalMode) {
-            "internal_vlc" -> VlcPlayerActivity::class.java
             "internal_mpv" -> MpvPlayerActivity::class.java
             else           -> ExoPlayerActivity::class.java
         }

@@ -133,9 +133,56 @@ class ExoPlayerActivity : PlayerActivity() {
     @OptIn(UnstableApi::class)
     private var subtitleUrls: List<String> = emptyList()
 
-    // Playlist queue for auto-advancing through episodes
-    private var playlistItems: MutableList<playbridge.PlayPayload> = mutableListOf()
-    private var playlistIndex: Int = 0
+    // Playlist queue / auto-advance — single source of truth, shared with MpvPlayerActivity.
+    private val coordinator = PlaybackCoordinator(object : PlaybackCoordinator.Host {
+        override fun loadItem(item: playbridge.PlayPayload, displayTitle: String?) {
+            displayTitle?.takeIf { it.isNotBlank() }?.let {
+                android.widget.Toast.makeText(this@ExoPlayerActivity, it, android.widget.Toast.LENGTH_SHORT).show()
+            }
+            playVideo(
+                url = item.url,
+                title = displayTitle,
+                contentType = item.content_type,
+                detectedBy = item.detected_by,
+                intentHeaders = item.headers.takeIf { it.isNotEmpty() },
+                subtitles = item.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) },
+            )
+            videoFilterManager.reapplyFilter()
+            controlsViewModel.hideControls()
+        }
+
+        override suspend fun saveProgressBeforeAdvance(captureThumbnail: Boolean) {
+            val player = engine?.getExoPlayer()
+            val state = player?.playbackState
+            val hasPlayed = state == Player.STATE_READY || state == Player.STATE_ENDED || (player?.currentPosition ?: 0L) > 0L
+            if (!hasPlayed || player?.playerError != null) return
+            try {
+                if (captureThumbnail) {
+                    syncSelectionsToProgressManager()
+                    val bitmap = progressManager.captureBitmapSuspend()
+                    progressManager.saveProgress(bitmap)
+                } else if (::progressManager.isInitialized) {
+                    progressManager.saveProgress()
+                }
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Failed to save progress before advance: ${e.message}")
+            }
+        }
+
+        override fun onPlaylistChanged(items: List<playbridge.PlayPayload>, index: Int) {
+            controlsViewModel.updatePlaylistData(items, index)
+            broadcastPlaylistStatus()
+        }
+
+        override fun showMessage(message: String) {
+            android.widget.Toast.makeText(this@ExoPlayerActivity, message, android.widget.Toast.LENGTH_SHORT).show()
+        }
+
+        override fun onPlaylistFinished() {
+            FileLogger.i(TAG, "Playlist complete — finishing")
+            finish()
+        }
+    })
     private var lastVolume: Float = 1.0f
     private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
 
@@ -183,18 +230,15 @@ class ExoPlayerActivity : PlayerActivity() {
                     }
                 }
                 ServerService.ACTION_QUEUE_ADD -> {
-                    ServerService.drainPendingQueueItems().forEach { payload ->
-                        playlistItems.add(payload)
-                        FileLogger.i(TAG, "Queue add: ${payload.title ?: payload.url} — playlist now has ${playlistItems.size} items")
-                    }
+                    coordinator.queueAdd(ServerService.drainPendingQueueItems())
                     controlsViewModel.setPlaylistVisible(true)
-                    broadcastPlaylistStatus()
                 }
                 ServerService.ACTION_PLAYLIST_JUMP -> {
                     val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
                     if (index >= 0) {
                         FileLogger.i(TAG, "Playlist jump to index: $index")
-                        playItemAtIndex(index) // broadcasts status internally after updating playlistIndex
+                        navigationJob?.cancel()
+                        navigationJob = lifecycleScope.launch { coordinator.jumpTo(index) }
                     }
                 }
                 ServerService.ACTION_RESYNC -> {
@@ -249,8 +293,8 @@ class ExoPlayerActivity : PlayerActivity() {
                             controlsViewModel.showSettings(SettingsTab.AUDIO) 
                         },
                         onPlaylist = { showPlaylistOverlay() },
-                        onPrev = { playPreviousInPlaylist() },
-                        onNext = { playNextInPlaylist() },
+                        onPrev = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.previous() } },
+                        onNext = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.next() } },
                         onFilter = { showVideoFilterOverlay() },
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
@@ -288,7 +332,8 @@ class ExoPlayerActivity : PlayerActivity() {
                         },
                         onPlaylistItemPicked = { index ->
                             controlsViewModel.hideOverlay()
-                            playItemAtIndex(index)
+                            navigationJob?.cancel()
+                            navigationJob = lifecycleScope.launch { coordinator.jumpTo(index) }
                         },
                         onPlayerSwitched = { playerId ->
                             controlsViewModel.hideOverlay()
@@ -409,14 +454,10 @@ class ExoPlayerActivity : PlayerActivity() {
         handleIntent(intent)
 
         // Drain any queue items that arrived before our receiver was registered.
-        // Must happen AFTER handleIntent because handleIntent replaces playlistItems.
-        ServerService.drainPendingQueueItems().forEach { payload ->
-            playlistItems.add(payload)
-            FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
-        }
-        if (playlistItems.size > 1) {
+        // Must happen AFTER handleIntent because handleIntent replaces the coordinator's queue.
+        coordinator.queueAdd(ServerService.drainPendingQueueItems())
+        if (coordinator.hasPlaylist) {
             controlsViewModel.setPlaylistVisible(true)
-            broadcastPlaylistStatus()
         }
     }
 
@@ -437,17 +478,17 @@ class ExoPlayerActivity : PlayerActivity() {
         val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
         val inMemoryPlaylist = PlaylistStore.currentPlaylist
         if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
-            playlistItems = inMemoryPlaylist.toMutableList()
-            playlistIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
-            FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
+            val startIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
+            coordinator.setPlaylist(inMemoryPlaylist, startIndex)
+            FileLogger.i(TAG, "Playlist loaded: ${coordinator.playlist.size} items, starting at index ${coordinator.index}")
         } else {
-            playlistItems = mutableListOf()
+            coordinator.setPlaylist(emptyList(), 0)
         }
 
-        // Update button visibility based on playlist. A single video is now modelled as a
-        // one-item playlist, so only treat it as a "playlist" (prev/next nav + panel) once
+        // Update button visibility based on playlist. A single video is modelled as an
+        // empty queue, so only treat it as a "playlist" (prev/next nav + panel) once
         // there's more than one item.
-        val hasPlaylist = playlistItems.size > 1
+        val hasPlaylist = coordinator.hasPlaylist
 
         // Show playlist button when a playlist is active
         controlsViewModel.setPlaylistVisible(hasPlaylist)
@@ -510,8 +551,8 @@ class ExoPlayerActivity : PlayerActivity() {
         if (url != null) {
             val baseTitle = title
 
-            val suffix = "(${playlistIndex + 1}/${playlistItems.size})"
-            val displayTitle = if (playlistItems.size > 1 && baseTitle?.contains(suffix) != true) {
+            val suffix = "(${coordinator.index + 1}/${coordinator.playlist.size})"
+            val displayTitle = if (coordinator.hasPlaylist && baseTitle?.contains(suffix) != true) {
                 "$baseTitle $suffix"
             } else {
                 baseTitle
@@ -539,10 +580,10 @@ class ExoPlayerActivity : PlayerActivity() {
             viewModel.ui.collect { state -> handleVmUiState(state) }
         }
 
-        // 5a proxy: sync Activity-owned state into the VM so it stays consistent.
-        if (playlistItems.isNotEmpty()) {
-            viewModel.setPlaylist(playlistItems, playlistIndex)
-        }
+        // NOTE: do NOT feed the queue to the shared PlayerViewModel here. The PlaybackCoordinator
+        // is the single source of truth for playlist advancement on the TV receiver; mirroring the
+        // playlist into the VM would make its observeEngineState() auto-advance on end-of-stream and
+        // race with the coordinator (double-load). The VM stays inert on TV (handleVmUiState logs only).
     }
 
     private var playJob: kotlinx.coroutines.Job? = null
@@ -583,12 +624,8 @@ class ExoPlayerActivity : PlayerActivity() {
                 val parsedPlaylist = M3uParser.fetchAndParseM3u(url, intentHeaders)
                 if (parsedPlaylist != null && parsedPlaylist.isNotEmpty()) {
                     FileLogger.i(TAG, "Successfully parsed IPTV M3U playlist with ${parsedPlaylist.size} items")
-                    playlistItems = parsedPlaylist.toMutableList()
-                    playlistIndex = 0
+                    coordinator.setPlaylist(parsedPlaylist, 0)
                     controlsViewModel.setPlaylistVisible(true)
-                    if (::viewModel.isInitialized) {
-                        viewModel.setPlaylist(playlistItems, playlistIndex)
-                    }
 
                     val firstItem = parsedPlaylist[0]
                     val displayTitle = if (firstItem.title != null) {
@@ -637,16 +674,16 @@ class ExoPlayerActivity : PlayerActivity() {
         broadcastPlaylistStatus()
 
         // Build playlist JSON for history persistence
-        val plistJson = if (playlistItems.isNotEmpty()) {
+        val plistJson = if (!coordinator.isEmpty) {
             try {
-                com.playbridge.shared.protocol.encodePlayPayloadListJson(playlistItems)
+                com.playbridge.shared.protocol.encodePlayPayloadListJson(coordinator.playlist)
             } catch (e: Exception) { null }
         } else null
 
         applyPlaybackSpeed(currentPlaybackSpeed)
         applyVideoScalingMode(currentVideoScalingMode)
 
-        progressManager.setCurrentMedia(url, title, contentType, intentHeaders, plistJson, playlistIndex)
+        progressManager.setCurrentMedia(url, title, contentType, intentHeaders, plistJson, coordinator.index)
         controlsViewModel.setTitle(title ?: "")
 
         val payload = playbridge.PlayPayload(
@@ -763,7 +800,8 @@ class ExoPlayerActivity : PlayerActivity() {
                 androidx.media3.common.Player.STATE_ENDED -> {
                     FileLogger.i(TAG, "Playback ended")
                     controlsViewModel.setBuffering(false)
-                    playNextInPlaylist()
+                    navigationJob?.cancel()
+                    navigationJob = lifecycleScope.launch { coordinator.next() }
                 }
                 androidx.media3.common.Player.STATE_IDLE -> {
                 }
@@ -797,6 +835,21 @@ class ExoPlayerActivity : PlayerActivity() {
                 player.seekToDefaultPosition()
                 player.prepare()
                 return
+            }
+
+            // Some streams reach the end without signalling EOS, so instead of STATE_ENDED the
+            // player sits "playing but not ending" and Media3's StuckPlayerDetector raises
+            // ERROR_CODE_TIMEOUT. When that happens at (or within a few seconds of) the end,
+            // treat it as a clean end-of-stream and advance the queue — same as STATE_ENDED.
+            if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_TIMEOUT) {
+                val pos = player.currentPosition
+                val dur = player.duration
+                if (dur > 0 && pos >= dur - 5_000L) {
+                    FileLogger.i(TAG, "Timeout at end of stream (${pos}/${dur}ms) — advancing as end-of-stream")
+                    navigationJob?.cancel()
+                    navigationJob = lifecycleScope.launch { coordinator.next() }
+                    return
+                }
             }
 
             val isAudioDiscontinuity = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ||
@@ -849,11 +902,12 @@ class ExoPlayerActivity : PlayerActivity() {
                 return
             }
 
-            // Unrecognized Input Format (e.g. WMV) — Transition to internal VLC player automatically
+            // Unrecognized Input Format (e.g. WMV) — Transition to the internal MPV player
+            // automatically. MPV's software decode handles exotic containers ExoPlayer can't parse.
             val isUnrecognizedFormat = error.cause is androidx.media3.exoplayer.source.UnrecognizedInputFormatException ||
                                        (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
             if (isUnrecognizedFormat) {
-                FileLogger.e(TAG, "Unrecognized format detected, automatically transitioning to VlcPlayerActivity")
+                FileLogger.e(TAG, "Unrecognized format detected, automatically transitioning to MpvPlayerActivity")
                 val currentUrl = player.currentMediaItem?.localConfiguration?.uri?.toString() ?: ""
                 val currentTitle = player.currentMediaItem?.mediaMetadata?.title?.toString()
 
@@ -861,8 +915,8 @@ class ExoPlayerActivity : PlayerActivity() {
                 player.pause()
 
                 runOnUiThread {
-                    android.widget.Toast.makeText(this@ExoPlayerActivity, "Format not supported by ExoPlayer, trying VLC...", android.widget.Toast.LENGTH_SHORT).show()
-                    val vlcIntent = Intent(this@ExoPlayerActivity, VlcPlayerActivity::class.java).apply {
+                    android.widget.Toast.makeText(this@ExoPlayerActivity, "Format not supported by ExoPlayer, trying MPV...", android.widget.Toast.LENGTH_SHORT).show()
+                    val mpvIntent = Intent(this@ExoPlayerActivity, MpvPlayerActivity::class.java).apply {
                         putExtra(com.playbridge.player.server.ServerService.EXTRA_URL, currentUrl)
                         currentTitle?.let { putExtra(com.playbridge.player.server.ServerService.EXTRA_TITLE, it) }
 
@@ -871,8 +925,8 @@ class ExoPlayerActivity : PlayerActivity() {
                             putStringArrayListExtra(com.playbridge.player.server.ServerService.EXTRA_SUBTITLES, ArrayList(subtitleUrls))
                         }
 
-                        val currentHeaders = if (playlistItems.isNotEmpty()) {
-                            playlistItems.getOrNull(playlistIndex)?.headers ?: emptyMap()
+                        val currentHeaders = if (!coordinator.isEmpty) {
+                            coordinator.playlist.getOrNull(coordinator.index)?.headers ?: emptyMap()
                         } else {
                             intent.getStringMapExtra(com.playbridge.player.server.ServerService.EXTRA_HEADERS) ?: emptyMap()
                         }
@@ -880,12 +934,12 @@ class ExoPlayerActivity : PlayerActivity() {
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_HEADERS, HashMap(currentHeaders))
                         }
 
-                        if (playlistItems.isNotEmpty()) {
+                        if (!coordinator.isEmpty) {
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_IS_PLAYLIST, true)
-                            putExtra(com.playbridge.player.server.ServerService.EXTRA_PLAYLIST_INDEX, playlistIndex)
+                            putExtra(com.playbridge.player.server.ServerService.EXTRA_PLAYLIST_INDEX, coordinator.index)
                         }
                     }
-                    startActivity(vlcIntent)
+                    startActivity(mpvIntent)
                     finish()
                 }
                 return
@@ -924,7 +978,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
             // Single-stream (non-playlist) network error: re-prepare up to 3 times with a
             // short delay. Covers transient CDN drops and brief Debrid server hiccups.
-            if (isNetworkOrHttpError && playlistItems.isEmpty() && networkErrorRetryCount < 3) {
+            if (isNetworkOrHttpError && coordinator.isEmpty && networkErrorRetryCount < 3) {
                 networkErrorRetryCount++
                 val delayMs = 3000L * networkErrorRetryCount // 3s, 6s, 9s
                 FileLogger.w(TAG, "Network error on single stream, retrying in ${delayMs}ms (attempt $networkErrorRetryCount/3)")
@@ -943,25 +997,20 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             // Auto-skip logic for broken links in playlists (e.g., 403 Forbidden, 404 Not Found, Timeout)
-            if (playlistItems.isNotEmpty() && isNetworkOrHttpError) {
+            if (!coordinator.isEmpty && isNetworkOrHttpError) {
                 FileLogger.w(TAG, "Network/HTTP error detected. Skipping to next item in playlist.")
                 runOnUiThread {
                     android.widget.Toast.makeText(this@ExoPlayerActivity, "Link failed, skipping to next channel...", android.widget.Toast.LENGTH_SHORT).show()
                 }
 
-                // Mark item as failed
-                if (playlistIndex in playlistItems.indices) {
-                    val failedItem = playlistItems[playlistIndex]
-                    val title = failedItem.title ?: "Channel ${playlistIndex + 1}"
-                    if (!title.startsWith("[FAILED]")) {
-                        playlistItems[playlistIndex] = failedItem.copy(title = "[FAILED] $title")
-                    }
-                }
+                // Mark item as failed in place (IPTV channel failover)
+                coordinator.markCurrentFailed()
 
                 // Add a small delay so the user sees the toast before it skips
-                lifecycleScope.launch(Dispatchers.Main) {
+                navigationJob?.cancel()
+                navigationJob = lifecycleScope.launch(Dispatchers.Main) {
                     kotlinx.coroutines.delay(1000)
-                    playNextInPlaylist()
+                    coordinator.next()
                 }
                 return
             }
@@ -996,7 +1045,7 @@ class ExoPlayerActivity : PlayerActivity() {
             initializePlayer()
         }
         // Stream now-playing status + available tracks to the phone (shared,
-        // engine-agnostic — works the same for Exo/VLC/MPV).
+        // engine-agnostic — works the same for Exo/MPV).
         startNowPlayingBroadcasts(controlsViewModel)
     }
 
@@ -1071,102 +1120,6 @@ class ExoPlayerActivity : PlayerActivity() {
         }
     }
 
-    private fun playItemAtIndex(index: Int) {
-        if (playlistItems.isEmpty() || index < 0 || index >= playlistItems.size) return
-        
-        lifecycleScope.launch {
-            try {
-                if (::progressManager.isInitialized) progressManager.saveProgress()
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Failed to save progress before jump: ${e.message}")
-            }
-
-            playlistIndex = index
-            if (::viewModel.isInitialized) {
-                viewModel.setPlaylist(playlistItems, playlistIndex)
-            }
-            controlsViewModel.showPlaylist(playlistItems, playlistIndex)
-
-            val item = playlistItems[index]
-            val title = if (item.title != null) {
-                "${item.title} (${index + 1}/${playlistItems.size})"
-            } else {
-                "Item ${index + 1}/${playlistItems.size}"
-            }
-
-            FileLogger.i(TAG, "Jumping to playlist item $index: $title")
-            android.widget.Toast.makeText(this@ExoPlayerActivity, title, android.widget.Toast.LENGTH_SHORT).show()
-
-            stopPlayback()
-            playVideo(
-                url = item.url,
-                title = title,
-                contentType = item.content_type,
-                detectedBy = item.detected_by,
-                intentHeaders = item.headers.takeIf { it.isNotEmpty() },
-                subtitles = item.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) }
-            )
-            videoFilterManager.reapplyFilter()
-            controlsViewModel.hideControls()
-            broadcastPlaylistStatus()
-        }
-    }
-
-    private fun playPreviousInPlaylist() {
-        // Series navigation path (no playlist queue active)
-        // Playlist navigation only in dumb mode
-        if (playlistItems.isEmpty()) {
-            android.widget.Toast.makeText(this, "Already on first item", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // Playlist path
-        if (playlistIndex <= 0) {
-            android.widget.Toast.makeText(this, "Already on first episode", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        lifecycleScope.launch {
-            // Only capture screenshot and save progress if playback was actually ready/started
-            val state = engine?.getExoPlayer()?.playbackState
-            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (engine?.getExoPlayer()?.currentPosition ?: 0) > 0L
-            if (hasPlayed && engine?.getExoPlayer()?.playerError == null) {
-                syncSelectionsToProgressManager()
-                try {
-                    val bitmap = progressManager.captureBitmapSuspend()
-                    progressManager.saveProgress(bitmap)
-                } catch (e: Exception) {
-                    FileLogger.e(TAG, "Failed to capture/save progress before previous: ${e.message}")
-                }
-            }
-
-            playlistIndex--
-            if (::viewModel.isInitialized) {
-                viewModel.setPlaylist(playlistItems, playlistIndex)
-            }
-            val prevItem = playlistItems[playlistIndex]
-            val title = if (prevItem.title != null) {
-                "${prevItem.title} (${playlistIndex + 1}/${playlistItems.size})"
-            } else {
-                "Item ${playlistIndex + 1}/${playlistItems.size}"
-            }
-
-            FileLogger.i(TAG, "Playing previous in playlist: $title")
-            android.widget.Toast.makeText(this@ExoPlayerActivity, title, android.widget.Toast.LENGTH_SHORT).show()
-
-            playVideo(
-                url = prevItem.url,
-                title = title,
-                contentType = prevItem.content_type,
-                detectedBy = prevItem.detected_by,
-                intentHeaders = prevItem.headers.takeIf { it.isNotEmpty() },
-                subtitles = prevItem.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) }
-            )
-            videoFilterManager.reapplyFilter()
-            controlsViewModel.hideControls()
-        }
-    }
-
     /**
      * Checks every 5s whether bufferedPosition is advancing. If it hasn't moved at all
      * for two consecutive checks (10s with zero bytes received), the CDN connection is
@@ -1195,99 +1148,9 @@ class ExoPlayerActivity : PlayerActivity() {
         }, 5_000L)
     }
 
-    /**
-     * Play the next item in the playlist queue, or finish if at the end.
-     */
-    private fun playNextInPlaylist() {
-        navigationJob?.cancel()
-        navigationJob = lifecycleScope.launch {
-            // Save progress for the current episode before advancing,
-            // but only if playback was actually ready (to avoid crashes on failed streams)
-            val state = engine?.getExoPlayer()?.playbackState
-            val hasPlayed = state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_ENDED || (engine?.getExoPlayer()?.currentPosition ?: 0) > 0L
-            if (hasPlayed && engine?.getExoPlayer()?.playerError == null) {
-                syncSelectionsToProgressManager()
-                try {
-                    val bitmap = progressManager.captureBitmapSuspend()
-                    progressManager.saveProgress(bitmap)
-                } catch (e: Exception) {
-                    FileLogger.e(TAG, "Failed to capture/save progress before next: ${e.message}")
-                }
-            }
-
-            if (playlistItems.isEmpty()) {
-                FileLogger.i(TAG, "No playlist queue — finishing")
-                finish()
-                return@launch
-            }
-
-            playlistIndex++
-            if (::viewModel.isInitialized) {
-                viewModel.setPlaylist(playlistItems, playlistIndex)
-            }
-            if (playlistIndex >= playlistItems.size) {
-                FileLogger.i(TAG, "Playlist complete ($playlistIndex/${playlistItems.size}) — finishing")
-                finish()
-                return@launch
-            }
-
-            val nextItem = playlistItems[playlistIndex]
-            val title = if (nextItem.title != null) {
-                "${nextItem.title} (${playlistIndex + 1}/${playlistItems.size})"
-            } else {
-                "Item ${playlistIndex + 1}/${playlistItems.size}"
-            }
-
-            FileLogger.i(TAG, "Playing next in playlist: $title (${playlistIndex + 1}/${playlistItems.size})")
-            android.widget.Toast.makeText(this@ExoPlayerActivity, "Next: $title", android.widget.Toast.LENGTH_SHORT).show()
-
-            playVideo(
-                url = nextItem.url,
-                title = title,
-                contentType = nextItem.content_type,
-                detectedBy = nextItem.detected_by,
-                intentHeaders = nextItem.headers.takeIf { it.isNotEmpty() },
-                subtitles = nextItem.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) }
-            )
-            videoFilterManager.reapplyFilter()
-            controlsViewModel.hideControls()
-            broadcastPlaylistStatus()
-        }
-    }
-
-
-
-    /**
-     * Broadcast current playlist state to the phone via WebSocket.
-     */
+    /** Broadcast current queue state to the phone (delegates to the shared base implementation). */
     private fun broadcastPlaylistStatus() {
-        // Always send — even when empty — so the phone clears a stale episode list
-        // when new (single/non-playlist) content replaces an earlier playlist.
-        try {
-            val itemsArray = org.json.JSONArray()
-            playlistItems.forEachIndexed { index, item ->
-                itemsArray.put(org.json.JSONObject().apply {
-                    put("index", index)
-                    put("title", item.title ?: "Item ${index + 1}")
-                    // Echo the series resolution context back so the phone can resume
-                    // queueing later episodes after an app restart (no phone-side persistence).
-                    item.visual_metadata?.season?.let { put("season", it) }
-                    item.visual_metadata?.episode?.let { put("episode", it) }
-                    item.visual_metadata?.imdb_id?.let { put("imdbId", it) }
-                    item.binge_group?.let { put("bingeGroup", it) }
-                })
-            }
-            val statusJson = org.json.JSONObject().apply {
-                put("type", "playlist_status")
-                put("items", itemsArray)
-                put("currentIndex", if (playlistItems.isEmpty()) 0 else playlistIndex)
-                put("totalCount", playlistItems.size)
-            }.toString()
-
-            ServerService.broadcastPlaylistStatus(statusJson)
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "Failed to broadcast playlist status: ${e.message}")
-        }
+        broadcastPlaylistStatus(coordinator.playlist, coordinator.index)
     }
 
     /**
@@ -1392,18 +1255,15 @@ class ExoPlayerActivity : PlayerActivity() {
         engine?.getExoPlayer()?.repeatMode = if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         controlsViewModel.setLooping(enabled)
         FileLogger.i(TAG, "Loop mode: $enabled")
-        if (::viewModel.isInitialized) {
-            viewModel.setLooping(enabled)
-        }
     }
 
     private fun showPlaylistOverlay() {
         val displayItems: List<playbridge.PlayPayload>
         val displayIndex: Int
 
-        if (playlistItems.isNotEmpty()) {
-            displayItems = playlistItems
-            displayIndex = playlistIndex
+        if (!coordinator.isEmpty) {
+            displayItems = coordinator.playlist
+            displayIndex = coordinator.index
         } else {
             return
         }

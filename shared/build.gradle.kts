@@ -12,6 +12,13 @@ kotlin {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
+        // Wire commonTest to a JVM host-test compilation so the shared player
+        // logic (PlayerViewModel, queue/playlist) is actually unit-tested.
+        // isReturnDefaultValues lets android.util.Log calls no-op under plain JVM tests.
+        withHostTestBuilder {
+        }.configure {
+            isReturnDefaultValues = true
+        }
     }
 
     sourceSets {
@@ -46,15 +53,13 @@ kotlin {
             implementation(libs.okhttp)
             implementation(libs.okhttp.urlconnection)
 
-            // LibVLC
-            implementation(libs.libvlc.all)
-
             // MPV
             compileOnly(files("../libs/mpv-android/mpv-android.aar"))
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.turbine)
+            implementation(libs.kotlinx.coroutines.test)
             implementation(libs.ktor.client.mock)
             implementation(libs.okio.fakefilesystem)
         }

@@ -60,7 +60,7 @@ android {
             excludes += "/META-INF/INDEX.LIST"
         }
         jniLibs {
-            // mpv-android and libvlc both ship libc++_shared.so for every ABI; pick one copy.
+            // mpv-android ships libc++_shared.so for every ABI; guard against duplicates.
             pickFirsts.add("lib/**/libc++_shared.so")
         }
     }
@@ -131,6 +131,7 @@ dependencies {
     implementation(libs.androidx.media3.effect)                  // Media effects support
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
@@ -140,9 +141,6 @@ dependencies {
     implementation(libs.coil3.network.okhttp)
 
     implementation(project(":shared"))
-
-    // LibVLC
-    implementation(libs.libvlc.all)
 
     // MPV
     implementation(files("libs/mpv-android.aar"))

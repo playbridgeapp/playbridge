@@ -129,6 +129,99 @@ class PlayerViewModelTest {
     // }
 
     @Test
+    fun `playlist next advances index and loads next item`() = runTest(testDispatcher) {
+        val items = listOf(
+            PlayPayload(url = "https://a.com/1.mp4", title = "A"),
+            PlayPayload(url = "https://a.com/2.mp4", title = "B"),
+        )
+        vm.onPlaylistPayload(items, 0)
+        engine.emitState(PlaybackState.Playing)
+
+        vm.next()
+        yield()
+        assertEquals(items[1], engine.lastLoadedPayload)
+        assertEquals(1, vm.currentIndex)
+    }
+
+    @Test
+    fun `appendToPlaylist on a single video makes it index 0 and queues the rest`() = runTest(testDispatcher) {
+        vm.onPayload(directPayload)
+        engine.emitState(PlaybackState.Playing)
+        assertFalse(vm.isPlaylistActive)
+
+        val queued = listOf(
+            PlayPayload(url = "https://a.com/ep2.mp4", title = "Ep2"),
+            PlayPayload(url = "https://a.com/ep3.mp4", title = "Ep3"),
+        )
+        vm.appendToPlaylist(queued)
+
+        assertTrue(vm.isPlaylistActive)
+        assertEquals(0, vm.currentIndex)
+        assertEquals(directPayload, vm.currentPlaylist[0])
+        assertEquals(3, vm.currentPlaylist.size)
+
+        // Advancing from the single video plays the first queued episode.
+        vm.next()
+        yield()
+        assertEquals(queued[0], engine.lastLoadedPayload)
+        assertEquals(1, vm.currentIndex)
+    }
+
+    @Test
+    fun `appendToPlaylist extends an existing playlist`() = runTest(testDispatcher) {
+        val items = listOf(
+            PlayPayload(url = "https://a.com/1.mp4", title = "A"),
+            PlayPayload(url = "https://a.com/2.mp4", title = "B"),
+        )
+        vm.onPlaylistPayload(items, 0)
+        engine.emitState(PlaybackState.Playing)
+
+        vm.appendToPlaylist(listOf(PlayPayload(url = "https://a.com/3.mp4", title = "C")))
+        assertEquals(3, vm.currentPlaylist.size)
+        assertEquals(0, vm.currentIndex)
+    }
+
+    @Test
+    fun `appendToPlaylist ignores empty input`() = runTest(testDispatcher) {
+        vm.onPayload(directPayload)
+        vm.appendToPlaylist(emptyList())
+        assertFalse(vm.isPlaylistActive)
+        assertTrue(vm.currentPlaylist.isEmpty())
+    }
+
+    @Test
+    fun `appended queue auto-advances on Ended`() = runTest(testDispatcher) {
+        vm.onPayload(directPayload)
+        engine.emitState(PlaybackState.Playing)
+        val queued = listOf(PlayPayload(url = "https://a.com/ep2.mp4", title = "Ep2"))
+        vm.appendToPlaylist(queued)
+
+        engine.emitState(PlaybackState.Ended)
+        yield()
+        assertEquals(queued[0], engine.lastLoadedPayload)
+        assertEquals(1, vm.currentIndex)
+    }
+
+    @Test
+    fun `jumpToPlaylistIndex out of bounds is ignored`() = runTest(testDispatcher) {
+        val items = listOf(
+            PlayPayload(url = "https://a.com/1.mp4", title = "A"),
+            PlayPayload(url = "https://a.com/2.mp4", title = "B"),
+        )
+        vm.onPlaylistPayload(items, 0)
+        engine.emitState(PlaybackState.Playing)
+
+        vm.jumpToPlaylistIndex(5)
+        yield()
+        assertEquals(0, vm.currentIndex)
+
+        vm.jumpToPlaylistIndex(1)
+        yield()
+        assertEquals(1, vm.currentIndex)
+        assertEquals(items[1], engine.lastLoadedPayload)
+    }
+
+    @Test
     fun `playlist previous goes back`() = runTest(testDispatcher) {
         val items = listOf(
             PlayPayload(url = "https://a.com/1.mp4", title = "A"),
