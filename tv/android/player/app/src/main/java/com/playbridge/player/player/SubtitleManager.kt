@@ -246,3 +246,19 @@ class SubtitleManager(
         onCueChanged(null)
     }
 }
+
+/**
+ * Display name for an external subtitle URL. The phone appends a "#<label>" fragment carrying a
+ * human-readable language name (the fragment is never sent over HTTP, so the download is
+ * unaffected). Falls back to the decoded filename, then a generic label.
+ */
+fun externalSubtitleName(url: String): String {
+    val frag = url.substringAfter('#', "")
+    if (frag.isNotEmpty()) {
+        return runCatching { java.net.URLDecoder.decode(frag, "UTF-8") }.getOrDefault(frag)
+    }
+    return runCatching {
+        android.net.Uri.parse(url).path?.substringAfterLast('/')
+            ?.takeIf { it.isNotEmpty() }?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+    }.getOrNull() ?: "External subtitle"
+}

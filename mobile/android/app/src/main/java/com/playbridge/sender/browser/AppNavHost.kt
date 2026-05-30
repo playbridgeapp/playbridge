@@ -54,6 +54,7 @@ import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -812,6 +813,18 @@ fun AppNavHost(
                         },
                         onPlayPayloadToTv = { payload ->
                             scope.launch {
+                                // Fetch addon subtitles (preferred language) in parallel with the
+                                // connection setup so they can be bundled into the play command without
+                                // delaying it.
+                                val subsDeferred = async {
+                                    subtitleService.getAllSubtitleUrls(
+                                        payload.visual_metadata?.imdb_id,
+                                        payload.visual_metadata?.season,
+                                        payload.visual_metadata?.episode,
+                                        preferredSubLang
+                                    )
+                                }
+
                                 // Ensure connected before sending
                                 val device = tvDevice
                                 if (device != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
@@ -823,12 +836,15 @@ fun AppNavHost(
                                 }
 
                                 if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                    subsDeferred.cancel()
                                     withContext(Dispatchers.Main) { Toast.makeText(context, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
                                     return@launch
                                 }
 
+                                val addonSubs = runCatching { subsDeferred.await() }.getOrDefault(emptyList())
                                 val cmd = createSingleVideoCommandJson(
                                     payload.copy(
+                                        subtitles = (payload.subtitles + addonSubs).distinct(),
                                         player_mode = tvPlayerMode.takeIf { it != "tv" },
                                         preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
                                         preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
@@ -853,6 +869,15 @@ fun AppNavHost(
                         },
                         onStartTvEpisodeQueue = { current, plan ->
                             scope.launch {
+                                // Fetch the start episode's subtitles in parallel with connecting.
+                                val startSubsDeferred = async {
+                                    subtitleService.getAllSubtitleUrls(
+                                        current.visual_metadata?.imdb_id,
+                                        current.visual_metadata?.season,
+                                        current.visual_metadata?.episode,
+                                        preferredSubLang
+                                    )
+                                }
                                 // Ensure connected before sending
                                 val device = tvDevice
                                 if (device != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
@@ -863,6 +888,7 @@ fun AppNavHost(
                                     }
                                 }
                                 if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                    startSubsDeferred.cancel()
                                     withContext(Dispatchers.Main) { Toast.makeText(context, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
                                     return@launch
                                 }
@@ -876,9 +902,14 @@ fun AppNavHost(
                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
                                 )
 
+                                val startSubs = runCatching { startSubsDeferred.await() }.getOrDefault(emptyList())
+                                val currentCmd = decorate(current).copy(
+                                    subtitles = (current.subtitles + startSubs).distinct()
+                                )
+
                                 // Send the current episode as a one-item playlist, then let the
                                 // coordinator resolve & queue_add the rest (it appends after this).
-                                if (connectionViewModel.webSocketClient.send(createSingleVideoCommandJson(decorate(current)))) {
+                                if (connectionViewModel.webSocketClient.send(createSingleVideoCommandJson(currentCmd))) {
                                     connectionCoordinator.nowPlayingTvId.value = current.visual_metadata?.tmdb_id?.toIntOrNull()
                                     connectionCoordinator.nowPlayingSeason.value = current.visual_metadata?.season
                                     connectionCoordinator.nowPlayingEpisodeStart.value = current.visual_metadata?.episode ?: 1
@@ -953,6 +984,13 @@ fun AppNavHost(
                         },
                         onPlayPlaylistToTv = { playlist ->
                             scope.launch {
+                                // Fetch the start episode's subtitles in parallel with connecting.
+                                val startVm = playlist.items.getOrNull(playlist.start_index)?.visual_metadata
+                                val startSubsDeferred = async {
+                                    subtitleService.getAllSubtitleUrls(
+                                        startVm?.imdb_id, startVm?.season, startVm?.episode, preferredSubLang
+                                    )
+                                }
                                 // Ensure connected before sending
                                 val device = tvDevice
                                 if (device != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
@@ -964,13 +1002,19 @@ fun AppNavHost(
                                 }
 
                                 if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                    startSubsDeferred.cancel()
                                     withContext(Dispatchers.Main) { Toast.makeText(context, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
                                     return@launch
                                 }
 
+                                // Bundle the start episode's subtitles into its item; subsequent Hub
+                                // episodes get theirs as they advance (handled by the queue coordinator
+                                // for no-Hub series; Hub playlists rely on the remote's Search Subtitles).
+                                val startSubs = runCatching { startSubsDeferred.await() }.getOrDefault(emptyList())
                                 val playerMode = tvPlayerMode.takeIf { it != "tv" }
-                                val itemsWithPrefs = playlist.items.map {
+                                val itemsWithPrefs = playlist.items.mapIndexed { idx, it ->
                                     it.copy(
+                                        subtitles = if (idx == playlist.start_index) (it.subtitles + startSubs).distinct() else it.subtitles,
                                         player_mode = playerMode,
                                         preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
                                         preferred_subtitle_language = preferredSubLang.takeIf { l -> l.isNotEmpty() },
@@ -1077,3 +1121,4 @@ fun AppNavHost(
         }
     }
 }
+

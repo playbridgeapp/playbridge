@@ -307,7 +307,17 @@ object VideoDetector {
 
                 // Set Range header to fetch only first 4KB to ensure we get a few cues
                 connection.setRequestProperty("Range", "bytes=0-4096")
-                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
+
+                // Forward the page's request headers (Referer / Cookie / User-Agent) — many
+                // subtitle hosts 403 a bare request, which is why previews sometimes don't load.
+                val hdrs = video.headers ?: emptyMap()
+                hdrs.forEach { (k, v) -> runCatching { connection.setRequestProperty(k, v) } }
+                if (!video.originUrl.isNullOrEmpty() && hdrs.keys.none { it.equals("Referer", ignoreCase = true) }) {
+                    connection.setRequestProperty("Referer", video.originUrl)
+                }
+                if (hdrs.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
+                }
 
                 connection.connect()
 

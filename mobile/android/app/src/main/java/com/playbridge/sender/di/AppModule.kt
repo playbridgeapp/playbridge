@@ -95,6 +95,7 @@ val appModule = module {
             addonRepository = get(),
             connectionCoordinator = get(),
             settingsRepository = get(),
+            subtitleService = get(),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         )
     }

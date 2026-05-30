@@ -29,6 +29,17 @@ class StremioSubtitleService(
     companion object {
         private const val TAG = "StremioSubtitleService"
         private const val DEFAULT_ADDON_URL = "https://opensubtitles-v3.strem.io/subtitles"
+
+        private val LANG_ISO3 = mapOf(
+            "en" to "eng", "es" to "spa", "fr" to "fre", "de" to "ger", "it" to "ita",
+            "ja" to "jpn", "ko" to "kor", "zh" to "chi", "ru" to "rus", "pt" to "por",
+            "ar" to "ara", "hi" to "hin", "nl" to "dut", "sv" to "swe", "tr" to "tur", "pl" to "pol"
+        )
+        private val LANG_NAMES = mapOf(
+            "en" to "english", "es" to "spanish", "fr" to "french", "de" to "german", "it" to "italian",
+            "ja" to "japanese", "ko" to "korean", "zh" to "chinese", "ru" to "russian", "pt" to "portuguese",
+            "ar" to "arabic", "hi" to "hindi", "nl" to "dutch", "sv" to "swedish", "tr" to "turkish", "pl" to "polish"
+        )
     }
 
     private val json = Json {
@@ -70,6 +81,62 @@ class StremioSubtitleService(
             }
             mergeSubtitles(defaultDeferred.await(), addonDeferred.await())
         }
+    }
+
+    /**
+     * Fetch ALL subtitles for a movie (season/episode null) or episode and return their URLs so
+     * the user can choose on the TV. Each URL is suffixed with a `#<label>` fragment carrying a
+     * human-readable language name — the fragment is never sent over HTTP (OkHttp strips it), so it
+     * doesn't affect the download, but the TV uses it to label the track. Subtitles in
+     * [preferredLang] are listed first. Deduplicated by URL, capped at [limit].
+     */
+    suspend fun getAllSubtitleUrls(
+        imdbId: String?,
+        season: Int?,
+        episode: Int?,
+        preferredLang: String = "",
+        limit: Int = 40
+    ): List<String> {
+        if (imdbId.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val streams = if (season != null && episode != null)
+                getSubtitlesForEpisode(imdbId, season, episode)
+            else getSubtitlesForMovie(imdbId)
+            val pref = preferredLang.lowercase()
+            streams
+                .mapNotNull { s -> s.url?.let { url -> Triple(url, subtitleLabel(s), pref.isNotBlank() && matchesLang(s, pref)) } }
+                .distinctBy { it.first }
+                .sortedByDescending { it.third }  // preferred language first
+                .take(limit)
+                .map { (url, label, _) -> "$url#${java.net.URLEncoder.encode(label, "UTF-8")}" }
+        }.getOrDefault(emptyList())
+    }
+
+    /** A readable language label for a subtitle stream (English name when derivable). */
+    private fun subtitleLabel(s: StremioStream): String {
+        val code = s.lang?.lowercase()?.trim()
+        val display = code?.let { c ->
+            LANG_NAMES[c] ?: LANG_NAMES.entries.firstOrNull { LANG_ISO3[it.key] == c }?.value
+        }?.replaceFirstChar { it.titlecase() }
+        return display
+            ?: s.name?.takeIf { it.isNotBlank() }
+            ?: s.title?.takeIf { it.isNotBlank() }
+            ?: code?.uppercase()
+            ?: "Subtitle"
+    }
+
+    /** Match a subtitle's language against a preferred ISO code, tolerating 2-letter / 3-letter
+     *  codes and the English language name appearing in lang/name/title. */
+    private fun matchesLang(s: StremioStream, prefCode: String): Boolean {
+        val p = prefCode.lowercase()
+        if (p.isBlank()) return false
+        val name = LANG_NAMES[p]
+        val iso3 = LANG_ISO3[p]
+        val hay = "${s.lang ?: ""} ${s.name ?: ""} ${s.title ?: ""}".lowercase()
+        val tokens = hay.split(' ', '.', '-', '_', ',', '/', '(', ')', '[', ']').filter { it.isNotBlank() }
+        val codeMatch = tokens.any { it == p || it == iso3 }
+        val nameMatch = name != null && hay.contains(name)
+        return codeMatch || nameMatch
     }
 
     /**

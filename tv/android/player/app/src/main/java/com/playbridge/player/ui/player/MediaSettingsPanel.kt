@@ -174,11 +174,46 @@ private fun UnifiedTrackList(
             .padding(start = 8.dp),
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
-        items(tracks, key = { it.id }) { track ->
+        // Split embedded (in the media) from externally added subtitle tracks so they can be
+        // shown under a separator. Audio/video tabs have no external tracks, so nothing changes.
+        val (embedded, external) = tracks.partition { it.type != "external_sub" }
+
+        items(embedded, key = { it.id }) { track ->
             UnifiedTrackItem(
                 track = track,
                 onClick = { onTrackSelected(track) }
             )
+        }
+
+        if (external.isNotEmpty()) {
+            if (embedded.isNotEmpty()) {
+                item(key = "external_subs_separator") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 2.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(Color.White.copy(alpha = 0.15f))
+                        )
+                        Text(
+                            text = "External subtitles",
+                            color = Color.Gray,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 6.dp, start = 4.dp)
+                        )
+                    }
+                }
+            }
+            items(external, key = { it.id }) { track ->
+                UnifiedTrackItem(
+                    track = track,
+                    onClick = { onTrackSelected(track) }
+                )
+            }
         }
 
         if (tracks.isEmpty()) {

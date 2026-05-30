@@ -267,7 +267,6 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
 
     // Settings state
     private var subtitleUrls: List<String> = emptyList()
-    private var subtitleUrl: String? = null
 
     // Seek buffering
     private var pendingSeekTime: Long? = null
@@ -744,11 +743,13 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
             "audio" -> engine?.setAudioTrack(id)
             "video" -> engine?.setVideoTrack(id)
             "sub" -> {
-                subtitleUrl = null
+                // Switching to an embedded/Off subtitle clears any active external one.
+                currentSubtitleUrl = null
+                controlsViewModel.clearSubtitle()
                 engine?.setSubtitleTrack(id)
             }
             "external_sub" -> {
-                engine?.setSubtitleTrack(null)
+                engine?.setSubtitleTrack(null)  // turn off embedded
                 currentSubtitleUrl = id
                 controlsViewModel.loadExternalSubtitle(id, currentHeaders)
             }
@@ -1177,19 +1178,14 @@ class VlcPlayerActivity : PlayerActivity(), IVLCVout.Callback {
         } ?: emptyList()
         
         val embeddedSubs = player.getTracks(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.map { 
-            UnifiedTrack(it.id, it.name ?: "Subtitle ${it.id}", it.id == player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.id && subtitleUrl == null, "sub")
+            UnifiedTrack(it.id, it.name ?: "Subtitle ${it.id}", it.id == player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text)?.id && currentSubtitleUrl == null, "sub")
         } ?: emptyList()
         
         val externalSubs = subtitleUrls.map { url ->
-            val name = try {
-                val path = android.net.Uri.parse(url).path ?: ""
-                val n = path.substringAfterLast('/')
-                if (n.isNotEmpty()) java.net.URLDecoder.decode(n, "UTF-8") else "External Sub"
-            } catch (e: Exception) { "External Sub" }
-            UnifiedTrack(url, name, url == subtitleUrl, "external_sub")
+            UnifiedTrack(url, externalSubtitleName(url), url == currentSubtitleUrl, "external_sub")
         }
         
-        val offSelected = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) == null && subtitleUrl == null
+        val offSelected = player.getSelectedTrack(org.videolan.libvlc.interfaces.IMedia.Track.Type.Text) == null && currentSubtitleUrl == null
         val offSub = UnifiedTrack("none", "Off", offSelected, "sub")
         
         controlsViewModel.updateTracks(audio, listOf(offSub) + embeddedSubs + externalSubs, video)

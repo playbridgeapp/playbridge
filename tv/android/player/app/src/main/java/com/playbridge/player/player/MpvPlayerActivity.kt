@@ -1112,12 +1112,14 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             "audio" -> engine?.setAudioTrack(id)
             "video" -> engine?.setVideoTrack(id)
             "sub" -> {
+                // Switching to an embedded/Off subtitle clears any active external one.
                 currentSubtitleUrl = null
+                controlsViewModel.clearSubtitle()
                 if (id == "none") engine?.setSubtitleTrack(null)
                 else engine?.setSubtitleTrack(id)
             }
             "external_sub" -> {
-                engine?.setSubtitleTrack(null)
+                engine?.setSubtitleTrack(null)  // turn off embedded
                 currentSubtitleUrl = id
                 controlsViewModel.loadExternalSubtitle(id, currentHeaders)
             }
@@ -1167,12 +1169,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
         
         val externalSubs = subtitleUrls.map { url ->
-            val name = try {
-                val path = android.net.Uri.parse(url).path ?: ""
-                val n = path.substringAfterLast('/')
-                if (n.isNotEmpty()) java.net.URLDecoder.decode(n, "UTF-8") else "External Sub"
-            } catch (e: Exception) { "External Sub" }
-            UnifiedTrack(url, name, url == currentSubtitleUrl, "external_sub")
+            UnifiedTrack(url, externalSubtitleName(url), url == currentSubtitleUrl, "external_sub")
         }
         
         val noSubSelected = allTracks.none { it.type == "sub" && it.isSelected } && currentSubtitleUrl == null

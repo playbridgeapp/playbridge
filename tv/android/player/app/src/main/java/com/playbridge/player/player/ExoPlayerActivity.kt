@@ -681,6 +681,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
             // Handle manual subtitles (Nuvio-style Compose rendering)
             this@ExoPlayerActivity.subtitleUrls = subtitles ?: emptyList()
+            this@ExoPlayerActivity.subtitleHeaders = intentHeaders
             if (subtitleUrls.isNotEmpty()) {
                 val subUrl = subtitleUrls[0]
                 currentSubtitleUrl = subUrl
@@ -1298,6 +1299,11 @@ class ExoPlayerActivity : PlayerActivity() {
         val player = engine?.getExoPlayer() ?: return
         when (type) {
             "audio", "video", "sub" -> {
+                // Choosing an embedded or "Off" subtitle clears any active external one.
+                if (type == "sub") {
+                    currentSubtitleUrl = null
+                    controlsViewModel.clearSubtitle()
+                }
                 if (id == "auto" || id == "off") {
                     val trackType = when (type) {
                         "audio" -> androidx.media3.common.C.TRACK_TYPE_AUDIO
@@ -1330,7 +1336,13 @@ class ExoPlayerActivity : PlayerActivity() {
                 }
             }
             "external_sub" -> {
-                // Exo handles external subs via side-loading in playVideo.
+                // id is the subtitle URL. Activate it in the overlay and turn off embedded text.
+                currentSubtitleUrl = id
+                controlsViewModel.loadExternalSubtitle(id, subtitleHeaders)
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true)
+                    .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_TEXT)
+                    .build()
             }
         }
         updateUnifiedTracks()
@@ -1405,6 +1417,8 @@ class ExoPlayerActivity : PlayerActivity() {
 
 
     private var currentSubtitleUrl: String? = null
+    /** Request headers for the current media, reused when (re)loading an external subtitle. */
+    private var subtitleHeaders: Map<String, String>? = null
     private var currentPlaybackSpeed: Float = 1.0f
     private var currentVideoScalingMode: Int = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
 
@@ -1722,7 +1736,7 @@ class ExoPlayerActivity : PlayerActivity() {
         // PlayerActivity, which observes these controlsViewModel updates.
         controlsViewModel.updateTracks(
             audio = mapTracks(androidx.media3.common.C.TRACK_TYPE_AUDIO, "audio"),
-            subtitles = mapTracks(androidx.media3.common.C.TRACK_TYPE_TEXT, "sub"),
+            subtitles = buildSubtitleTracks(tracks, params),
             video = mapTracks(androidx.media3.common.C.TRACK_TYPE_VIDEO, "video")
         )
         controlsViewModel.setPlaybackSpeed(player.playbackParameters.speed)
@@ -1736,6 +1750,38 @@ class ExoPlayerActivity : PlayerActivity() {
             else -> "Fit"
         }
         controlsViewModel.setVideoScaling(scalingMode)
+    }
+
+    /**
+     * Subtitle track list: "Off" + embedded (in-media) text tracks + externally side-loaded
+     * subtitles ([subtitleUrls]). Exo renders externals via a custom overlay rather than as
+     * player tracks, so they have to be added here explicitly (the separator in the UI groups
+     * them under "External subtitles").
+     */
+    private fun buildSubtitleTracks(
+        tracks: androidx.media3.common.Tracks,
+        params: androidx.media3.common.TrackSelectionParameters
+    ): List<UnifiedTrack> {
+        val type = androidx.media3.common.C.TRACK_TYPE_TEXT
+        val isDisabled = params.disabledTrackTypes.contains(type)
+
+        val embedded = mutableListOf<UnifiedTrack>()
+        tracks.groups.filter { it.type == type }.forEach { group ->
+            val actualGroupIdx = tracks.groups.indexOf(group)
+            for (i in 0 until group.length) {
+                val format = group.getTrackFormat(i)
+                // An embedded track only counts as selected when no external sub is active.
+                val selected = group.isTrackSelected(i) && currentSubtitleUrl == null
+                embedded.add(UnifiedTrack("$actualGroupIdx:$i", buildTrackName(format), selected, "sub"))
+            }
+        }
+
+        val external = subtitleUrls.map { url ->
+            UnifiedTrack(url, externalSubtitleName(url), url == currentSubtitleUrl, "external_sub")
+        }
+
+        val offSelected = isDisabled && currentSubtitleUrl == null
+        return listOf(UnifiedTrack("off", "Off", offSelected, "sub")) + embedded + external
     }
 
     private fun buildTrackName(format: androidx.media3.common.Format): String {

@@ -228,7 +228,9 @@ data class StremioStream(
     val infoHash: String? = null,
     val fileIdx: Int? = null,
     @SerialName("externalUrl") val externalUrl: String? = null,
-    val behaviorHints: StemioBehaviorHints? = null
+    val behaviorHints: StemioBehaviorHints? = null,
+    /** Subtitle language (ISO code like "en"/"eng"), present on subtitle resources. */
+    val lang: String? = null
 ) {
     /** Whether this is a directly playable HTTP stream (from debrid) */
     val isDirectUrl: Boolean get() = !url.isNullOrBlank() && (url.startsWith("http://") || url.startsWith("https://"))

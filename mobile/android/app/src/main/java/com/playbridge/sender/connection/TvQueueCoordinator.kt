@@ -10,6 +10,7 @@ import com.playbridge.sender.player.AutoPickPrefs
 import com.playbridge.shared.protocol.createQueueAddCommandJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -63,6 +64,7 @@ class TvQueueCoordinator(
     private val addonRepository: AddonRepository,
     private val connectionCoordinator: ConnectionCoordinator,
     private val settingsRepository: SettingsRepository,
+    private val subtitleService: com.playbridge.sender.data.library.StremioSubtitleService,
     private val scope: CoroutineScope
 ) {
     private val TAG = "TvQueueCoordinator"
@@ -166,7 +168,9 @@ class TvQueueCoordinator(
             val idx = nextToResolve
             val url = resolveBest(p, idx)
             if (url != null) {
-                val payload = p.items[idx].template.copy(url = url)
+                val tmpl = p.items[idx].template
+                val subs = fetchSubtitlesFor(tmpl)
+                val payload = tmpl.copy(url = url, subtitles = (tmpl.subtitles + subs).distinct())
                 if (!webSocketClient.send(createQueueAddCommandJson(payload))) {
                     // Send failed (socket dropped) — leave nextToResolve so we retry on the next tick.
                     Log.w(TAG, "queue_add failed for episode index $idx; will retry")
@@ -179,6 +183,13 @@ class TvQueueCoordinator(
             }
             nextToResolve++
         }
+    }
+
+    /** Preferred-language addon subtitles for an episode (from its template's visual_metadata). */
+    private suspend fun fetchSubtitlesFor(tmpl: playbridge.PlayPayload): List<String> {
+        val pref = runCatching { settingsRepository.preferredSubtitleLang.first() }.getOrDefault("")
+        val vm = tmpl.visual_metadata
+        return subtitleService.getAllSubtitleUrls(vm?.imdb_id, vm?.season, vm?.episode, pref)
     }
 
     private suspend fun resolveBest(p: TvEpisodeQueuePlan, index: Int): String? {
