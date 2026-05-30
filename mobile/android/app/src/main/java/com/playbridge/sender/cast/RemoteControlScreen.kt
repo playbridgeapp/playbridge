@@ -21,12 +21,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -122,8 +128,8 @@ fun RemoteControlScreen(
 ) {
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showAddSubtitle by remember { mutableStateOf(false) }
-    // Default to touchpad when no media playing (browser mode), D-Pad when playing (player mode)
-    var isTouchpad by remember { mutableStateOf(!isMediaPlaying) }
+    // Input mode for the non-player (browser) hero area. Defaults to the touchpad.
+    var inputMode by remember { mutableStateOf(RemoteInputMode.TOUCHPAD) }
 
     Scaffold(
         topBar = {
@@ -176,39 +182,49 @@ fun RemoteControlScreen(
                     modifier = Modifier.weight(1f)
                 )
 
-                // ── Transport controls (play/pause driven by TV state) ──
+                // ── Volume + transport controls ──
+                VolumeRow(
+                    onVolumeUp = { onRemoteKey("volume_up") },
+                    onVolumeDown = { onRemoteKey("volume_down") }
+                )
                 // No Back/Home here — Stop already exits playback, so they'd be redundant.
                 MediaControlRow(
                     isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
                     onPlayerControl = onPlayerControl
                 )
             } else {
-                // ── Toggle Pill ──
-                TogglePill(
-                    isTouchpad = isTouchpad,
-                    onToggle = { isTouchpad = it }
+                // ── Input mode switcher: Touchpad / D-Pad / Keyboard ──
+                InputModeSwitcher(
+                    mode = inputMode,
+                    onSelect = { inputMode = it }
                 )
 
                 // ── Hero Area (fills available space) ──
                 Box(modifier = Modifier.weight(1f)) {
-                    if (isTouchpad) {
-                        TouchpadArea(
+                    when (inputMode) {
+                        RemoteInputMode.TOUCHPAD -> TouchpadArea(
                             onMouseMove = onMouseMove,
                             onMouseClick = onMouseClick,
                             onMouseScroll = onMouseScroll,
                             onMouseDown = onMouseDown,
                             onMouseUp = onMouseUp
                         )
-                    } else {
-                        DpadArea(onRemoteKey = onRemoteKey)
+                        RemoteInputMode.DPAD -> DpadArea(onRemoteKey = onRemoteKey)
+                        RemoteInputMode.KEYBOARD -> KeyboardArea(onRemoteKey = onRemoteKey)
                     }
                 }
 
-                // ── Navigation Row ──
-                NavigationRow(onRemoteKey = onRemoteKey)
+                // ── Volume (sits where Back/Home used to be) ──
+                VolumeRow(
+                    onVolumeUp = { onRemoteKey("volume_up") },
+                    onVolumeDown = { onRemoteKey("volume_down") }
+                )
 
-                // ── Browser Controls ──
-                BrowserContextRow(onBrowserControl = onBrowserControl)
+                // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · Home ──
+                BrowserContextRow(
+                    onBrowserControl = onBrowserControl,
+                    onRemoteKey = onRemoteKey
+                )
             }
         }
     }
@@ -240,8 +256,11 @@ fun RemoteControlScreen(
 }
 
 
+/** Which input surface the non-player ("browser") remote shows. */
+private enum class RemoteInputMode { TOUCHPAD, DPAD, KEYBOARD }
+
 @Composable
-private fun TogglePill(isTouchpad: Boolean, onToggle: (Boolean) -> Unit) {
+private fun InputModeSwitcher(mode: RemoteInputMode, onSelect: (RemoteInputMode) -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     Row(
         modifier = Modifier
@@ -253,14 +272,20 @@ private fun TogglePill(isTouchpad: Boolean, onToggle: (Boolean) -> Unit) {
         PillOption(
             label = "Touchpad",
             icon = Icons.Default.TouchApp,
-            selected = isTouchpad,
-            onClick = { onToggle(true) }
+            selected = mode == RemoteInputMode.TOUCHPAD,
+            onClick = { onSelect(RemoteInputMode.TOUCHPAD) }
         )
         PillOption(
             label = "D-Pad",
             icon = Icons.Default.Gamepad,
-            selected = !isTouchpad,
-            onClick = { onToggle(false) }
+            selected = mode == RemoteInputMode.DPAD,
+            onClick = { onSelect(RemoteInputMode.DPAD) }
+        )
+        PillOption(
+            label = "Keyboard",
+            icon = Icons.Default.Keyboard,
+            selected = mode == RemoteInputMode.KEYBOARD,
+            onClick = { onSelect(RemoteInputMode.KEYBOARD) }
         )
     }
 }
@@ -291,12 +316,97 @@ private fun PillOption(
         modifier = Modifier.height(40.dp)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 20.dp),
+            modifier = Modifier.padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge)
+            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        }
+    }
+}
+
+/**
+ * Keyboard input for browsing the TV. The phone's text field streams its full contents to the
+ * TV on every change (`text:<base64>`), which the TV writes into its focused web input — so
+ * typing and deleting both work. The Enter button submits (`key_enter`).
+ */
+@Composable
+private fun KeyboardArea(onRemoteKey: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+
+    fun sendText(value: String) {
+        val b64 = android.util.Base64.encodeToString(value.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+        onRemoteKey("text:$b64")
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            "Tap a text box on the TV, then type here — it's sent as you type.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it; sendText(it) },
+            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+            placeholder = { Text("Type to send to TV…") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { onRemoteKey("key_enter") }),
+            trailingIcon = {
+                if (text.isNotEmpty()) {
+                    IconButton(onClick = { text = ""; sendText("") }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear")
+                    }
+                }
+            }
+        )
+        Button(onClick = { onRemoteKey("key_enter") }) {
+            Icon(Icons.Default.Done, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Enter")
+        }
+    }
+
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+}
+
+/** Slim horizontal −/＋ volume rocker shown just above the bottom controls in every context. */
+@Composable
+private fun VolumeRow(
+    onVolumeUp: () -> Unit,
+    onVolumeDown: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onVolumeDown) {
+            Icon(Icons.Default.Remove, contentDescription = "Volume down")
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.VolumeUp,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        IconButton(onClick = onVolumeUp) {
+            Icon(Icons.Default.Add, contentDescription = "Volume up")
         }
     }
 }
@@ -458,35 +568,6 @@ private fun DpadBtn(icon: ImageVector, desc: String, onClick: () -> Unit) {
 
 
 @Composable
-private fun NavigationRow(onRemoteKey: (String) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Back
-        LabeledIconButton(
-            icon = Icons.AutoMirrored.Filled.ArrowBack,
-            label = "Back",
-            tint = MaterialTheme.colorScheme.onSurface,
-            onClick = { onRemoteKey("back") }
-        )
-        // Home
-        LabeledIconButton(
-            icon = Icons.Default.Home,
-            label = "Home",
-            tint = MaterialTheme.colorScheme.onSurface,
-            onClick = { onRemoteKey("home") }
-        )
-    }
-}
-
-
-@Composable
 private fun MediaControlRow(isPlaying: Boolean, onPlayerControl: (String) -> Unit) {
     var isLooping by remember { mutableStateOf(false) }
 
@@ -547,7 +628,10 @@ private fun MediaControlRow(isPlaying: Boolean, onPlayerControl: (String) -> Uni
 
 
 @Composable
-private fun BrowserContextRow(onBrowserControl: (String) -> Unit) {
+private fun BrowserContextRow(
+    onBrowserControl: (String) -> Unit,
+    onRemoteKey: (String) -> Unit
+) {
     var isVideoMaximized by remember { mutableStateOf(false) }
 
     Row(
@@ -559,6 +643,13 @@ private fun BrowserContextRow(onBrowserControl: (String) -> Unit) {
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Back — goes back one page
+        LabeledIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            label = "Back",
+            tint = MaterialTheme.colorScheme.onSurface,
+            onClick = { onRemoteKey("back") }
+        )
         // Refresh
         LabeledIconButton(
             icon = Icons.Default.Refresh,
@@ -582,6 +673,13 @@ private fun BrowserContextRow(onBrowserControl: (String) -> Unit) {
                 onBrowserControl(if (isVideoMaximized) "restore_video" else "maximize_video")
                 isVideoMaximized = !isVideoMaximized
             }
+        )
+        // Home — exits the browser
+        LabeledIconButton(
+            icon = Icons.Default.Home,
+            label = "Home",
+            tint = MaterialTheme.colorScheme.onSurface,
+            onClick = { onRemoteKey("home") }
         )
     }
 }

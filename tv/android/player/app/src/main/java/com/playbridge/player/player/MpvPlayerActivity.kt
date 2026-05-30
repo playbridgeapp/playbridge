@@ -1134,6 +1134,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 itemsArray.put(org.json.JSONObject().apply {
                     put("index", index)
                     put("title", item.title ?: "Item ${index + 1}")
+                    // Echo the series resolution context back so the phone can resume
+                    // queueing later episodes after an app restart (no phone-side persistence).
+                    item.visual_metadata?.season?.let { put("season", it) }
+                    item.visual_metadata?.episode?.let { put("episode", it) }
+                    item.visual_metadata?.imdb_id?.let { put("imdbId", it) }
+                    item.binge_group?.let { put("bingeGroup", it) }
                 })
             }
             val statusJson = org.json.JSONObject().apply {

@@ -952,8 +952,14 @@ data class PlaylistUiState(
     val items: List<PlaylistEpisode> = emptyList()
 )
 
-/** A single entry in the TV's current playlist, synced via playlist_status. */
+/** A single entry in the TV's current playlist, synced via playlist_status.
+ *  The optional fields are the resolution context the TV echoes back (when present)
+ *  so the phone can resume queueing later episodes after an app restart. */
 data class PlaylistEpisode(
     val index: Int,
-    val title: String
+    val title: String,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val imdbId: String? = null,
+    val bingeGroup: String? = null
 )

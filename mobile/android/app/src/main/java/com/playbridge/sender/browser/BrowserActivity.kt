@@ -1523,31 +1523,49 @@ class BrowserActivity : ComponentActivity() {
                         pendingContentPayload = null
                     },
                     onVideoClick = { video, subs ->
-                         val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                         if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                             headers["Referer"] = video.originUrl
-                         }
-                         val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
-                         val cmd = createSingleVideoCommandJson(
-                             PlayPayload(
-                                 url = video.url,
-                                 title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                 headers = headers ?: emptyMap(),
-                                 content_type = video.contentType,
-                                 detected_by = video.detectedBy,
-                                 player_mode = sheetPlayerMode.takeIf { it != "tv" },
-                                 preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                 preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
-                                 default_video_quality = effectiveQuality,
-                                 max_bitrate_cap_mbps = maxBitrateCapMbps,
+                         // A bundle (e.g. "Play All" from the debrid screen) carries its real items in
+                         // playlistPayload with a "playlist://…" sentinel URL; send it as a playlist,
+                         // not as a single video (otherwise the TV tries to play the sentinel URL).
+                         val cmd = if (video.playlistPayload != null) {
+                             val items = video.playlistPayload!!.map {
+                                 it.copy(
+                                     player_mode = sheetPlayerMode.takeIf { m -> m != "tv" },
+                                     preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
+                                     preferred_subtitle_language = preferredSubLang.takeIf { l -> l.isNotEmpty() },
+                                     default_video_quality = defaultVideoQuality.takeIf { q -> q != "Auto" },
+                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                 )
+                             }
+                             com.playbridge.shared.protocol.createPlaylistCommandJson(
+                                 playbridge.PlaylistPayload(items = items)
                              )
-                         )
+                         } else {
+                             val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
+                             if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
+                                 headers["Referer"] = video.originUrl
+                             }
+                             val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
+                             createSingleVideoCommandJson(
+                                 PlayPayload(
+                                     url = video.url,
+                                     title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                     headers = headers ?: emptyMap(),
+                                     content_type = video.contentType,
+                                     detected_by = video.detectedBy,
+                                     player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                     preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                     preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                     default_video_quality = effectiveQuality,
+                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                 )
+                             )
+                         }
                          val sent = when (connectionState) {
                              is WebSocketClient.ConnectionState.Connected -> {
                                  val ok = connectionViewModel.webSocketClient.send(cmd)
                                  if (ok) {
                                      connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                     browserViewModel.logHistory(video.url, video.title)
+                                     if (video.playlistPayload == null) browserViewModel.logHistory(video.url, video.title)
                                  }
                                  ok
                              }

@@ -205,7 +205,10 @@ class ConnectionViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        webSocketClient.destroy()
+        // WebSocketClient is a process-wide singleton reused by the next Activity/ViewModel, so
+        // only close the socket here — destroy() shuts down its OkHttp executor permanently, which
+        // would make every later reconnect fail with "executor rejected".
+        webSocketClient.disconnect()
         nsdHelper.stopDiscovery()
     }
 }

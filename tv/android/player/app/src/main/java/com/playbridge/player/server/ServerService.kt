@@ -411,7 +411,21 @@ class ServerService : Service() {
             }
             is IncomingMessage.Remote -> {
                 FileLogger.i(TAG, "Remote command: ${msg.payload.key}")
-                if (activeContext == "browser_external") {
+                val remoteKey = msg.payload.key
+                if (remoteKey == "volume_up" || remoteKey == "volume_down" || remoteKey == "mute") {
+                    // System media volume — handle centrally so it works in every context.
+                    val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                    val direction = when (remoteKey) {
+                        "volume_up" -> android.media.AudioManager.ADJUST_RAISE
+                        "volume_down" -> android.media.AudioManager.ADJUST_LOWER
+                        else -> android.media.AudioManager.ADJUST_TOGGLE_MUTE
+                    }
+                    am.adjustStreamVolume(
+                        android.media.AudioManager.STREAM_MUSIC,
+                        direction,
+                        android.media.AudioManager.FLAG_SHOW_UI
+                    )
+                } else if (activeContext == "browser_external") {
                     val browserIntent = Intent(ACTION_REMOTE).apply {
                         putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
                         setPackage("com.playbridge.browser")

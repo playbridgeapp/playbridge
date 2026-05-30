@@ -61,7 +61,11 @@ class ConnectionCoordinator(
                                         add(
                                             PlaylistEpisode(
                                                 index = o.optInt("index", i),
-                                                title = o.optString("title", "Item ${i + 1}")
+                                                title = o.optString("title", "Item ${i + 1}"),
+                                                season = o.optInt("season", -1).takeIf { it >= 0 },
+                                                episode = o.optInt("episode", -1).takeIf { it >= 0 },
+                                                imdbId = o.optString("imdbId", "").ifEmpty { null },
+                                                bingeGroup = o.optString("bingeGroup", "").ifEmpty { null }
                                             )
                                         )
                                     }

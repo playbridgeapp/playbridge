@@ -25,14 +25,26 @@ class SystemWebViewEngine(
     private val desktopMode: Boolean = false,
     private val onFullscreen: (View, WebChromeClient.CustomViewCallback) -> Unit,
     private val onExitFullscreen: () -> Unit,
-    private val onEngineRecreateRequired: (url: String?) -> Unit = {}
+    private val onEngineRecreateRequired: (url: String?) -> Unit = {},
+    private val onDownloadStarted: (downloadId: Long, fileName: String) -> Unit = { _, _ -> }
 ) {
 
     companion object {
         private const val TAG = "SystemWebViewEngine"
     }
 
-    private val webView: WebView = WebView(context)
+    private val webView: WebView = object : WebView(context) {
+        // When the user enables "Hide on-screen keyboard" (Settings → Browser), suppress the IME
+        // by refusing the input connection. The field still focuses and receives text injected
+        // from the phone keyboard (via JS), so the TV keyboard never steals the cursor focus.
+        override fun onCreateInputConnection(
+            outAttrs: android.view.inputmethod.EditorInfo
+        ): android.view.inputmethod.InputConnection? {
+            val hide = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                .getBoolean("hide_soft_keyboard", false)
+            return if (hide) null else super.onCreateInputConnection(outAttrs)
+        }
+    }
     private var canGoBack = false
     private var currentUrl: String? = null
     
@@ -236,11 +248,20 @@ class SystemWebViewEngine(
                 allowContentAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
-                // User agent: desktop Chrome on Linux or mobile Android, driven by desktopMode flag
+                // User agent. In mobile mode use the WebView's OWN default UA rather than a
+                // hardcoded Chrome version: the device sends User-Agent Client Hints (Sec-CH-UA)
+                // derived from the real WebView/Chrome version, and Google flags the UA string when
+                // its Chrome version disagrees with those hints ("I'm not a robot"). A stale
+                // "Chrome/120" string against a newer WebView is exactly that mismatch.
                 userAgentString = if (desktopMode) {
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    // Desktop spoofing still mismatches the mobile client hints, so it stays
+                    // captcha-prone; at least track the device's real Chrome major version.
+                    val real = WebSettings.getDefaultUserAgent(context)
+                    val chromeVersion = Regex("Chrome/([\\d.]+)").find(real)?.groupValues?.get(1)
+                        ?: "120.0.0.0"
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVersion Safari/537.36"
                 } else {
-                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                    WebSettings.getDefaultUserAgent(context)
                 }
 
                 // Optimize for media streaming
@@ -268,7 +289,14 @@ class SystemWebViewEngine(
 
             // Handle Downloads via Android DownloadManager
             setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
+                Log.d(TAG, "Download requested: $url (mime=$mimeType)")
                 try {
+                    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                        // DownloadManager only handles http(s); blob:/data: can't be enqueued.
+                        Log.w(TAG, "Cannot download non-http URL: $url")
+                        android.widget.Toast.makeText(context, "This download type isn't supported", android.widget.Toast.LENGTH_SHORT).show()
+                        return@setDownloadListener
+                    }
                     val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
                     request.setMimeType(mimeType)
 
@@ -276,21 +304,22 @@ class SystemWebViewEngine(
                     val fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
                     request.setTitle(fileName)
 
-                    // Add cookie if needed
-                    val cookies = android.webkit.CookieManager.getInstance().getCookie(url)
-                    request.addRequestHeader("cookie", cookies)
+                    // Forward the cookies, UA and referer the page would use — many hosts 403 a
+                    // bare download request without them.
+                    android.webkit.CookieManager.getInstance().getCookie(url)?.let { request.addRequestHeader("Cookie", it) }
                     request.addRequestHeader("User-Agent", userAgent)
+                    currentUrl?.takeIf { it.isNotBlank() }?.let { request.addRequestHeader("Referer", it) }
 
                     request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    // Save to the public Downloads folder so the user can find it in a file manager.
                     request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
 
                     val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                    dm.enqueue(request)
-
-                    android.widget.Toast.makeText(context, "Downloading file...", android.widget.Toast.LENGTH_SHORT).show()
+                    val downloadId = dm.enqueue(request)
+                    onDownloadStarted(downloadId, fileName)
                 } catch (e: Exception) {
                     android.util.Log.e(TAG, "Failed to start download", e)
-                    android.widget.Toast.makeText(context, "Download failed", android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
 

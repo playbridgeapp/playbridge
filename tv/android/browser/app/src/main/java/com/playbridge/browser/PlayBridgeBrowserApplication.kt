@@ -31,7 +31,13 @@ class PlayBridgeBrowserApplication : Application() {
                     "resource://android/assets/extensions/pb_bridge/",
                     "pb-bridge@playbridge.com"
                 ).accept(
-                    { _ -> Log.i("PBApplication", "PB Bridge pre-initialized") },
+                    { ext ->
+                        // Register the native message delegate here — on the extension as it's first
+                        // ensured — so the background script's connectNative finds it instead of
+                        // falling back to an (unsupported) native manifest lookup.
+                        if (ext != null) PbBridge.register(ext)
+                        Log.i("PBApplication", "PB Bridge pre-initialized")
+                    },
                     { e -> Log.e("PBApplication", "PB Bridge pre-init failed", e) }
                 )
             } catch (e: Exception) {

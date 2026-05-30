@@ -4,12 +4,10 @@ import android.content.Context
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
-import org.json.JSONObject
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.ScreenLength
-import org.mozilla.geckoview.WebExtension
 
 class GeckoViewEngine(
     private val context: Context,
@@ -26,9 +24,6 @@ class GeckoViewEngine(
     private val runtime = GeckoRuntime.getDefault(context)
 
     private var _canGoBack: Boolean = false
-
-    // WebExtension bridge port for JS evaluation
-    private var bridgePort: WebExtension.Port? = null
 
     init {
         runtime.warmUp()
@@ -54,35 +49,13 @@ class GeckoViewEngine(
     }
 
     fun evaluateJavascript(script: String, callback: ((String?) -> Unit)?) {
-        val port = bridgePort
-        if (port != null) {
-            try {
-                val message = JSONObject()
-                message.put("type", "eval")
-                message.put("code", script)
-                port.postMessage(message)
-                // Note: The callback is currently invoked with null immediately.
-                // In a perfect world, we'd wait for a response, but it's asynchronous.
-                callback?.invoke(null)
-            } catch (e: Exception) {
-                Log.e(TAG, "Bridge eval error", e)
-                callback?.invoke(null)
-            }
-        } else {
-            try {
-                val clean = script.trim()
-                val encoded = android.util.Base64.encodeToString(clean.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
-                // Use Base64 to bypass all escaping issues
-                session.loadUri("javascript:void(eval(decodeURIComponent(escape(window.atob('$encoded')))))")
-            } catch (e: Exception) {
-                Log.e(TAG, "JS fallback error", e)
-            }
-            callback?.invoke(null)
-        }
+        // The bridge port lives in PbBridge (registered on the extension at app startup) and is
+        // shared across sessions; PbBridge queues if it isn't connected yet.
+        PbBridge.eval(script)
+        callback?.invoke(null)
     }
 
     fun destroy() {
-        bridgePort = null
         session.close()
     }
 
@@ -116,34 +89,6 @@ class GeckoViewEngine(
         upEvent.recycle()
     }
 
-    /**
-     * Register message delegate for the PB Bridge extension.
-     * For background script messaging, the delegate is set directly on the extension object.
-     */
-    private fun registerBridgeDelegate(ext: WebExtension) {
-        ext.setMessageDelegate(
-            object : WebExtension.MessageDelegate {
-                override fun onConnect(port: WebExtension.Port) {
-                    Log.i(TAG, "PB Bridge port connected")
-                    bridgePort = port
-                    port.setDelegate(object : WebExtension.PortDelegate {
-                        override fun onPortMessage(message: Any, port: WebExtension.Port) {
-                            Log.d(TAG, "PB Bridge response: $message")
-                        }
-                        override fun onDisconnect(port: WebExtension.Port) {
-                            Log.d(TAG, "PB Bridge port disconnected")
-                            if (bridgePort === port) {
-                                bridgePort = null
-                            }
-                        }
-                    })
-                }
-            },
-            "pbBridge"
-        )
-        Log.d(TAG, "PB Bridge delegate registered")
-    }
-
     private fun setupGeckoView() {
         geckoView.isFocusable = true
         geckoView.isFocusableInTouchMode = true
@@ -163,23 +108,8 @@ class GeckoViewEngine(
             }
         }
 
-        // PB Bridge extension is required for JS evaluation.
-        // uBlock is handled globally in PlayBridgeBrowserApplication.
-
-        runtime.webExtensionController.ensureBuiltIn(
-            "resource://android/assets/extensions/pb_bridge/",
-            "pb-bridge@playbridge.com"
-        ).accept(
-            { ext ->
-                if (ext != null) {
-                    Log.i(TAG, "PB Bridge extension ensured")
-                    registerBridgeDelegate(ext)
-                } else {
-                    Log.w(TAG, "PB Bridge ensureBuiltIn returned null — bridge unavailable")
-                }
-            },
-            { e -> Log.e(TAG, "Failed to install PB Bridge extension", e) }
-        )
+        // PB Bridge + uBlock extensions are ensured (and the bridge delegate registered) once at
+        // startup in PlayBridgeBrowserApplication; the runtime is shared, so nothing to do here.
 
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {

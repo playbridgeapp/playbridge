@@ -146,6 +146,7 @@ fun AppNavHost(
     val connectionViewModel: ConnectionViewModel = koinViewModel()
     val libraryViewModel: LibraryViewModel = koinViewModel()
     val connectionCoordinator: ConnectionCoordinator = koinInject()
+    val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
     val historyDao: HistoryDao = koinInject()
     val bookmarkDao: BookmarkDao = koinInject()
     val addonRepository: AddonRepository = koinInject()
@@ -842,6 +843,51 @@ fun AppNavHost(
                                         connectionCoordinator.nowPlayingEpisodeStart.value = payload.visual_metadata?.episode ?: 1
                                     }
                                     connectionCoordinator.tvActiveContext.value = "player"
+                                    if (autoSwitchToRemote) {
+                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                        onScreenChange(Screen.Remote)
+                                    }
+                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show() }
+                                }
+                            }
+                        },
+                        onStartTvEpisodeQueue = { current, plan ->
+                            scope.launch {
+                                // Ensure connected before sending
+                                val device = tvDevice
+                                if (device != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Connecting to TV...", Toast.LENGTH_SHORT).show() }
+                                    connectionViewModel.connect(device)
+                                    withTimeoutOrNull(8000) {
+                                        connectionViewModel.connectionState.first { it is WebSocketClient.ConnectionState.Connected }
+                                    }
+                                }
+                                if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
+                                    return@launch
+                                }
+
+                                // Decorate with the same playback prefs used for single sends.
+                                fun decorate(p: PlayPayload) = p.copy(
+                                    player_mode = tvPlayerMode.takeIf { it != "tv" },
+                                    preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                    preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                    default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                    max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                )
+
+                                // Send the current episode as a one-item playlist, then let the
+                                // coordinator resolve & queue_add the rest (it appends after this).
+                                if (connectionViewModel.webSocketClient.send(createSingleVideoCommandJson(decorate(current)))) {
+                                    connectionCoordinator.nowPlayingTvId.value = current.visual_metadata?.tmdb_id?.toIntOrNull()
+                                    connectionCoordinator.nowPlayingSeason.value = current.visual_metadata?.season
+                                    connectionCoordinator.nowPlayingEpisodeStart.value = current.visual_metadata?.episode ?: 1
+                                    connectionCoordinator.tvActiveContext.value = "player"
+
+                                    tvQueueCoordinator.start(
+                                        plan.copy(items = plan.items.map { it.copy(template = decorate(it.template)) })
+                                    )
+
                                     if (autoSwitchToRemote) {
                                         connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                         onScreenChange(Screen.Remote)

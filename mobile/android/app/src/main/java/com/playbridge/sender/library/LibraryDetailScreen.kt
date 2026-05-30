@@ -84,6 +84,7 @@ fun LibraryDetailScreen(
     addonRepository: AddonRepository,
     onPlayStream: (url: String, title: String) -> Unit = { _, _ -> },
     onPlayPayloadToTv: (playbridge.PlayPayload) -> Unit = {},
+    onStartTvEpisodeQueue: (current: playbridge.PlayPayload, plan: com.playbridge.sender.connection.TvEpisodeQueuePlan) -> Unit = { _, _ -> },
     onPlayPlaylistToTv: (playbridge.PlaylistPayload) -> Unit = {},
     onPlayTrailer: ((String) -> Unit)? = null,
     onQueueAdd: (playbridge.PlayPayload) -> Unit = {},
@@ -381,6 +382,57 @@ fun LibraryDetailScreen(
         }
     }
 
+    /**
+     * Send a just-resolved stream to the TV. For a series episode (no Hub addon to build a
+     * deterministic playlist), hand the whole show to [onStartTvEpisodeQueue] so the phone can
+     * resolve & queue subsequent episodes on the TV (bingeGroup-consistent). Movies / single
+     * episodes go through the normal single-play path.
+     */
+    fun sendToTv(payload: playbridge.PlayPayload, episode: StremioVideo?, bingeGroup: String?) {
+        val videos = addonMeta?.videos
+            ?.filter { it.season != null && it.episode != null && it.season > 0 }
+            ?.distinctBy { Pair(it.season, it.episode) }
+            ?.sortedWith(compareBy({ it.season }, { it.episode }))
+        if (isSeries && episode != null && videos != null && videos.size > 1) {
+            val currentImdbId = resolvedImdbId
+            val streamType = if (currentImdbId != null) "series" else addonType
+            val startIdx = videos.indexOfFirst {
+                it.season == episode.season && it.episode == episode.episode
+            }.coerceAtLeast(0)
+            // bingeGroup is echoed back by the TV so the phone can recognise its own lazy-queued
+            // series and resume queueing after an app restart (see TvQueueCoordinator re-attach).
+            val currentPayload = payload.copy(binge_group = bingeGroup)
+            val items = videos.mapIndexed { i, vid ->
+                val streamId = if (currentImdbId != null) "$currentImdbId:${vid.season}:${vid.episode}" else vid.id
+                val template = if (i == startIdx) {
+                    currentPayload // already resolved, with this episode's metadata
+                } else {
+                    playbridge.PlayPayload(
+                        url = "",
+                        title = "$displayTitle S${vid.season}E${vid.episode}${if (vid.title.isNotBlank()) " - ${vid.title}" else ""}",
+                        content_type = "series",
+                        detected_by = "library",
+                        visual_metadata = buildVisualMetadata(vid),
+                        binge_group = bingeGroup
+                    )
+                }
+                com.playbridge.sender.connection.TvQueueEpisode(streamId = streamId, template = template)
+            }
+            onStartTvEpisodeQueue(
+                currentPayload,
+                com.playbridge.sender.connection.TvEpisodeQueuePlan(
+                    streamType = streamType,
+                    forcedSource = forcedSource,
+                    bingeGroup = bingeGroup,
+                    startIndex = startIdx,
+                    items = items
+                )
+            )
+        } else {
+            onPlayPayloadToTv(payload)
+        }
+    }
+
     val startResolution: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = start@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
         if (!canResolveStreams) return@start
 
@@ -433,7 +485,7 @@ fun LibraryDetailScreen(
                                 detected_by = "library",
                                 visual_metadata = buildVisualMetadata(episode)
                             )
-                            onPlayPayloadToTv(payload)
+                            sendToTv(payload, episode, finalSelection.stream.behaviorHints?.bingeGroup)
                         }
                     }
                 } else {
@@ -583,7 +635,7 @@ fun LibraryDetailScreen(
                         detected_by = "library",
                         visual_metadata = buildVisualMetadata(currentEpisodeSelection)
                     )
-                    onPlayPayloadToTv(payload)
+                    sendToTv(payload, currentEpisodeSelection, resolved.stream.behaviorHints?.bingeGroup)
                 }
             },
             onRefresh = {

@@ -5,8 +5,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkAdd
@@ -61,6 +63,7 @@ fun MyListTab(
     contentPadding: PaddingValues,
     onItemClick: (WatchlistEntity) -> Unit,
     onLongPress: (WatchlistEntity) -> Unit,
+    gridState: LazyGridState = rememberLazyGridState(),
 ) {
     var selectedFilter by remember { mutableStateOf(ListFilter.ALL) }
 
@@ -151,6 +154,7 @@ fun MyListTab(
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
+                state = gridState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     start = 8.dp,

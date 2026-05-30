@@ -374,6 +374,7 @@ internal fun SplitPlayButton(
             val connectedGreen = Color(0xFF4CAF50)
 
             ChipDropdown(
+                fixedWidth = 150.dp,
                 selectedLabel = if (watchOnTv) {
                     if (!tvName.isNullOrBlank()) "TV ($tvName)" else "TV"
                 } else "This Device",

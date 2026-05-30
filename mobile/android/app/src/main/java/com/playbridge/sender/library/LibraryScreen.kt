@@ -363,6 +363,24 @@ private fun LibraryScreenContent(
 
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
+    // Scroll state for the My List (tab 2) grid, lifted so the top bar can react to it.
+    val myListGridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
+
+    // The top bar is transparent only when the *currently visible* content is scrolled to the
+    // very top, otherwise dark/translucent. A single shared pinnedScrollBehavior can't track this
+    // because the tabs are swapped scrollables, so derive it from the active tab's own scroll state.
+    val topBarAtTop by remember(selectedTab, isSearching) {
+        derivedStateOf {
+            val (index, offset) = when {
+                isSearching -> searchResultsListState.firstVisibleItemIndex to searchResultsListState.firstVisibleItemScrollOffset
+                selectedTab == 1 -> discoverGridState.firstVisibleItemIndex to discoverGridState.firstVisibleItemScrollOffset
+                selectedTab == 2 -> myListGridState.firstVisibleItemIndex to myListGridState.firstVisibleItemScrollOffset
+                else -> mainListState.firstVisibleItemIndex to mainListState.firstVisibleItemScrollOffset
+            }
+            index == 0 && offset == 0
+        }
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -386,11 +404,16 @@ private fun LibraryScreenContent(
         topBar = {
             if (selectedTab < 3) {
                 Column {
+                    val topBarContainerColor =
+                        if (topBarAtTop) Color.Transparent
+                        else MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
                     CenterAlignedTopAppBar(
                         scrollBehavior = scrollBehavior,
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = Color.Transparent,
-                            scrolledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                            // Drive the background directly off the active list's scroll position
+                            // (both colors equal so the scroll-behavior interpolation can't override it).
+                            containerColor = topBarContainerColor,
+                            scrolledContainerColor = topBarContainerColor,
                             titleContentColor = MaterialTheme.colorScheme.onSurface
                         ),
                         title = {
@@ -803,6 +826,7 @@ private fun LibraryScreenContent(
                     watchlist = watchlistAll,
                     newEpisodeTmdbIds = newEpisodeTmdbIds,
                     contentPadding = innerPadding,
+                    gridState = myListGridState,
                     onItemClick = { entity ->
                         if (entity.mediaType == "movie") onMovieClick(entity.tmdbId)
                         else onTvShowClick(entity.tmdbId)

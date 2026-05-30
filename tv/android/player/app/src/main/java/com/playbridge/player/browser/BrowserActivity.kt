@@ -105,6 +105,13 @@ class BrowserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Android ≤ 9 needs WRITE_EXTERNAL_STORAGE granted at runtime to save into public Downloads.
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+            checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), 1001)
+        }
+
         window.setFlags(
             android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
@@ -219,11 +226,153 @@ class BrowserActivity : ComponentActivity() {
                 Log.w(TAG, "Rebuilding SystemWebViewEngine after render process crash")
                 initializeEngine()
                 url?.let { engine?.loadUrl(it) }
-            }
+            },
+            onDownloadStarted = { id, name -> showDownloadPopup(id, name) }
         )
 
         // Add engine view at index 0 (behind cursor)
         contentContainer?.addView(engine?.getView(), 0)
+    }
+
+    /**
+     * Bottom-right overlay card showing live download progress. Because the phone's cursor/d-pad
+     * target the web page (not Android overlays), the card isn't tappable, so the file is opened
+     * automatically on completion (the "open" affordance for a pointer-less TV).
+     */
+    private fun showDownloadPopup(downloadId: Long, fileName: String) {
+        runOnUiThread {
+            val dm = getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+            val density = resources.displayMetrics.density
+            fun dp(v: Int) = (v * density).toInt()
+
+            fun dpf(v: Int) = v * density
+            val accent = android.graphics.Color.parseColor("#5B9DFF")
+            val muted = android.graphics.Color.parseColor("#9AA0AA")
+            val barWidth = dp(320)
+
+            val card = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dpf(18)
+                    setColor(android.graphics.Color.parseColor("#F0202028"))
+                    setStroke(dp(1), android.graphics.Color.parseColor("#22FFFFFF"))
+                }
+                setPadding(dp(18), dp(14), dp(18), dp(16))
+                elevation = dpf(12)
+            }
+            val header = android.widget.TextView(this).apply {
+                text = "↓  DOWNLOADING"
+                setTextColor(accent)
+                textSize = 10f
+                letterSpacing = 0.12f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            val title = android.widget.TextView(this).apply {
+                text = fileName
+                setTextColor(android.graphics.Color.WHITE)
+                textSize = 14f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                layoutParams = android.widget.LinearLayout.LayoutParams(barWidth, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+                    .apply { topMargin = dp(4) }
+            }
+
+            fun roundRect(color: Int) = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dpf(3); setColor(color)
+            }
+            val progressLayer = android.graphics.drawable.LayerDrawable(arrayOf(
+                roundRect(android.graphics.Color.parseColor("#33FFFFFF")),
+                android.graphics.drawable.ClipDrawable(
+                    roundRect(accent), android.view.Gravity.START,
+                    android.graphics.drawable.ClipDrawable.HORIZONTAL
+                )
+            )).apply {
+                setId(0, android.R.id.background)
+                setId(1, android.R.id.progress)
+            }
+            val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                max = 100
+                isIndeterminate = false
+                progressDrawable = progressLayer
+                layoutParams = android.widget.LinearLayout.LayoutParams(barWidth, dp(6)).apply { topMargin = dp(12) }
+            }
+
+            val pctText = android.widget.TextView(this).apply {
+                text = "Starting…"
+                setTextColor(android.graphics.Color.WHITE)
+                textSize = 12f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            val sizeText = android.widget.TextView(this).apply {
+                setTextColor(muted)
+                textSize = 12f
+            }
+            val bottomRow = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                layoutParams = android.widget.LinearLayout.LayoutParams(barWidth, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+                    .apply { topMargin = dp(8) }
+                addView(pctText, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(sizeText)
+            }
+
+            card.addView(header); card.addView(title); card.addView(bar); card.addView(bottomRow)
+            rootContainer.addView(card, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                setMargins(0, 0, dp(24), dp(24))
+            })
+
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            fun finishCard(autoDismissMs: Long) = handler.postDelayed({ rootContainer.removeView(card) }, autoDismissMs)
+
+            val poll = object : Runnable {
+                override fun run() {
+                    var reschedule = false
+                    dm.query(android.app.DownloadManager.Query().setFilterById(downloadId))?.use { c ->
+                        if (!c.moveToFirst()) { rootContainer.removeView(card); return@use }
+                        val st = c.getInt(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS))
+                        val dl = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                        val tot = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                        when (st) {
+                            android.app.DownloadManager.STATUS_SUCCESSFUL -> {
+                                header.text = "✓  DOWNLOADED"
+                                bar.progress = 100
+                                pctText.text = "Saved to Downloads"; sizeText.text = ""
+                                finishCard(6000)
+                            }
+                            android.app.DownloadManager.STATUS_FAILED -> {
+                                header.text = "✕  FAILED"
+                                pctText.text = "Download failed"; sizeText.text = ""
+                                finishCard(4000)
+                            }
+                            else -> {
+                                if (tot > 0) {
+                                    bar.progress = (dl * 100 / tot).toInt()
+                                    pctText.text = "${bar.progress}%"
+                                    sizeText.text = "${fmtSize(dl)} / ${fmtSize(tot)}"
+                                } else {
+                                    pctText.text = "Starting…"
+                                    sizeText.text = fmtSize(dl)
+                                }
+                                reschedule = true
+                            }
+                        }
+                    }
+                    if (reschedule) handler.postDelayed(this, 500)
+                }
+            }
+            handler.post(poll)
+        }
+    }
+
+    private fun fmtSize(bytes: Long): String {
+        if (bytes <= 0) return "0 B"
+        val units = arrayOf("B", "KB", "MB", "GB")
+        var v = bytes.toDouble(); var i = 0
+        while (v >= 1024 && i < units.lastIndex) { v /= 1024; i++ }
+        return String.format("%.1f %s", v, units[i])
     }
 
     private fun enterFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) {
@@ -372,6 +521,16 @@ class BrowserActivity : ComponentActivity() {
             return
         }
 
+        // Keyboard input streamed from the phone (browser keyboard mode).
+        if (key != null && key.startsWith("text:")) {
+            injectFocusedText(key.removePrefix("text:"))
+            return
+        }
+        if (key == "key_enter") {
+            submitFocusedInput()
+            return
+        }
+
         val cursorStepX = 15f // Finer control horizontally
         val cursorStepY = 15f // Finer control vertically
         val scrollStep = 50   // Smaller scroll increments
@@ -421,13 +580,44 @@ class BrowserActivity : ComponentActivity() {
                 cursorView?.animateClick()
             }
             "back" -> {
+                // Back goes one page back; only exits when there's no history left.
                 if (engine?.canGoBack() == true) {
                     engine?.goBack()
                 } else {
                     finish()
                 }
             }
+            "home" -> {
+                // Home always exits the browser.
+                finish()
+            }
         }
+    }
+
+    /** Write [b64] (base64 UTF-8) into the focused web input, replacing its contents. */
+    private fun injectFocusedText(b64: String) {
+        // Decode in JS so arbitrary text never has to be escaped into the script string.
+        val safe = b64.filter { it.isLetterOrDigit() || it == '+' || it == '/' || it == '=' }
+        val js = "(function(){try{" +
+            "var t=decodeURIComponent(escape(atob('$safe')));" +
+            "var e=document.activeElement;" +
+            "if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA'||e.isContentEditable)){" +
+              "if(e.isContentEditable){e.textContent=t;}else{e.value=t;}" +
+              "e.dispatchEvent(new Event('input',{bubbles:true}));" +
+              "e.dispatchEvent(new Event('change',{bubbles:true}));" +
+              "return 'ok';}" +
+            "return 'no_focus';}catch(err){return 'err:'+err;}})();"
+        engine?.evaluateJavascript(js) { result -> Log.d(TAG, "injectFocusedText: $result") }
+    }
+
+    /** Fire an Enter key on the focused input and submit its form if any. */
+    private fun submitFocusedInput() {
+        val js = "(function(){var e=document.activeElement;if(!e)return 'no_focus';" +
+            "var mk=function(ty){return new KeyboardEvent(ty,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true});};" +
+            "e.dispatchEvent(mk('keydown'));e.dispatchEvent(mk('keypress'));e.dispatchEvent(mk('keyup'));" +
+            "if(e.form){try{if(e.form.requestSubmit){e.form.requestSubmit();}else{e.form.submit();}}catch(err){}}" +
+            "return 'ok';})();"
+        engine?.evaluateJavascript(js) { result -> Log.d(TAG, "submitFocusedInput: $result") }
     }
 
     private fun handleBrowserControlCommand(action: String?) {

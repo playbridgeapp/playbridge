@@ -87,6 +87,18 @@ val appModule = module {
         )
     }
 
+    // 5b. TvQueueCoordinator — lazy episode queueing for series without a play-endpoint addon
+    single {
+        com.playbridge.sender.connection.TvQueueCoordinator(
+            context = androidContext(),
+            webSocketClient = get(),
+            addonRepository = get(),
+            connectionCoordinator = get(),
+            settingsRepository = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        )
+    }
+
     // 6. ViewModels
     viewModel {
         ConnectionViewModel(

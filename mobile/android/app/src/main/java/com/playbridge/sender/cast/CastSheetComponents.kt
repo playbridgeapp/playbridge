@@ -82,7 +82,9 @@ internal fun ChipDropdown(
     leadingIcon: (@Composable () -> Unit)? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
-    toggleAction: (() -> Unit)? = null
+    toggleAction: (() -> Unit)? = null,
+    /** When set, the chip is pinned to this width and the label ellipsises instead of resizing the chip. */
+    fixedWidth: androidx.compose.ui.unit.Dp? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -97,23 +99,25 @@ internal fun ChipDropdown(
 
     Box(modifier = modifier) {
         Surface(
-            modifier = Modifier.combinedClickable(
-                onClick = {
-                    if (toggleAction != null) {
-                        toggleAction()
-                    } else {
-                        expanded = true
+            modifier = Modifier
+                .combinedClickable(
+                    onClick = {
+                        if (toggleAction != null) {
+                            toggleAction()
+                        } else {
+                            expanded = true
+                        }
+                    },
+                    onLongClick = {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        if (toggleAction != null) {
+                            expanded = true
+                        } else {
+                            onLongClick?.invoke()
+                        }
                     }
-                },
-                onLongClick = {
-                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                    if (toggleAction != null) {
-                        expanded = true
-                    } else {
-                        onLongClick?.invoke()
-                    }
-                }
-            ),
+                )
+                .then(if (fixedWidth != null) Modifier.width(fixedWidth) else Modifier),
             shape = RoundedCornerShape(50),
             color = when {
                 isHighlighted -> chipLabelColor.copy(alpha = 0.15f)
@@ -130,7 +134,9 @@ internal fun ChipDropdown(
             )
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                modifier = Modifier
+                    .then(if (fixedWidth != null) Modifier.fillMaxWidth() else Modifier)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -143,7 +149,8 @@ internal fun ChipDropdown(
                     fontWeight = FontWeight.Medium,
                     color = resolvedLabelColor,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (fixedWidth != null) Modifier.weight(1f) else Modifier
                 )
                 if (trailingIcon != null) {
                     trailingIcon()

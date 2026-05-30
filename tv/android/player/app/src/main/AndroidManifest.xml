@@ -26,6 +26,12 @@
     <!-- Auto-start on boot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Save browser downloads to the public Downloads folder (Android ≤ 9 needs this;
+         Android 10+ DownloadManager is exempt) -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- Signature-protected permission so only the Gecko plugin (signed with the same
          keystore) can send ACTION_CONTEXT_IDLE to ServerService. -->
     <permission

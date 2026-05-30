@@ -14,6 +14,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -77,6 +79,8 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
 
     val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
     var maxBitrateText by remember { mutableStateOf("") }
+
+    val tvPrefetchWindow by settingsRepository.tvPrefetchWindow.collectAsState(initial = 1)
     
     LaunchedEffect(maxBitrateCapMbps) {
         maxBitrateText = if (maxBitrateCapMbps > 0.0) maxBitrateCapMbps.toString() else ""
@@ -321,6 +325,36 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                             label = { Text(type.label) }
                         )
                     }
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // TV episode prefetch window
+            Text("TV Auto-Advance", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Episodes queued ahead", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "For series without a play-endpoint addon, how many upcoming episodes the phone resolves and queues on the TV. Higher values keep playing longer if the phone disconnects, but links may expire before they're reached. The phone must stay connected to the TV.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { scope.launch { settingsRepository.setTvPrefetchWindow(tvPrefetchWindow - 1) } },
+                        enabled = tvPrefetchWindow > 1
+                    ) { Icon(Icons.Default.Remove, contentDescription = "Fewer") }
+                    Text("$tvPrefetchWindow", style = MaterialTheme.typography.titleMedium, modifier = Modifier.widthIn(min = 20.dp))
+                    IconButton(
+                        onClick = { scope.launch { settingsRepository.setTvPrefetchWindow(tvPrefetchWindow + 1) } },
+                        enabled = tvPrefetchWindow < 10
+                    ) { Icon(Icons.Default.Add, contentDescription = "More") }
                 }
             }
 

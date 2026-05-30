@@ -163,6 +163,10 @@ class BrowserActivity : ComponentActivity() {
             engine?.loadUrl("https://www.google.com")
         }
 
+        // Surface the cursor as soon as the browser opens so the user sees it without having
+        // to nudge the touchpad first (it still auto-hides after the inactivity timeout).
+        showCursorAndResetTimer()
+
         // Handle back press
         onBackPressedDispatcher.addCallback(this) {
             if (isGeckoFullscreen) {
@@ -335,6 +339,16 @@ class BrowserActivity : ComponentActivity() {
             return
         }
 
+        // Keyboard input streamed from the phone (browser keyboard mode).
+        if (key != null && key.startsWith("text:")) {
+            injectFocusedText(key.removePrefix("text:"))
+            return
+        }
+        if (key == "key_enter") {
+            submitFocusedInput()
+            return
+        }
+
         val cursorStepX = 15f // Finer control horizontally
         val cursorStepY = 15f // Finer control vertically
         val scrollStep = 50   // Smaller scroll increments
@@ -384,13 +398,42 @@ class BrowserActivity : ComponentActivity() {
                 cursorView?.animateClick()
             }
             "back" -> {
+                // Back goes one page back; only exits when there's no history left.
                 if (engine?.canGoBack() == true) {
                     engine?.goBack()
                 } else {
                     finish()
                 }
             }
+            "home" -> {
+                // Home always exits the browser.
+                finish()
+            }
         }
+    }
+
+    /** Write [b64] (base64 UTF-8) into the focused web input, replacing its contents. */
+    private fun injectFocusedText(b64: String) {
+        val safe = b64.filter { it.isLetterOrDigit() || it == '+' || it == '/' || it == '=' }
+        val js = "(function(){try{" +
+            "var t=decodeURIComponent(escape(atob('$safe')));" +
+            "var e=document.activeElement;" +
+            "if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA'||e.isContentEditable)){" +
+              "if(e.isContentEditable){e.textContent=t;}else{e.value=t;}" +
+              "e.dispatchEvent(new Event('input',{bubbles:true}));" +
+              "e.dispatchEvent(new Event('change',{bubbles:true}));}" +
+            "}catch(err){}})();"
+        engine?.evaluateJavascript(js, null)
+    }
+
+    /** Fire an Enter key on the focused input and submit its form if any. */
+    private fun submitFocusedInput() {
+        val js = "(function(){var e=document.activeElement;if(!e)return;" +
+            "var mk=function(ty){return new KeyboardEvent(ty,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true});};" +
+            "e.dispatchEvent(mk('keydown'));e.dispatchEvent(mk('keypress'));e.dispatchEvent(mk('keyup'));" +
+            "if(e.form){try{if(e.form.requestSubmit){e.form.requestSubmit();}else{e.form.submit();}}catch(err){}}" +
+            "})();"
+        engine?.evaluateJavascript(js, null)
     }
 
     private fun handleBrowserControlCommand(action: String?) {
@@ -466,6 +509,7 @@ class BrowserActivity : ComponentActivity() {
             currentUrl = url
             engine?.loadUrl(url)
         }
+        showCursorAndResetTimer()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

@@ -55,6 +55,7 @@ fun SettingsScreen(
     var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
     var showIpDialog by remember { mutableStateOf(false) }
     var allowInsecureWs by remember { mutableStateOf(prefs.getBoolean("allow_insecure_ws", false)) }
+    var hideSoftKeyboard by remember { mutableStateOf(prefs.getBoolean("hide_soft_keyboard", false)) }
     var frameRateMatching by remember { mutableStateOf(prefs.getBoolean("frame_rate_matching", false)) }
     var tunneledPlayback by remember { mutableStateOf(prefs.getBoolean("tunneled_playback", false)) }
     var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
@@ -216,6 +217,20 @@ fun SettingsScreen(
                                 onCheckedChange = {
                                     tunneledPlayback = it
                                     prefs.edit().putBoolean("tunneled_playback", it).apply()
+                                }
+                            )
+                        }
+                    }
+
+                    SettingsCategory.BROWSER -> {
+                        item {
+                            SettingToggleItem(
+                                label = "Hide on-screen keyboard",
+                                description = "Don't pop up the TV keyboard when a web field is focused — type from the phone's keyboard instead (built-in WebView browser).",
+                                checked = hideSoftKeyboard,
+                                onCheckedChange = {
+                                    hideSoftKeyboard = it
+                                    prefs.edit().putBoolean("hide_soft_keyboard", it).apply()
                                 }
                             )
                         }
@@ -406,6 +421,7 @@ fun SettingsScreen(
 
 enum class SettingsCategory(val label: String, val icon: ImageVector) {
     PLAYER("Player", Icons.Default.PlayArrow),
+    BROWSER("Browser", Icons.Default.Search),
     NETWORK("Network", Icons.Default.Settings),
     APPEARANCE("Appearance", Icons.Default.Add),
     ABOUT("About", Icons.Default.Info)

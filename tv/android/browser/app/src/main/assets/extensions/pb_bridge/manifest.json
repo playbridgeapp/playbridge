@@ -1,7 +1,7 @@
 {
     "manifest_version": 2,
     "name": "PlayBridge Bridge",
-    "version": "1.0",
+    "version": "1.2",
     "description": "Native JS evaluation bridge for PlayBridge TV",
     "browser_specific_settings": {
         "gecko": {
@@ -11,6 +11,7 @@
     "permissions": [
         "nativeMessaging",
         "activeTab",
+        "tabs",
         "<all_urls>"
     ],
     "background": {
@@ -20,6 +21,6 @@
         "matches": ["<all_urls>"],
         "js": ["content.js"],
         "run_at": "document_start",
-        "all_frames": false
+        "all_frames": true
     }]
 }
