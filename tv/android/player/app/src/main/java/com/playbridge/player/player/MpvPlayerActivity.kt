@@ -67,7 +67,7 @@ data class MpvTrack(
  * MPV-based video player activity.
  *
  * Wraps the mpv-android library (MPVLib) behind the same PlayerActivity interface used by
- * ExoPlayerActivity and VlcPlayerActivity.  The activity owns the MPVLib lifecycle: create →
+ * ExoPlayerActivity.  The activity owns the MPVLib lifecycle: create →
  * init → [surface attached] → loadfile → … → destroy.
  *
  * Prerequisites
@@ -149,11 +149,40 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
     }
 
-    // Playlist state
-    private var playlistItems: MutableList<playbridge.PlayPayload> = mutableListOf()
-    private var playlistIndex: Int = 0
+    // Playlist queue / auto-advance — single source of truth, shared with ExoPlayerActivity.
+    private val coordinator = PlaybackCoordinator(object : PlaybackCoordinator.Host {
+        override fun loadItem(item: playbridge.PlayPayload, displayTitle: String?) {
+            runOnUiThread {
+                displayTitle?.takeIf { it.isNotBlank() }?.let {
+                    Toast.makeText(this@MpvPlayerActivity, it, Toast.LENGTH_SHORT).show()
+                    controlsViewModel.setTitle(it)
+                }
+                controlsViewModel.hideControls()
+            }
+            stopPlayback()
+            currentHeaders = item.headers
+            playVideo(item.url, item.headers)
+        }
 
+        override suspend fun saveProgressBeforeAdvance(captureThumbnail: Boolean) {
+            if (::progressManager.isInitialized) progressManager.saveProgress()
+        }
 
+        override fun onPlaylistChanged(items: List<playbridge.PlayPayload>, index: Int) {
+            // Do NOT feed the queue to the shared PlayerViewModel — the PlaybackCoordinator owns
+            // playlist advancement here; mirroring would make the VM auto-advance and race with it.
+            controlsViewModel.updatePlaylistData(items, index)
+            broadcastPlaylistStatus()
+        }
+
+        override fun showMessage(message: String) {
+            runOnUiThread { Toast.makeText(this@MpvPlayerActivity, message, Toast.LENGTH_SHORT).show() }
+        }
+
+        override fun onPlaylistFinished() {
+            finish()
+        }
+    })
 
     private var playJob: kotlinx.coroutines.Job? = null
     private lateinit var composeView: androidx.compose.ui.platform.ComposeView
@@ -274,8 +303,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                             controlsViewModel.showSettings(SettingsTab.AUDIO) 
                         },
                         onPlaylist = { showPlaylistOverlay() },
-                        onPrev = { playPreviousInPlaylist() },
-                        onNext = { playNextInPlaylist() },
+                        onPrev = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.previous() } },
+                        onNext = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.next() } },
                         onFilter = { showVideoFilterOverlay() },
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
@@ -305,7 +334,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         },
                         onPlaylistItemPicked = { index ->
                             controlsViewModel.hideOverlay()
-                            playItemAtIndex(index)
+                            navigationJob?.cancel()
+                            navigationJob = lifecycleScope.launch { coordinator.jumpTo(index) }
                         },
                         onPlayerSwitched = { playerId ->
                             controlsViewModel.hideOverlay()
@@ -442,14 +472,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         handleIntent(intent)
 
         // Drain any queue items that arrived before our receiver was registered.
-        // Must happen AFTER handleIntent because handleIntent replaces playlistItems.
-        ServerService.drainPendingQueueItems().forEach { payload ->
-            playlistItems.add(payload)
-            FileLogger.i(TAG, "Queue add (startup drain): ${payload.title ?: payload.url}")
-        }
-        if (playlistItems.size > 1) {
+        // Must happen AFTER handleIntent because handleIntent replaces the coordinator's queue.
+        coordinator.queueAdd(ServerService.drainPendingQueueItems())
+        if (coordinator.hasPlaylist) {
             controlsViewModel.setPlaylistVisible(true)
-            broadcastPlaylistStatus()
         }
     }
 
@@ -670,8 +696,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
                 runOnUiThread {
                     controlsViewModel.setBuffering(false)
-                    if (playlistItems.isNotEmpty() && playlistIndex < playlistItems.size - 1) {
-                        playNextInPlaylist()
+                    if (!coordinator.isEmpty && coordinator.index < coordinator.playlist.size - 1) {
+                        navigationJob?.cancel()
+                        navigationJob = lifecycleScope.launch { coordinator.next() }
                     } else {
                         // If it ended very quickly without playing anything, it might be a load error
                         if (positionMs == 0L && durationMs == 0L) {
@@ -714,18 +741,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     }
                 }
                 ServerService.ACTION_QUEUE_ADD -> {
-                    ServerService.drainPendingQueueItems().forEach { payload ->
-                        playlistItems.add(payload)
-                        FileLogger.i(TAG, "Queue add: ${payload.title ?: payload.url}")
-                    }
+                    coordinator.queueAdd(ServerService.drainPendingQueueItems())
                     controlsViewModel.setPlaylistVisible(true)
-                    broadcastPlaylistStatus()
                 }
                 ServerService.ACTION_PLAYLIST_JUMP -> {
                     val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
                     if (index >= 0) {
                         FileLogger.i(TAG, "Playlist jump to index: $index")
-                        playItemAtIndex(index)
+                        navigationJob?.cancel()
+                        navigationJob = lifecycleScope.launch { coordinator.jumpTo(index) }
                     }
                 }
                 ServerService.ACTION_RESYNC -> {
@@ -755,16 +779,16 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
         val inMemoryPlaylist = PlaylistStore.currentPlaylist
         if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
-            playlistItems = inMemoryPlaylist.toMutableList()
-            playlistIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
-            FileLogger.i(TAG, "Playlist loaded: ${playlistItems.size} items, starting at index $playlistIndex")
+            val startIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
+            coordinator.setPlaylist(inMemoryPlaylist, startIndex)
+            FileLogger.i(TAG, "Playlist loaded: ${coordinator.playlist.size} items, starting at index ${coordinator.index}")
         } else {
-            playlistItems = mutableListOf()
+            coordinator.setPlaylist(emptyList(), 0)
         }
 
-        // Update button visibility based on playlist. A single video is modelled as a
-        // one-item playlist, so only treat it as a "playlist" once there's >1 item.
-        val hasPlaylist = playlistItems.size > 1
+        // Update button visibility based on playlist. A single video is modelled as an
+        // empty queue, so only treat it as a "playlist" once there's >1 item.
+        val hasPlaylist = coordinator.hasPlaylist
 
         // Show playlist button when a playlist is active
         controlsViewModel.setPlaylistVisible(hasPlaylist)
@@ -877,12 +901,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             title = controlsViewModel.getTitle(),
             contentType = null,
             headers = headers,
-            playlistJson = if (playlistItems.isNotEmpty()) {
+            playlistJson = if (!coordinator.isEmpty) {
                 try {
-                    com.playbridge.shared.protocol.encodePlayPayloadListJson(playlistItems)
+                    com.playbridge.shared.protocol.encodePlayPayloadListJson(coordinator.playlist)
                 } catch (e: Exception) { null }
             } else null,
-            playlistIndex = playlistIndex,
+            playlistIndex = coordinator.index,
             externalSubtitleUrl = currentSubtitleUrl,
             playbackSpeed = currentPlaybackSpeed
         )
@@ -1025,10 +1049,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     private fun showPlaylistOverlay() {
-        if (playlistItems.isEmpty()) return
+        if (coordinator.isEmpty) return
 
-        val displayItems = playlistItems
-        val displayIndex = playlistIndex
+        val displayItems = coordinator.playlist
+        val displayIndex = coordinator.index
 
         val wasPlaying = isPlayingState
         if (wasPlaying) pause()
@@ -1042,65 +1066,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private fun playSeriesEpisodeAtIndex(index: Int) {
         // Not implemented in dumb mode
-    }
-
-    private fun playItemAtIndex(index: Int) {
-        if (playlistItems.isEmpty() || index < 0 || index >= playlistItems.size) return
-        
-        lifecycleScope.launch {
-            // Save progress for the current episode before jumping, if it was playing
-            if (::progressManager.isInitialized) progressManager.saveProgress()
-
-            playlistIndex = index
-            if (::viewModel.isInitialized) {
-                viewModel.setPlaylist(playlistItems, playlistIndex)
-            }
-            controlsViewModel.showPlaylist(playlistItems, playlistIndex)
-
-            val item = playlistItems[index]
-            val title = if (item.title != null) {
-                "${item.title} (${index + 1}/${playlistItems.size})"
-            } else {
-                "Item ${index + 1}/${playlistItems.size}"
-            }
-
-            FileLogger.i(TAG, "Jumping to playlist item $index: $title")
-            runOnUiThread {
-                Toast.makeText(this@MpvPlayerActivity, title, Toast.LENGTH_SHORT).show()
-                controlsViewModel.setTitle(title ?: "")
-                controlsViewModel.hideControls()
-            }
-
-            stopPlayback()
-            currentHeaders = item.headers
-            playVideo(item.url, item.headers)
-            broadcastPlaylistStatus()
-        }
-    }
-
-    private fun playPreviousInPlaylist() {
-        if (playlistItems.isEmpty()) {
-            Toast.makeText(this, "Already on first item", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (playlistIndex <= 0) {
-            Toast.makeText(this, "Already on first item", Toast.LENGTH_SHORT).show()
-            return
-        }
-        playItemAtIndex(playlistIndex - 1)
-    }
-
-    private fun playNextInPlaylist() {
-        if (playlistItems.isEmpty()) {
-            finish()
-            return
-        }
-
-        if (playlistIndex >= playlistItems.size - 1) {
-            finish()
-            return
-        }
-        playItemAtIndex(playlistIndex + 1)
     }
 
     /**
@@ -1127,33 +1092,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         updateUnifiedTracks()
     }
 
+    /** Broadcast current queue state to the phone (delegates to the shared base implementation). */
     private fun broadcastPlaylistStatus() {
-        // Always send (even empty) so the phone clears a stale episode list when
-        // single/non-playlist content replaces an earlier playlist.
-        try {
-            val itemsArray = org.json.JSONArray()
-            playlistItems.forEachIndexed { index, item ->
-                itemsArray.put(org.json.JSONObject().apply {
-                    put("index", index)
-                    put("title", item.title ?: "Item ${index + 1}")
-                    // Echo the series resolution context back so the phone can resume
-                    // queueing later episodes after an app restart (no phone-side persistence).
-                    item.visual_metadata?.season?.let { put("season", it) }
-                    item.visual_metadata?.episode?.let { put("episode", it) }
-                    item.visual_metadata?.imdb_id?.let { put("imdbId", it) }
-                    item.binge_group?.let { put("bingeGroup", it) }
-                })
-            }
-            val statusJson = org.json.JSONObject().apply {
-                put("type", "playlist_status")
-                put("items", itemsArray)
-                put("currentIndex", if (playlistItems.isEmpty()) 0 else playlistIndex)
-                put("totalCount", playlistItems.size)
-            }.toString()
-            ServerService.broadcastPlaylistStatus(statusJson)
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "Failed to broadcast playlist status: ${e.message}")
-        }
+        broadcastPlaylistStatus(coordinator.playlist, coordinator.index)
     }
 
     private fun updateUnifiedTracks() {

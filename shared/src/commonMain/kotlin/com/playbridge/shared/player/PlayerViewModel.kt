@@ -45,6 +45,17 @@ class PlayerViewModel(
     private var playlist: List<PlayPayload> = emptyList()
     private var playlistIndex: Int = 0
 
+    /**
+     * Read access to the active queue for the host UI — e.g. now-playing /
+     * `playlist_status` broadcasts and cross-engine failover that need to carry
+     * the queue + position to the next player.
+     */
+    val currentPlaylist: List<PlayPayload> get() = playlist
+    val currentIndex: Int get() = playlistIndex
+
+    /** A single video is modelled as an empty playlist; nav UI only applies once size > 1. */
+    val isPlaylistActive: Boolean get() = playlist.size > 1
+
     /** Whether single-video loop is enabled. */
     private var isLooping: Boolean = false
 
@@ -222,6 +233,23 @@ class PlayerViewModel(
     fun setPlaylist(items: List<PlayPayload>, startIndex: Int = 0) {
         playlist = items
         playlistIndex = startIndex.coerceIn(0, items.size.coerceAtLeast(1) - 1)
+    }
+
+    /**
+     * Append items to the queue (phone-driven `queue_add` for no-Hub series
+     * auto-advance). When no multi-item playlist is active yet, the currently
+     * playing single video becomes index 0 so the appended items advance
+     * correctly via [next] and end-of-stream auto-advance.
+     */
+    fun appendToPlaylist(items: List<PlayPayload>) {
+        if (items.isEmpty()) return
+        if (playlist.isEmpty()) {
+            val current = currentPayload
+            playlist = if (current != null) listOf(current) + items else items
+            playlistIndex = 0
+        } else {
+            playlist = playlist + items
+        }
     }
 
 

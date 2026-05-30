@@ -2,7 +2,7 @@ package com.playbridge.player.player
 
 /**
  * Interface to abstract engine-specific playback controls for the unified UI.
- * This allows UnifiedControlsManager to interact with ExoPlayer, VLC, or MPV
+ * This allows UnifiedControlsManager to interact with ExoPlayer or MPV
  * without direct dependencies on their internal classes.
  */
 interface PlayerEngineAdapter {

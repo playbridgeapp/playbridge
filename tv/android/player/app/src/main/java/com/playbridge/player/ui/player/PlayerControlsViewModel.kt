@@ -242,13 +242,19 @@ class PlayerControlsViewModel : ViewModel() {
         showOverlay(ActiveOverlay.VIDEO_FILTER)
     }
 
-    fun showPlaylist(items: List<playbridge.PlayPayload>, index: Int) {
+    /** Refresh the playlist data (picker contents + current index) WITHOUT opening the picker. */
+    fun updatePlaylistData(items: List<playbridge.PlayPayload>, index: Int) {
         _controlsState.update {
             it.copy(
                 playlistItems = items,
                 playlistIndex = index
             )
         }
+    }
+
+    /** Refresh the playlist data AND open the picker overlay (explicit user action). */
+    fun showPlaylist(items: List<playbridge.PlayPayload>, index: Int) {
+        updatePlaylistData(items, index)
         showOverlay(ActiveOverlay.PLAYLIST_PICKER)
     }
 

@@ -30,7 +30,6 @@ turbine = "1.1.0"
 appcompat = "1.6.1"
 tvFoundation = "1.0.0-alpha12"
 tvMaterial = "1.0.1"
-libvlc = "4.0.0-eap24"
 composeUiTextGoogleFonts = "1.6.4"
 wire = "5.1.0"
 koin = "3.5.6"
@@ -67,6 +66,7 @@ ktor-serialization-json         = { module = "io.ktor:ktor-serialization-kotlinx
 kotlinx-serialization-json      = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-core         = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android      = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-test         = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 okio                            = { module = "com.squareup.okio:okio", version.ref = "okio" }
 wire-runtime                    = { module = "com.squareup.wire:wire-runtime", version.ref = "wire" }
 wire-moshi-adapter              = { module = "com.squareup.wire:wire-moshi-adapter", version.ref = "wire" }
@@ -145,9 +145,6 @@ androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = 
 ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
 ktor-server-cio = { group = "io.ktor", name = "ktor-server-cio", version.ref = "ktor" }
 ktor-server-websockets = { group = "io.ktor", name = "ktor-server-websockets", version.ref = "ktor" }
-
-# LibVLC
-libvlc-all = { group = "org.videolan.android", name = "libvlc-all", version.ref = "libvlc" }
 
 # Koin DI
 koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }

@@ -26,6 +26,8 @@ internal class FakePlaybackEngine : PlaybackEngine {
     private val _subtitleTracks = MutableStateFlow<List<Track>>(emptyList())
     override val subtitleTracks: StateFlow<List<Track>> = _subtitleTracks.asStateFlow()
 
+    override var isTransitioning = false
+
     var lastLoadedPayload: PlayPayload? = null
         private set
     var released = false

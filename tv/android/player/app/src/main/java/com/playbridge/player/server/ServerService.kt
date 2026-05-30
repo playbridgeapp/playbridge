@@ -601,7 +601,6 @@ class ServerService : Service() {
                     broadcastContext()
 
                     val activityClass = when (playlistMode) {
-                        "internal_vlc" -> com.playbridge.player.player.VlcPlayerActivity::class.java
                         "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
                         else           -> com.playbridge.player.player.ExoPlayerActivity::class.java
                     }

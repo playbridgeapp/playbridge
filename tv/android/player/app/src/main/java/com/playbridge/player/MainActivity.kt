@@ -213,14 +213,7 @@ fun MainContent(
 
     val onPlayItem: (PlaybackHistoryItem) -> Unit = { item ->
         val prefs = currentContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-        val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
-        val activityClass = if (tvPref == "internal_vlc") {
-            com.playbridge.player.player.VlcPlayerActivity::class.java
-        } else {
-            com.playbridge.player.player.ExoPlayerActivity::class.java
-        }
-
-        val intent = android.content.Intent(currentContext, activityClass).apply {
+        val intent = android.content.Intent(currentContext, com.playbridge.player.player.ExoPlayerActivity::class.java).apply {
             putExtra(ServerService.EXTRA_URL, item.url)
             putExtra(ServerService.EXTRA_TITLE, item.title)
             putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)

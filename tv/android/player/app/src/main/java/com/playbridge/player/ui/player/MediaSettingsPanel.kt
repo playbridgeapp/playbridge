@@ -307,7 +307,6 @@ private fun ScalingSettingsList(
     engineType: String
 ) {
     val modes = when {
-        engineType.contains("vlc") -> listOf("Fit", "Fill", "16:9", "4:3", "Center")
         engineType.contains("mpv") -> listOf("Fit", "Fill", "Zoom")
         else -> listOf("Fit", "Fill", "Zoom", "Fixed Width", "Fixed Height")
     }
