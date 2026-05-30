@@ -630,7 +630,7 @@ fun AppNavHost(
                         onScreenChange(lastMainScreen)
                     }
                     RemoteControlScreen(
-                        isMediaPlaying = tvActiveContext == "player",
+                        activeContext = tvActiveContext,
                         playbackState = tvPlayback?.state,
                         positionMs = tvPlayback?.positionMs ?: 0L,
                         durationMs = tvPlayback?.durationMs ?: 0L,
@@ -719,7 +719,16 @@ fun AppNavHost(
                         onPlayerControl = { command ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson(command))
                             if (command == "stop") { connectionCoordinator.tvActiveContext.value = "idle" }
-                        }
+                        },
+                        // Connected-TV tile — same device switcher as the Library top bar.
+                        tvName = tvDevice?.name,
+                        connectionState = connectionState,
+                        availableTvDevices = remember(discoveredDevices, history) {
+                            (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
+                        },
+                        selectedTvDevice = tvDevice,
+                        onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
+                        onDisconnectTv = { connectionViewModel.disconnect() }
                     )
                 }
                 Screen.Home -> {

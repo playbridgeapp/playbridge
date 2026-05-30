@@ -1,8 +1,15 @@
 package com.playbridge.sender.cast
 import com.playbridge.sender.library.*
 import com.playbridge.sender.browser.*
+import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.model.TvDevice
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -76,12 +83,13 @@ data class SubtitleOption(
 /**
  * Full-screen remote control.
  *
- * In **player mode** (`isMediaPlaying`) it shows a now-playing surface: title,
- * a live seekbar (drag to seek), transport controls, and the TV's episode list
- * (tap to jump). In **browser mode** it shows the Touchpad/D-Pad hero + browser
- * controls.
+ * The body follows the TV's active context. **player** shows a now-playing surface:
+ * title, a live seekbar (drag to seek), transport controls, and the TV's episode list
+ * (tap to jump). **browser** shows the Touchpad/D-Pad hero + browser controls. **idle**
+ * (e.g. just after Stop) shows a calm "nothing playing" state that can reveal the input
+ * surface on demand. A persistent connected-TV tile anchors the top across all three.
  *
- * @param isMediaPlaying Whether video/media is currently playing on the TV
+ * @param activeContext  TV's active context: "player", "browser", or "idle"
  * @param playbackState  TV playback state ("playing"/"paused"/…), null if unknown
  * @param positionMs      Current playback position from the TV
  * @param durationMs      Total duration from the TV (0 if unknown/live)
@@ -94,7 +102,7 @@ data class SubtitleOption(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RemoteControlScreen(
-    isMediaPlaying: Boolean,
+    activeContext: String,
     onBack: () -> Unit,
     onRemoteKey: (String) -> Unit,
     onMouseMove: (dx: Float, dy: Float) -> Unit,
@@ -124,17 +132,30 @@ fun RemoteControlScreen(
     onSetFilter: (String) -> Unit = {},
     onSwitchEngine: (String) -> Unit = {},
     onAddSubtitleUrl: (String) -> Unit = {},
-    onSearchSubtitles: (suspend () -> List<SubtitleOption>)? = null
+    onSearchSubtitles: (suspend () -> List<SubtitleOption>)? = null,
+    // Connected-TV tile (mirrors the Library top-bar device switcher)
+    tvName: String? = null,
+    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
+    availableTvDevices: List<TvDevice> = emptyList(),
+    selectedTvDevice: TvDevice? = null,
+    onTvDeviceSelect: (TvDevice) -> Unit = {},
+    onDisconnectTv: () -> Unit = {}
 ) {
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showAddSubtitle by remember { mutableStateOf(false) }
     // Input mode for the non-player (browser) hero area. Defaults to the touchpad.
     var inputMode by remember { mutableStateOf(RemoteInputMode.TOUCHPAD) }
+    // When idle (e.g. right after Stop), the calm empty state can reveal the input surface on demand.
+    var idleShowingInput by remember { mutableStateOf(false) }
+
+    val remoteContext = remoteContextOf(activeContext)
+    // Leaving idle (TV started playing or opened the browser) collapses the on-demand input surface.
+    LaunchedEffect(remoteContext) { if (remoteContext != RemoteContext.IDLE) idleShowingInput = false }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Remote Control") },
+                title = { Text("Remote") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -152,79 +173,112 @@ fun RemoteControlScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (isMediaPlaying) {
-                // ── Now Playing: title + live seekbar ──
-                NowPlayingPanel(
-                    title = mediaTitle,
-                    episodeLabel = episodeLabelFor(currentEpisodeIndex, episodes),
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onSeekTo = onSeekTo
-                )
+            // Persistent connected-TV tile — the constant anchor across player/browser/idle, so
+            // the controls below can crossfade without the screen feeling like it teleported.
+            ConnectedTvChip(
+                tvName = tvName,
+                connectionState = connectionState,
+                availableTvDevices = availableTvDevices,
+                selectedTvDevice = selectedTvDevice,
+                onTvDeviceSelect = onTvDeviceSelect,
+                onDisconnectTv = onDisconnectTv
+            )
+            Spacer(modifier = Modifier.height(12.dp))
 
-                // ── Audio / Subtitle track pickers + More ──
-                TrackChipsRow(
-                    audioTracks = audioTracks,
-                    subtitleTracks = subtitleTracks,
-                    onSelectAudio = onSelectAudio,
-                    onSelectSubtitle = onSelectSubtitle,
-                    onMore = { showSettingsSheet = true }
-                )
+            AnimatedContent(
+                targetState = remoteContext,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(220))
+                },
+                label = "RemoteBody"
+            ) { ctx ->
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    when (ctx) {
+                        RemoteContext.PLAYER -> {
+                            // ── Now Playing: title + live seekbar ──
+                            NowPlayingPanel(
+                                title = mediaTitle,
+                                episodeLabel = episodeLabelFor(currentEpisodeIndex, episodes),
+                                positionMs = positionMs,
+                                durationMs = durationMs,
+                                onSeekTo = onSeekTo
+                            )
 
-                // ── Episode list (fills available space) ──
-                EpisodesList(
-                    episodes = episodes,
-                    currentIndex = currentEpisodeIndex,
-                    onJumpToEpisode = onJumpToEpisode,
-                    modifier = Modifier.weight(1f)
-                )
+                            // ── Audio / Subtitle track pickers + More ──
+                            TrackChipsRow(
+                                audioTracks = audioTracks,
+                                subtitleTracks = subtitleTracks,
+                                onSelectAudio = onSelectAudio,
+                                onSelectSubtitle = onSelectSubtitle,
+                                onMore = { showSettingsSheet = true }
+                            )
 
-                // ── Volume + transport controls ──
-                VolumeRow(
-                    onVolumeUp = { onRemoteKey("volume_up") },
-                    onVolumeDown = { onRemoteKey("volume_down") }
-                )
-                // No Back/Home here — Stop already exits playback, so they'd be redundant.
-                MediaControlRow(
-                    isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
-                    onPlayerControl = onPlayerControl
-                )
-            } else {
-                // ── Input mode switcher: Touchpad / D-Pad / Keyboard ──
-                InputModeSwitcher(
-                    mode = inputMode,
-                    onSelect = { inputMode = it }
-                )
+                            // ── Episode list (fills available space) ──
+                            EpisodesList(
+                                episodes = episodes,
+                                currentIndex = currentEpisodeIndex,
+                                onJumpToEpisode = onJumpToEpisode,
+                                modifier = Modifier.weight(1f)
+                            )
 
-                // ── Hero Area (fills available space) ──
-                Box(modifier = Modifier.weight(1f)) {
-                    when (inputMode) {
-                        RemoteInputMode.TOUCHPAD -> TouchpadArea(
+                            // ── Volume + transport controls ──
+                            VolumeRow(
+                                onVolumeUp = { onRemoteKey("volume_up") },
+                                onVolumeDown = { onRemoteKey("volume_down") }
+                            )
+                            // No Back/Home here — Stop already exits playback, so they'd be redundant.
+                            MediaControlRow(
+                                isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
+                                onPlayerControl = onPlayerControl
+                            )
+                        }
+
+                        RemoteContext.BROWSER -> BrowserInputSurface(
+                            inputMode = inputMode,
+                            onSelectMode = { inputMode = it },
+                            onRemoteKey = onRemoteKey,
                             onMouseMove = onMouseMove,
                             onMouseClick = onMouseClick,
                             onMouseScroll = onMouseScroll,
                             onMouseDown = onMouseDown,
-                            onMouseUp = onMouseUp
+                            onMouseUp = onMouseUp,
+                            onBrowserControl = onBrowserControl
                         )
-                        RemoteInputMode.DPAD -> DpadArea(onRemoteKey = onRemoteKey)
-                        RemoteInputMode.KEYBOARD -> KeyboardArea(onRemoteKey = onRemoteKey)
+
+                        RemoteContext.IDLE -> {
+                            if (idleShowingInput) {
+                                BrowserInputSurface(
+                                    inputMode = inputMode,
+                                    onSelectMode = { inputMode = it },
+                                    onRemoteKey = onRemoteKey,
+                                    onMouseMove = onMouseMove,
+                                    onMouseClick = onMouseClick,
+                                    onMouseScroll = onMouseScroll,
+                                    onMouseDown = onMouseDown,
+                                    onMouseUp = onMouseUp,
+                                    onBrowserControl = onBrowserControl
+                                )
+                            } else {
+                                // Calm "nothing playing" state — Stop lands here instead of dumping
+                                // the user straight onto a touchpad.
+                                IdleEmptyState(
+                                    tvName = tvName,
+                                    onShowControls = { idleShowingInput = true },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
                     }
                 }
-
-                // ── Volume (sits where Back/Home used to be) ──
-                VolumeRow(
-                    onVolumeUp = { onRemoteKey("volume_up") },
-                    onVolumeDown = { onRemoteKey("volume_down") }
-                )
-
-                // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · Home ──
-                BrowserContextRow(
-                    onBrowserControl = onBrowserControl,
-                    onRemoteKey = onRemoteKey
-                )
             }
         }
     }
@@ -258,6 +312,164 @@ fun RemoteControlScreen(
 
 /** Which input surface the non-player ("browser") remote shows. */
 private enum class RemoteInputMode { TOUCHPAD, DPAD, KEYBOARD }
+
+/** Which TV surface the remote is controlling, derived from the TV's reported context. */
+private enum class RemoteContext { PLAYER, BROWSER, IDLE }
+
+private fun remoteContextOf(active: String): RemoteContext = when (active) {
+    "player" -> RemoteContext.PLAYER
+    "browser" -> RemoteContext.BROWSER
+    else -> RemoteContext.IDLE
+}
+
+/**
+ * Persistent connected-TV tile shown at the top of the remote — the same device switcher the
+ * Library top bar uses ([ChipDropdown]): tap to switch TV, or pick "This Device" to disconnect.
+ */
+@Composable
+private fun ConnectedTvChip(
+    tvName: String?,
+    connectionState: WebSocketClient.ConnectionState,
+    availableTvDevices: List<TvDevice>,
+    selectedTvDevice: TvDevice?,
+    onTvDeviceSelect: (TvDevice) -> Unit,
+    onDisconnectTv: () -> Unit
+) {
+    val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
+    val isConnecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
+        connectionState is WebSocketClient.ConnectionState.Retrying ||
+        connectionState is WebSocketClient.ConnectionState.WaitingForApproval
+
+    val selectedLabel = when {
+        isConnected -> "Watching on: ${tvName ?: "TV"}"
+        isConnecting -> "Connecting to: ${tvName ?: "TV"}..."
+        else -> "Watching on: This Device"
+    }
+
+    val connectedGreen = Color(0xFF4CAF50)
+    val connectingOrange = Color(0xFFFF9800)
+
+    val leadingIconVector = if (isConnected || isConnecting) Icons.Default.Tv else Icons.Default.Smartphone
+    val leadingIconTint = when {
+        isConnected -> connectedGreen
+        isConnecting -> connectingOrange
+        else -> Color.White.copy(alpha = 0.7f)
+    }
+    val chipLabelColor = when {
+        isConnected -> connectedGreen
+        isConnecting -> connectingOrange
+        else -> Color.Unspecified
+    }
+
+    ChipDropdown(
+        selectedLabel = selectedLabel,
+        options = listOf("phone" to "This Device") + availableTvDevices.map {
+            (it.uuid.ifBlank { it.ip }) to (it.name.ifBlank { it.ip })
+        },
+        selectedValue = if (isConnected || isConnecting) (selectedTvDevice?.uuid ?: selectedTvDevice?.ip ?: "tv") else "phone",
+        onSelect = { value ->
+            if (value == "phone") {
+                onDisconnectTv()
+            } else {
+                availableTvDevices.find { it.uuid == value || it.ip == value }?.let { onTvDeviceSelect(it) }
+            }
+        },
+        leadingIcon = {
+            Icon(
+                imageVector = leadingIconVector,
+                contentDescription = null,
+                modifier = Modifier.size(13.dp),
+                tint = leadingIconTint
+            )
+        },
+        chipLabelColor = chipLabelColor
+    )
+}
+
+/**
+ * The browser/input hero shared by the **browser** context and the on-demand reveal from the
+ * **idle** empty state: the Touchpad/D-Pad/Keyboard switcher + hero, volume, and browser controls.
+ */
+@Composable
+private fun ColumnScope.BrowserInputSurface(
+    inputMode: RemoteInputMode,
+    onSelectMode: (RemoteInputMode) -> Unit,
+    onRemoteKey: (String) -> Unit,
+    onMouseMove: (dx: Float, dy: Float) -> Unit,
+    onMouseClick: () -> Unit,
+    onMouseScroll: (dx: Float, dy: Float) -> Unit,
+    onMouseDown: () -> Unit,
+    onMouseUp: () -> Unit,
+    onBrowserControl: (String) -> Unit
+) {
+    // ── Input mode switcher: Touchpad / D-Pad / Keyboard ──
+    InputModeSwitcher(mode = inputMode, onSelect = onSelectMode)
+
+    // ── Hero Area (fills available space) ──
+    Box(modifier = Modifier.weight(1f)) {
+        when (inputMode) {
+            RemoteInputMode.TOUCHPAD -> TouchpadArea(
+                onMouseMove = onMouseMove,
+                onMouseClick = onMouseClick,
+                onMouseScroll = onMouseScroll,
+                onMouseDown = onMouseDown,
+                onMouseUp = onMouseUp
+            )
+            RemoteInputMode.DPAD -> DpadArea(onRemoteKey = onRemoteKey)
+            RemoteInputMode.KEYBOARD -> KeyboardArea(onRemoteKey = onRemoteKey)
+        }
+    }
+
+    // ── Volume (sits where Back/Home used to be) ──
+    VolumeRow(
+        onVolumeUp = { onRemoteKey("volume_up") },
+        onVolumeDown = { onRemoteKey("volume_down") }
+    )
+
+    // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · Home ──
+    BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
+}
+
+/**
+ * Calm placeholder shown when the TV is idle (e.g. right after Stop). Offers to reveal the
+ * input surface on demand instead of dropping the user straight onto a touchpad.
+ */
+@Composable
+private fun IdleEmptyState(
+    tvName: String?,
+    onShowControls: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            Icons.Default.Tv,
+            contentDescription = null,
+            modifier = Modifier.size(56.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            "Nothing playing",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            "on ${tvName ?: "your TV"}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+        FilledTonalButton(onClick = onShowControls) {
+            Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Show touchpad & controls")
+        }
+    }
+}
 
 @Composable
 private fun InputModeSwitcher(mode: RemoteInputMode, onSelect: (RemoteInputMode) -> Unit) {
