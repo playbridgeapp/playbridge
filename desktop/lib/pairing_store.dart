@@ -53,23 +53,12 @@ class PairingStore {
     return PairingStore._(p);
   }
 
-  EngineType get engineType {
-    final val = _prefs.getString(_kEngineType);
-    return switch (val) {
-      'mpv_ext' => EngineType.mpvExternal,
-      'vlc_ext' => EngineType.vlcExternal,
-      _ => EngineType.mpvInternal,
-    };
-  }
+  // Desktop ships only the embedded MPV engine; the setting is retained for API
+  // compatibility but always resolves to internal MPV.
+  EngineType get engineType => EngineType.mpvInternal;
 
-  Future<void> setEngineType(EngineType type) {
-    final val = switch (type) {
-      EngineType.mpvInternal => 'mpv_int',
-      EngineType.mpvExternal => 'mpv_ext',
-      EngineType.vlcExternal => 'vlc_ext',
-    };
-    return _prefs.setString(_kEngineType, val);
-  }
+  Future<void> setEngineType(EngineType type) =>
+      _prefs.setString(_kEngineType, 'mpv_int');
 
   String get deviceId {
     var id = _prefs.getString(_kDeviceId);

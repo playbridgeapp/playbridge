@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'auto_launch.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
-import 'player_engine.dart';
 import 'server.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -86,31 +85,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // — Playback ————————————————————————————
             _Section('Playback'),
-            _Tile(
-              icon: Icons.settings_input_component,
-              title: 'Video Engine',
-              subtitle: switch (widget.player.engineType) {
-                EngineType.mpvInternal => 'High performance (Integrated MPV)',
-                EngineType.mpvExternal => 'Native Player (External MPV)',
-                EngineType.vlcExternal => 'Native Player (External VLC)',
-              },
-              trailing: DropdownButton<EngineType>(
-                value: widget.player.engineType,
-                underline: const SizedBox(),
-                dropdownColor: const Color(0xFF1E1E1E),
-                items: const [
-                  DropdownMenuItem(value: EngineType.mpvInternal, child: Text('MPV (Internal)')),
-                  DropdownMenuItem(value: EngineType.mpvExternal, child: Text('MPV (External)')),
-                  DropdownMenuItem(value: EngineType.vlcExternal, child: Text('VLC (External)')),
-                ],
-                onChanged: (type) async {
-                  if (type != null) {
-                    await widget.store.setEngineType(type);
-                    await widget.player.switchEngine(type);
-                  }
-                },
-              ),
-            ),
             _Tile(
               icon: Icons.insights,
               title: 'Show playback stats',

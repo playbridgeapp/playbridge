@@ -16,10 +16,13 @@ object TvCapabilityOptions {
 
     // Known player_mode ids → display label. Insertion order defines display order.
     // `internal` and `internal_exo` are aliases for ExoPlayer (the TV routes both to it).
+    // Ids span every receiver: Android TV (exo/mpv), desktop (mpv), Apple TV (avplayer/vlc).
     private val PLAYER_LABELS = linkedMapOf(
         "internal" to "ExoPlayer",
         "internal_exo" to "ExoPlayer",
         "internal_mpv" to "MPV",
+        "avplayer" to "AVPlayer",
+        "vlc" to "VLC",
     )
 
     private val BROWSER_LABELS = linkedMapOf(

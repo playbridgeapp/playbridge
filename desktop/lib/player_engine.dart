@@ -9,8 +9,6 @@ typedef QueueItem = ({
 
 enum EngineType {
   mpvInternal,
-  mpvExternal,
-  vlcExternal
 }
 
 /// Live playback statistics sampled from the player (currently only the internal

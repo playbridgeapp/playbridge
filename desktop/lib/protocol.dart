@@ -146,11 +146,18 @@ Command parseCommand(String json) {
 
 String pongJson() => jsonEncode({'type': 'pong'});
 
-String pairingApprovedJson(String token, {String? certFingerprint}) =>
+String pairingApprovedJson(
+  String token, {
+  String? certFingerprint,
+  List<String> players = const [],
+  List<String> browsers = const [],
+}) =>
     jsonEncode({
       'type': 'pairing_approved',
       'token': token,
       if (certFingerprint != null) 'certFingerprint': certFingerprint,
+      if (players.isNotEmpty) 'players': players,
+      if (browsers.isNotEmpty) 'browsers': browsers,
     });
 
 String pairingDeniedJson() => jsonEncode({'type': 'pairing_denied'});
@@ -159,12 +166,16 @@ String authResponseJson({
   required bool success,
   String? token,
   String? certFingerprint,
+  List<String> players = const [],
+  List<String> browsers = const [],
 }) =>
     jsonEncode({
       'type': 'auth_response',
       'success': success,
       if (token != null) 'token': token,
       if (certFingerprint != null) 'certFingerprint': certFingerprint,
+      if (players.isNotEmpty) 'players': players,
+      if (browsers.isNotEmpty) 'browsers': browsers,
     });
 
 String contextJson(String active) => jsonEncode({'type': 'context', 'active': active});

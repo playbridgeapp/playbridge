@@ -6,6 +6,9 @@ struct PlayerView: View {
     @EnvironmentObject var historyStore: HistoryStore
     @EnvironmentObject var playlistStore: PlaylistStore
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
+    // Engine chosen via the on-screen switch this session. Takes precedence over both the
+    // phone's player_mode and the stored preference, but is not persisted.
+    @State private var sessionEngine: String? = nil
     @State private var resumeTime: Double = 0.0
     @State private var showPlaylist: Bool = false
     let isPreBuffering: Bool
@@ -21,7 +24,22 @@ struct PlayerView: View {
 
     private func handleSwitch(currentTime: Double) {
         resumeTime = currentTime
-        preferredPlayer = preferredPlayer == "vlc" ? "avplayer" : "vlc"
+        let current = effectiveEngine(for: playlistStore.currentItem ?? payload)
+        sessionEngine = current == "vlc" ? "avplayer" : "vlc"
+    }
+
+    /// Engine for this item: a manual session switch wins; otherwise honor the phone's
+    /// `player_mode` ("vlc"/"avplayer"); "tv"/unset/unknown fall back to the stored default.
+    private func effectiveEngine(for item: Playbridge_PlayPayload) -> String {
+        if let session = sessionEngine { return session }
+        if item.hasPlayerMode {
+            switch item.playerMode {
+            case "vlc": return "vlc"
+            case "avplayer", "native": return "avplayer"
+            default: break
+            }
+        }
+        return preferredPlayer
     }
 
     private func handleNext() {
@@ -48,7 +66,7 @@ struct PlayerView: View {
             let currentRequest = playlistStore.currentItem ?? payload
             if let currentURL = currentRequest.validURL {
                 let _ = print("PlayerView: Rendering with URL: \(currentURL)")
-                if preferredPlayer == "vlc" {
+                if effectiveEngine(for: currentRequest) == "vlc" {
                     VLCPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,

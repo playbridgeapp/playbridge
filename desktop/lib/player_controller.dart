@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'player_engine.dart';
 import 'engines/mpv_engine.dart';
-import 'engines/external_engine.dart';
 
 /// Coordinator that delegates playback to the active [PlayerEngine].
 class PlayerController extends ChangeNotifier {
@@ -27,40 +25,6 @@ class PlayerController extends ChangeNotifier {
       case EngineType.mpvInternal:
         _engine = MpvEngine();
         (_engine as MpvEngine).onCompleted = _onCompleted;
-      case EngineType.mpvExternal:
-        _engine = ExternalEngine(
-          command: 'mpv',
-          argsBuilder: (item, m3u, startIdx) => [
-            if (m3u != null) ...[
-              m3u.path,
-              '--playlist-start=$startIdx',
-            ] else
-              item.url,
-            '--fs',
-            '--force-window=yes',
-            if (item.title != null) '--title=${item.title}',
-            if (item.headers != null)
-              '--http-header-fields=${item.headers!.entries.map((e) => "${e.key}: ${e.value}").join(",")}',
-          ],
-        );
-        (_engine as ExternalEngine).onCompleted = _onCompleted;
-      case EngineType.vlcExternal:
-        final vlcCmd = Platform.isMacOS ? '/Applications/VLC.app/Contents/MacOS/VLC' : 'vlc';
-        _engine = ExternalEngine(
-          command: vlcCmd,
-          argsBuilder: (item, m3u, startIdx) => [
-            if (m3u != null) ...[
-              m3u.path,
-              '--playlist-index=$startIdx',
-            ] else
-              item.url,
-            '--fullscreen',
-            '--play-and-exit',
-            if (item.headers != null)
-              '--http-user-agent=${item.headers!['User-Agent'] ?? 'PlayBridge'}',
-          ],
-        );
-        (_engine as ExternalEngine).onCompleted = _onCompleted;
     }
 
     _engine.addListener(notifyListeners);

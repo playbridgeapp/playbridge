@@ -49,6 +49,11 @@ class ReceiverServer extends ChangeNotifier {
   Timer? _approvalTimeout;
   bool _disposed = false;
 
+  /// Players this receiver advertises to the phone at auth. Desktop only ships the
+  /// embedded MPV engine, so the phone's player picker shows just "TV Default" + MPV.
+  /// (No browsers — desktop has no web view.)
+  static const List<String> _capabilityPlayers = ['internal_mpv'];
+
   /// SPKI pin of our TLS cert, sent to senders at pairing. Null until the
   /// wss:// listener starts.
   String? _certFingerprint;
@@ -259,6 +264,7 @@ class ReceiverServer extends ChangeNotifier {
             success: true,
             token: token,
             certFingerprint: _certFingerprint,
+            players: _capabilityPlayers,
           ));
           unawaited(store.updateLastConnected(token));
           return true;
@@ -289,13 +295,18 @@ class ReceiverServer extends ChangeNotifier {
     unawaited(store.addPairedDevice(device));
 
     pending.channel.sink.add(
-      pairingApprovedJson(token, certFingerprint: _certFingerprint),
+      pairingApprovedJson(
+        token,
+        certFingerprint: _certFingerprint,
+        players: _capabilityPlayers,
+      ),
     );
     // Immediately treat as authed — phone won't send a separate auth after pairing_approved.
     pending.channel.sink.add(authResponseJson(
       success: true,
       token: token,
       certFingerprint: _certFingerprint,
+      players: _capabilityPlayers,
     ));
     _authed.add(pending.channel);
     notifyListeners();
@@ -325,6 +336,7 @@ class ReceiverServer extends ChangeNotifier {
         channel.sink.add(authResponseJson(
           success: true,
           certFingerprint: _certFingerprint,
+          players: _capabilityPlayers,
         ));
       case ContextQueryCmd():
         channel.sink.add(contextJson(player.state == 'idle' ? 'idle' : 'player'));

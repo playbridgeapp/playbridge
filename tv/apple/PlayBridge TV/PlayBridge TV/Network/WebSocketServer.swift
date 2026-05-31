@@ -422,6 +422,7 @@ class WebSocketServer: ObservableObject {
 
         var approved: [String: Any] = ["type": "pairing_approved", "token": token]
         if let fp = certFingerprint { approved["certFingerprint"] = fp }
+        approved["players"] = Self.capabilityPlayers
         send(json: approved, to: request.connection)
         completeAuth(from: request.connection, token: token)
         pendingPairingRequest = nil
@@ -437,6 +438,11 @@ class WebSocketServer: ObservableObject {
     }
 
     // MARK: - Auth
+
+    /// Players this receiver advertises to the phone at auth, so the phone's player picker
+    /// shows "TV Default" + AVPlayer + VLC. A concrete choice is honored per cast in
+    /// `PlayerView` via the play payload's `playerMode`. (No browsers — Apple TV has no web view.)
+    static let capabilityPlayers = ["avplayer", "vlc"]
 
     private func handleAuth(_ msg: Playbridge_AuthMessage, from connection: NWConnection) {
         guard msg.hasToken else {
@@ -458,6 +464,7 @@ class WebSocketServer: ObservableObject {
             self.connectedCount = self.connectedConnections.count
             var response: [String: Any] = ["type": "auth_response", "success": true, "token": token]
             if let fp = self.certFingerprint { response["certFingerprint"] = fp }
+            response["players"] = Self.capabilityPlayers
             self.send(json: response, to: connection)
         }
     }

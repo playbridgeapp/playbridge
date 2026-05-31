@@ -790,8 +790,6 @@ class _StatusBar extends StatelessWidget {
   String _engineLabel(EngineType type) {
     return switch (type) {
       EngineType.mpvInternal => 'MPV',
-      EngineType.mpvExternal => 'MPV (EXT)',
-      EngineType.vlcExternal => 'VLC (EXT)',
     };
   }
 
@@ -957,19 +955,6 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                           onClosed: widget.onMenuClosed,
                         ),
                       ],
-                      IconButton(
-                        tooltip: 'Swap engine',
-                        icon: const Icon(Icons.swap_horiz),
-                        onPressed: () async {
-                          final next = switch (p.engineType) {
-                            EngineType.mpvInternal => EngineType.mpvExternal,
-                            EngineType.mpvExternal => EngineType.vlcExternal,
-                            EngineType.vlcExternal => EngineType.mpvInternal,
-                          };
-                          await widget.store.setEngineType(next);
-                          await p.switchEngine(next);
-                        },
-                      ),
                       if (widget.showQueueControls)
                         IconButton(
                           tooltip: widget.playlistOpen
