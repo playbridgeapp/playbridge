@@ -74,6 +74,7 @@ data class TmdbVideo(
     val key: String,
     val site: String,
     val type: String,
+    val name: String = "",
     val official: Boolean = false
 ) {
     val youtubeUrl: String? get() = if (site == "YouTube") "https://www.youtube.com/watch?v=$key" else null

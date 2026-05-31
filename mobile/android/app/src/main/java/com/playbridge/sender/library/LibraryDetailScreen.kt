@@ -114,7 +114,7 @@ fun LibraryDetailScreen(
     var addonMeta by remember { mutableStateOf<StremioMetaDetail?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var trailerUrl by remember { mutableStateOf<String?>(null) }
+    var trailerOptions by remember { mutableStateOf<List<TrailerOption>>(emptyList()) }
     var hasAddons by remember { mutableStateOf(false) }
     var selectedSeason by remember { mutableIntStateOf(1) }
     /** Name of the addon that supplied [addonMeta], e.g. "Cinemeta" or "Kitsu". Null until loaded. */
@@ -153,6 +153,7 @@ fun LibraryDetailScreen(
 
     // Player mode (mirrors CastSheet; persisted to browser_prefs/tv_player_mode)
     val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
+    val tmdbRepository: com.playbridge.sender.data.library.TmdbRepository = org.koin.compose.koinInject()
     val playerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
 
     // Mediaflow proxy config (read once — user reopens the screen to pick up changes)
@@ -206,8 +207,7 @@ fun LibraryDetailScreen(
         if (metaResult != null) {
             addonMeta = metaResult.first
             addonMetaSource = metaResult.second
-            trailerUrl = addonMeta?.trailer
-            
+
             // Final fallback: if addon metadata has a TMDB ID, sync it to state
             if (resolvedTmdbId == null && addonMeta?.tmdbId != null) {
                 resolvedTmdbId = addonMeta?.tmdbId
@@ -221,6 +221,18 @@ fun LibraryDetailScreen(
         isLoading = false
         hasAddons = addonRepository.hasAnyAddons()
         hubAddon = addonRepository.getInstalledAddons().find { it.supportsPlayEndpoint() }
+    }
+
+    // Build the trailer list: TMDB /videos first (when resolved), addon-provided ytIds as
+    // fallback/extras. Recomputed whenever the TMDB id or addon metadata changes.
+    LaunchedEffect(resolvedTmdbId, addonMeta) {
+        val tmdbVideos = resolvedTmdbId?.let { tid ->
+            runCatching {
+                if (type == "movie") tmdbRepository.getMovieVideos(tid)
+                else tmdbRepository.getTvVideos(tid)
+            }.getOrNull()?.results ?: emptyList()
+        } ?: emptyList()
+        trailerOptions = buildTrailerOptions(addonMeta, tmdbVideos)
     }
 
     // IDs for tracking/streams are now managed as state variables
@@ -249,13 +261,26 @@ fun LibraryDetailScreen(
     val displayBackdrop = addonMeta?.background ?: addonMeta?.poster
     val displayLogo = addonMeta?.logo
     val displayYear = addonMeta?.year ?: ""
-    val displayCert = "" // Hub-meta doesn't typically provide this separately from releaseInfo
+    // Certification: prefer the explicit app_extras field (AIO/TMDB); otherwise try to
+    // recover it from releaseInfo, where Cinemeta appends it after the year (e.g. "2014  PG-13").
+    val displayCert = addonMeta?.appExtras?.certification?.takeIf { it.isNotBlank() }
+        ?: addonMeta?.releaseInfo
+            ?.replace(Regex("""^\s*\d{4}(\s*[–-]\s*\d{4})?"""), "")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        ?: ""
     val displayRating = addonMeta?.imdbRating ?: ""
     val displayRuntime = addonMeta?.runtime ?: ""
     val displayGenres = addonMeta?.genres ?: emptyList()
     val displayOverview = addonMeta?.description ?: ""
     val displayCast = addonMeta?.cast ?: emptyList()
+    // Rich cast (headshots + character names) when the addon provides app_extras.cast.
+    val displayCastDetailed = addonMeta?.appExtras?.cast ?: emptyList()
     val displayDirector = addonMeta?.director ?: emptyList()
+    val displayWriter = addonMeta?.writer ?: emptyList()
+    val displayCountry = addonMeta?.country?.takeIf { it.isNotBlank() } ?: ""
+    val displayStatus = addonMeta?.status?.takeIf { it.isNotBlank() } ?: ""
+    val displayAwards = addonMeta?.awards?.takeIf { it.isNotBlank() } ?: ""
 
 
     // Check if we have episodes
@@ -708,6 +733,7 @@ fun LibraryDetailScreen(
                                 resolvingLabel = "Finding streams…",
                                 hasAddons = hasAddons,
                                 hasImdbId = resolvedImdbId != null || resolvedTmdbId != null,
+                                canResolveStreams = canResolveStreams,
                                 watchProviders = emptyList(),
                                 tvName = tvName,
                                 isTvConnected = isTvConnected,
@@ -802,6 +828,7 @@ fun LibraryDetailScreen(
                                     resolvingLabel = "Finding streams…",
                                     hasAddons = hasAddons,
                                     hasImdbId = resolvedImdbId != null || resolvedTmdbId != null,
+                                    canResolveStreams = canResolveStreams,
                                     watchProviders = emptyList(),
                                     tvName = tvName,
                                     isTvConnected = isTvConnected,
@@ -855,32 +882,35 @@ fun LibraryDetailScreen(
                         }
                     }
 
-                    // Action buttons (watchlist, trailer) — only if TMDB resolved
+                    // Action buttons — watchlist requires a TMDB id; the trailer button
+                    // shows whenever any trailer (TMDB or addon) is available.
                     val tmdbIdForActions = resolvedTmdbId
-                    if (tmdbIdForActions != null) {
+                    if (tmdbIdForActions != null || trailerOptions.isNotEmpty()) {
                         item {
                             ActionButtons(
                                 isWatchlisted = isWatchlisted,
                                 tracked = tracked,
+                                canWatchlist = tmdbIdForActions != null,
                                 onToggleWatchlist = {
-                                    // Handled via pure Hub metadata extracts above
-                                    viewModel.toggleWatchlist(
-                                        tmdbId = tmdbIdForActions,
-                                        mediaType = type,
-                                        title = displayTitle,
-                                        posterUrl = addonMeta?.poster,
-                                        year = displayYear,
-                                        rating = displayRating
-                                    )
+                                    if (tmdbIdForActions != null) {
+                                        viewModel.toggleWatchlist(
+                                            tmdbId = tmdbIdForActions,
+                                            mediaType = type,
+                                            title = displayTitle,
+                                            posterUrl = addonMeta?.poster,
+                                            year = displayYear,
+                                            rating = displayRating
+                                        )
+                                    }
                                 },
-                                trailerUrl = trailerUrl,
+                                trailers = trailerOptions,
                                 onPlayTrailer = onPlayTrailer,
                                 themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                             )
                         }
                     }
 
-                    // Overview, cast, director
+                    // Overview / synopsis — kept up top, above seasons & episodes.
                     item {
                         Text(
                             text = displayOverview,
@@ -888,25 +918,6 @@ fun LibraryDetailScreen(
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                             color = Color.White
                         )
-
-                        if (displayCast.isNotEmpty()) {
-                            Text(
-                                text = "Starring: ${displayCast.take(5).joinToString(", ")}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                            )
-                        }
-
-                        if (displayDirector.isNotEmpty()) {
-                            val directors = displayDirector.joinToString(", ")
-                            Text(
-                                text = "Director: $directors",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-                            )
-                        }
                     }
 
                     // Season chips — only for series with episodes
@@ -1047,6 +1058,69 @@ fun LibraryDetailScreen(
                                     }
                                 },
                                 themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    // Cast & credits — moved below the episode list so the synopsis and
+                    // seasons stay near the top. Each row renders only when data is present.
+                    item {
+                        if (displayCastDetailed.isNotEmpty()) {
+                            CastCarousel(
+                                members = displayCastDetailed,
+                                themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
+                            )
+                        } else if (displayCast.isNotEmpty()) {
+                            Text(
+                                text = "Starring: ${displayCast.take(5).joinToString(", ")}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                            )
+                        }
+
+                        if (displayDirector.isNotEmpty()) {
+                            Text(
+                                text = "Director: ${displayDirector.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        if (displayWriter.isNotEmpty()) {
+                            Text(
+                                text = "Writer: ${displayWriter.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        if (displayCountry.isNotEmpty()) {
+                            Text(
+                                text = "Country: $displayCountry",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        if (displayStatus.isNotEmpty()) {
+                            Text(
+                                text = "Status: $displayStatus",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        if (displayAwards.isNotEmpty()) {
+                            Text(
+                                text = "Awards: $displayAwards",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
                             )
                         }
                     }

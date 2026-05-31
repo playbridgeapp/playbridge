@@ -375,9 +375,50 @@ data class StremioMetaDetail(
     val genres: List<String> = emptyList(),
     @Serializable(with = StringListSerializer::class)
     val director: List<String> = emptyList(),
+    @Serializable(with = StringListSerializer::class)
+    val writer: List<String> = emptyList(),
+    val country: String? = null,
+    val releaseInfo: String? = null,
+    val status: String? = null,
+    val awards: String? = null,
     val trailer: String? = null,
+    val trailers: List<StremioTrailer> = emptyList(),
+    val trailerStreams: List<StremioTrailerStream> = emptyList(),
     val logo: String? = null,
+    @SerialName("app_extras") val appExtras: AppExtras? = null,
     val videos: List<StremioVideo> = emptyList()
+)
+
+/** `trailers[]` entry — `source` is the YouTube id; `name`/`type` are optional labels. */
+@Serializable
+data class StremioTrailer(
+    val source: String? = null,
+    val type: String? = null,
+    val name: String? = null
+)
+
+/** `trailerStreams[]` entry — `ytId` is the YouTube id, `title` an optional label. */
+@Serializable
+data class StremioTrailerStream(
+    val ytId: String? = null,
+    val title: String? = null
+)
+
+/** Extra detail some addons (AIO, TMDB) nest under `app_extras`. All optional. */
+@Serializable
+data class AppExtras(
+    val certification: String? = null,
+    val cast: List<CastMember> = emptyList(),
+    val directors: List<CastMember> = emptyList(),
+    val writers: List<CastMember> = emptyList(),
+    val seasonPosters: List<String> = emptyList()
+)
+
+@Serializable
+data class CastMember(
+    val name: String = "",
+    val character: String? = null,
+    val photo: String? = null
 )
 
 @Serializable
@@ -388,7 +429,10 @@ data class StremioVideo(
     val episode: Int? = null,
     val released: String? = null,
     val thumbnail: String? = null,
-    val overview: String? = null
+    val overview: String? = null,
+    val rating: String? = null,      // per-episode IMDb rating (Cinemeta)
+    val runtime: String? = null,     // per-episode runtime (AIO/TMDB), e.g. "48min"
+    val available: Boolean? = null   // false ⇒ not yet released/available (AIO/TMDB)
 )
 
 @Serializable data class StremioMetaResponse(val meta: StremioMetaDetail? = null)

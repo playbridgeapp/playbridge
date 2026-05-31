@@ -199,6 +199,7 @@ class BrowserActivity : ComponentActivity() {
 
     private val connectionViewModel: ConnectionViewModel by viewModel()
     private val connectionCoordinator: ConnectionCoordinator by inject()
+    private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
     private val tabManager = TabManager()
 
@@ -728,6 +729,10 @@ class BrowserActivity : ComponentActivity() {
             var interceptedMagnet by remember { mutableStateOf<String?>(null) }
             var interceptedTorrentBytes by remember { mutableStateOf<ByteArray?>(null) }
 
+            // Stremio addon install state (set when a stremio:// link is clicked in the browser)
+            var pendingStremioAddon by remember { mutableStateOf<String?>(null) }
+            var isInstallingStremioAddon by remember { mutableStateOf(false) }
+
             // Video detection state — per-tab
             var showVideoSheet by remember { mutableStateOf(false) }
             val sheetPlayerMode = tvPlayerMode
@@ -1068,6 +1073,9 @@ class BrowserActivity : ComponentActivity() {
                 },
                 onMagnetDetected = { uri ->
                     interceptedMagnet = uri
+                },
+                onStremioAddonDetected = { uri ->
+                    pendingStremioAddon = uri
                 },
                 onTorrentDownloaded = { bytes ->
                     interceptedTorrentBytes = bytes
@@ -1786,6 +1794,55 @@ class BrowserActivity : ComponentActivity() {
                     },
                     onDismiss = { pendingDownload = null; pendingDownloadState.value = null }
                  )
+
+                pendingStremioAddon?.let { addonUri ->
+                    // Convert stremio:// to https:// for a readable host, then derive a label.
+                    val httpsUrl = addonUri.replaceFirst("stremio://", "https://")
+                    val host = runCatching { java.net.URI(httpsUrl).host }.getOrNull() ?: httpsUrl
+                    AlertDialog(
+                        onDismissRequest = { if (!isInstallingStremioAddon) pendingStremioAddon = null },
+                        title = { Text("Install Stremio addon?") },
+                        text = {
+                            Column {
+                                Text(host, style = MaterialTheme.typography.titleSmall)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    httpsUrl,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 3,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                enabled = !isInstallingStremioAddon,
+                                onClick = {
+                                    isInstallingStremioAddon = true
+                                    scope.launch {
+                                        val result = runCatching { addonRepository.installAddon(addonUri) }.getOrNull()
+                                        isInstallingStremioAddon = false
+                                        pendingStremioAddon = null
+                                        Toast.makeText(
+                                            this@BrowserActivity,
+                                            if (result != null) "Installed: ${result.name}" else "Failed to install addon",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            ) {
+                                Text(if (isInstallingStremioAddon) "Installing…" else "Install")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                enabled = !isInstallingStremioAddon,
+                                onClick = { pendingStremioAddon = null }
+                            ) { Text("Cancel") }
+                        }
+                    )
+                }
              }
          }
      }

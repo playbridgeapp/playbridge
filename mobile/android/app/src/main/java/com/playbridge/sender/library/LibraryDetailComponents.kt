@@ -313,6 +313,10 @@ internal fun SplitPlayButton(
     resolvingLabel: String = "Resolving…",
     hasAddons: Boolean,
     hasImdbId: Boolean,
+    // Whether an addon can resolve a stream for this id. True for TMDB/IMDb ids *and*
+    // addon-native ids (e.g. kitsu:12345) that have no TMDB/IMDb mapping. Defaults to the
+    // old TMDB/IMDb-only behavior so existing callers are unaffected.
+    canResolveStreams: Boolean = hasAddons && hasImdbId,
     watchProviders: List<TmdbWatchProvider>,
     tvName: String? = null,
     isTvConnected: Boolean = false,
@@ -349,7 +353,7 @@ internal fun SplitPlayButton(
     val topProvider = watchProviders.firstOrNull()
     val isBusy = isTvResolving || isPhoneResolving
     val isResolving = if (watchOnTv) isTvResolving else isPhoneResolving
-    val canPlay = hasAddons && hasImdbId || watchProviders.isNotEmpty()
+    val canPlay = canResolveStreams || watchProviders.isNotEmpty()
     val haptic = LocalHapticFeedback.current
 
     Column(
@@ -449,7 +453,7 @@ internal fun SplitPlayButton(
                 .combinedClickable(
                     enabled = !isBusy && canPlay,
                     onClick = {
-                        if (hasAddons && hasImdbId) {
+                        if (canResolveStreams) {
                             if (watchOnTv) onWatchOnTv() else onWatchOnPhone()
                         } else if (watchProviders.isNotEmpty()) showProvidersSheet = true
                     },
@@ -614,17 +618,90 @@ internal fun WatchProvidersSheet(
     }
 }
 
+/** A single playable trailer: a display label + a YouTube watch URL. */
+data class TrailerOption(val title: String, val youtubeUrl: String)
+
+private val TRAILER_YT_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
+
+/**
+ * Merge trailer candidates into a de-duplicated, ranked list.
+ * TMDB videos come first (official Trailers, then Teasers, then any YouTube clip),
+ * with the addon's own `trailerStreams`/`trailers`/`trailer` appended as fallbacks/extras.
+ * De-duped by YouTube id, preserving first-seen order.
+ */
+internal fun buildTrailerOptions(
+    meta: StremioMetaDetail?,
+    tmdbVideos: List<TmdbVideo>
+): List<TrailerOption> {
+    val seen = LinkedHashMap<String, TrailerOption>()
+    fun add(id: String?, label: String?) {
+        val key = id?.trim()?.takeIf { it.matches(TRAILER_YT_ID_REGEX) } ?: return
+        if (seen.containsKey(key)) return
+        seen[key] = TrailerOption(
+            title = label?.takeIf { it.isNotBlank() } ?: "Trailer",
+            youtubeUrl = "https://www.youtube.com/watch?v=$key"
+        )
+    }
+
+    tmdbVideos
+        .filter { it.site == "YouTube" && it.key.matches(TRAILER_YT_ID_REGEX) }
+        .sortedWith(
+            compareBy<TmdbVideo>(
+                { when (it.type.lowercase()) { "trailer" -> 0; "teaser" -> 1; else -> 2 } },
+                { if (it.official) 0 else 1 }
+            )
+        )
+        .forEach { add(it.key, it.name.ifBlank { it.type }) }
+
+    meta?.trailerStreams?.forEach { add(it.ytId, it.title) }
+    meta?.trailers?.forEach { add(it.source, it.name ?: it.type) }
+    meta?.trailer?.let { raw -> add(raw.substringAfterLast(':').substringAfterLast('='), "Trailer") }
+
+    return seen.values.toList()
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ActionButtons(
     isWatchlisted: Boolean,
     tracked: WatchlistEntity? = null,
+    canWatchlist: Boolean = true,
     onToggleWatchlist: () -> Unit,
-    trailerUrl: String? = null,
+    trailers: List<TrailerOption> = emptyList(),
     onPlayTrailer: ((String) -> Unit)? = null,
     themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
-    val trailerReady = trailerUrl != null && onPlayTrailer != null
+    val trailerReady = trailers.isNotEmpty() && onPlayTrailer != null
+    var showTrailerPicker by remember { mutableStateOf(false) }
     val status = tracked?.let { WatchlistStatus.from(it.status) }
+
+    if (showTrailerPicker) {
+        ModalBottomSheet(onDismissRequest = { showTrailerPicker = false }) {
+            Text(
+                "Trailers",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+            )
+            trailers.forEach { option ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showTrailerPicker = false
+                            onPlayTrailer?.invoke(option.youtubeUrl)
+                        }
+                        .padding(horizontal = 24.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.PlayCircle, contentDescription = null, tint = themeColor)
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(option.title, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -664,26 +741,31 @@ internal fun ActionButtons(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.clickable { onToggleWatchlist() }
-        ) {
-            Icon(
-                if (isWatchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                contentDescription = if (isWatchlisted) "Remove from Watchlist" else "Add to Watchlist",
-                tint = if (isWatchlisted) themeColor else Color.White.copy(alpha=0.7f)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                if (isWatchlisted) "In Watchlist" else "Add to Watchlist",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isWatchlisted) themeColor else Color.White.copy(alpha=0.7f)
-            )
+        if (canWatchlist) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onToggleWatchlist() }
+            ) {
+                Icon(
+                    if (isWatchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                    contentDescription = if (isWatchlisted) "Remove from Watchlist" else "Add to Watchlist",
+                    tint = if (isWatchlisted) themeColor else Color.White.copy(alpha=0.7f)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    if (isWatchlisted) "In Watchlist" else "Add to Watchlist",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isWatchlisted) themeColor else Color.White.copy(alpha=0.7f)
+                )
+            }
+            Spacer(modifier = Modifier.width(48.dp))
         }
-        Spacer(modifier = Modifier.width(48.dp))
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = if (trailerReady) Modifier.clickable { onPlayTrailer!!(trailerUrl!!) } else Modifier
+            modifier = if (trailerReady) Modifier.clickable {
+                if (trailers.size == 1) onPlayTrailer!!(trailers.first().youtubeUrl)
+                else showTrailerPicker = true
+            } else Modifier
         ) {
             Icon(
                 Icons.Default.Movie,
@@ -692,7 +774,11 @@ internal fun ActionButtons(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                if (trailerReady) "Play Trailer" else "No Trailer",
+                when {
+                    !trailerReady -> "No Trailer"
+                    trailers.size > 1 -> "Trailers (${trailers.size})"
+                    else -> "Play Trailer"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = if (trailerReady) Color.White else Color.White.copy(alpha = 0.3f)
             )
@@ -715,6 +801,8 @@ internal fun EpisodeItem(
 ) {
     val haptic = LocalHapticFeedback.current
     val containerColor = Color.Transparent
+    // Some addons (AIO/TMDB) flag episodes that aren't released/available yet.
+    val isUnavailable = episode.available == false
 
     val offsetX = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -751,9 +839,10 @@ internal fun EpisodeItem(
             modifier = Modifier
                 .offset { androidx.compose.ui.unit.IntOffset(offsetX.value.roundToInt(), 0) }
                 .fillMaxWidth()
+                .alpha(if (isUnavailable) 0.45f else 1f)
                 .background(containerColor)
                 .combinedClickable(
-                    enabled = hasAddon && !isResolving,
+                    enabled = hasAddon && !isResolving && !isUnavailable,
                     onClick = onClick,
                     onLongClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -838,16 +927,36 @@ internal fun EpisodeItem(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 val formattedDate = remember(episode.released) { formatEpisodeDate(episode.released) }
-                if (formattedDate != null) {
-                    val isFuture = episode.released?.let { isEpisodeFuture(it) } == true
-                    Text(
-                        text = formattedDate,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (isFuture)
-                            themeColor.copy(alpha = 0.9f)
-                        else
-                            Color.White.copy(alpha = 0.7f)
-                    )
+                val isFuture = episode.released?.let { isEpisodeFuture(it) } == true
+                // Date · runtime · rating — each part shown only when the addon provides it.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val metaColor = if (isFuture) themeColor.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.7f)
+                    val parts = buildList {
+                        formattedDate?.let { add(it) }
+                        episode.runtime?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    }
+                    if (parts.isNotEmpty()) {
+                        Text(
+                            text = parts.joinToString(" · "),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = metaColor
+                        )
+                    }
+                    episode.rating?.takeIf { it.isNotBlank() }?.let { rating ->
+                        if (parts.isNotEmpty()) Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            Icons.Default.Star,
+                            contentDescription = null,
+                            tint = Color(0xFFFFC107),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = rating,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White.copy(alpha = 0.7f)
+                        )
+                    }
                 }
             }
 
@@ -991,6 +1100,87 @@ fun TranslucentBackground(backdropUrl: String?, dominantColor: Color? = null) {
                     .fillMaxSize()
                     .background(color.copy(alpha = 0.15f))
             )
+        }
+    }
+}
+
+// ==================== Cast Carousel ====================
+
+/**
+ * Horizontal carousel of cast (or crew) members with headshots and character names.
+ * Sourced from the optional `app_extras.cast` some addons (AIO/TMDB) provide; renders
+ * nothing when [members] is empty, so callers can fall back to a plain text credit line.
+ */
+@Composable
+internal fun CastCarousel(
+    members: List<CastMember>,
+    title: String = "Cast",
+    themeColor: Color = MaterialTheme.colorScheme.primary
+) {
+    if (members.isEmpty()) return
+    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(members) { member ->
+                Column(
+                    modifier = Modifier.width(80.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(themeColor.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (member.photo != null) {
+                            AsyncImage(
+                                model = member.photo,
+                                contentDescription = member.name,
+                                contentScale = ContentScale.Crop,
+                                placeholder = ColorPainter(themeColor.copy(alpha = 0.1f)),
+                                error = ColorPainter(themeColor.copy(alpha = 0.1f)),
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                tint = themeColor.copy(alpha = 0.5f),
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = member.name,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    if (!member.character.isNullOrBlank()) {
+                        Text(
+                            text = member.character,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.6f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+            }
         }
     }
 }

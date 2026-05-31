@@ -64,6 +64,7 @@ fun SessionObserverSetup(
     pendingPopup: MutableState<PendingPopup?>,
     onXpiDetected: (String) -> Unit,
     onMagnetDetected: (String) -> Unit,
+    onStremioAddonDetected: (String) -> Unit,
     onTorrentDownloaded: (ByteArray) -> Unit,
     onVideoHashDetected: (String, String) -> Unit,  // (url, kotlinTabId)
     onFullScreenChange: (Boolean, Boolean) -> Unit
@@ -368,6 +369,13 @@ fun SessionObserverSetup(
                                         Log.d(TAG, "Intercepted magnet link: $uri")
                                         scope.launch(Dispatchers.Main) {
                                             onMagnetDetected(uri)
+                                        }
+                                        return@newProxyInstance GeckoResult.fromValue(org.mozilla.geckoview.AllowOrDeny.DENY)
+                                    }
+                                    if (uri != null && uri.startsWith("stremio://")) {
+                                        Log.d(TAG, "Intercepted Stremio addon link: $uri")
+                                        scope.launch(Dispatchers.Main) {
+                                            onStremioAddonDetected(uri)
                                         }
                                         return@newProxyInstance GeckoResult.fromValue(org.mozilla.geckoview.AllowOrDeny.DENY)
                                     }
