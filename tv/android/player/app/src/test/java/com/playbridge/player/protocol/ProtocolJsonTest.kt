@@ -3,6 +3,7 @@ package com.playbridge.player.protocol
 import com.playbridge.shared.protocol.createAuthResponseJson
 import com.playbridge.shared.protocol.createPairingApprovedJson
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -42,5 +43,45 @@ class ProtocolJsonTest {
         val o = obj(createAuthResponseJson(success = false))
         assertEquals(false, o["success"]?.jsonPrimitive?.content?.toBoolean())
         assertNull(o["certFingerprint"])
+    }
+
+    @Test
+    fun authResponseIncludesCapabilitiesWhenPresent() {
+        val o = obj(createAuthResponseJson(
+            success = true,
+            players = listOf("internal_exo", "internal_mpv"),
+            browsers = listOf("webview", "gecko"),
+        ))
+        assertEquals(
+            listOf("internal_exo", "internal_mpv"),
+            o["players"]?.jsonArray?.map { it.jsonPrimitive.content }
+        )
+        assertEquals(
+            listOf("webview", "gecko"),
+            o["browsers"]?.jsonArray?.map { it.jsonPrimitive.content }
+        )
+    }
+
+    @Test
+    fun authResponseOmitsCapabilitiesWhenEmpty() {
+        val o = obj(createAuthResponseJson(success = true))
+        assertNull(o["players"])
+        assertNull(o["browsers"])
+    }
+
+    @Test
+    fun pairingApprovedIncludesCapabilitiesAndOmitsGeckoWhenNotInstalled() {
+        // The browsers list models a TV without the GeckoView plugin: webview only.
+        val o = obj(createPairingApprovedJson(
+            token = "tok",
+            players = listOf("internal_exo", "internal_mpv"),
+            browsers = listOf("webview"),
+        ))
+        assertEquals("tok", o["token"]?.jsonPrimitive?.content)
+        assertEquals(
+            listOf("internal_exo", "internal_mpv"),
+            o["players"]?.jsonArray?.map { it.jsonPrimitive.content }
+        )
+        assertEquals(listOf("webview"), o["browsers"]?.jsonArray?.map { it.jsonPrimitive.content })
     }
 }

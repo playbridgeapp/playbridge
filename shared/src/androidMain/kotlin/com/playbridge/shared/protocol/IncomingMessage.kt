@@ -5,6 +5,8 @@ import com.squareup.moshi.Types
 import com.squareup.wire.WireJsonAdapterFactory
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -153,11 +155,18 @@ fun createPairingRequestJson(deviceName: String, deviceUUID: String): String =
         PairingRequestMessage(type = "pairing_request", device_name = deviceName, device_uuid = deviceUUID)
     )
 
-fun createPairingApprovedJson(token: String, certFingerprint: String? = null): String =
+fun createPairingApprovedJson(
+    token: String,
+    certFingerprint: String? = null,
+    players: List<String> = emptyList(),
+    browsers: List<String> = emptyList(),
+): String =
     buildJsonObject {
         put("type", "pairing_approved")
         put("token", token)
         if (certFingerprint != null) put("certFingerprint", certFingerprint)
+        if (players.isNotEmpty()) put("players", buildJsonArray { players.forEach { add(it) } })
+        if (browsers.isNotEmpty()) put("browsers", buildJsonArray { browsers.forEach { add(it) } })
     }.toString()
 
 fun createPairingDeniedJson(): String = """{"type":"pairing_denied"}"""
@@ -166,12 +175,16 @@ fun createAuthResponseJson(
     success: Boolean,
     token: String? = null,
     certFingerprint: String? = null,
+    players: List<String> = emptyList(),
+    browsers: List<String> = emptyList(),
 ): String =
     buildJsonObject {
         put("type", "auth_response")
         put("success", success)
         if (token != null) put("token", token)
         if (certFingerprint != null) put("certFingerprint", certFingerprint)
+        if (players.isNotEmpty()) put("players", buildJsonArray { players.forEach { add(it) } })
+        if (browsers.isNotEmpty()) put("browsers", buildJsonArray { browsers.forEach { add(it) } })
     }.toString()
 
 fun createContextJson(active: String): String =

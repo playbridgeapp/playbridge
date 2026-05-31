@@ -47,6 +47,9 @@ class WebSocketServer(
     // Invoked after the wss bind attempt with the bound port (null if it failed),
     // so the caller advertises wss_port over NSD only when it's actually up.
     private val onWssReady: ((Int?) -> Unit)? = null,
+    // Players/browsers this receiver supports, re-evaluated per auth so a plugin installed
+    // after start-up is picked up on the next (re)connect. Reported to the phone at auth.
+    private val capabilities: () -> TvCapabilities = { TvCapabilities(emptyList(), emptyList()) },
 ) {
     data class PairingRequest(
         val deviceName: String,
@@ -293,7 +296,10 @@ class WebSocketServer(
                         if (approved) {
                             val token = onPairingApproved(msg.device_name, msg.device_uuid)
                             FileLogger.i(TAG, "Pairing approved for ${msg.device_name} — token issued")
-                            session.send(Frame.Text(createPairingApprovedJson(token)))
+                            val caps = capabilities()
+                            session.send(Frame.Text(createPairingApprovedJson(
+                                token, players = caps.players, browsers = caps.browsers
+                            )))
                             isAuthenticated = true
                         } else {
                             FileLogger.i(TAG, "Pairing denied for ${msg.device_name}")
@@ -312,7 +318,10 @@ class WebSocketServer(
                             if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
                                 isAuthenticated = true
                                 FileLogger.i(TAG, "Client reconnected with saved token: $clientId")
-                                session.send(Frame.Text("{\"type\":\"auth_response\",\"success\":true}"))
+                                val caps = capabilities()
+                                session.send(Frame.Text(createAuthResponseJson(
+                                    success = true, players = caps.players, browsers = caps.browsers
+                                )))
                             } else {
                                 FileLogger.w(TAG, "Auth rejected — unknown or revoked token: $clientId")
                                 session.send(Frame.Text("{\"type\":\"auth_response\",\"success\":false}"))
@@ -553,7 +562,8 @@ class WebSocketServer(
                     val approved = awaitPairingApproval(msg.device_name, msg.device_uuid)
                     if (approved) {
                         val token = onPairingApproved(msg.device_name, msg.device_uuid)
-                        conn.send(createPairingApprovedJson(token, certFingerprint))
+                        val caps = capabilities()
+                        conn.send(createPairingApprovedJson(token, certFingerprint, caps.players, caps.browsers))
                         registerAuthed(conn)
                     } else {
                         conn.send(createPairingDeniedJson()); conn.close()
@@ -565,7 +575,11 @@ class WebSocketServer(
                 val token = (parseIncomingMessage(text) as? IncomingMessage.Auth)?.msg?.token
                 scope.launch {
                     if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
-                        conn.send(createAuthResponseJson(success = true, certFingerprint = certFingerprint))
+                        val caps = capabilities()
+                        conn.send(createAuthResponseJson(
+                            success = true, certFingerprint = certFingerprint,
+                            players = caps.players, browsers = caps.browsers
+                        ))
                         registerAuthed(conn)
                     } else {
                         conn.send(createAuthResponseJson(success = false)); conn.close()

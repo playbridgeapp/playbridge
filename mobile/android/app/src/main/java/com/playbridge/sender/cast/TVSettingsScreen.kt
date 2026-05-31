@@ -2,6 +2,8 @@ package com.playbridge.sender.cast
 
 import android.content.Context
 import org.koin.compose.koinInject
+import org.koin.androidx.compose.koinViewModel
+import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.data.settings.SettingsRepository
 import android.os.Environment
 import android.widget.Toast
@@ -43,26 +45,21 @@ fun TVSettingsScreen(
     val scope = rememberCoroutineScope()
     val isTvAvailable = tvIp != null && tvPort != null
 
+    // Options reflect what the connected/last-paired TV reported it supports. Capabilities are
+    // persisted on the saved device, so the real list survives disconnects (see
+    // TvCapabilityOptions). Before any TV is paired, only "TV Default" is offered.
+    val connectionViewModel: ConnectionViewModel = koinViewModel()
+    val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
+
     val playerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
     var playerExpanded by remember { mutableStateOf(false) }
-    val playerOptions = listOf(
-        "tv" to "TV Default",
-        "internal" to "Internal (ExoPlayer)",
-        "internal_vlc" to "Internal (LibVLC)",
-        "internal_mpv" to "Internal (MPV)",
-        "external" to "External Player",
-        "external_mpv" to "External (MPV)"
-    )
+    val playerOptions = TvCapabilityOptions.playerOptions(tvDevice)
 
     var browserMode by remember {
         mutableStateOf(prefs.getString("tv_browser_mode", "tv") ?: "tv")
     }
     var browserExpanded by remember { mutableStateOf(false) }
-    val browserOptions = listOf(
-        "tv" to "TV Default",
-        "webview" to "System WebView",
-        "gecko" to "GeckoView (Mozilla)"
-    )
+    val browserOptions = TvCapabilityOptions.browserOptions(tvDevice)
 
     var isDownloading by remember { mutableStateOf(false) }
     var isClearing by remember { mutableStateOf(false) }

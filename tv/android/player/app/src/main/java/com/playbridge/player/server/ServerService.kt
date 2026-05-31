@@ -232,6 +232,9 @@ class ServerService : Service() {
                 // Register NSD once the wss bind result is known, advertising
                 // wss_port only if it actually came up.
                 onWssReady = { wssPort -> registerNsdService(port, wssPort) },
+                // Resolved per auth so a GeckoView plugin installed later is picked up
+                // on the next (re)connect without restarting the server.
+                capabilities = { TvCapabilityProvider.current(this@ServerService) },
             ).also { server ->
                 server.start()
 

@@ -337,15 +337,8 @@ internal fun SplitPlayButton(
     onProxyModeChange: (MediaflowProxy.Mode) -> Unit = {},
     themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
-    // Player-mode options mirror CastSheet's "play" mode list.
-    val playerOptions = listOf(
-        "tv"           to "TV Default",
-        "internal"     to "ExoPlayer",
-        "internal_vlc" to "LibVLC",
-        "internal_mpv" to "MPV",
-        "external"     to "External",
-        "external_mpv" to "Ext. MPV"
-    )
+    // Options reflect what the selected TV reported it supports (see TvCapabilityOptions).
+    val playerOptions = TvCapabilityOptions.playerOptions(selectedTvDevice)
     val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
     var showProvidersSheet by remember { mutableStateOf(false) }
     var showDeviceMenu by remember { mutableStateOf(false) }

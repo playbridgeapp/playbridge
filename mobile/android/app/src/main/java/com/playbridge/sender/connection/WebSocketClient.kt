@@ -5,7 +5,9 @@ import com.playbridge.shared.protocol.createAuthJson
 import com.playbridge.shared.protocol.createPairingRequestJson
 import com.playbridge.shared.protocol.createPingJson
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -52,7 +54,13 @@ class WebSocketClient {
 
     private val _newCredentials = MutableSharedFlow<IssuedCredentials>(replay = 0)
     val newCredentials = _newCredentials.asSharedFlow()
-    
+
+    // Players/browsers the TV reports at auth. Emitted on *every* successful auth
+    // (incl. reconnect with an existing token, where no new credentials are issued),
+    // so it's a separate channel from [newCredentials].
+    private val _tvCapabilities = MutableSharedFlow<TvCapabilities>(replay = 0)
+    val tvCapabilities = _tvCapabilities.asSharedFlow()
+
     private var retryCount = 0
     private val MAX_RETRIES = com.playbridge.shared.protocol.Config.MAX_RETRIES // 5 minutes
     private val RETRY_DELAY_MS = com.playbridge.shared.protocol.Config.RETRY_DELAY_MS
@@ -89,6 +97,9 @@ class WebSocketClient {
 
     /** Token + SPKI pin issued by the receiver, persisted together by the ViewModel. */
     data class IssuedCredentials(val token: String, val certFingerprint: String?)
+
+    /** Players/browsers (player_mode / browser_mode ids) the TV reported it supports. */
+    data class TvCapabilities(val players: List<String>, val browsers: List<String>)
 
     sealed class ConnectionState {
         data object Disconnected : ConnectionState()
@@ -217,6 +228,7 @@ class WebSocketClient {
                                 targetConnection = targetConnection?.copy(token = token, pin = pin)
                                 scope.launch { _newCredentials.emit(IssuedCredentials(token, pin)) }
                             }
+                            emitCapabilities(json)
                             _connectionState.value = ConnectionState.Connected(serverName, isSecure)
                             return
                         }
@@ -249,6 +261,7 @@ class WebSocketClient {
                                 val success = json["success"].toString() == "true"
                                 if (success) {
                                     Log.i(TAG, "Authentication successful")
+                                    emitCapabilities(json)
                                     _connectionState.value = ConnectionState.Connected(serverName, isSecure)
                                     val token = json["token"]?.toString()?.replace("\"", "")
                                     val certFp = json["certFingerprint"]?.toString()?.replace("\"", "")
@@ -340,7 +353,19 @@ class WebSocketClient {
             }
         })
     }
-    
+
+    /** Parse players/browsers from an auth/pairing response and publish them (if any). */
+    private fun emitCapabilities(json: JsonObject) {
+        val players = parseStringArray(json, "players")
+        val browsers = parseStringArray(json, "browsers")
+        if (players.isNotEmpty() || browsers.isNotEmpty()) {
+            scope.launch { _tvCapabilities.emit(TvCapabilities(players, browsers)) }
+        }
+    }
+
+    private fun parseStringArray(json: JsonObject, key: String): List<String> =
+        (json[key] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+
     /**
      * OkHttp client for wss:// that trusts the receiver's self-signed cert by SPKI
      * pin. Captures the presented pin (for pairing-time verification) and rejects a

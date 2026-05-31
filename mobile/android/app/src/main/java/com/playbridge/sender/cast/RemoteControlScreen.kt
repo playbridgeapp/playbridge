@@ -1279,7 +1279,6 @@ private fun PlayerSettingsSheet(
                 ChipGroup(
                     options = listOf(
                         "ExoPlayer" to "internal_exo",
-                        "VLC" to "internal_vlc",
                         "MPV" to "internal_mpv"
                     ),
                     selectedKey = settings.engine,

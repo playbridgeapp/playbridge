@@ -459,21 +459,11 @@ fun CastSheet(
             }
 
             // Compact player + TV selectors side by side
+            // Options reflect what the selected TV reported it supports (see TvCapabilityOptions).
             val playerOptions = if (castAction == "browse") {
-                listOf(
-                    "tv"      to "TV Default",
-                    "webview" to "System WebView",
-                    "gecko"   to "GeckoView"
-                )
+                TvCapabilityOptions.browserOptions(selectedTvDevice)
             } else {
-                listOf(
-                    "tv"           to "TV Default",
-                    "internal"     to "ExoPlayer",
-                    "internal_vlc" to "LibVLC",
-                    "internal_mpv" to "MPV",
-                    "external"     to "External",
-                    "external_mpv" to "Ext. MPV"
-                )
+                TvCapabilityOptions.playerOptions(selectedTvDevice)
             }
             val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
             Row(

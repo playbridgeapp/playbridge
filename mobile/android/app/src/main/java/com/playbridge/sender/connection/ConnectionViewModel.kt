@@ -116,6 +116,21 @@ class ConnectionViewModel(
             }
         }
 
+        // Cache the players/browsers the TV advertises at auth so the phone's pickers
+        // reflect what this specific TV can actually drive (see TvCapabilityOptions).
+        viewModelScope.launch {
+            webSocketClient.tvCapabilities.collect { caps ->
+                val currentDevice = connectionStore.tvDevice.first() ?: return@collect
+                if (currentDevice.players == caps.players && currentDevice.browsers == caps.browsers) {
+                    return@collect
+                }
+                Log.i(TAG, "TV capabilities for ${currentDevice.ip}: players=${caps.players}, browsers=${caps.browsers}")
+                val updatedDevice = currentDevice.copy(players = caps.players, browsers = caps.browsers)
+                connectionStore.saveTvDevice(updatedDevice)
+                connectionStore.addToHistory(updatedDevice)
+            }
+        }
+
         // On auth failure or pairing denial, wipe the token so the next tap triggers
         // a fresh pairing_request instead of silently retrying the wrong token.
         viewModelScope.launch {
