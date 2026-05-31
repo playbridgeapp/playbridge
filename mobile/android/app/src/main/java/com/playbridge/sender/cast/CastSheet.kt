@@ -42,7 +42,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -116,17 +115,22 @@ fun CastSheet(
               )
     }
 
-    var sheetMode by remember(playableVideos, contentPayload) {
+    // The action chosen in the header dropdown. It drives both the body layout and what the
+    // Send button does when tapped — nothing is sent on selection:
+    //   "play"   → play the current selection now on the TV
+    //   "queue"  → append the current selection to the TV's queue
+    //   "browse" → open the page URL on the TV
+    var castAction by remember(playableVideos, contentPayload) {
         mutableStateOf(
             if (playableVideos.isEmpty() && contentPayload == null) "browse" else initialMode
         )
     }
 
-    // If we have content metadata but no browser-detected videos, ensure we stay in play mode
-    // (since the video URL will come from the contentPayload/library resource).
+    // If we have content metadata but no browser-detected videos, default to playing it
+    // (the video URL comes from the contentPayload/library resource).
     LaunchedEffect(contentPayload) {
         if (contentPayload != null && playableVideos.isEmpty()) {
-            sheetMode = "play"
+            castAction = "play"
         }
     }
     val allSubtitles = remember(videos) { videos.filter { it.isSubtitle } }
@@ -293,11 +297,12 @@ fun CastSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Shared by the mode chip's play/queue menu and the always-send button below.
-                var playMenuExpanded by remember { mutableStateOf(false) }
+                // Shared by the header action dropdown and the Send button.
+                var actionMenuExpanded by remember { mutableStateOf(false) }
                 val playEnabled = selectedVideo != null || contentPayload != null
                 // External players hand off to another app, so there's no queue to append to.
                 val canQueue = isTvPlaying && !playerMode.startsWith("external")
+                val canBrowse = onBrowseClick != null
 
                 // Resolve the current selection (quality / HLS filtering / proxy) once, then
                 // either play it now or append it to the TV's queue.
@@ -326,75 +331,79 @@ fun CastSheet(
                     if (queue) onQueueVideo(resolved, subs) else onVideoClick(resolved, subs)
                 }
 
+                // Whether the Send button can fire for the currently-selected action.
+                val sendEnabled = when (castAction) {
+                    "browse" -> canBrowse && browseUrl.isNotBlank()
+                    "queue"  -> playEnabled && canQueue
+                    else     -> playEnabled
+                }
 
-
-                // Mode chip: tap opens the play/queue menu (in play mode) or returns from browse;
-                // long-press switches to browse mode. The actual send is the button on the right.
+                // Action chip: tap opens a dropdown to choose Play / Queue / Browse. Selecting an
+                // action only switches the mode — nothing is sent until the Send button is tapped.
                 Box {
                     FilterChip(
                         selected = true,
-                        onClick = {},
+                        onClick = { actionMenuExpanded = true },
                         label = {
                             Text(
-                                text = if (sheetMode == "play") "Play" else "Browse",
+                                text = when (castAction) {
+                                    "browse" -> "Browse"
+                                    "queue"  -> "Queue"
+                                    else     -> "Play"
+                                },
                                 style = MaterialTheme.typography.bodySmall
                             )
                         },
                         leadingIcon = {
                             Icon(
-                                imageVector = if (sheetMode == "play") Icons.Default.PlayArrow else Icons.Default.Language,
+                                imageVector = when (castAction) {
+                                    "browse" -> Icons.Default.Language
+                                    "queue"  -> Icons.Default.List
+                                    else     -> Icons.Default.PlayArrow
+                                },
                                 contentDescription = null,
                                 modifier = Modifier.size(FilterChipDefaults.IconSize)
                             )
                         },
                         trailingIcon = {
                             Icon(
-                                imageVector = if (sheetMode == "play") Icons.Default.ArrowDropDown else Icons.Default.SwapHoriz,
-                                contentDescription = "Play options / switch mode",
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Choose action",
                                 modifier = Modifier.size(FilterChipDefaults.IconSize)
                             )
                         }
                     )
-                    // Transparent overlay so tap + long-press apply to the whole chip
-                    // (FilterChip itself doesn't expose a long-press handler).
-                    Box(
-                        modifier = Modifier
-                            .matchParentSize()
-                            .clip(RoundedCornerShape(8.dp))
-                            .combinedClickable(
-                                // Tap opens the play/queue menu (play mode only); long-press
-                                // toggles between Play and Browse in both directions.
-                                onClick = {
-                                    if (sheetMode == "play") playMenuExpanded = true
-                                },
-                                onLongClick = {
-                                    sheetMode = if (sheetMode == "play") "browse" else "play"
-                                }
-                            )
-                    )
                     DropdownMenu(
-                        expanded = playMenuExpanded,
-                        onDismissRequest = { playMenuExpanded = false }
+                        expanded = actionMenuExpanded,
+                        onDismissRequest = { actionMenuExpanded = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Play now") },
+                            text = { Text("Play") },
                             leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                            enabled = playEnabled,
                             onClick = {
-                                playMenuExpanded = false
-                                dispatch(queue = false)
+                                castAction = "play"
+                                actionMenuExpanded = false
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Add to queue") },
+                            text = { Text("Queue") },
                             leadingIcon = { Icon(Icons.Default.List, contentDescription = null) },
-                            enabled = playEnabled && canQueue,
+                            enabled = canQueue,
                             onClick = {
-                                playMenuExpanded = false
-                                dispatch(queue = true)
+                                castAction = "queue"
+                                actionMenuExpanded = false
                             }
                         )
-
+                        if (canBrowse) {
+                            DropdownMenuItem(
+                                text = { Text("Browse") },
+                                leadingIcon = { Icon(Icons.Default.Language, contentDescription = null) },
+                                onClick = {
+                                    castAction = "browse"
+                                    actionMenuExpanded = false
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -419,7 +428,7 @@ fun CastSheet(
                             chipLabelColor = tvLabelColorHeader
                         )
                     }
-                    if (sheetMode == "play" && videos.isNotEmpty()) {
+                    if (castAction != "browse" && videos.isNotEmpty()) {
                         IconButton(onClick = onClear) {
                             Icon(
                                 Icons.Default.Delete,
@@ -429,35 +438,28 @@ fun CastSheet(
                         }
                     }
 
-                    if (sheetMode == "browse") {
-                        IconButton(
-                            onClick = { onBrowseClick?.invoke(playerMode, browseDesktopMode) }
-                        ) {
-                            Icon(
-                                Icons.Default.Send,
-                                contentDescription = "Browse",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    } else {
-                        // Always sends the current selection (play now). Queueing lives in the
-                        // mode chip's tap menu on the left.
-                        IconButton(
-                            onClick = { dispatch(queue = false) },
-                            enabled = playEnabled
-                        ) {
-                            Icon(
-                                Icons.Default.Send,
-                                contentDescription = "Play",
-                                tint = if (playEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                            )
-                        }
+                    // The single commit point: runs whichever action the dropdown has selected.
+                    IconButton(
+                        onClick = {
+                            when (castAction) {
+                                "browse" -> onBrowseClick?.invoke(playerMode, browseDesktopMode)
+                                "queue"  -> dispatch(queue = true)
+                                else     -> dispatch(queue = false)
+                            }
+                        },
+                        enabled = sendEnabled
+                    ) {
+                        Icon(
+                            Icons.Default.Send,
+                            contentDescription = "Send",
+                            tint = if (sendEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        )
                     }
                 }
             }
 
             // Compact player + TV selectors side by side
-            val playerOptions = if (sheetMode == "browse") {
+            val playerOptions = if (castAction == "browse") {
                 listOf(
                     "tv"      to "TV Default",
                     "webview" to "System WebView",
@@ -487,7 +489,7 @@ fun CastSheet(
                     selectedValue = playerMode,
                     onSelect = onPlayerModeChange
                 )
-                if (sheetMode == "play" && proxyAvailable) {
+                if (castAction != "browse" && proxyAvailable) {
                     ChipDropdown(
                         selectedLabel = proxyMode.label,
                         options = MediaflowProxy.Mode.entries.map { it.name to it.label },
@@ -495,7 +497,7 @@ fun CastSheet(
                         onSelect = { value -> proxyMode = MediaflowProxy.Mode.valueOf(value) }
                     )
                 }
-                if (sheetMode == "browse") {
+                if (castAction == "browse") {
                     FilterChip(
                         selected = browseDesktopMode,
                         onClick = { browseDesktopMode = !browseDesktopMode },
@@ -525,7 +527,7 @@ fun CastSheet(
                 }
             }
 
-            if (sheetMode == "browse") {
+            if (castAction == "browse") {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "URL",

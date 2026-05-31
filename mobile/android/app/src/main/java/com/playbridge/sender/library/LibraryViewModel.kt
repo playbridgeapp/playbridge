@@ -249,6 +249,21 @@ class LibraryViewModel(
 
             // Final swap + persist to disk for the next launch.
             val result = ordered.filterNot { it.items.isEmpty() }
+
+            // Guard against cache poisoning. fetchCatalog() returns an empty list on *any*
+            // failure (network not ready at cold start, addon hiccup, parse error), so a
+            // transient failure can make every row come back empty. If we cached/persisted
+            // that and stamped it fresh, the Home screen would show an empty library (only
+            // Continue Watching, which is DB-backed, survives) until the cache went stale
+            // (~30 min) or the user hit "Refresh now". So when the whole round comes back
+            // empty, never overwrite a good cache or mark it fresh: keep showing whatever we
+            // had and let the next load retry the network.
+            if (result.isEmpty()) {
+                Log.w("LibraryViewModel", "loadCatalogRows: all catalogs empty — skipping cache write (likely transient failure)")
+                catalogCache?.let { _catalogRows.value = it }
+                return@launch
+            }
+
             _catalogRows.value = result
             catalogCache = result
             catalogCacheTime = System.currentTimeMillis()
@@ -314,6 +329,9 @@ class LibraryViewModel(
             if (!file.exists()) return@withContext null
             runCatching {
                 val p = catalogCacheJson.decodeFromString<PersistedCatalogCache>(file.readText())
+                // Never trust a persisted-empty cache: it can only be the residue of an
+                // older poisoned write. Treat it as "no cache" so we refetch immediately.
+                if (p.rows.isEmpty()) return@withContext null
                 p.rows.map { it.copy(isLoading = false) } to p.timestamp
             }.getOrNull()
         }
