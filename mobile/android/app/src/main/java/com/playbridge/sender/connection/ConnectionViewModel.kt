@@ -12,6 +12,8 @@ import com.playbridge.sender.data.history.CommandHistoryEntity
 import com.playbridge.sender.model.TvDevice
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 class ConnectionViewModel(
@@ -45,6 +47,24 @@ class ConnectionViewModel(
         ?: UUID.randomUUID().toString().also { prefs.edit().putString("pb_phone_uuid", it).apply() }
 
     private var hasAttemptedInitialConnect = false
+
+    // Serialises read-modify-write updates to the saved TvDevice. The credentials and
+    // capabilities collectors both fire on auth and each does tvDevice.first() → copy() →
+    // save; without this lock a stale read lets one clobber the other's fields (e.g. a token
+    // refresh wiping the just-stored players list, which is why receivers that echo the token
+    // on every reconnect showed "TV Default" only).
+    private val deviceUpdateMutex = Mutex()
+
+    private suspend fun updateSavedDevice(transform: (TvDevice) -> TvDevice) {
+        deviceUpdateMutex.withLock {
+            val current = connectionStore.tvDevice.first() ?: return@withLock
+            val updated = transform(current)
+            if (updated == current) return@withLock
+            Log.i(TAG, "Saving TV device ${updated.ip} (players=${updated.players})")
+            connectionStore.saveTvDevice(updated)
+            connectionStore.addToHistory(updated)
+        }
+    }
 
     init {
         // Handle Auto-connection
@@ -103,15 +123,11 @@ class ConnectionViewModel(
         // Listen for new auth tokens + cert pins issued by the receiver.
         viewModelScope.launch {
             webSocketClient.newCredentials.collect { creds ->
-                val currentDevice = connectionStore.tvDevice.first()
-                if (currentDevice != null) {
-                    Log.i(TAG, "Updating stored token/pin for ${currentDevice.ip}")
-                    val updatedDevice = currentDevice.copy(
+                updateSavedDevice { device ->
+                    device.copy(
                         token = creds.token,
-                        certFingerprint = creds.certFingerprint ?: currentDevice.certFingerprint
+                        certFingerprint = creds.certFingerprint ?: device.certFingerprint
                     )
-                    connectionStore.saveTvDevice(updatedDevice)
-                    connectionStore.addToHistory(updatedDevice)
                 }
             }
         }
@@ -120,14 +136,7 @@ class ConnectionViewModel(
         // reflect what this specific TV can actually drive (see TvCapabilityOptions).
         viewModelScope.launch {
             webSocketClient.tvCapabilities.collect { caps ->
-                val currentDevice = connectionStore.tvDevice.first() ?: return@collect
-                if (currentDevice.players == caps.players && currentDevice.browsers == caps.browsers) {
-                    return@collect
-                }
-                Log.i(TAG, "TV capabilities for ${currentDevice.ip}: players=${caps.players}, browsers=${caps.browsers}")
-                val updatedDevice = currentDevice.copy(players = caps.players, browsers = caps.browsers)
-                connectionStore.saveTvDevice(updatedDevice)
-                connectionStore.addToHistory(updatedDevice)
+                updateSavedDevice { device -> device.copy(players = caps.players, browsers = caps.browsers) }
             }
         }
 
@@ -137,12 +146,8 @@ class ConnectionViewModel(
             connectionState.collect { state ->
                 if (state is WebSocketClient.ConnectionState.AuthFailed ||
                     state is WebSocketClient.ConnectionState.PairingDenied) {
-                    val currentDevice = connectionStore.tvDevice.first()
-                    if (currentDevice != null && currentDevice.token.isNotEmpty()) {
-                        Log.i(TAG, "Auth/pairing failed — clearing token for ${currentDevice.ip}")
-                        val clearedDevice = currentDevice.copy(token = "")
-                        connectionStore.saveTvDevice(clearedDevice)
-                        connectionStore.addToHistory(clearedDevice)
+                    updateSavedDevice { device ->
+                        if (device.token.isNotEmpty()) device.copy(token = "") else device
                     }
                 }
             }

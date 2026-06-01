@@ -372,7 +372,7 @@ class WebSocketServer: ObservableObject {
             }
         case "command":
             if isAuthenticated {
-                handleCommand(action: json["action"] as? String, payload: json["payload"])
+                handleCommand(action: json["action"] as? String, payload: json["payload"], from: connection)
             }
         default:
             break
@@ -510,11 +510,22 @@ class WebSocketServer: ObservableObject {
 
     // MARK: - Command Handling
 
-    private func handleCommand(action: String?, payload: Any?) {
+    private func handleCommand(action: String?, payload: Any?, from connection: NWConnection) {
         guard let action = action else {
             print("WebSocket Command Error: missing 'action'")
             return
         }
+
+        // context_query carries no payload — answer it (player vs idle; Apple TV has no
+        // browser) before the payload guard below would otherwise reject it.
+        if action == "context_query" {
+            DispatchQueue.main.async {
+                let active = self.currentPlayRequest != nil ? "player" : "idle"
+                self.send(json: ["type": "context", "active": active], to: connection)
+            }
+            return
+        }
+
         guard let payloadObj = payload else {
             print("WebSocket Command Error: missing 'payload' for action \(action)")
             return
