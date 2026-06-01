@@ -55,7 +55,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
         
         let switchAction = UIAction(
-            title: "Switch to VLC",
+            title: "Switch to MPV",
             image: UIImage(systemName: "arrow.triangle.2.circlepath")
         ) { [weak coordinator = context.coordinator] _ in
             coordinator?.invokeSwitch()

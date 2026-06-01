@@ -20,11 +20,11 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    Button(action: { preferredPlayer = "vlc" }) {
+                    Button(action: { preferredPlayer = "mpv" }) {
                         HStack {
-                            Text("VLC Player")
+                            Text("MPV Player")
                             Spacer()
-                            if preferredPlayer == "vlc" {
+                            if preferredPlayer == "mpv" {
                                 Image(systemName: "checkmark").foregroundColor(Theme.accent)
                             }
                         }

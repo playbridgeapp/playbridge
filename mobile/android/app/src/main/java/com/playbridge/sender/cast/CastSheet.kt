@@ -120,10 +120,20 @@ fun CastSheet(
     //   "play"   → play the current selection now on the TV
     //   "queue"  → append the current selection to the TV's queue
     //   "browse" → open the page URL on the TV
+    // Whether the selected TV can open web pages. Receivers that report no browser engines
+    // (e.g. desktop, Apple TV) get no Browse action at all.
+    val canBrowse = onBrowseClick != null && selectedTvDevice?.browsers?.isNotEmpty() == true
+
     var castAction by remember(playableVideos, contentPayload) {
         mutableStateOf(
-            if (playableVideos.isEmpty() && contentPayload == null) "browse" else initialMode
+            if (playableVideos.isEmpty() && contentPayload == null && canBrowse) "browse" else initialMode
         )
+    }
+
+    // Never sit in browse mode for a TV that can't browse (covers capabilities arriving after
+    // the sheet opened, an explicit browse initialMode, or switching to a browser-less TV).
+    LaunchedEffect(canBrowse) {
+        if (!canBrowse && castAction == "browse") castAction = "play"
     }
 
     // If we have content metadata but no browser-detected videos, default to playing it
@@ -300,9 +310,7 @@ fun CastSheet(
                 // Shared by the header action dropdown and the Send button.
                 var actionMenuExpanded by remember { mutableStateOf(false) }
                 val playEnabled = selectedVideo != null || contentPayload != null
-                // External players hand off to another app, so there's no queue to append to.
-                val canQueue = isTvPlaying && !playerMode.startsWith("external")
-                val canBrowse = onBrowseClick != null
+                val canQueue = isTvPlaying
 
                 // Resolve the current selection (quality / HLS filtering / proxy) once, then
                 // either play it now or append it to the TV's queue.

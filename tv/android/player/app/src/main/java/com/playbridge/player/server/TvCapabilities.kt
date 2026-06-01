@@ -18,7 +18,8 @@ object TvCapabilityProvider {
     private const val GECKO_PACKAGE = "com.playbridge.browser"
 
     // Both engines are compiled into the player app; external players were removed.
-    private val PLAYERS = listOf("internal_exo", "internal_mpv")
+    // Bare engine ids, shared with every receiver (Apple TV/desktop already use the same scheme).
+    private val PLAYERS = listOf("exo", "mpv")
 
     /**
      * Resolved fresh per call so a GeckoView plugin installed after the server starts is

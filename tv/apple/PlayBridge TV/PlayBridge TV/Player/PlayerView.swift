@@ -25,17 +25,17 @@ struct PlayerView: View {
     private func handleSwitch(currentTime: Double) {
         resumeTime = currentTime
         let current = effectiveEngine(for: playlistStore.currentItem ?? payload)
-        sessionEngine = current == "vlc" ? "avplayer" : "vlc"
+        sessionEngine = current == "mpv" ? "avplayer" : "mpv"
     }
 
     /// Engine for this item: a manual session switch wins; otherwise honor the phone's
-    /// `player_mode` ("vlc"/"avplayer"); "tv"/unset/unknown fall back to the stored default.
+    /// `player_mode` ("avplayer"/"mpv"); "tv"/unset/unknown fall back to the stored default.
     private func effectiveEngine(for item: Playbridge_PlayPayload) -> String {
         if let session = sessionEngine { return session }
         if item.hasPlayerMode {
             switch item.playerMode {
-            case "vlc": return "vlc"
             case "avplayer", "native": return "avplayer"
+            case "mpv": return "mpv"
             default: break
             }
         }
@@ -66,15 +66,15 @@ struct PlayerView: View {
             let currentRequest = playlistStore.currentItem ?? payload
             if let currentURL = currentRequest.validURL {
                 let _ = print("PlayerView: Rendering with URL: \(currentURL)")
-                if effectiveEngine(for: currentRequest) == "vlc" {
-                    VLCPlayerView(
+                if effectiveEngine(for: currentRequest) == "mpv" {
+                    MPVPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
                         subtitles: currentRequest.subtitlesOrNil,
                         initialTime: resumeTime,
                         isPreBuffering: isPreBuffering,
-                        onDismiss: handleNext,  // end-of-video → try next item
-                        onExit: onDismiss,      // back button → always go home
+                        onDismiss: handleNext,
+                        onExit: onDismiss,
                         onSwitch: handleSwitch
                     )
                     .ignoresSafeArea()

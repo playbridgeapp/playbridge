@@ -49,11 +49,11 @@ class ProtocolJsonTest {
     fun authResponseIncludesCapabilitiesWhenPresent() {
         val o = obj(createAuthResponseJson(
             success = true,
-            players = listOf("internal_exo", "internal_mpv"),
+            players = listOf("exo", "mpv"),
             browsers = listOf("webview", "gecko"),
         ))
         assertEquals(
-            listOf("internal_exo", "internal_mpv"),
+            listOf("exo", "mpv"),
             o["players"]?.jsonArray?.map { it.jsonPrimitive.content }
         )
         assertEquals(
@@ -74,12 +74,12 @@ class ProtocolJsonTest {
         // The browsers list models a TV without the GeckoView plugin: webview only.
         val o = obj(createPairingApprovedJson(
             token = "tok",
-            players = listOf("internal_exo", "internal_mpv"),
+            players = listOf("exo", "mpv"),
             browsers = listOf("webview"),
         ))
         assertEquals("tok", o["token"]?.jsonPrimitive?.content)
         assertEquals(
-            listOf("internal_exo", "internal_mpv"),
+            listOf("exo", "mpv"),
             o["players"]?.jsonArray?.map { it.jsonPrimitive.content }
         )
         assertEquals(listOf("webview"), o["browsers"]?.jsonArray?.map { it.jsonPrimitive.content })

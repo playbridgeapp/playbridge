@@ -51,10 +51,7 @@ fun SettingsScreen(
     var selectedCategory by remember { mutableStateOf(SettingsCategory.PLAYER) }
 
     // Settings States
-    // VLC was removed; migrate any persisted internal_vlc preference to ExoPlayer.
-    var playerMode by remember {
-        mutableStateOf((prefs.getString("player_mode", "phone") ?: "phone").let { if (it == "internal_vlc") "internal" else it })
-    }
+    var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
     var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
     var showIpDialog by remember { mutableStateOf(false) }
     var allowInsecureWs by remember { mutableStateOf(prefs.getBoolean("allow_insecure_ws", false)) }
@@ -95,20 +92,6 @@ fun SettingsScreen(
             ServerService.start(context)
             delay(1200)
             isRestarting = false
-        }
-    }
-
-    // Migrate old boolean prefs to new mode strings on first load
-    LaunchedEffect(Unit) {
-        if (!prefs.contains("player_mode")) {
-            val oldExternal = prefs.getBoolean("use_external_player", false)
-            val mode = if (oldExternal) "external" else "phone"
-            prefs.edit().putString("player_mode", mode).apply()
-            playerMode = mode
-        } else if (prefs.getString("player_mode", null) == "internal_vlc") {
-            // VLC engine was removed — fall back to the internal ExoPlayer.
-            prefs.edit().putString("player_mode", "internal").apply()
-            playerMode = "internal"
         }
     }
 
@@ -181,15 +164,13 @@ fun SettingsScreen(
                                 description = "Choose preferred player engine.",
                                 options = listOf(
                                     "phone" to "Use Phone Setting",
-                                    "internal" to "Internal (ExoPlayer)",
-                                    "internal_mpv" to "Internal (MPV)",
-                                    "external_mpv" to "External (MPV)",
-                                    "external" to "External Player",
+                                    "exo" to "ExoPlayer",
+                                    "mpv" to "MPV",
                                 ),
                                 selected = playerMode,
                                 onSelected = { mode ->
                                     playerMode = mode
-                                    prefs.edit().putString("player_mode", mode).putBoolean("use_external_player", mode == "external").apply()
+                                    prefs.edit().putString("player_mode", mode).apply()
                                 }
                             )
                         }

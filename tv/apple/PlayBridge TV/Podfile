@@ -3,8 +3,8 @@ platform :tvos, '14.0'
 target 'PlayBridge TV' do
   use_frameworks!
 
-  pod 'TVVLCKit', '~> 3.6.0'
   pod 'SwiftProtobuf', '~> 1.28'
+  pod 'MPVKit', :podspec => 'https://raw.githubusercontent.com/mpv-ios/MPVKit/0.41.0-av/MPVKit.podspec'
 
 
 end

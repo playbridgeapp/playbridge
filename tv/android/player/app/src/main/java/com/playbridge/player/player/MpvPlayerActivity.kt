@@ -435,7 +435,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
         )
 
-        controlsViewModel.setEngine(engineAdapter, "internal_mpv")
+        controlsViewModel.setEngine(engineAdapter, "mpv")
 
         // Register MPV observer NOW — after controlsManager is initialized — so that
         // property-change callbacks can safely reference controlsManager without crashing.
@@ -703,7 +703,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         // If it ended very quickly without playing anything, it might be a load error
                         if (positionMs == 0L && durationMs == 0L) {
                             FileLogger.w(TAG, "MPV ended file immediately — likely a load error. Failing over to ExoPlayer.")
-                            switchPlayer("internal_exo")
+                            switchPlayer("exo")
                         } else {
                             finish()
                         }
@@ -964,7 +964,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
 
         if (!startPaused) play()
-        startPlaybackWatchdog("internal_mpv")
+        startPlaybackWatchdog("mpv")
     }
 
     private fun playVideo(url: String, headers: Map<String, String>?, startPaused: Boolean = false, subtitles: ArrayList<String>? = null) {

@@ -44,7 +44,7 @@ abstract class PlayerActivity : ComponentActivity() {
             delay(30000) // 30 seconds timeout for failover
             if (!isFinishing) {
                 FileLogger.w("PlayerActivity", "Watchdog: Playback failed to start within 30s. Swapping engine.")
-                val alternative = if (currentEngineId == "internal_mpv") "internal_exo" else "internal_mpv"
+                val alternative = if (currentEngineId == "mpv") "exo" else "mpv"
                 switchPlayer(alternative)
             }
         }
@@ -473,35 +473,9 @@ abstract class PlayerActivity : ComponentActivity() {
             return
         }
 
-        if (newMode == "external" || newMode == "external_mpv") {
-            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(android.net.Uri.parse(url), "video/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                if (title != null) {
-                    putExtra(Intent.EXTRA_TITLE, title)
-                    putExtra("title", title)
-                }
-                val headers = pm?.headers ?: intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
-                if (headers != null) {
-                    val bundle = android.os.Bundle()
-                    headers.forEach { (key, value) -> bundle.putString(key, value) }
-                    putExtra(android.provider.Browser.EXTRA_HEADERS, bundle)
-                    val headersArray = headers.flatMap { listOf(it.key, it.value) }.toTypedArray()
-                    putExtra("headers", headersArray)
-                }
-            }
-            val chooserIntent = Intent.createChooser(viewIntent, "Open video with...")
-            chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            startActivity(chooserIntent)
-
-            // Wait briefly before finishing to allow external player to launch smoothly
-            window.decorView.postDelayed({ finish() }, 1000)
-            return
-        }
-
         val activityClass = when (newMode) {
-            "internal_mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
-            else -> com.playbridge.player.player.ExoPlayerActivity::class.java
+            "mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
+            else  -> com.playbridge.player.player.ExoPlayerActivity::class.java
         }
 
         // Just launch a new instance of the selected player activity with the same intent extras,

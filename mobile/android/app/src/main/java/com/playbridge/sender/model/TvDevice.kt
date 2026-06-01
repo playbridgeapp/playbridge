@@ -19,7 +19,7 @@ data class TvDevice(
     // connection. Null until paired with a TLS-capable receiver.
     val certFingerprint: String? = null,
     // Players/browsers this TV reported it supports at the last auth (player_mode /
-    // browser_mode ids, e.g. "internal_mpv", "gecko"). Drives the phone's pickers via
+    // browser_mode ids, e.g. "mpv", "gecko"). Drives the phone's pickers via
     // TvCapabilityOptions. Empty until we've authed with a capability-reporting receiver.
     val players: List<String> = emptyList(),
     val browsers: List<String> = emptyList(),

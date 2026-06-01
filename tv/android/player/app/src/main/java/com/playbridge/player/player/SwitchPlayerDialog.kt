@@ -28,9 +28,8 @@ fun SwitchPlayerDialog(
     onDismiss: () -> Unit
 ) {
     val players = listOf(
-        Pair("internal_exo", "ExoPlayer (Internal)"),
-        Pair("internal_mpv", "MPV (Internal)"),
-        Pair("external", "External Player")
+        Pair("exo", "ExoPlayer"),
+        Pair("mpv", "MPV")
     )
 
     val focusRequester = remember { FocusRequester() }

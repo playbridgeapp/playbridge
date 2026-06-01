@@ -159,47 +159,20 @@ class PrePlayActivity : ComponentActivity() {
         FileLogger.i(TAG, "Launching player for: ${meta.title}")
 
         val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-        val tvPref = if (prefs.contains("player_mode")) {
-            prefs.getString("player_mode", "phone") ?: "phone"
+        val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
+
+        // TV pref forces an engine; otherwise honour the phone's per-cast choice ("phone"/"tv"
+        // /unset → ExoPlayer default).
+        val finalMode = when {
+            tvPref == "mpv" || tvPref == "exo" -> tvPref
+            playerMode == "mpv" -> "mpv"
+            else -> "exo"
+        }
+
+        val activityClass = if (finalMode == "mpv") {
+            MpvPlayerActivity::class.java
         } else {
-            if (prefs.getBoolean("use_external_player", false)) "external" else "phone"
-        }
-
-        val finalMode = if (tvPref == "phone") {
-            if (playerMode != null && playerMode != "tv") {
-                playerMode!!
-            } else {
-                "internal"
-            }
-        } else {
-            tvPref
-        }
-
-        if (finalMode == "external" || finalMode == "external_mpv") {
-            val intent = if (finalMode == "external_mpv") {
-                 Intent(Intent.ACTION_VIEW).apply {
-                    setClassName("is.xyz.mpv", "is.xyz.mpv.MPVActivity")
-                    data = android.net.Uri.parse(url)
-                    putExtra(Intent.EXTRA_TITLE, meta.title)
-                    putExtra("title", meta.title)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
-            } else {
-                Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(android.net.Uri.parse(url), "video/*")
-                    putExtra(Intent.EXTRA_TITLE, meta.title)
-                    putExtra("title", meta.title)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
-            }
-            startActivity(intent)
-            finish()
-            return
-        }
-
-        val activityClass = when (finalMode) {
-            "internal_mpv" -> MpvPlayerActivity::class.java
-            else           -> ExoPlayerActivity::class.java
+            ExoPlayerActivity::class.java
         }
 
         val intent = Intent(this, activityClass).apply {

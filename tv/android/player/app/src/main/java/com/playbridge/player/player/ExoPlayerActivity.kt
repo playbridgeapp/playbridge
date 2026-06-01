@@ -433,7 +433,7 @@ class ExoPlayerActivity : PlayerActivity() {
             isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
         )
         
-        controlsViewModel.setEngine(engineAdapter, "internal_exo")
+        controlsViewModel.setEngine(engineAdapter, "exo")
 
         // Register broadcast receiver for control commands
         val filter = IntentFilter().apply {
@@ -729,7 +729,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 controlsViewModel.clearSubtitle()
             }
 
-            startPlaybackWatchdog("internal_exo")
+            startPlaybackWatchdog("exo")
         }
     }
 
@@ -825,7 +825,7 @@ class ExoPlayerActivity : PlayerActivity() {
             if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
                 error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED) {
                 FileLogger.w(TAG, "Fatal Decoder Error detected — immediate failover to MPV")
-                switchPlayer("internal_mpv")
+                switchPlayer("mpv")
                 return
             }
             // Live stream fell behind the available DVR window — seek back to the live edge and resume.

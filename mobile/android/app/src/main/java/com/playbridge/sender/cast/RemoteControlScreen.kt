@@ -1278,8 +1278,8 @@ private fun PlayerSettingsSheet(
             SettingRow("Player engine") {
                 ChipGroup(
                     options = listOf(
-                        "ExoPlayer" to "internal_exo",
-                        "MPV" to "internal_mpv"
+                        "ExoPlayer" to "exo",
+                        "MPV" to "mpv"
                     ),
                     selectedKey = settings.engine,
                     onSelect = onSwitchEngine

@@ -1,13 +1,16 @@
 import SwiftUI
 import Combine
 
-// MARK: - VLC UI Models & Overlay
+// MARK: - Player UI Models & Overlay
 
-class VLCPlaybackData: ObservableObject {
+class PlayerControlsData: ObservableObject {
     @Published var isPlaying: Bool = false
     @Published var userPaused: Bool = false
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
+    /// Absolute time (seconds) up to which media is buffered ahead. Drives the seek-bar
+    /// buffer indicator. 0 hides it.
+    @Published var bufferedTime: Double = 0
     @Published var showUI: Bool = true
     @Published var isLooping: Bool = false
     
@@ -105,13 +108,16 @@ struct TrackMenuView: View {
     }
 }
 
-struct VLCControlsOverlay: View {
-    @ObservedObject var data: VLCPlaybackData
+struct PlayerControlsOverlay: View {
+    @ObservedObject var data: PlayerControlsData
     let onSelectSubtitle: (Int) -> Void
     let onSelectAudio: (Int) -> Void
     let onTogglePlayPause: () -> Void
     let onSwitchEngine: () -> Void
     let onTogglePlaylist: () -> Void
+    /// Short name of the active playback engine (e.g. "MPV", "AVPlayer"). Shown in a small
+    /// badge while the controls are visible. Empty hides the badge.
+    var engineLabel: String = ""
 
     var body: some View {
         ZStack {
@@ -122,6 +128,20 @@ struct VLCControlsOverlay: View {
                     Color.black.opacity(0.5)
                         .ignoresSafeArea()
                         .transition(.opacity)
+                }
+
+                // Active-player badge, pinned top-trailing
+                if !engineLabel.isEmpty {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            playerBadge
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 50)
+                    .padding(.trailing, 60)
+                    .transition(.opacity)
                 }
 
                 VStack(spacing: 0) {
@@ -158,7 +178,17 @@ struct VLCControlsOverlay: View {
 
                             GeometryReader { proxy in
                                 ZStack(alignment: .leading) {
+                                    // Track
                                     Capsule().fill(Color.white.opacity(0.2))
+                                    // Buffered-ahead range
+                                    if data.duration > 0, data.bufferedTime > displayTime {
+                                        Capsule()
+                                            .fill(Color.white.opacity(0.35))
+                                            .frame(
+                                                width: proxy.size.width
+                                                    * CGFloat(min(data.bufferedTime / data.duration, 1.0)))
+                                    }
+                                    // Played progress
                                     Capsule()
                                         .fill(
                                             LinearGradient(
@@ -316,6 +346,23 @@ struct VLCControlsOverlay: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showSubtitleMenu)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showAudioMenu)
         .allowsHitTesting(data.showUI || data.showSubtitleMenu || data.showAudioMenu)
+    }
+
+    private var playerBadge: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "play.rectangle.fill")
+                .font(.system(size: 18))
+            Text(engineLabel)
+                .font(.system(size: 18, weight: .semibold))
+        }
+        .foregroundColor(.white.opacity(0.9))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .overlay(
+            Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
     }
 
     private func formatTime(_ seconds: Double) -> String {

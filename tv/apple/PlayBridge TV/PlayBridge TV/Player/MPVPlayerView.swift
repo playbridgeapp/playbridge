@@ -1,0 +1,802 @@
+import SwiftUI
+import AVFoundation
+import AVKit
+import MPVKit
+
+// MARK: - SwiftUI representable
+
+struct MPVPlayerView: UIViewControllerRepresentable {
+    let url: URL
+    let headers: [String: String]?
+    let subtitles: [String]?
+    let initialTime: Double
+    let isPreBuffering: Bool
+    let onDismiss: () -> Void
+    let onExit: () -> Void
+    let onSwitch: (Double) -> Void
+
+    func makeUIViewController(context: Context) -> MPVViewController {
+        let vc = MPVViewController()
+        vc.url = url
+        vc.headers = headers
+        vc.subtitles = subtitles
+        vc.initialTime = initialTime
+        vc.isPreBuffering = isPreBuffering
+        vc.onDismiss = onDismiss
+        vc.onExit = onExit
+        vc.onSwitch = onSwitch
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: MPVViewController, context: Context) {
+        uiViewController.isPreBuffering = isPreBuffering
+    }
+
+    /// Deterministic teardown. SwiftUI calls this when it removes the representable's
+    /// controller — unlike `viewWillDisappear`, it's guaranteed to fire. Tearing mpv down
+    /// here (while the controller is still alive) clears the wakeup callback before
+    /// deallocation, so the callback can never run against a half-dead object.
+    static func dismantleUIViewController(_ uiViewController: MPVViewController, coordinator: ()) {
+        uiViewController.teardown()
+    }
+}
+
+// MARK: - View Controller
+
+class MPVViewController: UIViewController {
+
+    // MARK: Configuration (set by representable before viewDidLoad)
+    var url: URL?
+    var headers: [String: String]?
+    var subtitles: [String]?
+    var initialTime: Double = 0.0
+    var onDismiss: (() -> Void)?
+    var onExit: (() -> Void)?
+    var onSwitch: ((Double) -> Void)?
+
+    var isPreBuffering: Bool = false {
+        didSet { if isPreBuffering != oldValue { applyPreBufferingState() } }
+    }
+
+    // MARK: MPV
+    private var mpv: OpaquePointer?
+    private let mpvQueue = DispatchQueue(label: "mpv.playbridge.tvos", qos: .userInitiated)
+    private var isMpvStopped = false
+    private var pendingExternalSubtitles: [String] = []
+    /// Opaque pointer to a +1-retained `self` handed to mpv's wakeup callback. Keeping self
+    /// alive while the callback is installed means the callback never forms a weak reference
+    /// to a deallocating object. Balanced (released) once in `teardown()`.
+    private var callbackSelfPtr: UnsafeMutableRawPointer?
+
+    // MARK: Rendering — AVSampleBufferDisplayLayer fed by vo=avfoundation
+    private let displayLayer = AVSampleBufferDisplayLayer()
+
+    // MARK: UI
+    private var playbackState = PlayerControlsData()
+    private var hostingController: UIHostingController<PlayerControlsOverlay>?
+    private var hideControlsTimer: Timer?
+    private var holdTimer: Timer?
+    private var virtualScrubTickTimer: Timer?
+    private var ignoreTimeUpdatesUntil: Date = .distantPast
+    /// Seconds buffered ahead of the play head (from mpv `demuxer-cache-duration`). Main-thread only.
+    private var cacheAheadSec: Double = 0
+
+    // Custom focusable view that receives Siri Remote presses
+    private class FocusableView: UIView {
+        override var canBecomeFocused: Bool { true }
+    }
+    private let videoView = FocusableView()
+
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if playbackState.userPaused, let hv = hostingController?.view { return [hv] }
+        return [videoView]
+    }
+
+    // MARK: - Lifecycle
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        videoView.frame = view.bounds
+        videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(videoView)
+
+        displayLayer.frame = videoView.bounds
+        displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = UIColor.black.cgColor
+        videoView.layer.addSublayer(displayLayer)
+
+        setupHUD()
+        setupMPV()
+        showUI(autoHide: true)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        displayLayer.frame = videoView.bounds
+        CATransaction.commit()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        teardown()
+    }
+
+    deinit {
+        teardown()
+    }
+
+    // MARK: - MPV Initialisation
+
+    private func setupMPV() {
+        guard let handle = mpv_create() else {
+            print("[MPV] mpv_create() failed")
+            return
+        }
+        mpv = handle
+
+        // Pass the display layer pointer so vo_avfoundation can render into it
+        var widVal = Int64(Int(bitPattern: Unmanaged.passUnretained(displayLayer).toOpaque()))
+        mpv_set_option(handle, "wid", MPV_FORMAT_INT64, &widVal)
+
+        // vo=avfoundation renders video frames directly into AVSampleBufferDisplayLayer
+        mpv_set_option_string(handle, "vo", "avfoundation")
+
+        // MUST follow vo=avfoundation immediately, before any hwdec option.
+        // On tvOS "yes" causes a freeze when the player exits; "no" is correct here.
+        // On iOS "yes" is needed for PiP subtitle compositing (not applicable on tvOS).
+        mpv_set_option_string(handle, "avfoundation-composite-osd", "no")
+
+        // VideoToolbox hardware decoding with software fallback for unsupported codecs
+        mpv_set_option_string(handle, "hwdec", "videotoolbox")
+        mpv_set_option_string(handle, "hwdec-codecs", "all")
+        mpv_set_option_string(handle, "hwdec-software-fallback", "yes")
+
+        // Signal content colourspace to the display system so tvOS can switch HDR modes
+        mpv_set_option_string(handle, "target-colorspace-hint", "yes")
+
+        // Subtitle defaults
+        mpv_set_option_string(handle, "sub-scale-with-window", "no")
+        mpv_set_option_string(handle, "sub-use-margins", "no")
+        mpv_set_option_string(handle, "subs-match-os-language", "yes")
+        mpv_set_option_string(handle, "subs-fallback", "yes")
+
+        #if DEBUG
+        mpv_request_log_messages(handle, "warn")
+        #else
+        mpv_request_log_messages(handle, "no")
+        #endif
+
+        guard mpv_initialize(handle) >= 0 else {
+            print("[MPV] mpv_initialize() failed")
+            return
+        }
+
+        mpv_observe_property(handle, 0, "duration",         MPV_FORMAT_DOUBLE)
+        mpv_observe_property(handle, 0, "time-pos",         MPV_FORMAT_DOUBLE)
+        mpv_observe_property(handle, 0, "pause",            MPV_FORMAT_FLAG)
+        mpv_observe_property(handle, 0, "demuxer-cache-duration", MPV_FORMAT_DOUBLE)
+        // Observe the whole list (FORMAT_NONE = notify-only): mpv reliably fires this when
+        // tracks are discovered or a sub is added, unlike the indexed "track-list/count".
+        mpv_observe_property(handle, 0, "track-list", MPV_FORMAT_NONE)
+        mpv_observe_property(handle, 0, "paused-for-cache", MPV_FORMAT_FLAG)
+
+        // Retain self for the callback's lifetime (released in teardown()). The callback fires
+        // on mpv's own thread, so self must outlive the installed callback.
+        let selfPtr = Unmanaged.passRetained(self).toOpaque()
+        callbackSelfPtr = selfPtr
+        mpv_set_wakeup_callback(handle, { ctx in
+            guard let ctx else { return }
+            Unmanaged<MPVViewController>.fromOpaque(ctx).takeUnretainedValue().drainEvents()
+        }, selfPtr)
+
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
+        try? AVAudioSession.sharedInstance().setActive(true)
+
+        if let url { loadFile(url) }
+    }
+
+    private func loadFile(_ url: URL) {
+        guard let handle = mpv else { return }
+        pendingExternalSubtitles = subtitles ?? []
+        // Clear buffered-ahead state so a looped/next file doesn't flash the prior buffer.
+        cacheAheadSec = 0
+        playbackState.bufferedTime = 0
+
+        mpvQueue.async { [weak self] in
+            guard let self, let handle = self.mpv else { return }
+
+            // User-Agent must go via the dedicated "user-agent" option, not http-header-fields.
+            // Fall back to a browser UA — some servers reject mpv's default "Lavf/..." agent.
+            let ua = self.headers?
+                .first(where: { $0.key.caseInsensitiveCompare("user-agent") == .orderedSame })?
+                .value ?? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            mpv_set_property_string(handle, "user-agent", ua)
+
+            self.setHTTPHeaders(self.headers, on: handle)
+
+            if self.initialTime > 0 {
+                mpv_set_property_string(handle, "start", String(format: "%.2f", self.initialTime))
+            }
+            let path = url.isFileURL ? url.path : url.absoluteString
+            self.mpvCommand(handle, ["loadfile", path, "replace"])
+        }
+    }
+
+    // MARK: - Event Loop
+
+    private func drainEvents() {
+        mpvQueue.async { [weak self] in
+            guard let self else { return }
+            while true {
+                guard let handle = self.mpv,
+                      let evPtr = mpv_wait_event(handle, 0) else { break }
+                let event = evPtr.pointee
+                if event.event_id == MPV_EVENT_NONE { break }
+                self.handleEvent(event)
+                if event.event_id == MPV_EVENT_SHUTDOWN { break }
+            }
+        }
+    }
+
+    private func handleEvent(_ event: mpv_event) {
+        switch event.event_id {
+        case MPV_EVENT_FILE_LOADED:
+            onFileLoaded()
+
+        case MPV_EVENT_END_FILE:
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.playbackState.isLooping {
+                    if let url = self.url { self.loadFile(url) }
+                } else {
+                    self.onDismiss?()
+                }
+            }
+
+        case MPV_EVENT_PROPERTY_CHANGE:
+            guard let propPtr = event.data?.assumingMemoryBound(to: mpv_event_property.self),
+                  let nameCStr = propPtr.pointee.name else { break }
+            handlePropertyChange(name: String(cString: nameCStr), prop: propPtr.pointee)
+
+        case MPV_EVENT_LOG_MESSAGE:
+            #if DEBUG
+            if let logPtr = event.data?.assumingMemoryBound(to: mpv_event_log_message.self) {
+                let text = String(cString: logPtr.pointee.text)
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    print("[MPV] \(text)", terminator: "")
+                }
+            }
+            #endif
+
+        default:
+            break
+        }
+    }
+
+    private func onFileLoaded() {
+        guard let handle = mpv else { return }
+
+        detectAndApplyHDR(handle: handle)
+        if isPreBuffering {
+            mpv_set_property_string(handle, "mute", "yes")
+        }
+
+        // Surface embedded audio/subtitle tracks right away. (mpvQueue context; updateTracks
+        // hops its UI assignment to main.)
+        updateTracks()
+
+        // Then attach external subtitles. Each `sub-add` mutates track-list, which fires the
+        // "track-list" observer → updateTracks() again, so late/remote subs appear as they land
+        // without blocking this initial read behind their downloads.
+        for sub in pendingExternalSubtitles {
+            mpvCommand(handle, ["sub-add", sub, "auto"])
+        }
+        pendingExternalSubtitles = []
+    }
+
+    private func handlePropertyChange(name: String, prop: mpv_event_property) {
+        switch name {
+        case "time-pos":
+            guard prop.format == MPV_FORMAT_DOUBLE,
+                  let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, Date() > self.ignoreTimeUpdatesUntil else { return }
+                self.playbackState.currentTime = val
+                self.playbackState.bufferedTime = val + self.cacheAheadSec
+            }
+
+        case "demuxer-cache-duration":
+            guard prop.format == MPV_FORMAT_DOUBLE,
+                  let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.cacheAheadSec = val
+                self.playbackState.bufferedTime = self.playbackState.currentTime + val
+            }
+
+        case "duration":
+            guard prop.format == MPV_FORMAT_DOUBLE,
+                  let val = prop.data?.assumingMemoryBound(to: Double.self).pointee,
+                  val > 0 else { break }
+            DispatchQueue.main.async { [weak self] in self?.playbackState.duration = val }
+
+        case "pause":
+            guard prop.format == MPV_FORMAT_FLAG,
+                  let val = prop.data?.assumingMemoryBound(to: Int32.self).pointee else { break }
+            let isPaused = val != 0
+            DispatchQueue.main.async { [weak self] in self?.playbackState.isPlaying = !isPaused }
+
+        case "track-list":
+            updateTracks()  // already on mpvQueue (event loop); hops UI assignment to main
+
+        default:
+            break
+        }
+    }
+
+    // MARK: - Track Selection
+
+    /// Enumerate tracks. MUST be called on `mpvQueue` (never the main thread): this MPVKit
+    /// build's vo=avfoundation does work on the main thread, so a synchronous mpv_* call from
+    /// main can deadlock against the video output while it holds mpv's core lock.
+    private func updateTracks() {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        guard let handle = mpv else { return }
+
+        var count: Int64 = 0
+        mpv_get_property(handle, "track-list/count", MPV_FORMAT_INT64, &count)
+
+        var audioTracks: [(id: Int, name: String)] = []
+        var subtitleTracks: [(id: Int, name: String)] = []
+
+        for i in 0..<count {
+            let prefix = "track-list/\(i)"
+            guard let type = stringProperty(handle, "\(prefix)/type") else { continue }
+
+            var trackId: Int64 = 0
+            mpv_get_property(handle, "\(prefix)/id", MPV_FORMAT_INT64, &trackId)
+
+            let rawTitle = stringProperty(handle, "\(prefix)/title")
+            let lang = stringProperty(handle, "\(prefix)/lang")
+            let displayName: String
+            if let t = rawTitle, !t.isEmpty {
+                displayName = t
+            } else if let l = lang, !l.isEmpty {
+                displayName = Locale.current.localizedString(forLanguageCode: l) ?? l
+            } else {
+                displayName = "Track \(trackId)"
+            }
+
+            switch type {
+            case "audio": audioTracks.append((id: Int(trackId), name: displayName))
+            case "sub":   subtitleTracks.append((id: Int(trackId), name: displayName))
+            default:      break
+            }
+        }
+
+        var currentAid: Int64 = 0
+        var currentSid: Int64 = 0
+        mpv_get_property(handle, "aid", MPV_FORMAT_INT64, &currentAid)
+        mpv_get_property(handle, "sid", MPV_FORMAT_INT64, &currentSid)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.playbackState.audioTracks = audioTracks
+            self.playbackState.subtitleTracks = subtitleTracks
+            self.playbackState.currentAudioIndex = Int(currentAid)
+            self.playbackState.currentSubtitleIndex = Int(currentSid)
+        }
+    }
+
+    // MARK: - HDR (tvOS display criteria)
+
+    private enum HDRMode { case sdr, hdr10, hlg }
+
+    private func detectAndApplyHDR(handle: OpaquePointer) {
+        let primaries = stringProperty(handle, "video-params/primaries")
+        let gamma     = stringProperty(handle, "video-params/gamma")
+
+        var fps: Double = 24.0
+        mpv_get_property(handle, "container-fps", MPV_FORMAT_DOUBLE, &fps)
+        if fps <= 0 { fps = 24.0 }
+
+        let mode: HDRMode
+        if primaries == "bt.2020" || primaries == "bt.2020-ncl" {
+            mode = (gamma == "hlg") ? .hlg : .hdr10
+        } else {
+            mode = .sdr
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.applyDisplayCriteria(mode, fps: Float(fps))
+        }
+    }
+
+    private func applyDisplayCriteria(_ mode: HDRMode, fps: Float) {
+        guard #available(tvOS 17.0, *), let window = view.window else { return }
+        let manager = window.avDisplayManager
+
+        guard mode != .sdr else {
+            manager.preferredDisplayCriteria = nil
+            return
+        }
+
+        var ext: [String: Any] = [kCMFormatDescriptionExtension_FullRangeVideo as String: true]
+        switch mode {
+        case .hdr10:
+            ext[kCMFormatDescriptionExtension_ColorPrimaries as String] = kCMFormatDescriptionColorPrimaries_ITU_R_2020
+            ext[kCMFormatDescriptionExtension_TransferFunction as String] = kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ
+            ext[kCMFormatDescriptionExtension_YCbCrMatrix as String] = kCMFormatDescriptionYCbCrMatrix_ITU_R_2020
+        case .hlg:
+            ext[kCMFormatDescriptionExtension_ColorPrimaries as String] = kCMFormatDescriptionColorPrimaries_ITU_R_2020
+            ext[kCMFormatDescriptionExtension_TransferFunction as String] = kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG
+            ext[kCMFormatDescriptionExtension_YCbCrMatrix as String] = kCMFormatDescriptionYCbCrMatrix_ITU_R_2020
+        case .sdr:
+            break
+        }
+
+        var formatDesc: CMFormatDescription?
+        let status = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: kCMVideoCodecType_HEVC,
+            width: 3840, height: 2160,
+            extensions: ext as CFDictionary,
+            formatDescriptionOut: &formatDesc
+        )
+        guard status == noErr, let desc = formatDesc else { return }
+        manager.preferredDisplayCriteria = AVDisplayCriteria(refreshRate: fps, formatDescription: desc)
+    }
+
+    private func resetDisplayCriteria() {
+        guard #available(tvOS 17.0, *) else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.view.window?.avDisplayManager.preferredDisplayCriteria = nil
+        }
+    }
+
+    // MARK: - HUD
+
+    private func setupHUD() {
+        let overlay = PlayerControlsOverlay(
+            data: playbackState,
+            onSelectSubtitle: { [weak self] trackId in
+                guard let self else { return }
+                self.setPropertyAsync("sid", value: trackId < 0 ? "no" : String(trackId))
+                self.playbackState.currentSubtitleIndex = trackId
+            },
+            onSelectAudio: { [weak self] trackId in
+                guard let self else { return }
+                self.setPropertyAsync("aid", value: String(trackId))
+                self.playbackState.currentAudioIndex = trackId
+            },
+            onTogglePlayPause: { [weak self] in self?.togglePlayPause() },
+            onSwitchEngine: { [weak self] in
+                guard let self else { return }
+                self.onSwitch?(self.playbackState.currentTime)
+            },
+            onTogglePlaylist: {
+                NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
+            },
+            engineLabel: "MPV"
+        )
+        let hosting = UIHostingController(rootView: overlay)
+        hosting.view.backgroundColor = .clear
+        hosting.view.frame = view.bounds
+        hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addChild(hosting)
+        view.addSubview(hosting.view)
+        hosting.didMove(toParent: self)
+        hostingController = hosting
+    }
+
+    private func applyPreBufferingState() {
+        if isPreBuffering {
+            setPropertyAsync("mute", value: "yes")
+            playbackState.showUI = false
+            hideControlsTimer?.invalidate()
+        } else {
+            setPropertyAsync("mute", value: "no")
+            showUI(autoHide: true)
+        }
+    }
+
+    private func showUI(autoHide: Bool = true) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.playbackState.showUI = true
+            self.setNeedsFocusUpdate()
+            self.hideControlsTimer?.invalidate()
+            guard autoHide, !self.playbackState.isVirtualScrubbing else { return }
+            self.hideControlsTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+                DispatchQueue.main.async {
+                    withAnimation {
+                        self?.playbackState.showUI = false
+                        self?.setNeedsFocusUpdate()
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Playback Controls
+
+    private func togglePlayPause() {
+        // Use cached state (kept current by the "pause" property observer) instead of querying
+        // mpv synchronously — a main-thread mpv_* call can deadlock against vo=avfoundation.
+        if playbackState.isPlaying {
+            setPropertyAsync("pause", value: "yes")
+            playbackState.userPaused = true
+            mpvQueue.async { [weak self] in self?.updateTracks() }
+            showUI(autoHide: false)
+        } else {
+            setPropertyAsync("pause", value: "no")
+            playbackState.userPaused = false
+            showUI(autoHide: true)
+        }
+    }
+
+    private func skipForward() {
+        guard !playbackState.userPaused else { return }
+        let cap = playbackState.duration > 0 ? playbackState.duration - 2.0 : Double.infinity
+        let target = min(playbackState.currentTime + 15.0, cap)
+        playbackState.currentTime = target
+        ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+        seekAsync(to: target)
+        showUI()
+    }
+
+    private func skipBackward() {
+        guard !playbackState.userPaused else { return }
+        let target = max(0, playbackState.currentTime - 15.0)
+        playbackState.currentTime = target
+        ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+        seekAsync(to: target)
+        showUI()
+    }
+
+    private func seekAsync(to seconds: Double) {
+        guard let handle = mpv else { return }
+        let pos = String(format: "%.2f", max(0, seconds))
+        mpvQueue.async { self.mpvCommand(handle, ["seek", pos, "absolute"]) }
+    }
+
+    // MARK: - Virtual Scrubbing
+
+    private func startVirtualScrub(forward: Bool) {
+        playbackState.isVirtualScrubbing = true
+        playbackState.virtualTime = playbackState.currentTime
+        setPropertyAsync("pause", value: "yes")
+        showUI(autoHide: false)
+        increaseScrubMultiplier(forward)
+
+        virtualScrubTickTimer?.invalidate()
+        virtualScrubTickTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                let delta = Double(self.playbackState.scrubMultiplier) * 12.0 * 0.05
+                var next = self.playbackState.virtualTime + delta
+                if self.playbackState.duration > 0 {
+                    next = max(0, min(next, self.playbackState.duration))
+                } else {
+                    next = max(0, next)
+                }
+                self.playbackState.virtualTime = next
+            }
+        }
+    }
+
+    private func increaseScrubMultiplier(_ forward: Bool) {
+        let dir = forward ? 1 : -1
+        if playbackState.scrubMultiplier == 0 {
+            playbackState.scrubMultiplier = dir
+        } else if (playbackState.scrubMultiplier > 0) == forward {
+            playbackState.scrubMultiplier = min(abs(playbackState.scrubMultiplier) + 1, 8) * dir
+        } else {
+            playbackState.scrubMultiplier = dir
+        }
+    }
+
+    private func commitVirtualScrub() {
+        virtualScrubTickTimer?.invalidate()
+        virtualScrubTickTimer = nil
+
+        let target = playbackState.virtualTime
+        playbackState.currentTime = target
+        ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+        playbackState.isVirtualScrubbing = false
+        playbackState.scrubMultiplier = 0
+
+        seekAsync(to: target)
+        setPropertyAsync("pause", value: "no")
+        playbackState.userPaused = false
+        showUI(autoHide: true)
+    }
+
+    // MARK: - Siri Remote
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if isPreBuffering { super.pressesBegan(presses, with: event); return }
+        guard let type = presses.first?.type else { super.pressesBegan(presses, with: event); return }
+
+        if type == .menu {
+            if playbackState.showSubtitleMenu  { playbackState.showSubtitleMenu = false; return }
+            if playbackState.showAudioMenu     { playbackState.showAudioMenu = false; return }
+            if playbackState.isVirtualScrubbing {
+                virtualScrubTickTimer?.invalidate()
+                virtualScrubTickTimer = nil
+                playbackState.isVirtualScrubbing = false
+                playbackState.scrubMultiplier = 0
+                setPropertyAsync("pause", value: "no")
+                playbackState.userPaused = false
+                showUI(autoHide: true)
+                return
+            }
+            onExit?()
+            return
+        }
+
+        if playbackState.showSubtitleMenu || playbackState.showAudioMenu {
+            super.pressesBegan(presses, with: event); return
+        }
+
+        switch type {
+        case .playPause, .select:
+            if playbackState.isVirtualScrubbing {
+                commitVirtualScrub()
+            } else if !playbackState.userPaused {
+                togglePlayPause()
+            } else {
+                super.pressesBegan(presses, with: event)
+            }
+
+        case .leftArrow, .rightArrow:
+            let forward = type == .rightArrow
+            if playbackState.isVirtualScrubbing {
+                showUI(); increaseScrubMultiplier(forward)
+            } else if !playbackState.userPaused {
+                showUI()
+                holdTimer?.invalidate()
+                holdTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+                    self?.startVirtualScrub(forward: forward)
+                }
+            } else {
+                super.pressesBegan(presses, with: event)
+            }
+
+        default:
+            super.pressesBegan(presses, with: event)
+        }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.first?.type == .menu { return }
+        if let type = presses.first?.type, type == .leftArrow || type == .rightArrow {
+            if !playbackState.userPaused || playbackState.isVirtualScrubbing {
+                if let timer = holdTimer, timer.isValid {
+                    timer.invalidate()
+                    if !playbackState.isVirtualScrubbing {
+                        if type == .rightArrow { skipForward() } else { skipBackward() }
+                    }
+                }
+            }
+        }
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.first?.type == .menu { return }
+        holdTimer?.invalidate()
+        super.pressesCancelled(presses, with: event)
+    }
+
+    // MARK: - MPV Helpers
+
+    private func setPropertyAsync(_ name: String, value: String) {
+        guard let handle = mpv else { return }
+        mpvQueue.async { mpv_set_property_string(handle, name, value) }
+    }
+
+    private func setHTTPHeaders(_ headers: [String: String]?, on handle: OpaquePointer) {
+        // User-Agent is handled separately via the "user-agent" option; exclude it here.
+        let filtered = headers?.filter {
+            $0.key.caseInsensitiveCompare("user-agent") != .orderedSame
+        }
+
+        guard let filtered, !filtered.isEmpty else {
+            mpv_set_property(handle, "http-header-fields", MPV_FORMAT_NONE, nil)
+            return
+        }
+
+        // http-header-fields is OPT_STRINGLIST in mpv: comma-separated entries.
+        // Literal commas and backslashes inside values must be escaped.
+        let str = filtered.map { key, value in
+            let escaped = value
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: ",", with: "\\,")
+            return "\(key): \(escaped)"
+        }.joined(separator: ",")
+
+        mpv_set_property_string(handle, "http-header-fields", str)
+    }
+
+    @discardableResult
+    private func mpvCommand(_ handle: OpaquePointer, _ args: [String]) -> Int32 {
+        var cArgs = args.map { strdup($0) }
+        cArgs.append(nil)
+        defer { cArgs.forEach { if let p = $0 { free(p) } } }
+        return cArgs.withUnsafeMutableBufferPointer { buf in
+            buf.baseAddress!.withMemoryRebound(to: UnsafePointer<CChar>?.self, capacity: buf.count) {
+                mpv_command(handle, $0)
+            }
+        }
+    }
+
+    private func stringProperty(_ handle: OpaquePointer, _ name: String) -> String? {
+        guard let cstr = mpv_get_property_string(handle, name) else { return nil }
+        defer { mpv_free(cstr) }
+        return String(cString: cstr)
+    }
+
+    // MARK: - Shutdown
+
+    /// Idempotent. Safe to call from `dismantleUIViewController` (primary), `viewWillDisappear`,
+    /// and `deinit`. The first call does the work; later calls are no-ops via `isMpvStopped`.
+    func teardown() {
+        guard !isMpvStopped else { return }
+        isMpvStopped = true
+
+        guard let handle = mpv else {
+            // mpv never finished initialising — still balance the callback retain if taken.
+            releaseCallbackSelf()
+            return
+        }
+
+        // Stop new wakeup callbacks before draining the queue, then release the retain that
+        // kept self alive for the callback. The caller (SwiftUI/UIKit) still holds a ref, so
+        // this won't deallocate self mid-teardown.
+        mpv_set_wakeup_callback(handle, nil, nil)
+        releaseCallbackSelf()
+
+        // Drain pending mpvQueue work, send quit, drain remaining events
+        mpvQueue.sync { [weak self] in
+            guard let self else { return }
+            self.mpvCommand(handle, ["quit"])
+            var n = 0
+            while n < 100, let evPtr = mpv_wait_event(handle, 0.1) {
+                let id = evPtr.pointee.event_id
+                if id == MPV_EVENT_NONE || id == MPV_EVENT_SHUTDOWN { break }
+                n += 1
+            }
+        }
+
+        mpv = nil
+
+        // mpv_terminate_destroy cannot be called while blocking the main thread on tvOS —
+        // AVFoundation cleanup inside mpv needs the main thread and will deadlock otherwise.
+        DispatchQueue.global(qos: .userInitiated).async {
+            mpv_terminate_destroy(handle)
+        }
+
+        resetDisplayCriteria()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if #available(tvOS 17.0, *) {
+                self.displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+            } else {
+                self.displayLayer.flushAndRemoveImage()
+            }
+        }
+    }
+
+    /// Balances the `passRetained(self)` from `setupMPV`. Called exactly once during teardown.
+    private func releaseCallbackSelf() {
+        guard let ptr = callbackSelfPtr else { return }
+        callbackSelfPtr = nil
+        Unmanaged<MPVViewController>.fromOpaque(ptr).release()
+    }
+}

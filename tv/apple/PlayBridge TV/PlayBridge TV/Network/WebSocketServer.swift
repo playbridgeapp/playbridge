@@ -440,9 +440,9 @@ class WebSocketServer: ObservableObject {
     // MARK: - Auth
 
     /// Players this receiver advertises to the phone at auth, so the phone's player picker
-    /// shows "TV Default" + AVPlayer + VLC. A concrete choice is honored per cast in
+    /// shows "TV Default" + AVPlayer + MPV. A concrete choice is honored per cast in
     /// `PlayerView` via the play payload's `playerMode`. (No browsers — Apple TV has no web view.)
-    static let capabilityPlayers = ["avplayer", "vlc"]
+    static let capabilityPlayers = ["avplayer", "mpv"]
 
     private func handleAuth(_ msg: Playbridge_AuthMessage, from connection: NWConnection) {
         guard msg.hasToken else {
