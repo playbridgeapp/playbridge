@@ -11,9 +11,12 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let subtitles: [String]?
     let initialTime: Double
     let isPreBuffering: Bool
+    let title: String?
     let onDismiss: () -> Void
     let onExit: () -> Void
     let onSwitch: (Double) -> Void
+    /// Sends a now-playing JSON message (status/tracks) to connected phones.
+    let onBroadcast: ([String: Any]) -> Void
 
     func makeUIViewController(context: Context) -> MPVViewController {
         let vc = MPVViewController()
@@ -22,9 +25,11 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.subtitles = subtitles
         vc.initialTime = initialTime
         vc.isPreBuffering = isPreBuffering
+        vc.mediaTitle = title
         vc.onDismiss = onDismiss
         vc.onExit = onExit
         vc.onSwitch = onSwitch
+        vc.onBroadcast = onBroadcast
         return vc
     }
 
@@ -50,9 +55,12 @@ class MPVViewController: UIViewController {
     var headers: [String: String]?
     var subtitles: [String]?
     var initialTime: Double = 0.0
+    var mediaTitle: String?
     var onDismiss: (() -> Void)?
     var onExit: (() -> Void)?
     var onSwitch: ((Double) -> Void)?
+    var onBroadcast: (([String: Any]) -> Void)?
+    private var statusTimer: Timer?
 
     var isPreBuffering: Bool = false {
         didSet { if isPreBuffering != oldValue { applyPreBufferingState() } }
@@ -107,8 +115,10 @@ class MPVViewController: UIViewController {
         displayLayer.backgroundColor = UIColor.black.cgColor
         videoView.layer.addSublayer(displayLayer)
 
+        playbackState.title = mediaTitle ?? ""
         setupHUD()
         setupMPV()
+        startRemoteSync()
         showUI(autoHide: true)
     }
 
@@ -328,7 +338,10 @@ class MPVViewController: UIViewController {
             guard prop.format == MPV_FORMAT_FLAG,
                   let val = prop.data?.assumingMemoryBound(to: Int32.self).pointee else { break }
             let isPaused = val != 0
-            DispatchQueue.main.async { [weak self] in self?.playbackState.isPlaying = !isPaused }
+            DispatchQueue.main.async { [weak self] in
+                self?.playbackState.isPlaying = !isPaused
+                self?.broadcastStatus()
+            }
 
         case "track-list":
             updateTracks()  // already on mpvQueue (event loop); hops UI assignment to main
@@ -389,6 +402,7 @@ class MPVViewController: UIViewController {
             self.playbackState.subtitleTracks = subtitleTracks
             self.playbackState.currentAudioIndex = Int(currentAid)
             self.playbackState.currentSubtitleIndex = Int(currentSid)
+            self.broadcastTracks()
         }
     }
 
@@ -741,6 +755,118 @@ class MPVViewController: UIViewController {
         return String(cString: cstr)
     }
 
+    // MARK: - Phone Now-Playing Sync & Remote Commands
+
+    private func startRemoteSync() {
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(onControlNotification(_:)),
+            name: WebSocketServer.controlCommand, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(onRemoteNotification(_:)),
+            name: WebSocketServer.remoteKey, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(onResyncRequest),
+            name: WebSocketServer.resyncRequest, object: nil)
+
+        // Periodic status (covers live position) — 1s cadence matches the Android receiver.
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.broadcastStatus()
+        }
+    }
+
+    /// Wire format mirrors the Android receiver: `status` carries ms positions.
+    private func broadcastStatus() {
+        var json: [String: Any] = [
+            "type": "status",
+            "state": playbackState.isPlaying ? "playing" : "paused",
+            "position": Int(max(0, playbackState.currentTime) * 1000),
+            "duration": Int(max(0, playbackState.duration) * 1000),
+        ]
+        if let t = mediaTitle, !t.isEmpty { json["title"] = t }
+        onBroadcast?(json)
+    }
+
+    private func broadcastTracks() {
+        func encode(_ tracks: [(id: Int, name: String)], selected: Int) -> [[String: Any]] {
+            tracks.map { ["id": String($0.id), "name": $0.name, "selected": $0.id == selected] }
+        }
+        onBroadcast?([
+            "type": "tracks",
+            "audio": encode(playbackState.audioTracks, selected: playbackState.currentAudioIndex),
+            "subtitle": encode(playbackState.subtitleTracks, selected: playbackState.currentSubtitleIndex),
+        ])
+    }
+
+    @objc private func onResyncRequest() {
+        broadcastStatus()
+        broadcastTracks()
+    }
+
+    @objc private func onControlNotification(_ note: Notification) {
+        guard let cmd = note.userInfo?["command"] as? String else { return }
+        handleControlCommand(cmd)
+    }
+
+    @objc private func onRemoteNotification(_ note: Notification) {
+        guard let key = note.userInfo?["key"] as? String else { return }
+        switch key {
+        case "dpad_center": togglePlayPause()
+        case "dpad_left":   skipBackward()
+        case "dpad_right":  skipForward()
+        default:            break
+        }
+    }
+
+    /// Map a phone `control` command to the player. Runs on main (posted from the WS server).
+    /// Speed/scaling/filter/audio_boost/sub_offset are not yet supported on Apple MPV → ignored.
+    private func handleControlCommand(_ cmd: String) {
+        switch cmd {
+        case "play", "pause", "play_pause", "toggle":
+            togglePlayPause()
+        case "stop":
+            onExit?()
+        case "loop_on":
+            playbackState.isLooping = true
+        case "loop_off":
+            playbackState.isLooping = false
+        case "seek_forward":
+            skipForward()
+        case "seek_back":
+            skipBackward()
+        case let c where c.hasPrefix("seek_to:"):
+            if let ms = Double(c.dropFirst("seek_to:".count)) {
+                let secs = ms / 1000
+                playbackState.currentTime = secs
+                ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+                seekAsync(to: secs)
+            }
+        case let c where c.hasPrefix("audio_track:"):
+            let id = String(c.dropFirst("audio_track:".count))
+            setPropertyAsync("aid", value: id)
+            if let i = Int(id) { playbackState.currentAudioIndex = i }
+            mpvQueue.async { [weak self] in self?.updateTracks() }
+        case let c where c.hasPrefix("sub_track:"):
+            let id = String(c.dropFirst("sub_track:".count))
+            if id == "none" || id == "-1" {
+                setPropertyAsync("sid", value: "no")
+                playbackState.currentSubtitleIndex = -1
+            } else {
+                setPropertyAsync("sid", value: id)
+                if let i = Int(id) { playbackState.currentSubtitleIndex = i }
+            }
+            mpvQueue.async { [weak self] in self?.updateTracks() }
+        case let c where c.hasPrefix("add_subtitle:"):
+            let urlStr = String(c.dropFirst("add_subtitle:".count))
+            guard let handle = mpv, !urlStr.isEmpty else { break }
+            mpvQueue.async { [weak self] in self?.mpvCommand(handle, ["sub-add", urlStr, "select"]) }
+        case let c where c.hasPrefix("switch_player:"):
+            // MPV's only alternative engine is AVPlayer; any non-mpv target switches to it.
+            if String(c.dropFirst("switch_player:".count)) != "mpv" { onSwitch?(playbackState.currentTime) }
+        default:
+            break
+        }
+    }
+
     // MARK: - Shutdown
 
     /// Idempotent. Safe to call from `dismantleUIViewController` (primary), `viewWillDisappear`,
@@ -748,6 +874,10 @@ class MPVViewController: UIViewController {
     func teardown() {
         guard !isMpvStopped else { return }
         isMpvStopped = true
+
+        statusTimer?.invalidate()
+        statusTimer = nil
+        NotificationCenter.default.removeObserver(self)
 
         guard let handle = mpv else {
             // mpv never finished initialising — still balance the callback retain if taken.

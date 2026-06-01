@@ -5,6 +5,7 @@ struct PlayerView: View {
     let onDismiss: () -> Void
     @EnvironmentObject var historyStore: HistoryStore
     @EnvironmentObject var playlistStore: PlaylistStore
+    @EnvironmentObject var server: WebSocketServer
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
     // Engine chosen via the on-screen switch this session. Takes precedence over both the
     // phone's player_mode and the stored preference, but is not persisted.
@@ -73,9 +74,11 @@ struct PlayerView: View {
                         subtitles: currentRequest.subtitlesOrNil,
                         initialTime: resumeTime,
                         isPreBuffering: isPreBuffering,
+                        title: currentRequest.titleOrNil,
                         onDismiss: handleNext,
                         onExit: onDismiss,
-                        onSwitch: handleSwitch
+                        onSwitch: handleSwitch,
+                        onBroadcast: { server.broadcast($0) }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -86,9 +89,11 @@ struct PlayerView: View {
                         headers: currentRequest.headersOrNil,
                         initialTime: resumeTime,
                         isPreBuffering: isPreBuffering,
+                        title: currentRequest.titleOrNil,
                         onDismiss: handleNext,  // end-of-video → try next item
                         onExit: onDismiss,      // back button → always go home
-                        onSwitch: handleSwitch
+                        onSwitch: handleSwitch,
+                        onBroadcast: { server.broadcast($0) }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)

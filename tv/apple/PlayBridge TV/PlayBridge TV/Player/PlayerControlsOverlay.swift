@@ -6,6 +6,7 @@ import Combine
 class PlayerControlsData: ObservableObject {
     @Published var isPlaying: Bool = false
     @Published var userPaused: Bool = false
+    @Published var title: String = ""
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     /// Absolute time (seconds) up to which media is buffered ahead. Drives the seek-bar
@@ -130,19 +131,24 @@ struct PlayerControlsOverlay: View {
                         .transition(.opacity)
                 }
 
-                // Active-player badge, pinned top-trailing
-                if !engineLabel.isEmpty {
-                    VStack {
-                        HStack {
-                            Spacer()
-                            playerBadge
+                // Top bar: title (leading) + active-player badge (trailing)
+                VStack {
+                    HStack(alignment: .top, spacing: 24) {
+                        if !data.title.isEmpty {
+                            Text(data.title)
+                                .font(.system(size: 32, weight: .semibold))
+                                .foregroundColor(.white)
+                                .lineLimit(2)
+                                .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
                         }
-                        Spacer()
+                        Spacer(minLength: 0)
+                        if !engineLabel.isEmpty { playerBadge }
                     }
                     .padding(.top, 50)
-                    .padding(.trailing, 60)
-                    .transition(.opacity)
+                    .padding(.horizontal, 60)
+                    Spacer()
                 }
+                .transition(.opacity)
 
                 VStack(spacing: 0) {
                     Spacer()

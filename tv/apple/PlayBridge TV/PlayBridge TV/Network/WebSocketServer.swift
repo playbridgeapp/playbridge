@@ -19,7 +19,12 @@ class WebSocketServer: ObservableObject {
     private var historyStore: HistoryStore?
     var playlistStore: PlaylistStore?
 
-    @Published var currentPlayRequest: Playbridge_PlayPayload?
+    @Published var currentPlayRequest: Playbridge_PlayPayload? {
+        didSet {
+            // Keep the phone's now-playing context in sync without it having to poll.
+            broadcast(["type": "context", "active": currentPlayRequest != nil ? "player" : "idle"])
+        }
+    }
     @Published var isAuthenticated = false
     @Published var pendingPairingRequest: PairingRequest?
     @Published var pairedDevicesList: [PairedDevice] = []
@@ -444,6 +449,25 @@ class WebSocketServer: ObservableObject {
     /// `PlayerView` via the play payload's `playerMode`. (No browsers — Apple TV has no web view.)
     static let capabilityPlayers = ["avplayer", "mpv"]
 
+    /// Posted (on main) when the phone sends a `control` command (userInfo["command"]) or a
+    /// `remote` key (userInfo["key"]). The active player view observes these.
+    static let controlCommand = Notification.Name("PlayBridgeControlCommand")
+    static let remoteKey = Notification.Name("PlayBridgeRemoteKey")
+    /// Posted when a client (re)connects; the active player re-broadcasts status + tracks.
+    static let resyncRequest = Notification.Name("PlayBridgeResync")
+
+    /// Send a JSON object to every connected client (now-playing status, tracks, context, …).
+    func broadcast(_ json: [String: Any]) {
+        guard !connectedConnections.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: json) else { return }
+        let context = NWConnection.ContentContext(
+            identifier: "broadcast", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
+        for connection in connectedConnections {
+            connection.send(content: data, contentContext: context, isComplete: true,
+                            completion: .contentProcessed({ _ in }))
+        }
+    }
+
     private func handleAuth(_ msg: Playbridge_AuthMessage, from connection: NWConnection) {
         guard msg.hasToken else {
             send(json: ["type": "auth_response", "success": false], to: connection)
@@ -466,6 +490,10 @@ class WebSocketServer: ObservableObject {
             if let fp = self.certFingerprint { response["certFingerprint"] = fp }
             response["players"] = Self.capabilityPlayers
             self.send(json: response, to: connection)
+            // Re-sync now-playing for a client that connected mid-playback: context + a nudge
+            // for the active player to re-broadcast its status/tracks.
+            self.broadcast(["type": "context", "active": self.currentPlayRequest != nil ? "player" : "idle"])
+            NotificationCenter.default.post(name: Self.resyncRequest, object: nil)
         }
     }
 
@@ -563,6 +591,20 @@ class WebSocketServer: ObservableObject {
                     if let req = self.playlistStore?.jumpTo(index: Int(p.index)) {
                         self.currentPlayRequest = req
                     }
+                }
+            }
+        case "control":
+            if let p = try? Playbridge_ControlPayload(jsonString: payloadJson), !p.command.isEmpty {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: Self.controlCommand, object: nil, userInfo: ["command": p.command])
+                }
+            }
+        case "remote":
+            if let p = try? Playbridge_RemotePayload(jsonString: payloadJson), !p.key.isEmpty {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: Self.remoteKey, object: nil, userInfo: ["key": p.key])
                 }
             }
         default:
