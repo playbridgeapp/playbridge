@@ -17,8 +17,8 @@ android {
         applicationId = "com.playbridge.browser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.1.28"
+        versionCode = 29
+        versionName = "0.1.29"
     }
 
     testOptions {
