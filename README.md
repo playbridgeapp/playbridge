@@ -56,6 +56,19 @@ Contributions are welcome! Please follow these steps:
 
 For detailed instructions, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Acknowledgments
+
+PlayBridge was inspired by — and learned from — these excellent open-source projects. Huge thanks to their authors and communities:
+
+- **[Stremio](https://github.com/Stremio/stremio-web)**
+- **[Swiftfin](https://github.com/jellyfin/Swiftfin)** and **[Streamyfin](https://github.com/streamyfin/streamyfin)**
+- **[NuvioTV](https://github.com/NuvioMedia/NuvioTV)**
+- **[AIOStreams](https://github.com/Viren070/AIOStreams)**
+- **[VLC for iOS/tvOS](https://github.com/videolan/vlc-ios)**
+- **[mpvEx](https://github.com/marlboro-advance/mpvEx)**, **[mpvNova](https://github.com/Laskco/mpvNova)**, and **[Player](https://github.com/moneytoo/Player)**
+
+All trademarks and copyrights belong to their respective owners.
+
 ## License
 
 This project is licensed under the **GNU General Public License v3.0** (GPLv3). See the [LICENSE](LICENSE) file for details.
