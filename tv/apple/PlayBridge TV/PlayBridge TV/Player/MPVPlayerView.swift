@@ -88,6 +88,8 @@ class MPVViewController: UIViewController {
     private var ignoreTimeUpdatesUntil: Date = .distantPast
     /// Seconds buffered ahead of the play head (from mpv `demuxer-cache-duration`). Main-thread only.
     private var cacheAheadSec: Double = 0
+    /// When the current file started loading — used to log time-to-audio for diagnosing delays.
+    private var loadStartTime = Date()
 
     // Custom focusable view that receives Siri Remote presses
     private class FocusableView: UIView {
@@ -142,6 +144,11 @@ class MPVViewController: UIViewController {
     // MARK: - MPV Initialisation
 
     private func setupMPV() {
+        // Configure the audio session BEFORE mpv initialises its audio unit. If the session is
+        // still the default (non-playback) category when mpv's `ao` starts, audio is silent until
+        // the route is renegotiated — the "no sound for the first ~minute" symptom.
+        configureAudioSession()
+
         guard let handle = mpv_create() else {
             print("[MPV] mpv_create() failed")
             return
@@ -160,13 +167,52 @@ class MPVViewController: UIViewController {
         // On iOS "yes" is needed for PiP subtitle compositing (not applicable on tvOS).
         mpv_set_option_string(handle, "avfoundation-composite-osd", "no")
 
-        // VideoToolbox hardware decoding with software fallback for unsupported codecs
+        // VideoToolbox hardware decoding, with software fallback enabled. Fallback is required for
+        // codecs Apple TV has no HW decoder for — notably AV1 (no shipping Apple TV decodes AV1 in
+        // hardware); without it those files play audio-only with a black screen. The decoder mpv
+        // actually selects is logged via the "hwdec-current" observer below, so a drop to software
+        // (e.g. on a 4K HEVC file VideoToolbox bails on) is visible rather than silent.
         mpv_set_option_string(handle, "hwdec", "videotoolbox")
-        mpv_set_option_string(handle, "hwdec-codecs", "all")
+        // Only the codecs Apple TV actually has hardware decoders for. AV1 is deliberately
+        // excluded: no Apple TV decodes AV1 in hardware, and leaving it in this list makes mpv
+        // pick FFmpeg's *native* av1 decoder (the only one with a VideoToolbox hwaccel path) to
+        // attempt HW. When VideoToolbox then rejects AV1, that same native decoder limps along on
+        // its slow software path — overriding the `vd=libdav1d` preference below. Dropping av1
+        // here means av1 is never HW-selected, so the fast dav1d software decoder wins instead.
+        mpv_set_option_string(handle, "hwdec-codecs", "h264,hevc,vp9")
         mpv_set_option_string(handle, "hwdec-software-fallback", "yes")
+
+        // Use dav1d for AV1 — the fast, well-threaded software decoder VLC also uses. This only
+        // takes effect now that av1 is out of hwdec-codecs (above). dav1d decodes only AV1, so it
+        // has no effect on H.264/HEVC, which keep their VideoToolbox hardware path.
+        mpv_set_option_string(handle, "vd", "libdav1d")
+
+        // Drop late frames at the decoder when the pipeline can't keep up, instead of letting
+        // audio/video desync. This is the safety valve for software-decoded 4K AV1 (no Apple TV
+        // has HW AV1, and dav1d can't always sustain 2160p in real time on these cores). It's the
+        // mpv equivalent of the `--skip-frames=1 --drop-late-frames=1` we already give VLC — which
+        // is the only reason VLC looks smooth on these files. Default framedrop ("vo") only drops
+        // at display and doesn't relieve decode load; "decoder+vo" lets mpv skip decoding frames
+        // it's already late for. Harmless for HW-decoded HEVC/H.264 (it triggers only when behind).
+        mpv_set_option_string(handle, "framedrop", "decoder+vo")
+
+        // Buffering for high-bitrate remuxes (4K HEVC, ~80–100 Mbps). mpv's defaults read only
+        // ~1s ahead, so a momentary network/NAS shortfall drains the buffer and audio/video drop
+        // out — VLC rides over this with its 15s cache. Widen the demuxer read-ahead (bounded to
+        // 256 MiB so tvOS doesn't jetsam-kill us on a 56 GB file) and grow the audio output buffer
+        // from its ~200ms default to 1s so a brief audio-decode/scheduling stall can't underrun.
+        mpv_set_option_string(handle, "cache", "yes")
+        mpv_set_option_string(handle, "demuxer-max-bytes", "256MiB")
+        mpv_set_option_string(handle, "demuxer-max-back-bytes", "64MiB")
+        mpv_set_option_string(handle, "demuxer-readahead-secs", "30")
+        mpv_set_option_string(handle, "audio-buffer", "1.0")
 
         // Signal content colourspace to the display system so tvOS can switch HDR modes
         mpv_set_option_string(handle, "target-colorspace-hint", "yes")
+
+        // Force the iOS/tvOS audio output. Auto-detection can probe an output that blocks and
+        // only fall back after a ~minute timeout — that's the "audio appears after ~1 min" symptom.
+        mpv_set_option_string(handle, "ao", "audiounit")
 
         // Subtitle defaults
         mpv_set_option_string(handle, "sub-scale-with-window", "no")
@@ -175,7 +221,7 @@ class MPVViewController: UIViewController {
         mpv_set_option_string(handle, "subs-fallback", "yes")
 
         #if DEBUG
-        mpv_request_log_messages(handle, "warn")
+        mpv_request_log_messages(handle, "v")  // verbose: capture cache/underrun/sync events
         #else
         mpv_request_log_messages(handle, "no")
         #endif
@@ -193,6 +239,10 @@ class MPVViewController: UIViewController {
         // tracks are discovered or a sub is added, unlike the indexed "track-list/count".
         mpv_observe_property(handle, 0, "track-list", MPV_FORMAT_NONE)
         mpv_observe_property(handle, 0, "paused-for-cache", MPV_FORMAT_FLAG)
+        // Re-assert the audio session the moment mpv's audio output actually comes up.
+        mpv_observe_property(handle, 0, "current-ao", MPV_FORMAT_STRING)
+        // Which decoder mpv actually selected ("videotoolbox" = HW, "no"/empty = software).
+        mpv_observe_property(handle, 0, "hwdec-current", MPV_FORMAT_STRING)
 
         // Retain self for the callback's lifetime (released in teardown()). The callback fires
         // on mpv's own thread, so self must outlive the installed callback.
@@ -203,10 +253,21 @@ class MPVViewController: UIViewController {
             Unmanaged<MPVViewController>.fromOpaque(ctx).takeUnretainedValue().drainEvents()
         }, selfPtr)
 
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
-        try? AVAudioSession.sharedInstance().setActive(true)
-
         if let url { loadFile(url) }
+    }
+
+    private func configureAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio, options: [])
+            try session.setActive(true)
+        } catch {
+            print("[MPV] audio session config failed: \(error)")
+        }
+    }
+
+    private func activateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(true)
     }
 
     private func loadFile(_ url: URL) {
@@ -215,6 +276,7 @@ class MPVViewController: UIViewController {
         // Clear buffered-ahead state so a looped/next file doesn't flash the prior buffer.
         cacheAheadSec = 0
         playbackState.bufferedTime = 0
+        loadStartTime = Date()
 
         mpvQueue.async { [weak self] in
             guard let self, let handle = self.mpv else { return }
@@ -276,7 +338,9 @@ class MPVViewController: UIViewController {
             #if DEBUG
             if let logPtr = event.data?.assumingMemoryBound(to: mpv_event_log_message.self) {
                 let text = String(cString: logPtr.pointee.text)
-                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Drop the per-frame software-scaler flood so cache/audio events stay readable.
+                if !trimmed.isEmpty, !trimmed.contains("swscaler") {
                     print("[MPV] \(text)", terminator: "")
                 }
             }
@@ -299,11 +363,13 @@ class MPVViewController: UIViewController {
         // hops its UI assignment to main.)
         updateTracks()
 
-        // Then attach external subtitles. Each `sub-add` mutates track-list, which fires the
-        // "track-list" observer → updateTracks() again, so late/remote subs appear as they land
-        // without blocking this initial read behind their downloads.
-        for sub in pendingExternalSubtitles {
-            mpvCommand(handle, ["sub-add", sub, "auto"])
+        // Attach only the FIRST external subtitle. Senders like Stremio attach dozens of subtitle
+        // URLs; adding them all makes mpv open each over the network and bloats the track list, so
+        // switching audio/subtitle tracks lags badly. The sender orders them by preference, so the
+        // first is the best match; the media's own embedded tracks remain selectable. Async so the
+        // one fetch never blocks this serial event queue.
+        if let firstSub = pendingExternalSubtitles.first {
+            mpvCommandAsync(handle, ["sub-add", firstSub, "auto"])
         }
         pendingExternalSubtitles = []
     }
@@ -328,6 +394,20 @@ class MPVViewController: UIViewController {
                 self.playbackState.bufferedTime = self.playbackState.currentTime + val
             }
 
+        case "paused-for-cache":
+            // The decode-vs-network discriminator. If this fires "STALLED" repeatedly during
+            // playback, mpv is starved for data (network-bound — the proxy hypothesis). If it
+            // never fires but playback is still choppy/desynced, the demuxer is keeping up and
+            // the bottleneck is decode (4K AV1 software — a hardware limit the proxy can't fix).
+            guard prop.format == MPV_FORMAT_FLAG,
+                  let val = prop.data?.assumingMemoryBound(to: Int32.self).pointee else { break }
+            let stalled = val != 0
+            var cacheDur: Double = 0
+            if let handle = mpv {
+                mpv_get_property(handle, "demuxer-cache-duration", MPV_FORMAT_DOUBLE, &cacheDur)
+            }
+            print("[MPV] paused-for-cache: \(stalled ? "STALLED (network can't keep up)" : "resumed") — demuxer cache ahead = \(String(format: "%.1f", cacheDur))s")
+
         case "duration":
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee,
@@ -341,6 +421,24 @@ class MPVViewController: UIViewController {
             DispatchQueue.main.async { [weak self] in
                 self?.playbackState.isPlaying = !isPaused
                 self?.broadcastStatus()
+            }
+
+        case "current-ao":
+            // mpv's audio output just came up — make sure our session is active so it isn't muted.
+            if let handle = mpv {
+                let ao = stringProperty(handle, "current-ao") ?? "nil"
+                let elapsed = String(format: "%.1f", Date().timeIntervalSince(loadStartTime))
+                print("[MPV] audio output up: \(ao) at +\(elapsed)s")
+            }
+            DispatchQueue.main.async { [weak self] in self?.activateAudioSession() }
+
+        case "hwdec-current":
+            // Reports the decoder mpv settled on. With software fallback off this should read
+            // "videotoolbox"; "no"/empty here means the file isn't HW-decodable on this device.
+            if let handle = mpv {
+                let dec = stringProperty(handle, "hwdec-current") ?? "nil"
+                let elapsed = String(format: "%.1f", Date().timeIntervalSince(loadStartTime))
+                print("[MPV] hwdec-current: \(dec) at +\(elapsed)s")
             }
 
         case "track-list":
@@ -749,6 +847,21 @@ class MPVViewController: UIViewController {
         }
     }
 
+    /// Fire-and-forget command. Unlike `mpvCommand`, this does NOT block the calling thread (our
+    /// serial event-draining queue) — essential for `sub-add` of remote subtitles, which mpv
+    /// otherwise opens synchronously (a network fetch each). mpv copies the args, so freeing
+    /// them right after the call is safe.
+    private func mpvCommandAsync(_ handle: OpaquePointer, _ args: [String]) {
+        var cArgs = args.map { strdup($0) }
+        cArgs.append(nil)
+        defer { cArgs.forEach { if let p = $0 { free(p) } } }
+        _ = cArgs.withUnsafeMutableBufferPointer { buf in
+            buf.baseAddress!.withMemoryRebound(to: UnsafePointer<CChar>?.self, capacity: buf.count) {
+                mpv_command_async(handle, 0, $0)
+            }
+        }
+    }
+
     private func stringProperty(_ handle: OpaquePointer, _ name: String) -> String? {
         guard let cstr = mpv_get_property_string(handle, name) else { return nil }
         defer { mpv_free(cstr) }
@@ -858,7 +971,8 @@ class MPVViewController: UIViewController {
         case let c where c.hasPrefix("add_subtitle:"):
             let urlStr = String(c.dropFirst("add_subtitle:".count))
             guard let handle = mpv, !urlStr.isEmpty else { break }
-            mpvQueue.async { [weak self] in self?.mpvCommand(handle, ["sub-add", urlStr, "select"]) }
+            // Async: a remote sub-add opens a network fetch; never block the event queue.
+            mpvQueue.async { [weak self] in self?.mpvCommandAsync(handle, ["sub-add", urlStr, "select"]) }
         case let c where c.hasPrefix("switch_player:"):
             // MPV's only alternative engine is AVPlayer; any non-mpv target switches to it.
             if String(c.dropFirst("switch_player:".count)) != "mpv" { onSwitch?(playbackState.currentTime) }

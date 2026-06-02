@@ -3,6 +3,10 @@ platform :tvos, '14.0'
 target 'PlayBridge TV' do
   use_frameworks!
 
+  # VLCKit 4.0 (unified iOS/tvOS/macOS framework, replaces the legacy TVVLCKit 3.x).
+  # 3.6.0 bundled an old dav1d that crashes decoding some AV1 streams (i8mm motion-comp);
+  # 4.0's newer dav1d fixes it. This is the version the shipping VLC app uses.
+  pod 'VLCKit', '4.0.0a19'
   pod 'SwiftProtobuf', '~> 1.28'
   pod 'MPVKit', :podspec => 'https://raw.githubusercontent.com/mpv-ios/MPVKit/0.41.0-av/MPVKit.podspec'
 

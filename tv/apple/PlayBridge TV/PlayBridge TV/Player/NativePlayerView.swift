@@ -30,7 +30,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         let asset = AVURLAsset(url: url, options: options)
         let playerItem = AVPlayerItem(asset: asset)
 
-        // Title shown in the native transport bar (tvOS reads externalMetadata).
+        // Title shown in the native tvOS transport bar (read from externalMetadata).
         if let title, !title.isEmpty {
             let item = AVMutableMetadataItem()
             item.identifier = .commonIdentifierTitle
@@ -55,21 +55,21 @@ struct NativePlayerView: UIViewControllerRepresentable {
         ) { [weak coordinator = context.coordinator] action in
             coordinator?.toggleLoop(action)
         }
-
+        
         let switchAction = UIAction(
-            title: "Switch to MPV",
+            title: "Switch Player",
             image: UIImage(systemName: "arrow.triangle.2.circlepath")
         ) { [weak coordinator = context.coordinator] _ in
             coordinator?.invokeSwitch()
         }
-
+        
         let playlistAction = UIAction(
             title: "Playlist",
             image: UIImage(systemName: "list.bullet")
         ) { _ in
             NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
         }
-
+        
         controller.transportBarCustomMenuItems = [loopAction, switchAction, playlistAction]
 
         player.isMuted = isPreBuffering

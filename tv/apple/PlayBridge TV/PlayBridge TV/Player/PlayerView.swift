@@ -26,16 +26,22 @@ struct PlayerView: View {
     private func handleSwitch(currentTime: Double) {
         resumeTime = currentTime
         let current = effectiveEngine(for: playlistStore.currentItem ?? payload)
-        sessionEngine = current == "mpv" ? "avplayer" : "mpv"
+        // Cycle AVPlayer → VLC → MPV → AVPlayer.
+        switch current {
+        case "avplayer": sessionEngine = "vlc"
+        case "vlc":      sessionEngine = "mpv"
+        default:         sessionEngine = "avplayer"
+        }
     }
 
     /// Engine for this item: a manual session switch wins; otherwise honor the phone's
-    /// `player_mode` ("avplayer"/"mpv"); "tv"/unset/unknown fall back to the stored default.
+    /// `player_mode` ("avplayer"/"vlc"/"mpv"); "tv"/unset/unknown fall back to the stored default.
     private func effectiveEngine(for item: Playbridge_PlayPayload) -> String {
         if let session = sessionEngine { return session }
         if item.hasPlayerMode {
             switch item.playerMode {
             case "avplayer", "native": return "avplayer"
+            case "vlc": return "vlc"
             case "mpv": return "mpv"
             default: break
             }
@@ -67,7 +73,23 @@ struct PlayerView: View {
             let currentRequest = playlistStore.currentItem ?? payload
             if let currentURL = currentRequest.validURL {
                 let _ = print("PlayerView: Rendering with URL: \(currentURL)")
-                if effectiveEngine(for: currentRequest) == "mpv" {
+                if effectiveEngine(for: currentRequest) == "vlc" {
+                    VLCPlayerView(
+                        url: currentURL,
+                        headers: currentRequest.headersOrNil,
+                        subtitles: currentRequest.subtitlesOrNil,
+                        initialTime: resumeTime,
+                        isPreBuffering: isPreBuffering,
+                        title: currentRequest.titleOrNil,
+                        onDismiss: handleNext,
+                        onExit: onDismiss,
+                        onSwitch: handleSwitch,
+                        onBroadcast: { server.broadcast($0) }
+                    )
+                    .ignoresSafeArea()
+                    .focused($isPlayerFocused)
+                    .id(currentURL)
+                } else if effectiveEngine(for: currentRequest) == "mpv" {
                     MPVPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,

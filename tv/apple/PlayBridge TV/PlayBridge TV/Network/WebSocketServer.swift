@@ -445,9 +445,9 @@ class WebSocketServer: ObservableObject {
     // MARK: - Auth
 
     /// Players this receiver advertises to the phone at auth, so the phone's player picker
-    /// shows "TV Default" + AVPlayer + MPV. A concrete choice is honored per cast in
+    /// shows "TV Default" + AVPlayer + VLC + MPV. A concrete choice is honored per cast in
     /// `PlayerView` via the play payload's `playerMode`. (No browsers — Apple TV has no web view.)
-    static let capabilityPlayers = ["avplayer", "mpv"]
+    static let capabilityPlayers = ["avplayer", "vlc", "mpv"]
 
     /// Posted (on main) when the phone sends a `control` command (userInfo["command"]) or a
     /// `remote` key (userInfo["key"]). The active player view observes these.

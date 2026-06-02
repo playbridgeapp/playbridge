@@ -125,11 +125,23 @@ struct ContentView: View {
                 .zIndex(5)
             }
         }
-        .onAppear { server.start() }
+        .onAppear {
+            server.start()
+            // Keep the Apple TV awake while the receiver is foregrounded: otherwise the idle
+            // timer sleeps the device (dropping the WebSocket server, so casts can't reach it),
+            // and during MPV/VLC playback — which render into a custom layer the system doesn't
+            // recognise as "video playing" — the screensaver can interrupt mid-playback. AVPlayer
+            // suppresses this on its own, but this covers all engines + the idle receiver.
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
-            case .active: server.restart()
-            case .background: server.stop()
+            case .active:
+                server.restart()
+                UIApplication.shared.isIdleTimerDisabled = true
+            case .background:
+                server.stop()
+                UIApplication.shared.isIdleTimerDisabled = false  // allow normal sleep when backgrounded
             default: break
             }
         }
