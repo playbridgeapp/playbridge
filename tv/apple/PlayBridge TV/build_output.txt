@@ -1,8 +1,0 @@
-Command line invocation:
-    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -workspace "tv/apple-tv/PlayBridge TV/PlayBridge TV.xcworkspace" -scheme "PlayBridge TV" -sdk appletvsimulator -destination "platform=tvOS Simulator,name=Apple TV" build
-
-Build settings from command line:
-    SDKROOT = appletvsimulator26.4
-
-2026-04-29 02:10:59.307 xcodebuild[14287:5470528] Writing error result bundle to /var/folders/pc/cv0446h92gs0zz8hc92s2bhm0000gn/T/ResultBundle_2026-29-04_02-10-0059.xcresult
-xcodebuild: error: 'tv/apple-tv/PlayBridge TV/PlayBridge TV.xcworkspace' does not exist.

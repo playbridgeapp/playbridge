@@ -1,16 +1,22 @@
-# playbridge_desktop
+# PlayBridge — Desktop
 
-A new Flutter project.
+A Flutter **desktop receiver**: it accepts cast commands from the phone and plays them via libmpv. Runs on macOS, Windows, and Linux.
 
-## Getting Started
+## Build & run
 
-This project is a starting point for a Flutter application.
+```bash
+cd desktop
+flutter pub get
+flutter run -d macos        # or: windows, linux
+```
 
-A few resources to get you started if this is your first Flutter project:
+Release build:
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+```bash
+flutter build macos         # or: windows, linux
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Requirements
+
+- Flutter SDK (Dart `^3.6`)
+- libmpv available on the host (used for playback)
