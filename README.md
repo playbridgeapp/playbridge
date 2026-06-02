@@ -19,9 +19,7 @@ The project consists of two applications:
 ## Documentation
 
 Comprehensive project documentation is available:
-- **[Architecture](ARCHITECTURE.md)**: Project-wide architectural decisions, module roles, and technology stack.
 - **[Design System](DESIGN.md)**: Visual language, color tokens, typography, and component specifications.
-- **[AI Context](AI_CONTEXT.md)**: Guidelines and cross-module gotchas for AI-assisted development.
 - **[Contributing](CONTRIBUTING.md)**: Setup instructions and contribution guidelines.
 - **[Security Policy](SECURITY.md)**: Security considerations and vulnerability reporting.
 

@@ -4,6 +4,7 @@
 # Android/IntelliJ
 *.iml
 .idea
+.vscode/
 .gradle
 build/
 app/build/
@@ -63,18 +64,10 @@ inspirations
 
 tv/android/player/build_log.txt
 
-# Hub (Go + SvelteKit)
-hub/ui/node_modules/
-hub/ui/.svelte-kit/
-hub/ui/build/
+# Node / env
 pnpm-debug.log*
-hub/server/bin/
-hub/server/server.exe
 .env.*
 !.env.example
-hub/server/cache/
-hub/server/*.db
-hub/server/config.json
 
 # Stream Resolver (Go)
 stream-resolver/config.json
@@ -93,11 +86,14 @@ GEMINI.md
 CLAUDE.md
 AI_CONTEXT.md
 playbridge-context.skill
+PHONE_APP_CODE_SMELLS.md
 SHARED_PLANS.md
 addon-preference-implementation-plan.md
 tv_idle_blob.html
 pending_patches/
 scratch/
+# Local-only docs (architecture deep-dives, etc.)
+docs/local/
 **/ARCHITECTURE*.md
 **/*_PLAN.md
 **/*_STEP_*.md
@@ -116,6 +112,7 @@ mobile/android/store/icon_variants/*.svg
 .agents/
 .gemini/
 .kiro/
+.qoder/
 .mcp.json
 .opencode.json
 .opencode/
