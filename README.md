@@ -11,10 +11,13 @@ PlayBridge is an open-source Android application suite that bridges the gap betw
 
 ## Components
 
-The project consists of two applications:
-1.  **Phone App (`phone`)**: The sender application. Browses web, detects videos, and controls the TV.
-2.  **TV App (`tv`)**: The receiver application. Runs on Android TV, plays content, and displays a web browser.
-3.  **Shared Module (`shared`)**: Kotlin Multiplatform logic, player engines, and protocol definitions.
+The project is organized into several components:
+1.  **Phone App (`mobile/`)** — the sender: browses the web, detects videos, and controls the TV.
+2.  **TV App (`tv/`)** — the receiver for Android TV (with a tvOS variant): plays content and hosts a web browser.
+3.  **Desktop App (`desktop/`)** — a Flutter desktop receiver that plays casts via libmpv.
+4.  **Browser Extension (`extension/`)** — a Firefox extension that casts media from desktop browser tabs.
+5.  **Shared Module (`shared/`)** — Kotlin Multiplatform logic, player engines, and protocol bindings.
+6.  **Protocol (`protocol/`)** — protobuf wire-format definitions (git submodule).
 
 ## Documentation
 

@@ -53,8 +53,8 @@ kotlin {
             implementation(libs.okhttp)
             implementation(libs.okhttp.urlconnection)
 
-            // MPV
-            compileOnly(files("../libs/mpv-android/mpv-android.aar"))
+            // MPV (compile-only; the TV player app bundles the runtime .aar)
+            compileOnly(files("../tv/android/player/app/libs/mpv-android.aar"))
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
