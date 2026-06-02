@@ -23,8 +23,6 @@ Comprehensive project documentation is available:
 - **[Contributing](CONTRIBUTING.md)**: Setup instructions and contribution guidelines.
 - **[Security Policy](SECURITY.md)**: Security considerations and vulnerability reporting.
 
-Additional feature plans and historical documentation can be found in the [docs/](docs/) directory.
-
 ## Build Instructions
 
 ### Prerequisites
@@ -38,10 +36,10 @@ To build the APKs:
 
 ```bash
 # Build Phone App
-./gradlew :phone:app:assembleDebug
+cd mobile/android && ./gradlew :app:assembleDebug
 
 # Build TV App
-./gradlew :tv:app:assembleDebug
+cd tv/android && ./gradlew :player:app:assembleDebug
 ```
 
 ## Contributing

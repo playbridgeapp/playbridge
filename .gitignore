@@ -1,6 +1,9 @@
 # Java heap dumps
 *.hprof
 
+# Editor/temp scratch files
+*.tmp
+
 # Android/IntelliJ
 *.iml
 .idea
