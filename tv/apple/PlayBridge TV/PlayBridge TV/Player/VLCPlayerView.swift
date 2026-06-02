@@ -60,6 +60,19 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         /// every tick for the whole movie (which happened forever on files with no subtitle track)
         /// contends with the decoder and causes a periodic micro-hitch the real VLC app doesn't.
         private var didFetchTracks = false
+        /// Last state we acted on. VLCKit fires mediaPlayerStateChanged repeatedly with the same
+        /// state during buffering (once per % update); we de-dupe so the broadcast/print/track
+        /// work only runs on real transitions — that per-tick work competes with the decoder.
+        private var lastReportedState: VLCMediaPlayerState?
+        // Reload bookkeeping (GLES2 switch / proxy fallback). resolvedPlayURL/-Headers are the
+        // values startMedia last used, so a reload can recreate the media identically.
+        private var didSwitchVout = false
+        private var resolvedPlayURL: URL?
+        private var resolvedUseNativeHeaders = false
+        private var originalURL: URL?              // the cast URL — re-resolved via proxy on fallback
+        private var isPlayingViaProxy = false      // current playback goes through the relay
+        private var didFallbackToProxy = false     // only fall back from direct → proxy once
+        private var redirectResolver: RedirectResolver?  // retained during the resolve pre-flight
 
         var isPreBuffering: Bool = false {
             didSet {
@@ -196,14 +209,20 @@ struct VLCPlayerView: UIViewControllerRepresentable {
 
         private var proxyServer: VLCProxyServer?
 
+        private static let browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
         private func setupPlayer() {
+            // Start on the default vout (samplebufferdisplay): correct + efficient for hardware-
+            // decoded frames (already CVPixelBuffers) and it does proper HDR/Dolby Vision passthrough
+            // on tvOS. Only software-decoded AV1 (dav1d) suffers there — it needs a CPU swscale of
+            // every frame — so once we detect AV1 we reload the player onto the GLES2 vout (GPU
+            // color-convert). Non-AV1 content is never touched. See switchToGLESVout().
             mediaPlayer.delegate = self
 
             #if DEBUG
-            // Route libvlc's internal logs (input/decoder/vout/display/http) to the Xcode console
-            // so we can see WHY video isn't displaying. Very verbose — grep for "vout"/"display"/
-            // "decoder"/"http". NOTE: .debug floods the log every frame and adds console-I/O
-            // overhead that can skew playback smoothness — drop to .warning for smoothness testing.
+            // Route libvlc's internal logs (input/decoder/vout/display/http) to the Xcode console.
+            // .warning for normal use — .debug floods every frame and its console I/O skews
+            // playback smoothness. Bump to .debug to diagnose a specific failure.
             let vlcLogger = VLCConsoleLogger()
             vlcLogger.level = .warning
             mediaPlayer.libraryInstance.loggers = [vlcLogger]
@@ -212,57 +231,176 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             mediaPlayer.drawable = videoView
             print("[VLC] setupPlayer: drawable=videoView bounds=\(videoView.bounds) view.bounds=\(view.bounds)")
 
-            if let url = url {
-                // Always route HTTP(S) through the local proxy. The proxy fetches via URLSession,
-                // which follows 3xx redirects — VLCKit's HTTP/2 access does NOT follow the 307 that
-                // hosts like aiostreams return to their CDN; it resets the stream and the media
-                // never loads (black screen). URLSession also injects any custom headers. This
-                // mirrors how MPV/FFmpeg play these streams. Non-HTTP URLs (file://, etc.) play
-                // directly.
-                let scheme = url.scheme?.lowercased()
-                let playURL: URL
-                if scheme == "http" || scheme == "https" {
-                    var proxyHeaders = headers ?? [:]
-                    // Some CDNs reject non-browser user agents; supply a browser UA if none was
-                    // provided (matches the MPV path). A provided User-Agent is preserved.
-                    if !proxyHeaders.keys.contains(where: { $0.caseInsensitiveCompare("user-agent") == .orderedSame }) {
-                        proxyHeaders["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    }
-                    let proxy = VLCProxyServer(targetURL: url, headers: proxyHeaders)
-                    proxy.start()
-                    self.proxyServer = proxy
-                    playURL = proxy.localURL
-                    print("VLC Proxy: \(url.absoluteString) -> \(playURL.absoluteString)")
-                } else {
-                    playURL = url
-                }
-
-                // VLCKit 4.0: VLCMedia(url:) is failable.
-                guard let media = VLCMedia(url: playURL) else {
-                    print("VLC: failed to create media for \(playURL)")
-                    return
-                }
-
-                // Caching for tvOS streaming. network-caching is well above VLC's 999ms default
-                // for resilience on flaky/throttled sources. skip-frames/drop-late-frames just
-                // restate libvlc's defaults (both on). We intentionally do NOT set clock-jitter:
-                // VLC leaves it at its 5000ms default, and forcing 0 disables jitter tolerance,
-                // which can cause A/V resync stutter on network streams.
-                // network-caching kept modest: a 15s pre-roll caused a ~15s black/buffering stall
-                // before the first frame (the real VLC app uses 999ms). 3s balances fast start
-                // with a small cushion for the proxy/CDN. drop-late-frames/skip-frames stay on
-                // (libvlc defaults) so the player drops, rather than accumulates, late frames.
-                media.addOptions([
-                    "--network-caching": "3000",
-                    "--drop-late-frames": "1",
-                    "--skip-frames": "1",
-                ])
-
-                loadedMedia = media
-                mediaPlayer.media = media
-                applyPreBufferingState()
-                mediaPlayer.play()
+            guard let url = url else { return }
+            originalURL = url
+            let scheme = url.scheme?.lowercased()
+            guard scheme == "http" || scheme == "https" else {
+                startMedia(playURL: url, useNativeHeaders: false, viaProxy: false)   // file:// etc.
+                return
             }
+
+            // The local proxy (URLSession) must relay the whole stream when headers beyond
+            // User-Agent/Referer are needed (VLC can't inject those itself). Otherwise we only use
+            // URLSession to RESOLVE the redirect chain once, then let VLC play the final URL
+            // DIRECTLY (native UA/Referer) — no relay, which is lighter and matches the VLC app.
+            // If the resolved URL later errors (e.g. expired token), we fall back to the relay.
+            let complexHeaders = (headers ?? [:]).keys.contains { k in
+                let l = k.lowercased(); return l != "user-agent" && l != "referer"
+            }
+            if complexHeaders {
+                startViaProxy(url)
+            } else {
+                resolveFinalURL(for: url) { [weak self] finalURL in
+                    guard let self, !self.didRequestStop else { return }
+                    if let finalURL = finalURL {
+                        if finalURL != url { print("[VLC] resolved \(url.host ?? "?") -> \(finalURL.host ?? "?") (direct)") }
+                        self.startMedia(playURL: finalURL, useNativeHeaders: true, viaProxy: false)
+                    } else {
+                        // Couldn't resolve — relay through the proxy (handles redirects robustly).
+                        self.startViaProxy(url)
+                    }
+                }
+            }
+        }
+
+        /// Relay through the local proxy: URLSession follows redirects and injects all headers.
+        private func startViaProxy(_ url: URL) {
+            var proxyHeaders = headers ?? [:]
+            if !proxyHeaders.keys.contains(where: { $0.caseInsensitiveCompare("user-agent") == .orderedSame }) {
+                proxyHeaders["User-Agent"] = Self.browserUA
+            }
+            let proxy = VLCProxyServer(targetURL: url, headers: proxyHeaders)
+            proxy.start()
+            self.proxyServer = proxy
+            print("VLC Proxy: \(url.absoluteString) -> \(proxy.localURL.absoluteString)")
+            startMedia(playURL: proxy.localURL, useNativeHeaders: false, viaProxy: true)
+        }
+
+        /// Create the media and start playback. `useNativeHeaders` adds VLC's native UA/Referer
+        /// options (direct path only); `viaProxy` records whether playback is relayed (so an error
+        /// on the direct path can fall back to the relay, but a relay error doesn't loop).
+        private func startMedia(playURL: URL, useNativeHeaders: Bool, viaProxy: Bool) {
+            resolvedPlayURL = playURL
+            resolvedUseNativeHeaders = useNativeHeaders
+            isPlayingViaProxy = viaProxy
+            guard let media = VLCMedia(url: playURL) else {   // VLCKit 4.0: VLCMedia(url:) is failable
+                print("VLC: failed to create media for \(playURL)")
+                return
+            }
+            // network-caching kept modest: a 15s pre-roll caused a long black/buffering stall before
+            // the first frame (the real VLC app uses 999ms). 3s = fast start + small cushion.
+            // drop-late-frames/skip-frames stay on (libvlc defaults) so late frames are dropped.
+            media.addOptions([
+                "--network-caching": "3000",
+                "--drop-late-frames": "1",
+                "--skip-frames": "1",
+            ])
+            if useNativeHeaders, let headers = headers {
+                if let ua = headers.first(where: { $0.key.caseInsensitiveCompare("user-agent") == .orderedSame })?.value {
+                    media.addOption(":http-user-agent=\(ua)")
+                }
+                if let ref = headers.first(where: { $0.key.caseInsensitiveCompare("referer") == .orderedSame })?.value {
+                    media.addOption(":http-referrer=\(ref)")
+                }
+            }
+            loadedMedia = media
+            mediaPlayer.media = media
+            applyPreBufferingState()
+            mediaPlayer.play()
+        }
+
+        /// Resolve `url` through its redirect chain via URLSession (which follows 3xx) and return
+        /// the final URL — what VLC should play directly. Uses a 1-byte ranged GET cancelled right
+        /// after the response headers, so it mimics VLC's own GET (rather than a HEAD some servers
+        /// treat differently) without downloading the body. Completion runs on main; nil = failure.
+        private func resolveFinalURL(for url: URL, completion: @escaping (URL?) -> Void) {
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            req.setValue("bytes=0-1", forHTTPHeaderField: "Range")
+            req.timeoutInterval = 8
+            if let headers = headers {
+                for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+            }
+            redirectResolver = RedirectResolver(request: req) { [weak self] finalURL in
+                self?.redirectResolver = nil
+                completion(finalURL)   // nil on failure → caller relays through the proxy
+            }
+        }
+
+        // MARK: - AV1 → GLES2 vout reload
+
+        /// Is the current video track AV1? (Checked once playback starts and tracks are known.)
+        private func currentVideoIsAV1() -> Bool {
+            func isAV1(_ codecFourCC: UInt32) -> Bool {
+                Self.fourCCString(codecFourCC).lowercased() == "av01"
+            }
+            return mediaPlayer.videoTracks.contains { isAV1($0.codec) || isAV1($0.fourcc) }
+        }
+
+        private static func fourCCString(_ f: UInt32) -> String {
+            let bytes: [UInt8] = [UInt8(f & 0xff), UInt8((f >> 8) & 0xff), UInt8((f >> 16) & 0xff), UInt8((f >> 24) & 0xff)]
+            return (String(bytes: bytes, encoding: .ascii) ?? "")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\0 "))
+        }
+
+        /// Reload the current media onto the GLES2 vout so dav1d's software I420 frames are
+        /// color-converted on the GPU instead of via a CPU swscale. Done once, only for AV1.
+        private func switchToGLESVout() {
+            guard !didSwitchVout, let playURL = resolvedPlayURL else { return }
+            didSwitchVout = true
+            let resumeSec = max(0, Double(mediaPlayer.time.intValue) / 1000.0)
+            print("[VLC] AV1 detected — reloading on GLES2 vout (resume @ \(String(format: "%.1f", resumeSec))s)")
+            reloadPlayer(playURL: playURL, useNativeHeaders: resolvedUseNativeHeaders,
+                         viaProxy: isPlayingViaProxy, forceGLES: true, resumeSec: resumeSec)
+        }
+
+        /// Direct playback errored (e.g. an expired/invalid resolved-redirect token). Re-resolve
+        /// the original URL through the proxy relay, which fetches fresh on every connection.
+        private func fallbackToProxy() {
+            guard !didFallbackToProxy, !isPlayingViaProxy, let url = originalURL else { return }
+            didFallbackToProxy = true
+            let resumeSec = max(0, Double(mediaPlayer.time.intValue) / 1000.0)
+            print("[VLC] direct playback errored — falling back to proxy relay (resume @ \(String(format: "%.1f", resumeSec))s)")
+
+            var proxyHeaders = headers ?? [:]
+            if !proxyHeaders.keys.contains(where: { $0.caseInsensitiveCompare("user-agent") == .orderedSame }) {
+                proxyHeaders["User-Agent"] = Self.browserUA
+            }
+            let proxy = VLCProxyServer(targetURL: url, headers: proxyHeaders)
+            proxy.start()
+            self.proxyServer = proxy
+            // Keep GLES2 if we'd already switched (AV1); the relay just changes where bytes come from.
+            reloadPlayer(playURL: proxy.localURL, useNativeHeaders: false,
+                         viaProxy: true, forceGLES: didSwitchVout, resumeSec: resumeSec)
+        }
+
+        /// Tear down the current player and recreate it (optionally on the GLES2 vout), then resume
+        /// `playURL` at `resumeSec`. Shared by the GLES2 switch and the proxy fallback.
+        private func reloadPlayer(playURL: URL, useNativeHeaders: Bool, viaProxy: Bool,
+                                  forceGLES: Bool, resumeSec: Double) {
+            // Detach + stop the old player so its async ".stopped"/".error" can't be mistaken for
+            // end-of-video or re-trigger a fallback.
+            let old = mediaPlayer
+            old.delegate = nil
+            old.stop()
+
+            mediaPlayer = forceGLES ? VLCMediaPlayer(options: ["--vout=gles2"]) : VLCMediaPlayer()
+            mediaPlayer.delegate = self
+            #if DEBUG
+            let vlcLogger = VLCConsoleLogger()
+            vlcLogger.level = .warning
+            mediaPlayer.libraryInstance.loggers = [vlcLogger]
+            #endif
+            mediaPlayer.drawable = videoView
+
+            // Reset per-playback state so the new player re-attaches slaves/tracks and resumes.
+            lastReportedState = nil
+            slavesAttached = false
+            didFetchTracks = false
+            initialTime = resumeSec
+            initialTimeApplied = false
+
+            startMedia(playURL: playURL, useNativeHeaders: useNativeHeaders, viaProxy: viaProxy)
         }
         
         private func attachSlavesIfNeeded() {
@@ -307,26 +445,34 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         // VLCKit 4.0 passes the new state directly (3.x passed an NSNotification).
         func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
             DispatchQueue.main.async {
-                // Diagnostics for the "decodes but black screen" issue. hasVideoOut is the key
-                // signal: false => libvlc never built a video output (vout/drawable problem);
-                // true with a zero videoSize => stream/decoder problem; true + non-zero + still
-                // black => a view/layout/compositing problem on our side.
-                print("[VLC] state=\(Self.stateName(newState)) playing=\(self.mediaPlayer.isPlaying) hasVideoOut=\(self.mediaPlayer.hasVideoOut) videoSize=\(self.mediaPlayer.videoSize) videoTracks=\(self.mediaPlayer.videoTracks.count) viewBounds=\(self.videoView.bounds)")
-                self.playbackState.isPlaying = self.mediaPlayer.isPlaying
+                // De-dupe: VLCKit re-fires this with the same state on every buffering % tick.
+                // Only do the (lock-taking / broadcasting) work on real transitions.
+                let changed = newState != self.lastReportedState
+                self.lastReportedState = newState
+                guard changed else { return }
+
+                print("[VLC] state=\(Self.stateName(newState)) playing=\(self.mediaPlayer.isPlaying) hasVideoOut=\(self.mediaPlayer.hasVideoOut) videoSize=\(self.mediaPlayer.videoSize) videoTracks=\(self.mediaPlayer.videoTracks.count)")
+                if self.playbackState.isPlaying != self.mediaPlayer.isPlaying {
+                    self.playbackState.isPlaying = self.mediaPlayer.isPlaying
+                }
                 self.broadcastStatus()
-                // libvlc requires the input to be running before slaves can be
-                // attached to the *current* playback. Hook .opening (and .playing
-                // as a fallback) so external SRT/VTT URLs from the phone show up
-                // in the Subtitles menu.
+
+                // libvlc needs the input running before slaves attach to the current playback;
+                // hook .opening (with .playing as fallback). attachSlavesIfNeeded is idempotent.
                 if newState == .opening || newState == .playing {
                     self.attachSlavesIfNeeded()
                 }
                 if newState == .playing {
-                    // Clear userPaused when VLC resumes
-                    self.playbackState.userPaused = false
+                    self.playbackState.userPaused = false   // clear when VLC resumes
                     self.updateSubtitleTracks()
                     self.updateAudioTracks()
                     self.broadcastTracks()
+                    // Software-decoded AV1 is the only case that benefits from the GPU vout; reload
+                    // onto GLES2 once. Other codecs stay on samplebufferdisplay (HDR-correct).
+                    if !self.didSwitchVout, self.currentVideoIsAV1() {
+                        self.switchToGLESVout()
+                        return
+                    }
                 }
                 // 4.0 has no ".ended" — natural end arrives as ".stopped" (after ".stopping").
                 // Ignore the ".stopped" we cause ourselves on teardown (didRequestStop).
@@ -340,6 +486,11 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 }
                 if newState == .error {
                     print("VLC Error: Playback failed")
+                    // If a directly-played (resolved) URL failed — e.g. an expired token — retry
+                    // once through the proxy relay, which re-resolves fresh on each connection.
+                    if !self.isPlayingViaProxy, !self.didFallbackToProxy {
+                        self.fallbackToProxy()
+                    }
                 }
             }
         }
@@ -625,9 +776,12 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 self, selector: #selector(onResyncRequest),
                 name: WebSocketServer.resyncRequest, object: nil)
 
-            // Periodic status (covers live position) — 1s cadence matches the Android receiver.
-            statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                self?.broadcastStatus()
+            // Periodic position broadcast. 2s (was 1s) and only while actually playing — the JSON
+            // build + WebSocket send is wasted work while paused/buffering (state transitions are
+            // broadcast separately), and trimming it frees a little CPU for the decoder.
+            statusTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                guard let self, self.mediaPlayer.isPlaying else { return }
+                self.broadcastStatus()
             }
         }
 
@@ -747,5 +901,43 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             proxyServer?.stop()
             proxyServer = nil
         }
+    }
+}
+
+/// One-shot redirect resolver. Starts a request, lets URLSession follow the redirect chain, and
+/// reports the FINAL URL as soon as the response headers arrive — cancelling before the body
+/// downloads (so a server that ignores our Range and returns 200 doesn't pull the whole file).
+/// `nil` means a hard failure (no response). Completion is delivered on the main thread.
+private final class RedirectResolver: NSObject, URLSessionDataDelegate {
+    private let completion: (URL?) -> Void
+    private var finished = false
+    private var session: URLSession!
+
+    init(request: URLRequest, completion: @escaping (URL?) -> Void) {
+        self.completion = completion
+        super.init()
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = request.timeoutInterval
+        cfg.timeoutIntervalForResource = request.timeoutInterval
+        session = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
+        session.dataTask(with: request).resume()
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        finish(response.url)               // response.url is the final URL after any redirects
+        completionHandler(.cancel)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        finish(task.response?.url)         // hard failure before a response → task.response is nil
+    }
+
+    private func finish(_ url: URL?) {
+        guard !finished else { return }
+        finished = true
+        session.invalidateAndCancel()      // breaks the session↔delegate retain cycle
+        DispatchQueue.main.async { self.completion(url) }
     }
 }

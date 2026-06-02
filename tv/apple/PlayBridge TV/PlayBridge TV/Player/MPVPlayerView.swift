@@ -271,7 +271,7 @@ class MPVViewController: UIViewController {
     }
 
     private func loadFile(_ url: URL) {
-        guard let handle = mpv else { return }
+        guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
         pendingExternalSubtitles = subtitles ?? []
         // Clear buffered-ahead state so a looped/next file doesn't flash the prior buffer.
         cacheAheadSec = 0

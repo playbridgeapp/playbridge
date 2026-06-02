@@ -102,6 +102,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         private var timeObserver: Any?
         private var didBroadcastTracks = false
+        // Media-selection groups loaded once (async, tvOS 16+) when the item is ready, then used
+        // synchronously by broadcastTracks/selectTrack. Avoids the deprecated sync accessor.
+        private var audioGroup: AVMediaSelectionGroup?
+        private var subtitleGroup: AVMediaSelectionGroup?
 
         init(title: String?, onDismiss: @escaping () -> Void, onExit: @escaping () -> Void,
              onSwitch: @escaping (Double) -> Void, onBroadcast: @escaping ([String: Any]) -> Void) {
@@ -191,18 +195,36 @@ struct NativePlayerView: UIViewControllerRepresentable {
             if let t = title, !t.isEmpty { json["title"] = t }
             onBroadcast(json)
 
-            // Track lists become available once the item is ready; push them once.
-            if !didBroadcastTracks, player.currentItem?.status == .readyToPlay {
+            // Track lists become available once the item is ready; load the selection groups once
+            // (async on tvOS 16+), cache them, then broadcast.
+            if !didBroadcastTracks, let item = player.currentItem, item.status == .readyToPlay {
                 didBroadcastTracks = true
+                loadSelectionGroupsAndBroadcast(asset: item.asset)
+            }
+        }
+
+        private func loadSelectionGroupsAndBroadcast(asset: AVAsset) {
+            if #available(tvOS 16, *) {
+                Task { [weak self] in
+                    guard let self else { return }
+                    let audio = (try? await asset.loadMediaSelectionGroup(for: .audible)) ?? nil
+                    let sub = (try? await asset.loadMediaSelectionGroup(for: .legible)) ?? nil
+                    await MainActor.run {
+                        self.audioGroup = audio
+                        self.subtitleGroup = sub
+                        self.broadcastTracks()
+                    }
+                }
+            } else {
+                // tvOS 14/15: the only accessor is the deprecated sync one — skip track sync there.
                 broadcastTracks()
             }
         }
 
         private func broadcastTracks() {
             guard let item = player?.currentItem else { return }
-            let asset = item.asset
-            func encode(_ characteristic: AVMediaCharacteristic) -> [[String: Any]] {
-                guard let group = asset.mediaSelectionGroup(forMediaCharacteristic: characteristic) else { return [] }
+            func encode(_ group: AVMediaSelectionGroup?) -> [[String: Any]] {
+                guard let group else { return [] }
                 let selected = item.currentMediaSelection.selectedMediaOption(in: group)
                 return group.options.enumerated().map { index, option in
                     ["id": String(index), "name": option.displayName, "selected": option == selected]
@@ -210,8 +232,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             }
             onBroadcast([
                 "type": "tracks",
-                "audio": encode(.audible),
-                "subtitle": encode(.legible),
+                "audio": encode(audioGroup),
+                "subtitle": encode(subtitleGroup),
             ])
         }
 
@@ -267,8 +289,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private func selectTrack(_ characteristic: AVMediaCharacteristic, id: String) {
-            guard let item = player?.currentItem,
-                  let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: characteristic) else { return }
+            guard let item = player?.currentItem else { return }
+            guard let group = (characteristic == .audible) ? audioGroup : subtitleGroup else { return }
             if id == "none" || id == "-1" {
                 item.select(nil, in: group)  // deselect (e.g. subtitles off)
             } else if let index = Int(id), group.options.indices.contains(index) {
