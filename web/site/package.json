@@ -7,7 +7,8 @@
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "preinstall": "npx only-allow pnpm"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",

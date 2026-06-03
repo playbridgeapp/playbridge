@@ -139,6 +139,14 @@
             >
               <Icon name="github" size={13} /> View tvOS Source
             </button>
+          {:else if tab.downloadUrl}
+            <button
+              type="button"
+              class="btn btn--primary"
+              onclick={() => window.open(tab.downloadUrl, '_blank', 'noopener,noreferrer')}
+            >
+              <Icon name="download" size={13} stroke={2.0} /> Direct Download
+            </button>
           {:else}
             <button
               type="button"

@@ -5,9 +5,9 @@ Static marketing site for PlayBridge. Built with SvelteKit + `adapter-static`. D
 ## Develop
 
 ```bash
-cd web
-npm install
-npm run dev
+cd web/site
+pnpm install
+pnpm dev
 ```
 
 Open http://localhost:5173.
@@ -15,8 +15,8 @@ Open http://localhost:5173.
 ## Build
 
 ```bash
-npm run build      # outputs to web/build
-npm run preview    # serve the production build locally
+pnpm build      # outputs to web/site/build
+pnpm preview    # serve the production build locally
 ```
 
 Every route is prerendered to static HTML — view-source shows real content, which is what makes the site SEO-friendly.
@@ -31,15 +31,15 @@ Two equivalent options:
 2. Repository: this repo.
 3. **Build configuration:**
    - Framework preset: **SvelteKit (static)** (or "None")
-   - Build command: `cd web && npm ci && npm run build`
-   - Build output directory: `web/build`
+   - Build command: `cd web/site && pnpm install && pnpm build`
+   - Build output directory: `web/site/build`
    - Root directory: leave blank
 4. (Optional) set custom domain to `playbridge.app`.
 
 ### B) Deploy via Wrangler from CI
 
 ```bash
-cd web && npm ci && npm run build
+cd web/site && pnpm install && pnpm build
 npx wrangler pages deploy build --project-name playbridge
 ```
 
