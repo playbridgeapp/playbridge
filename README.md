@@ -98,7 +98,8 @@ All trademarks and copyrights belong to their respective owners.
 ## License
 
 This project is licensed under the **GNU General Public License v3.0** (GPLv3). See the [LICENSE](LICENSE) file for details.
-Some components (GeckoView) are licensed under MPL 2.0, which is compatible with GPLv3.
+
+It also bundles third-party software under their own (GPLv3-compatible) licenses — including GeckoView (MPL-2.0), FFmpeg and mpv/libmpv (LGPL/GPL), and uBlock Origin (GPL-3.0). See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the full list.
 
 ## Contact
 
