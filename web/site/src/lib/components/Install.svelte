@@ -202,7 +202,6 @@
 
 <style>
   .step-desc { color: var(--text-dim); }
-  .cta-row { margin-top: 28px; display: flex; gap: 8px; }
   .panel-label { font-size: 10px; letter-spacing: 0.16em; color: var(--text-faint); margin-bottom: 8px; }
   .meta-k { color: var(--text-faint); }
 

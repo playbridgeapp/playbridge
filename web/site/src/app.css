@@ -161,6 +161,8 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
     inset 0 1px 0 rgba(255,255,255,0.5);
 }
 
+.cta-row { margin-top: 28px; display: flex; gap: 8px; }
+
 .nav {
   position: sticky;
   top: 0;
