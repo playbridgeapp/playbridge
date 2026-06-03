@@ -82,14 +82,12 @@ Contributions are welcome! Please follow these steps:
 
 For detailed instructions, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## AI usage
+## AI Policy
 
-PlayBridge is built openly with the help of AI coding assistants and automated agents — a large share of the code, docs, and tooling was written or refactored with AI and reviewed before it landed. We'd rather be upfront about that than pretend otherwise.
+This project is built with the help of AI-assisted tools. We welcome similar contributions, provided you take full ownership of the code you submit. Every pull request—regardless of the tools used—is subject to the same standard of review and testing.
 
-AI-assisted contributions are welcome, held to the same bar as any other:
-- **You own what you submit.** Understand and test your changes — the tool isn't the contributor, you are.
-- **Keep PRs focused and reviewable** — no giant unexplained dumps of generated code.
-- A note that AI was involved is appreciated, but not required.
+- **Responsibility**: You must fully understand, test, and be able to explain all parts of your changes.
+- **Reviewability**: Keep PRs focused and readable. Avoid large, undocumented dumps of generated code.
 
 ## Acknowledgments
 
