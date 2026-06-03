@@ -194,8 +194,8 @@ export const INSTALL_TABS: InstallTab[] = [
     icon: 'tv',
     title: 'Android TV Player',
     steps: [
-      ['Download', 'TV Player APK from GitHub Releases.'],
-      ['Sideload', 'adb install or Downloader app.'],
+      ['Download', 'Use Downloader app on TV with code 9557748.'],
+      ['Install', 'Sideload via adb install or follow Downloader prompts.'],
       ['Approve devices', 'Allow the first phone that connects.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-tv-player&expanded=true',
