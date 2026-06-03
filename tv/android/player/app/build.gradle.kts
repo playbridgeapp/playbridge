@@ -104,9 +104,6 @@ dependencies {
     // (AndroidKeyStore keys can't sign TLS handshakes via Conscrypt).
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.78.1")
 
-    // QR Code Generation
-    implementation(libs.zxing.core)
-
     // DataStore
     implementation(libs.androidx.datastore)
 

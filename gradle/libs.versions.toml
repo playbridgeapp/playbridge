@@ -9,8 +9,6 @@ lifecycleRuntimeKtx = "2.10.0"
 activityCompose = "1.12.3"
 composeBom = "2024.09.00"
 okhttp = "4.12.0"
-mlkitBarcode = "17.3.0"
-cameraX = "1.4.1"
 datastore = "1.1.1"
 kotlinxSerialization = "1.7.3"
 coroutines = "1.9.0"
@@ -19,7 +17,6 @@ geckoview = "150.0.20260415192539"
 coil2 = "2.7.0"
 coil3 = "3.3.0"
 media3 = "1.9.2"
-zxing = "3.5.2"
 room = "2.8.4"
 palette = "1.0.0"
 ksp = "2.3.2"
@@ -79,17 +76,6 @@ okio-fakefilesystem             = { module = "com.squareup.okio:okio-fakefilesys
 # OkHttp
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-urlconnection = { group = "com.squareup.okhttp3", name = "okhttp-urlconnection", version.ref = "okhttp" }
-
-# ML Kit Barcode
-mlkit-barcode = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcode" }
-
-# ZXing
-zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
-
-# CameraX
-camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "cameraX" }
-camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
-camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX" }
 
 # DataStore
 androidx-datastore = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }

@@ -716,7 +716,6 @@ class BrowserActivity : ComponentActivity() {
             }
 
             // View state - browser
-            // var showScanner by remember { mutableStateOf(false) } (deleted)
 
             // FAB Drag state
             var fabOffsetX by remember { mutableFloatStateOf(0f) }
