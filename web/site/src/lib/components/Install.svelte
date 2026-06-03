@@ -146,7 +146,7 @@
                 class="btn btn--primary"
                 onclick={() => window.open(tab.downloadUrl, '_blank', 'noopener,noreferrer')}
               >
-                <Icon name="download" size={13} stroke={2.0} /> Direct Download
+                <Icon name="download" size={13} stroke={2.0} /> Download
               </button>
             {/if}
             <button
