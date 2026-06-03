@@ -151,12 +151,37 @@
             </button>
           {/if}
         </div>
+        {#if tab.downloadUrl && (tab.id === 'android' || tab.id === 'tvplayer' || tab.id === 'tvbrowser')}
+          <div class="arch-select">
+            <span>Universal APK (all CPUs) downloaded by default.</span>
+            <span>Or download: <a href="{tab.downloadUrl}-v8a" target="_blank" rel="noopener">64-bit (v8a)</a> • <a href="{tab.downloadUrl}-v7a" target="_blank" rel="noopener">32-bit (v7a)</a></span>
+          </div>
+        {/if}
       </div>
     </div>
   </div>
 </section>
 
 <style>
+  .arch-select {
+    margin-top: 16px;
+    font-size: 11px;
+    color: var(--text-faint);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+    line-height: 1.4;
+  }
+  .arch-select a {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  .arch-select a:hover {
+    text-decoration: underline;
+  }
+
   .step-desc { color: var(--text-dim); }
   .panel-label { font-size: 10px; letter-spacing: 0.16em; color: var(--text-faint); margin-bottom: 8px; }
   .meta-k { color: var(--text-faint); }

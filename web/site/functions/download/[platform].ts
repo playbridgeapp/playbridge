@@ -8,28 +8,45 @@ export const onRequestGet: PagesFunction<unknown, 'platform'> = async (context) 
   let assetPattern = '';
   const fallbackUrl = `https://github.com/${GITHUB_REPO}/releases`;
 
-  if (platform === 'android') {
+  // Parse architecture suffix if present (e.g. -v7a, -v8a, -universal)
+  let arch = '';
+  let cleanPlatform = platform;
+  if (platform.endsWith('-v7a')) {
+    arch = 'armeabi-v7a';
+    cleanPlatform = platform.substring(0, platform.length - 4);
+  } else if (platform.endsWith('-v8a')) {
+    arch = 'arm64-v8a';
+    cleanPlatform = platform.substring(0, platform.length - 4);
+  } else if (platform.endsWith('-universal')) {
+    arch = 'universal';
+    cleanPlatform = platform.substring(0, platform.length - 10);
+  }
+
+  if (cleanPlatform === 'android') {
     tagPrefix = 'phone-v';
-    assetPattern = '^playbridge-phone-.*-arm64-v8a-release\\.apk$';
-  } else if (platform === 'tv-player') {
+    const finalArch = arch || 'universal';
+    assetPattern = `^playbridge-phone-.*-${finalArch}-release\\.apk$`;
+  } else if (cleanPlatform === 'tv-player') {
     tagPrefix = 'tv-player-v';
-    assetPattern = '^playbridge-tv-player-.*-armeabi-v7a-release\\.apk$';
-  } else if (platform === 'tv-browser') {
+    const finalArch = arch || 'universal';
+    assetPattern = `^playbridge-tv-player-.*-${finalArch}-release\\.apk$`;
+  } else if (cleanPlatform === 'tv-browser') {
     tagPrefix = 'tv-browser-v';
-    assetPattern = '^playbridge-tv-browser-.*-armeabi-v7a-release\\.apk$';
-  } else if (platform === 'macos') {
+    const finalArch = arch || 'universal';
+    assetPattern = `^playbridge-tv-browser-.*-${finalArch}-release\\.apk$`;
+  } else if (cleanPlatform === 'macos') {
     tagPrefix = 'desktop-v';
     assetPattern = '^playbridge-desktop-macos-.*\\.zip$';
-  } else if (platform === 'windows') {
+  } else if (cleanPlatform === 'windows') {
     tagPrefix = 'desktop-v';
     assetPattern = '^playbridge-desktop-windows-.*\\.zip$';
-  } else if (platform === 'linux') {
+  } else if (cleanPlatform === 'linux') {
     tagPrefix = 'desktop-v';
     assetPattern = '^playbridge-desktop-linux-.*\\.tar\\.gz$';
-  } else if (platform === 'firefox') {
+  } else if (cleanPlatform === 'firefox') {
     tagPrefix = 'extension-v';
     assetPattern = '^playbridge-extension-.*\\.xpi$';
-  } else if (platform === 'appletv') {
+  } else if (cleanPlatform === 'appletv') {
     return Response.redirect(`https://github.com/${GITHUB_REPO}/tree/main/tv/apple`, 302);
   } else {
     return new Response('Platform Not Found', { status: 404 });
