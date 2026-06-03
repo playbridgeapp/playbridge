@@ -123,6 +123,7 @@ fun AppNavHost(
     onUrlBarTappedChange: (Boolean) -> Unit,
     urlPanelClipboard: String?,
     onUrlPanelClipboardChange: (String?) -> Unit,
+    onMagnetDetected: (String) -> Unit = {},
     contextMenuUrl: String?,
     onContextMenuUrlChange: (String?) -> Unit,
     suggestions: List<HistoryEntity>,
@@ -407,8 +408,12 @@ fun AppNavHost(
                                                     trailingContent = {
                                                         IconButton(onClick = {
                                                             val clip = urlPanelClipboard
-                                                            val url = if (clip.startsWith("http://") || clip.startsWith("https://") || clip.startsWith("about:")) clip else "https://$clip"
-                                                            session?.loadUrl(url)
+                                                            if (clip.startsWith("magnet:", ignoreCase = true)) {
+                                                                onMagnetDetected(clip.trim())
+                                                            } else {
+                                                                val url = if (clip.startsWith("http://") || clip.startsWith("https://") || clip.startsWith("about:")) clip else "https://$clip"
+                                                                session?.loadUrl(url)
+                                                            }
                                                             onIsEditingChange(false)
                                                             keyboardController?.hide()
                                                             focusManager.clearFocus()
@@ -418,8 +423,12 @@ fun AppNavHost(
                                                     },
                                                     modifier = Modifier.clickable {
                                                         val clip2 = urlPanelClipboard
-                                                        val url = if (clip2.startsWith("http://") || clip2.startsWith("https://") || clip2.startsWith("about:")) clip2 else "https://$clip2"
-                                                        session?.loadUrl(url)
+                                                        if (clip2.startsWith("magnet:", ignoreCase = true)) {
+                                                            onMagnetDetected(clip2.trim())
+                                                        } else {
+                                                            val url = if (clip2.startsWith("http://") || clip2.startsWith("https://") || clip2.startsWith("about:")) clip2 else "https://$clip2"
+                                                            session?.loadUrl(url)
+                                                        }
                                                         onIsEditingChange(false)
                                                         keyboardController?.hide()
                                                         focusManager.clearFocus()

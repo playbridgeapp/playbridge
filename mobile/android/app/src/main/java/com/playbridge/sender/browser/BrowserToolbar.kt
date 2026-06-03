@@ -46,6 +46,7 @@ fun BrowserToolbar(
     isLoading: Boolean,
     onUrlChange: (String) -> Unit,
     onNavigate: (String) -> Unit,
+    onMagnetDetected: (String) -> Unit = {},
     onRefresh: () -> Unit,
     onStop: () -> Unit,
     onRemoteClick: (() -> Unit)? = null,
@@ -210,8 +211,14 @@ fun BrowserToolbar(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(
                         onGo = {
-                            val url = normalizeUrl(textFieldValue.text)
-                            onNavigate(url)
+                            val raw = textFieldValue.text.trim()
+                            // A magnet link typed/pasted into the URL bar is handled like a
+                            // clicked magnet link (GeckoView can't load magnet: anyway).
+                            if (raw.startsWith("magnet:", ignoreCase = true)) {
+                                onMagnetDetected(raw)
+                            } else {
+                                onNavigate(normalizeUrl(textFieldValue.text))
+                            }
                             onEditingChange(false)
                             keyboardController?.hide()
                             focusManager.clearFocus()

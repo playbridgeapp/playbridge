@@ -1151,6 +1151,10 @@ class BrowserActivity : ComponentActivity() {
                                                 session.loadUrl(url)
                                                 isEditing = false
                                             },
+                                            onMagnetDetected = { magnet ->
+                                                interceptedMagnet = magnet
+                                                isEditing = false
+                                            },
                                             onRefresh = { session.reload() },
                                             onStop = { session.stopLoading() },
                                             onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
@@ -1408,6 +1412,7 @@ class BrowserActivity : ComponentActivity() {
                         onLastMainScreenChange = { lastMainScreen = it },
                         innerPadding = innerPadding,
                         session = session,
+                        onMagnetDetected = { interceptedMagnet = it },
                         sessions = tabManager.sessions,
                         tabManager = tabManager,
                         store = store,
