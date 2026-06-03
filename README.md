@@ -1,18 +1,24 @@
 # PlayBridge
 
+<p align="center">
+  <img src="docs/screenshots/cast-flow.png" alt="Find content on your phone, play it on your TV" width="720">
+</p>
+
 PlayBridge is an open-source Android application suite that bridges the gap between your phone and Android TV. Use PlayBridge to play what you want without the troubles of a clunky TV browser. Find your content on your phone, and seamlessly bridge it to your big screen.
 
 ## Screenshots
 
-<!-- Drop captures into docs/screenshots/ and replace these placeholders. -->
+**Browse & cast from your phone**
 
-<p align="center">
-  <img src="docs/screenshots/cast-flow.png" alt="Find content on the phone, play it on the TV" width="720">
-</p>
-
-| Library | Now Playing | TV Player |
+| Console hub | Library & discovery | Built-in browser |
 |:---:|:---:|:---:|
-| <img src="docs/screenshots/library.png" alt="Library / discovery" width="240"> | <img src="docs/screenshots/now-playing.png" alt="Now playing / remote" width="240"> | <img src="docs/screenshots/tv-player.png" alt="TV player" width="400"> |
+| <img src="docs/screenshots/phone-hub.jpg" alt="Console hub — connected to the TV" width="230"> | <img src="docs/screenshots/phone-library.jpg" alt="Library and discovery" width="230"> | <img src="docs/screenshots/phone-browser.jpg" alt="Built-in browser with cast" width="230"> |
+
+**Your phone is the remote**
+
+| Now playing | Touchpad · D-Pad · Keyboard |
+|:---:|:---:|
+| <img src="docs/screenshots/phone-now-playing.jpg" alt="Now playing — scrub and transport controls" width="230"> | <img src="docs/screenshots/phone-remote.jpg" alt="Touchpad, D-Pad and keyboard remote" width="230"> |
 
 ## Features
 

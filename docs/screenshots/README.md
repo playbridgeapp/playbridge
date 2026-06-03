@@ -1,13 +1,12 @@
 # Screenshots
 
-App captures used by the root [README](../../README.md). Drop the files here and they'll render automatically.
-
-Expected files (referenced from the README):
+Images used by the root [README](../../README.md).
 
 - `cast-flow.png` — cast-flow hero (rendered from the marketing site's hero scene)
-- `library.png` — phone Library / discovery screen
-- `now-playing.png` — phone now-playing / remote controls
-- `tv-player.png` — TV player on the big screen
+- `phone-hub.jpg` — Console Hub home, connected to the TV
+- `phone-library.jpg` — Library & discovery
+- `phone-browser.jpg` — built-in browser with cast
+- `phone-now-playing.jpg` — Remote: now playing (scrub + transport)
+- `phone-remote.jpg` — Remote: touchpad / D-Pad / keyboard
 
-Optional extras to add later: built-in browser detecting media, content detail / sources,
-TV browser with ad-block, pairing screen, desktop receiver, Firefox extension popup.
+Phone shots are 720px-wide JPEGs (downscaled from 1080×2340); the hero is a PNG.
