@@ -139,21 +139,23 @@
             >
               <Icon name="github" size={13} /> View tvOS Source
             </button>
-          {:else if tab.downloadUrl}
-            <button
-              type="button"
-              class="btn btn--primary"
-              onclick={() => window.open(tab.downloadUrl, '_blank', 'noopener,noreferrer')}
-            >
-              <Icon name="download" size={13} stroke={2.0} /> Direct Download
-            </button>
           {:else}
+            {#if tab.downloadUrl}
+              <button
+                type="button"
+                class="btn btn--primary"
+                onclick={() => window.open(tab.downloadUrl, '_blank', 'noopener,noreferrer')}
+              >
+                <Icon name="download" size={13} stroke={2.0} /> Direct Download
+              </button>
+            {/if}
             <button
               type="button"
-              class="btn btn--primary"
+              class="btn"
+              class:btn--primary={!tab.downloadUrl}
               onclick={() => window.open('https://' + tab.cmd, '_blank', 'noopener,noreferrer')}
             >
-              <Icon name="github" size={13} /> Download on GitHub
+              <Icon name="github" size={13} /> View on GitHub
             </button>
           {/if}
           <a class="btn" href="https://github.com/playbridgeapp/PlayBridge#readme" rel="noopener" target="_blank">Docs</a>

@@ -87,12 +87,6 @@ export const FEATURES: FeatureItem[] = [
   }
 ];
 
-const PHONE_VER = '0.2.0';
-const TV_PLAYER_VER = '0.2.0';
-const TV_BROWSER_VER = '0.2.0';
-const DESKTOP_VER = '0.2.0';
-const EXTENSION_VER = '0.2.0';
-
 export type InstallTab = {
   id: string;
   label: string;
@@ -128,7 +122,7 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
       ['Approve devices', 'Allow the first sender that connects.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
-    downloadUrl: `${SITE.github}/releases/download/desktop-v${DESKTOP_VER}/playbridge-desktop-macos-${DESKTOP_VER}.zip`,
+    downloadUrl: '/download/macos',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -146,7 +140,7 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
       ['Approve devices', 'Allow the first sender that connects.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
-    downloadUrl: `${SITE.github}/releases/download/desktop-v${DESKTOP_VER}/playbridge-desktop-windows-${DESKTOP_VER}.zip`,
+    downloadUrl: '/download/windows',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -164,7 +158,7 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
       ['Approve devices', 'Allow the first sender that connects.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
-    downloadUrl: `${SITE.github}/releases/download/desktop-v${DESKTOP_VER}/playbridge-desktop-linux-${DESKTOP_VER}.tar.gz`,
+    downloadUrl: '/download/linux',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
@@ -186,7 +180,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Open & connect', 'Send to a player on your network.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-phone-app&expanded=true',
-    downloadUrl: `${SITE.github}/releases/download/phone-v${PHONE_VER}/playbridge-phone-${PHONE_VER}-app-arm64-v8a-release.apk`,
+    downloadUrl: '/download/android',
     meta: [
       ['sha256', 'a4f1…c2b9'],
       ['size', '28.4 MB'],
@@ -205,7 +199,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Approve devices', 'Allow the first phone that connects.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-tv-player&expanded=true',
-    downloadUrl: `${SITE.github}/releases/download/tv-player-v${TV_PLAYER_VER}/playbridge-tv-player-${TV_PLAYER_VER}-app-arm64-v8a-release.apk`,
+    downloadUrl: '/download/tv-player',
     meta: [
       ['sha256', '—'],
       ['size', '—'],
@@ -224,7 +218,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Approve devices', 'Allow the first phone that connects.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-tv-browser&expanded=true',
-    downloadUrl: `${SITE.github}/releases/download/tv-browser-v${TV_BROWSER_VER}/playbridge-tv-browser-${TV_BROWSER_VER}-app-arm64-v8a-release.apk`,
+    downloadUrl: '/download/tv-browser',
     meta: [
       ['sha256', '—'],
       ['size', '—'],
@@ -271,7 +265,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Right-click links', 'Send any link to a player.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-firefox-extension&expanded=true',
-    downloadUrl: `${SITE.github}/releases/download/extension-v${EXTENSION_VER}/playbridge-extension-${EXTENSION_VER}.xpi`,
+    downloadUrl: '/download/firefox',
     meta: [
       ['sha256', '77fa…d3e2'],
       ['size', '3.2 MB'],
