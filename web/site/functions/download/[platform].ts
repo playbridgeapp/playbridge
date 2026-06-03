@@ -13,10 +13,10 @@ export const onRequestGet: PagesFunction<unknown, 'platform'> = async (context) 
     assetPattern = '^playbridge-phone-.*-arm64-v8a-release\\.apk$';
   } else if (platform === 'tv-player') {
     tagPrefix = 'tv-player-v';
-    assetPattern = '^playbridge-tv-player-.*-arm64-v8a-release\\.apk$';
+    assetPattern = '^playbridge-tv-player-.*-armeabi-v7a-release\\.apk$';
   } else if (platform === 'tv-browser') {
     tagPrefix = 'tv-browser-v';
-    assetPattern = '^playbridge-tv-browser-.*-arm64-v8a-release\\.apk$';
+    assetPattern = '^playbridge-tv-browser-.*-armeabi-v7a-release\\.apk$';
   } else if (platform === 'macos') {
     tagPrefix = 'desktop-v';
     assetPattern = '^playbridge-desktop-macos-.*\\.zip$';
