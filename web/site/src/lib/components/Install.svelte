@@ -4,7 +4,6 @@
   import { onMount } from 'svelte';
 
   let active = $state('android');
-  let copied = $state(false);
   let activeDesktopOS = $state<'macos' | 'windows' | 'linux'>('macos');
 
   // Detect client operating system on load to pre-select desktop OS
@@ -42,13 +41,6 @@
 
   const senderTabs = INSTALL_TABS.filter((t) => t.role === 'sender');
   const playerTabs = INSTALL_TABS.filter((t) => t.role === 'player');
-
-  async function copy() {
-    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
-    await navigator.clipboard.writeText(tab.cmd);
-    copied = true;
-    setTimeout(() => (copied = false), 1400);
-  }
 </script>
 
 <section class="section wrap" id="install">
@@ -158,42 +150,6 @@
               <Icon name="github" size={13} /> View on GitHub
             </button>
           {/if}
-          <a class="btn" href="https://github.com/playbridgeapp/PlayBridge#readme" rel="noopener" target="_blank">Docs</a>
-        </div>
-      </div>
-      <div>
-        <div class="mono panel-label">
-          {#if tab.id === 'appletv'}
-            BUILD COMMAND
-          {:else}
-            GITHUB RELEASES
-          {/if}
-        </div>
-
-        <div class="terminal-mock">
-          <div class="terminal-header">
-            <div class="terminal-dots">
-              <span class="dot dot--red"></span>
-              <span class="dot dot--yellow"></span>
-              <span class="dot dot--green"></span>
-            </div>
-            <span class="terminal-title">bash</span>
-          </div>
-          <div class="terminal-body">
-            <code class="terminal-code">{tab.cmd}</code>
-            <button type="button" class="copy-btn" onclick={copy}>
-              {copied ? '✓ COPIED' : 'COPY'}
-            </button>
-          </div>
-        </div>
-
-        <div class="installer__meta">
-          {#each tab.meta as [k, v]}
-            <div class="installer__meta__row">
-              <span class="meta-k">{k}</span>
-              <span>{v}</span>
-            </div>
-          {/each}
         </div>
       </div>
     </div>
@@ -288,60 +244,5 @@
     line-height: 1.45;
     color: var(--text-dim);
     margin: 0;
-  }
-
-  /* Terminal Mockup */
-  .terminal-mock {
-    background: rgba(0, 0, 0, 0.45);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  }
-  .terminal-header {
-    background: rgba(0, 0, 0, 0.2);
-    border-bottom: 1px solid var(--line);
-    padding: 8px 12px;
-    display: flex;
-    align-items: center;
-    position: relative;
-  }
-  .terminal-dots {
-    display: flex;
-    gap: 6px;
-  }
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-  .dot--red { background: #ff5f56; }
-  .dot--yellow { background: #ffbd2e; }
-  .dot--green { background: #27c93f; }
-  .terminal-title {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    color: var(--text-faint);
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-  }
-  .terminal-body {
-    padding: 14px 16px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: var(--text-dim);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  .terminal-code {
-    color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    user-select: all;
   }
 </style>

@@ -390,8 +390,10 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .installer__panel {
   padding: 48px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 64px;
+  grid-template-columns: 1fr;
+  max-width: 600px;
+  margin: 0 auto;
+  gap: 32px;
   align-items: start;
 }
 .installer__panel h3 { font-size: 22px; margin-bottom: 24px; }
@@ -408,32 +410,6 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .installer__steps li:first-child { border-top: 0; padding-top: 0; }
 .installer__steps li .n { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-faint); }
 .installer__steps li strong { color: var(--text); font-weight: 500; display: block; margin-bottom: 4px; }
-.installer__cmd {
-  background: rgba(0,0,0,0.4);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 14px 16px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: var(--text-dim);
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  overflow: hidden;
-}
-.installer__cmd code { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copy-btn {
-  border: 0; background: transparent;
-  color: var(--accent); padding: 4px 8px; border-radius: 4px;
-  font-size: 11px; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.1em;
-  cursor: pointer;
-}
-.copy-btn:hover { background: rgba(74,144,226,0.1); }
-.installer__meta { margin-top: 20px; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 2; color: var(--text-dim); }
-.installer__meta__row {
-  display: flex; justify-content: space-between;
-  border-top: 1px solid var(--line);
-  padding: 6px 0;
-}
-.installer__meta__row:first-child { border-top: 0; }
 
 .faq {
   border: 1px solid var(--line);
@@ -515,7 +491,7 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   .platform:nth-child(even) { padding-left: 0; }
   .feature { grid-template-columns: 1fr; gap: 16px; padding: 32px 0; }
   .feature__visual { justify-content: flex-start; margin-top: 16px; }
-  .installer__panel { grid-template-columns: 1fr; gap: 32px; padding: 24px; }
+  .installer__panel { gap: 32px; padding: 24px; }
   .os__stats { grid-template-columns: repeat(2, 1fr); }
   .os__stats > div:nth-child(2) { border-right: 0; }
   .os__stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
@@ -581,19 +557,6 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   .cta-row .btn {
     justify-content: center;
     width: 100%;
-  }
-  .terminal-body {
-    padding: 12px;
-  }
-  .terminal-code {
-    white-space: nowrap;
-    overflow-x: auto;
-    text-overflow: clip;
-    font-size: 11px;
-    scrollbar-width: none;
-  }
-  .terminal-code::-webkit-scrollbar {
-    display: none;
   }
 }
 
