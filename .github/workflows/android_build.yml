@@ -341,8 +341,8 @@ jobs:
             <!-- tag: pb-phone-app -->
             **Phone:** v${{ steps.versions.outputs.phone }}
 
-            > `.aab` files are for Play Store. `.apk` files are for sideloading.
-          files: output/phone-release-*/*
+            > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
+          files: output/phone-release-*/*.apk
           generate_release_notes: true
           draft: false
 
@@ -356,8 +356,8 @@ jobs:
             <!-- tag: pb-tv-player -->
             **TV Player:** v${{ steps.versions.outputs.player }}
 
-            > `.aab` files are for Play Store. `.apk` files are for sideloading.
-          files: output/tv-player-release-*/*
+            > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
+          files: output/tv-player-release-*/*.apk
           generate_release_notes: true
           draft: false
 
@@ -371,8 +371,8 @@ jobs:
             <!-- tag: pb-tv-browser -->
             **TV Browser:** v${{ steps.versions.outputs.browser }}
 
-            > `.aab` files are for Play Store. `.apk` files are for sideloading.
-          files: output/tv-browser-release-*/*
+            > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
+          files: output/tv-browser-release-*/*.apk
           generate_release_notes: true
           draft: false
 
