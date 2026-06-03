@@ -520,6 +520,97 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   .footer__grid { grid-template-columns: 1fr 1fr; }
   .nav__links { display: none; }
 }
+
+@media (max-width: 768px) {
+  .installer__tabs {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 16px;
+    gap: 16px;
+  }
+  .installer__divider {
+    display: none;
+  }
+  .installer__group {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .installer__group-label {
+    padding: 0 4px;
+    margin-bottom: 0;
+    flex: 0 0 100%;
+  }
+  .installer__tab {
+    border-radius: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--line);
+    margin-bottom: 0;
+    font-size: 12px;
+  }
+  .installer__tab--active {
+    border-color: var(--accent);
+  }
+  .installer__panel {
+    padding: 20px;
+    gap: 24px;
+  }
+  .installer__panel h3 {
+    font-size: 18px;
+    margin-bottom: 16px;
+  }
+  .installer__steps li {
+    padding: 10px 0;
+    font-size: 13px;
+  }
+  .installer__sub-selector {
+    margin-bottom: 16px;
+  }
+  .sub-tab {
+    padding: 5px 10px;
+    font-size: 11px;
+  }
+  .cta-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    margin-top: 20px;
+  }
+  .cta-row .btn {
+    justify-content: center;
+    width: 100%;
+  }
+  .terminal-body {
+    padding: 12px;
+  }
+  .terminal-code {
+    white-space: nowrap;
+    overflow-x: auto;
+    text-overflow: clip;
+    font-size: 11px;
+    scrollbar-width: none;
+  }
+  .terminal-code::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .nav__actions .btn:not(.btn--primary) { display: none; }
+  .logo span { font-size: 14px; }
+  .hero { text-align: center; }
+  .hero h1 { margin: 0 auto; }
+  .hero__sub { margin: 16px auto 0; }
+  .hero__ctas { justify-content: center; }
+  .hero__scene { margin-top: 48px; }
+  .scene { aspect-ratio: 16 / 10; }
+  .tv { width: 75%; }
+  .phone { width: 28%; }
+  .faq__btn { padding: 16px; font-size: 14px; }
+  .faq__panel { padding: 0 16px; }
+  .faq__item--open .faq__panel { padding: 0 16px 16px; }
+}
+
 @media (max-width: 560px) {
   .footer__grid { grid-template-columns: 1fr; }
   .footer__bottom { flex-direction: column; gap: 10px; align-items: flex-start; }
