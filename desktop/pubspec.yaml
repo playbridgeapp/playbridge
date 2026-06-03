@@ -21,8 +21,6 @@ dependencies:
   media_kit_video: ^1.2.5
   media_kit_libs_video: ^1.0.5
 
-  # libmdk-backed player fallback (FFmpeg-based)
-  fvp: ^0.36.2
   video_player: ^2.9.2
 
   # PlayBridge protocol — generated protobuf types

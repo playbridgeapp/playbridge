@@ -18,7 +18,6 @@ notices, and make the corresponding source available — see *Source availabilit
 | **nextlib** | `nextlib-mediainfo-local.aar` | GPL-3.0 — https://github.com/anilbeesetti/nextlib |
 | **libgav1** (AV1) | `lib-decoder-av1-*.aar` | Apache-2.0 — https://chromium.googlesource.com/codecs/libgav1 |
 | **libiamf** | `lib-decoder-iamf-*.aar` | BSD / AOM — https://github.com/AOMediaCodec/libiamf |
-| **MPEG-H decoder** (Fraunhofer) | `lib-decoder-mpegh-*.aar` | ⚠️ Verify redistribution & patent terms before distribution |
 
 > The ExoPlayer/Media3 decoder *wrappers* are Apache-2.0; the licenses above cover the
 > native codec libraries those `.aar`s bundle.
@@ -46,7 +45,7 @@ notices, and make the corresponding source available — see *Source availabilit
 - **OkHttp / Okio**, **Wire** (Square) — Apache-2.0
 - **Ktor**, **Koin**, **multiplatform-settings**, **Coil** — Apache-2.0
 - **Java-WebSocket** — MIT · **Bouncy Castle** — MIT (Bouncy Castle Licence)
-- **Desktop (Flutter)** — `media_kit` (MIT); `fvp` / libmdk (⚠️ verify); `video_player`, `shelf`, `web_socket_channel`, `path_provider`, `shared_preferences` (BSD-3, Flutter/Dart); `bonsoir`, `window_manager`, `tray_manager`, `uuid`, `crypto`, `basic_utils` (MIT/BSD)
+- **Desktop (Flutter)** — `media_kit` (MIT); `video_player`, `shelf`, `web_socket_channel`, `path_provider`, `shared_preferences` (BSD-3, Flutter/Dart); `bonsoir`, `window_manager`, `tray_manager`, `uuid`, `crypto`, `basic_utils` (MIT/BSD)
 - **Browser extension** — `@bufbuild/protobuf` (Apache-2.0), `esbuild` (MIT), `typescript` (Apache-2.0)
 
 ## Source availability
