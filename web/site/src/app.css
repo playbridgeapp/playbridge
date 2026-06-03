@@ -187,6 +187,80 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .nav__links a:hover::after { opacity: 1; }
 .nav__actions { display: flex; gap: 8px; }
 
+.logo__badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(74, 144, 226, 0.12);
+  border: 1px solid rgba(74, 144, 226, 0.25);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 2px;
+  line-height: 1;
+}
+
+.nav__toggle {
+  display: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s, color 0.2s;
+}
+.nav__toggle:hover {
+  background: rgba(200, 220, 255, 0.05);
+  color: var(--text);
+}
+
+.nav__mobile-menu {
+  position: fixed;
+  top: 63px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(6, 9, 30, 0.98);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  padding: 48px 24px;
+  border-top: 1px solid var(--line);
+}
+
+.nav__mobile-links {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  align-items: center;
+}
+
+.nav__mobile-links a {
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.nav__mobile-links a:hover {
+  color: var(--text);
+}
+
+.nav__mobile-github {
+  margin-top: 16px;
+  width: 100%;
+  max-width: 240px;
+  justify-content: center;
+}
+
 .logo {
   display: inline-flex;
   align-items: center;
@@ -497,6 +571,8 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   .os__stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .footer__grid { grid-template-columns: 1fr 1fr; }
   .nav__links { display: none; }
+  .nav__actions { display: none; }
+  .nav__toggle { display: flex; }
 }
 
 @media (max-width: 768px) {

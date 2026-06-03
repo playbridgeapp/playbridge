@@ -2,7 +2,8 @@
   type IconName =
     | 'phone' | 'tv' | 'cast' | 'desktop' | 'firefox' | 'apple' | 'android'
     | 'windows' | 'linux'
-    | 'github' | 'link' | 'plus' | 'arrow' | 'download';
+    | 'github' | 'link' | 'plus' | 'arrow' | 'download'
+    | 'menu' | 'x';
 
   interface Props {
     name: IconName;
@@ -72,5 +73,9 @@
   {:else if name === 'download'}
     <path d="M12 3v12M7 10l5 5 5-5" />
     <path d="M4 19h16" />
+  {:else if name === 'menu'}
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  {:else if name === 'x'}
+    <path d="M18 6L6 18M6 6l12 12" />
   {/if}
 </svg>

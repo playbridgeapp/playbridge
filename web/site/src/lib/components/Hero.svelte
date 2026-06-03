@@ -5,7 +5,7 @@
 </script>
 
 <section class="hero wrap">
-  <div class="hero__pill">Open source casting suite</div>
+  <div class="hero__pill">Alpha • Open source casting suite</div>
   <h1>Your phone. Your TV. <span class="accent">One bridge.</span></h1>
   <p class="hero__sub">
     PlayBridge turns any phone into a remote for any screen. Browse on your phone,
