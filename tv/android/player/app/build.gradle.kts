@@ -23,7 +23,7 @@ android {
         buildConfigField(
             "String",
             "GECKO_PLUGIN_DOWNLOAD_URL",
-            "\"https://github.com/atulmehla/playbridgeapp/releases\""
+            "\"https://github.com/playbridgeapp/playbridge/releases\""
         )
     }
 

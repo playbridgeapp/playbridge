@@ -28,7 +28,6 @@
           <li><a href={SITE.github} rel="noopener">GitHub</a></li>
           <li><a href="https://matrix.to/#/#playbridge:matrix.org" rel="noopener">Matrix</a></li>
           <li><a href="{SITE.github}/blob/main/CONTRIBUTING.md" rel="noopener">Contribute</a></li>
-          <li><a href="https://github.com/sponsors/truedem0n" rel="noopener">Sponsors</a></li>
         </ul>
       </div>
       <div>
