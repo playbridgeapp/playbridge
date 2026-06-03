@@ -17,8 +17,8 @@ android {
         applicationId = "com.playbridge.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 61
-        versionName = "0.1.61"
+        versionCode = 200
+        versionName = "0.2.0"
 
         buildConfigField(
             "String",

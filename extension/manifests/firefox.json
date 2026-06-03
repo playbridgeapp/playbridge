@@ -1,7 +1,7 @@
 {
     "manifest_version": 2,
     "name": "PlayBridge Video Detector",
-    "version": "1.2.3",
+    "version": "0.2.0",
     "description": "Detects video URLs for PlayBridge casting",
     "icons": {
         "48": "icon.png",
