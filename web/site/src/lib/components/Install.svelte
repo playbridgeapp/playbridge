@@ -124,31 +124,34 @@
         </ol>
         <div class="cta-row">
           {#if tab.id === 'appletv'}
-            <button
-              type="button"
+            <a
+              href="https://github.com/playbridgeapp/PlayBridge/tree/main/tv/apple"
+              target="_blank"
+              rel="noopener noreferrer"
               class="btn btn--primary"
-              onclick={() => window.open('https://github.com/playbridgeapp/PlayBridge/tree/main/tv/apple', '_blank', 'noopener,noreferrer')}
             >
               <Icon name="github" size={13} /> View tvOS Source
-            </button>
+            </a>
           {:else}
             {#if tab.downloadUrl}
-              <button
-                type="button"
+              <a
+                href={tab.downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
                 class="btn btn--primary"
-                onclick={() => window.open(tab.downloadUrl, '_blank', 'noopener,noreferrer')}
               >
                 <Icon name="download" size={13} stroke={2.0} /> Download
-              </button>
+              </a>
             {/if}
-            <button
-              type="button"
+            <a
+              href={'https://' + tab.cmd}
+              target="_blank"
+              rel="noopener noreferrer"
               class="btn"
               class:btn--primary={!tab.downloadUrl}
-              onclick={() => window.open('https://' + tab.cmd, '_blank', 'noopener,noreferrer')}
             >
               <Icon name="github" size={13} /> View on GitHub
-            </button>
+            </a>
           {/if}
         </div>
         {#if tab.downloadUrl && (tab.id === 'android' || tab.id === 'tvplayer' || tab.id === 'tvbrowser')}
