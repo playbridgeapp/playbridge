@@ -19,8 +19,13 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        versionCode = 201
-        versionName = "0.2.1"
+        versionCode = 202
+        versionName = "0.2.2"
+
+        ndk {
+            abiFilters.add("armeabi-v7a")
+            abiFilters.add("arm64-v8a")
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
