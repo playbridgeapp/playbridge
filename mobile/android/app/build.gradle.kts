@@ -19,8 +19,8 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        versionCode = 202
-        versionName = "0.2.2"
+        versionCode = 203
+        versionName = "0.2.3"
 
         ndk {
             abiFilters.add("armeabi-v7a")
@@ -60,6 +60,7 @@ android {
     packaging {
         jniLibs {
             pickFirsts.add("lib/**/libc++_shared.so")
+            useLegacyPackaging = true
         }
     }
 

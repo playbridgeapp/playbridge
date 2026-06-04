@@ -17,8 +17,8 @@ android {
         applicationId = "com.playbridge.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 202
-        versionName = "0.2.2"
+        versionCode = 203
+        versionName = "0.2.3"
 
         ndk {
             abiFilters.add("armeabi-v7a")
@@ -67,6 +67,7 @@ android {
         jniLibs {
             // mpv-android ships libc++_shared.so for every ABI; guard against duplicates.
             pickFirsts.add("lib/**/libc++_shared.so")
+            useLegacyPackaging = true
         }
     }
 
