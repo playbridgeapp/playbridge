@@ -35,6 +35,25 @@ PlayBridge is an open-source Android application suite that bridges the gap betw
 - **Browser**: A fully functional web browser on your phone that syncs with your TV.
 - **Open Source**: Built with privacy and transparency in mind.
 
+## Installation & Usage
+
+### 1. Installation
+* **Android TV / Fire TV (Receiver):** 
+  * Open the **Downloader** app on your TV and enter code `9557748` to download and install the TV Player release directly.
+  * Alternatively, download the latest receiver APK from the [Releases](https://github.com/playbridgeapp/playbridge/releases) page and sideload it.
+  * *Note:* On first launch, the TV app will request Bluetooth permissions (used for nearby discovery/pairing) and "Display over other apps" (System Alert Window) permissions. These are required for receiver services to run reliably in the background.
+* **Android Phone (Sender):** 
+  * Download the latest sender APK from the [Releases](https://github.com/playbridgeapp/playbridge/releases) page and install it on your mobile device.
+
+### 2. How to Connect & Cast
+1. Connect both your phone and Android TV to the **same local Wi-Fi network**.
+2. Open the **PlayBridge** app on your TV. It will display a "Ready to Cast" landing screen.
+3. Open the **PlayBridge** app on your phone, and tap the **Cast** icon in the top bar or menu to open the Connection screen.
+4. The phone app will scan the network and display your TV. Tap its name to connect.
+   * *If the TV is not auto-discovered:* Tap **"Manual Connect"** on the phone and enter the TV's IP address (displayed on the TV's screen).
+5. A pairing request will appear on the TV. Select **Allow** using your TV remote.
+6. Once connected, browse any video website using the phone app's built-in web browser. Play a video, and tap the cast option when it detects the stream to play it on the TV!
+
 ## Components
 
 PlayBridge is a monorepo; each component has its own README:
