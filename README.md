@@ -40,7 +40,7 @@ PlayBridge is an open-source Android application suite that bridges the gap betw
 ### 1. Installation
 * **Android TV / Fire TV (Receiver):** 
   * Open the **Downloader** app on your TV and enter code `9557748` to download and install the TV Player release directly.
-  * Alternatively, download the latest receiver APK from the [Releases](https://github.com/playbridgeapp/playbridge/releases) page and sideload it.
+  * Alternatively, download the latest receiver APK from the [Releases](https://github.com/playbridgeapp/playbridge/releases) page and install it.
   * *Note:* On first launch, the TV app will request Bluetooth permissions (used for nearby discovery/pairing) and "Display over other apps" (System Alert Window) permissions. These are required for receiver services to run reliably in the background.
 * **Android Phone (Sender):** 
   * Download the latest sender APK from the [Releases](https://github.com/playbridgeapp/playbridge/releases) page and install it on your mobile device.
