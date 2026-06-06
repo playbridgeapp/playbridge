@@ -17,8 +17,8 @@ android {
         applicationId = "com.playbridge.browser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 203
-        versionName = "0.2.3"
+        versionCode = 204
+        versionName = "0.2.4"
 
         ndk {
             abiFilters.add("armeabi-v7a")
@@ -63,7 +63,6 @@ android {
         }
         jniLibs {
             pickFirsts.add("lib/**/libc++_shared.so")
-            useLegacyPackaging = true
         }
     }
 
