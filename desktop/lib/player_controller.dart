@@ -14,7 +14,7 @@ class PlayerController extends ChangeNotifier {
 
   void _setEngine(EngineType type) {
     if (type == _currentType && _hasInited) return;
-    
+
     if (_hasInited) {
       _engine.removeListener(notifyListeners);
       _engine.dispose();
@@ -38,15 +38,16 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> switchEngine(EngineType type) async {
     if (type == _currentType) return;
-    
+
     // 1. Capture current state
     final wasPlaying = state == 'playing';
     final currentPos = Duration(milliseconds: _engine.positionMs);
-    final currentItem = _currentIndex >= 0 && _currentIndex < _queue.length 
-        ? _queue[_currentIndex] 
+    final currentItem = _currentIndex >= 0 && _currentIndex < _queue.length
+        ? _queue[_currentIndex]
         : null;
 
-    debugPrint('[player] switching engine: $_currentType -> $type at ${currentPos.inSeconds}s');
+    debugPrint(
+        '[player] switching engine: $_currentType -> $type at ${currentPos.inSeconds}s');
 
     // 2. Tear down and swap
     _setEngine(type);
@@ -54,7 +55,7 @@ class PlayerController extends ChangeNotifier {
     // 3. Restore state in the new engine
     if (currentItem != null) {
       await _engine.open(currentItem);
-      
+
       // Give the new engine a moment to initialize before seeking.
       // Some engines need a valid duration before they can seek.
       int retries = 0;
@@ -66,7 +67,7 @@ class PlayerController extends ChangeNotifier {
       if (currentPos > Duration.zero) {
         await _engine.seek(currentPos);
       }
-      
+
       if (!wasPlaying) {
         await _engine.pause();
       }

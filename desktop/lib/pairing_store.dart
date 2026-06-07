@@ -26,7 +26,8 @@ class PairedDeviceRecord {
         'lastConnected': lastConnected.millisecondsSinceEpoch,
       };
 
-  static PairedDeviceRecord fromJson(Map<String, dynamic> j) => PairedDeviceRecord(
+  static PairedDeviceRecord fromJson(Map<String, dynamic> j) =>
+      PairedDeviceRecord(
         deviceUUID: j['deviceUUID'] as String,
         deviceName: j['deviceName'] as String,
         token: j['token'] as String,
@@ -89,8 +90,7 @@ class PairingStore {
   /// hotkey or the Settings switch).
   bool get showStats => _prefs.getBool(_kShowStats) ?? false;
 
-  Future<void> setShowStats(bool value) =>
-      _prefs.setBool(_kShowStats, value);
+  Future<void> setShowStats(bool value) => _prefs.setBool(_kShowStats, value);
 
   // ─── Paired devices ──────────────────────────────────────────────────────
 
@@ -141,7 +141,8 @@ class PairingStore {
   }
 
   Future<void> forgetDevice(String deviceUUID) async {
-    final devices = pairedDevices.where((d) => d.deviceUUID != deviceUUID).toList();
+    final devices =
+        pairedDevices.where((d) => d.deviceUUID != deviceUUID).toList();
     await _savePairedDevices(devices);
   }
 

@@ -131,9 +131,11 @@ class ReceiverServer extends ChangeNotifier {
     // We do NOT auto-fall-back to ws on wss failure — that would be a silent
     // plaintext downgrade. Instead we fail closed and surface a hint.
     if (store.allowInsecure) {
-      final http = await shelf_io.serve(handler, InternetAddress.anyIPv4, _port);
+      final http =
+          await shelf_io.serve(handler, InternetAddress.anyIPv4, _port);
       _servers.add(http);
-      debugPrint('[server] ws  listening on ${http.address.address}:${http.port} (insecure allowed)');
+      debugPrint(
+          '[server] ws  listening on ${http.address.address}:${http.port} (insecure allowed)');
     }
 
     tlsError = (!wssUp && !store.allowInsecure)
@@ -339,7 +341,8 @@ class ReceiverServer extends ChangeNotifier {
           players: _capabilityPlayers,
         ));
       case ContextQueryCmd():
-        channel.sink.add(contextJson(player.state == 'idle' ? 'idle' : 'player'));
+        channel.sink
+            .add(contextJson(player.state == 'idle' ? 'idle' : 'player'));
       case PlaylistCmd(:final items, :final startIndex):
         // A single video arrives as a one-item playlist (the `play` command was removed).
         // Keep the old single-video duplicate-cast guard for that case.

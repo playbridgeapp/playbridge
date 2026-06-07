@@ -31,15 +31,17 @@ class PlaybackStats {
     this.cacheDuration,
   });
 
-  final int droppedVo;        // frames dropped by the video output (display can't keep up)
-  final int droppedDecoder;   // frames dropped during decoding (CPU/GPU can't keep up)
-  final double? fps;          // estimated output fps
+  final int
+      droppedVo; // frames dropped by the video output (display can't keep up)
+  final int
+      droppedDecoder; // frames dropped during decoding (CPU/GPU can't keep up)
+  final double? fps; // estimated output fps
   final double? containerFps; // source/container fps
-  final double? displayFps;   // monitor refresh estimate
+  final double? displayFps; // monitor refresh estimate
   final double? videoBitrate; // bits/sec
   final double? audioBitrate; // bits/sec
-  final String? hwdec;        // active hardware decoder, or "no"
-  final double? avsync;       // A/V desync in seconds
+  final String? hwdec; // active hardware decoder, or "no"
+  final double? avsync; // A/V desync in seconds
   final int? width;
   final int? height;
   final String? videoCodec;
@@ -51,7 +53,7 @@ abstract class PlayerEngine extends ChangeNotifier {
   int get positionMs;
   int get durationMs;
   double get volume => 1.0;
-  
+
   // Track management (optional, implementations can return empty/no-op)
   dynamic get tracks;
   dynamic get track;

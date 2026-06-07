@@ -43,12 +43,29 @@ Future<void> main() async {
 }
 
 // Keyboard shortcuts
-class PlayPauseIntent extends Intent { const PlayPauseIntent(); }
-class SeekForwardIntent extends Intent { const SeekForwardIntent(); }
-class SeekBackwardIntent extends Intent { const SeekBackwardIntent(); }
-class VolumeUpIntent extends Intent { const VolumeUpIntent(); }
-class VolumeDownIntent extends Intent { const VolumeDownIntent(); }
-class StatsToggleIntent extends Intent { const StatsToggleIntent(); }
+class PlayPauseIntent extends Intent {
+  const PlayPauseIntent();
+}
+
+class SeekForwardIntent extends Intent {
+  const SeekForwardIntent();
+}
+
+class SeekBackwardIntent extends Intent {
+  const SeekBackwardIntent();
+}
+
+class VolumeUpIntent extends Intent {
+  const VolumeUpIntent();
+}
+
+class VolumeDownIntent extends Intent {
+  const VolumeDownIntent();
+}
+
+class StatsToggleIntent extends Intent {
+  const StatsToggleIntent();
+}
 
 // Navigation destinations — nowPlaying is a mode, not a persistent screen.
 enum _Dest { cast, history, favorites, settings }
@@ -119,7 +136,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       port: kDefaultPort,
       deviceId: widget.store.deviceId,
     );
-    _tray = TrayController(player: _player, server: _server, store: widget.store);
+    _tray =
+        TrayController(player: _player, server: _server, store: widget.store);
 
     windowManager.addListener(this);
     _player.addListener(_handlePlayerChange);
@@ -236,20 +254,21 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           .where((i) {
             final name = i.name.toLowerCase();
             return !name.startsWith('br-') &&
-                   !name.startsWith('docker') &&
-                   !name.startsWith('veth') &&
-                   !name.startsWith('virbr') &&
-                   !name.startsWith('vboxnet') &&
-                   !name.startsWith('vmnet') &&
-                   !name.startsWith('tun') &&
-                   !name.startsWith('tap') &&
-                   !name.startsWith('wg');
+                !name.startsWith('docker') &&
+                !name.startsWith('veth') &&
+                !name.startsWith('virbr') &&
+                !name.startsWith('vboxnet') &&
+                !name.startsWith('vmnet') &&
+                !name.startsWith('tun') &&
+                !name.startsWith('tap') &&
+                !name.startsWith('wg');
           })
           .expand((i) => i.addresses)
           .map((a) => a.address)
           .where((a) => !a.startsWith('169.254.'))
           .toList();
-      setState(() => _hostInfo = addrs.isEmpty ? 'no LAN address' : addrs.join(', '));
+      setState(() =>
+          _hostInfo = addrs.isEmpty ? 'no LAN address' : addrs.join(', '));
     } catch (_) {
       setState(() => _hostInfo = 'unknown');
     }
@@ -268,236 +287,269 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showStats.dispose();
     super.dispose();
   }
-@override
-Widget build(BuildContext context) {
-  return MaterialApp(
-    title: 'PlayBridge Desktop',
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData.dark(useMaterial3: true).copyWith(
-      scaffoldBackgroundColor: Colors.transparent,
-      canvasColor: Colors.transparent,
-    ),
-    home: Shortcuts(
-      shortcuts: {
-        const SingleActivator(LogicalKeyboardKey.space): const PlayPauseIntent(),
-        const SingleActivator(LogicalKeyboardKey.arrowRight): const SeekForwardIntent(),
-        const SingleActivator(LogicalKeyboardKey.arrowLeft): const SeekBackwardIntent(),
-        const SingleActivator(LogicalKeyboardKey.arrowUp): const VolumeUpIntent(),
-        const SingleActivator(LogicalKeyboardKey.arrowDown): const VolumeDownIntent(),
-        const SingleActivator(LogicalKeyboardKey.keyI): const StatsToggleIntent(),
-      },
-      child: Actions(
-        actions: {
-          PlayPauseIntent: CallbackAction<PlayPauseIntent>(
-            onInvoke: (_) => _player.state == 'playing' ? _player.pause() : _player.resume(),
-          ),
-          SeekForwardIntent: CallbackAction<SeekForwardIntent>(
-            onInvoke: (_) {
-              _player.seek(Duration(milliseconds: _player.positionMs + 10000));
-              return null;
-            },
-          ),
-          SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
-            onInvoke: (_) {
-              _player.seek(Duration(milliseconds: _player.positionMs - 10000));
-              return null;
-            },
-          ),
-          VolumeUpIntent: CallbackAction<VolumeUpIntent>(
-            onInvoke: (_) {
-              _player.setVolume((_player.volume + 0.05).clamp(0.0, 1.0));
-              return null;
-            },
-          ),
-          VolumeDownIntent: CallbackAction<VolumeDownIntent>(
-            onInvoke: (_) {
-              _player.setVolume((_player.volume - 0.05).clamp(0.0, 1.0));
-              return null;
-            },
-          ),
-          StatsToggleIntent: CallbackAction<StatsToggleIntent>(
-            onInvoke: (_) {
-              _showStats.value = !_showStats.value;
-              return null;
-            },
-          ),
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'PlayBridge Desktop',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        scaffoldBackgroundColor: Colors.transparent,
+        canvasColor: Colors.transparent,
+      ),
+      home: Shortcuts(
+        shortcuts: {
+          const SingleActivator(LogicalKeyboardKey.space):
+              const PlayPauseIntent(),
+          const SingleActivator(LogicalKeyboardKey.arrowRight):
+              const SeekForwardIntent(),
+          const SingleActivator(LogicalKeyboardKey.arrowLeft):
+              const SeekBackwardIntent(),
+          const SingleActivator(LogicalKeyboardKey.arrowUp):
+              const VolumeUpIntent(),
+          const SingleActivator(LogicalKeyboardKey.arrowDown):
+              const VolumeDownIntent(),
+          const SingleActivator(LogicalKeyboardKey.keyI):
+              const StatsToggleIntent(),
         },
-        child: Focus(
-          autofocus: true,
-          child: Scaffold(
-            backgroundColor: Colors.transparent,
-            body: AnimatedBuilder(
-              animation: Listenable.merge([_server, _player, _showStats]),
-              builder: (context, _) {
-            final hasMedia = _player.queue.isNotEmpty;
-            final hasQueue = _player.queue.length > 1;
-            const titleBarHeight = 28.0;
-            // Hide every piece of chrome (title bar, sidebar, status bar)
-            // when the user is watching video in full-screen — the video
-            // should fill the entire monitor, not be framed by panels.
-            final hideChrome = _isFullScreen && _showingVideo && hasMedia;
+        child: Actions(
+          actions: {
+            PlayPauseIntent: CallbackAction<PlayPauseIntent>(
+              onInvoke: (_) => _player.state == 'playing'
+                  ? _player.pause()
+                  : _player.resume(),
+            ),
+            SeekForwardIntent: CallbackAction<SeekForwardIntent>(
+              onInvoke: (_) {
+                _player
+                    .seek(Duration(milliseconds: _player.positionMs + 10000));
+                return null;
+              },
+            ),
+            SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
+              onInvoke: (_) {
+                _player
+                    .seek(Duration(milliseconds: _player.positionMs - 10000));
+                return null;
+              },
+            ),
+            VolumeUpIntent: CallbackAction<VolumeUpIntent>(
+              onInvoke: (_) {
+                _player.setVolume((_player.volume + 0.05).clamp(0.0, 1.0));
+                return null;
+              },
+            ),
+            VolumeDownIntent: CallbackAction<VolumeDownIntent>(
+              onInvoke: (_) {
+                _player.setVolume((_player.volume - 0.05).clamp(0.0, 1.0));
+                return null;
+              },
+            ),
+            StatsToggleIntent: CallbackAction<StatsToggleIntent>(
+              onInvoke: (_) {
+                _showStats.value = !_showStats.value;
+                return null;
+              },
+            ),
+          },
+          child: Focus(
+            autofocus: true,
+            child: Scaffold(
+              backgroundColor: Colors.transparent,
+              body: AnimatedBuilder(
+                animation: Listenable.merge([_server, _player, _showStats]),
+                builder: (context, _) {
+                  final hasMedia = _player.queue.isNotEmpty;
+                  final hasQueue = _player.queue.length > 1;
+                  const titleBarHeight = 28.0;
+                  // Hide every piece of chrome (title bar, sidebar, status bar)
+                  // when the user is watching video in full-screen — the video
+                  // should fill the entire monitor, not be framed by panels.
+                  final hideChrome = _isFullScreen && _showingVideo && hasMedia;
 
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                // Aurora background — only rendered when the user is NOT
-                // watching video. Six-octave FBM + domain warping is expensive,
-                // and during playback the video texture covers most of it
-                // anyway, so leaving it running just steals GPU from mpv.
-                if (!_showingVideo)
-                  const Positioned.fill(child: AuroraBackground()),
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Aurora background — only rendered when the user is NOT
+                      // watching video. Six-octave FBM + domain warping is expensive,
+                      // and during playback the video texture covers most of it
+                      // anyway, so leaving it running just steals GPU from mpv.
+                      if (!_showingVideo)
+                        const Positioned.fill(child: AuroraBackground()),
 
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (!hideChrome)
-                      SizedBox(
-                        height: titleBarHeight,
-                        child: ClipRect(
-                          child: BackdropFilter(
-                            filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-                            child: DragToMoveArea(
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: [
-                                      Colors.white.withValues(alpha: 0.10),
-                                      Colors.black.withValues(alpha: 0.20),
-                                    ],
-                                  ),
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: Colors.white.withValues(alpha: 0.08),
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const SizedBox(width: 78),
-                                    Expanded(
-                                      child: Container(color: Colors.transparent),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    Expanded(
-                      child: Row(
+                      Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           if (!hideChrome)
-                            _NavSidebar(
-                              dest: _dest,
-                              showingVideo: _showingVideo,
-                              hasMedia: hasMedia,
-                              playerState: _player.state,
-                              onDestSelect: (d) => setState(() {
-                                _dest = d;
-                                _showingVideo = false;
-                              }),
-                              onShowVideo: () => setState(() => _showingVideo = true),
-                            ),
-                          Expanded(
-                            child: MouseRegion(
-                              onEnter: (_) => _markActive(),
-                              onExit: (_) => _markInactive(),
-                              onHover: (_) => _markActive(),
-                              child: Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  // Video is always in the tree (Offstage) so
-                                  // mpv is never torn down on screen switch.
-                                  Positioned.fill(
-                                    child: Offstage(
-                                      offstage: !_showingVideo || !hasMedia,
-                                      child: Container(
-                                        color: Colors.black,
-                                        child: PlaybackSurface(
-                                          controller: _player,
-                                          controlsVisible: _videoHovered || _playlistDrawerOpen || _menusOpen > 0,
+                            SizedBox(
+                              height: titleBarHeight,
+                              child: ClipRect(
+                                child: BackdropFilter(
+                                  filter:
+                                      ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                                  child: DragToMoveArea(
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Colors.white
+                                                .withValues(alpha: 0.10),
+                                            Colors.black
+                                                .withValues(alpha: 0.20),
+                                          ],
+                                        ),
+                                        border: Border(
+                                          bottom: BorderSide(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.08),
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ),                                  if (!_showingVideo)
-                                    Positioned.fill(child: _buildScreen()),
-                                  if (_showingVideo &&
-                                      hasMedia &&
-                                      _showStats.value &&
-                                      _player.engine is MpvEngine)
-                                    Positioned(
-                                      top: 16,
-                                      left: 16,
-                                      child: StatsOverlay(
-                                        engine: _player.engine as MpvEngine,
+                                      child: Row(
+                                        children: [
+                                          const SizedBox(width: 78),
+                                          Expanded(
+                                            child: Container(
+                                                color: Colors.transparent),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                  if (_showingVideo && hasMedia)
-                                    Positioned(
-                                      left: 0,
-                                      right: 0,
-                                      bottom: 0,
-                                      child: _PlayerControlsBar(
-                                        player: _player,
-                                        store: widget.store,
-                                        visible: _videoHovered ||
-                                            _playlistDrawerOpen ||
-                                            _menusOpen > 0,                                        showQueueControls: hasQueue,
-                                        onTogglePlaylist: () => setState(
-                                          () => _playlistDrawerOpen = !_playlistDrawerOpen,
-                                        ),
-                                        playlistOpen: _playlistDrawerOpen,
-                                        onMenuOpened: () => setState(() => _menusOpen++),
-                                        onMenuClosed: () => setState(
-                                          () => _menusOpen = (_menusOpen - 1).clamp(0, 99),
-                                        ),
-                                        isFullScreen: _isFullScreen,
-                                        onToggleFullScreen: _toggleFullScreen,
-                                      ),
-                                    ),
-                                  if (_showingVideo && hasQueue && _playlistDrawerOpen)
-                                    Positioned(
-                                      right: 0,
-                                      top: 0,
-                                      bottom: 0,
-                                      width: 360,
-                                      child: _PlaylistDrawer(
-                                        player: _player,
-                                        onClose: () => setState(
-                                          () => _playlistDrawerOpen = false,
-                                        ),
-                                      ),
-                                    ),
-                                ],
+                                  ),
+                                ),
                               ),
                             ),
+                          Expanded(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (!hideChrome)
+                                  _NavSidebar(
+                                    dest: _dest,
+                                    showingVideo: _showingVideo,
+                                    hasMedia: hasMedia,
+                                    playerState: _player.state,
+                                    onDestSelect: (d) => setState(() {
+                                      _dest = d;
+                                      _showingVideo = false;
+                                    }),
+                                    onShowVideo: () =>
+                                        setState(() => _showingVideo = true),
+                                  ),
+                                Expanded(
+                                  child: MouseRegion(
+                                    onEnter: (_) => _markActive(),
+                                    onExit: (_) => _markInactive(),
+                                    onHover: (_) => _markActive(),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        // Video is always in the tree (Offstage) so
+                                        // mpv is never torn down on screen switch.
+                                        Positioned.fill(
+                                          child: Offstage(
+                                            offstage:
+                                                !_showingVideo || !hasMedia,
+                                            child: Container(
+                                              color: Colors.black,
+                                              child: PlaybackSurface(
+                                                controller: _player,
+                                                controlsVisible:
+                                                    _videoHovered ||
+                                                        _playlistDrawerOpen ||
+                                                        _menusOpen > 0,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        if (!_showingVideo)
+                                          Positioned.fill(
+                                              child: _buildScreen()),
+                                        if (_showingVideo &&
+                                            hasMedia &&
+                                            _showStats.value &&
+                                            _player.engine is MpvEngine)
+                                          Positioned(
+                                            top: 16,
+                                            left: 16,
+                                            child: StatsOverlay(
+                                              engine:
+                                                  _player.engine as MpvEngine,
+                                            ),
+                                          ),
+                                        if (_showingVideo && hasMedia)
+                                          Positioned(
+                                            left: 0,
+                                            right: 0,
+                                            bottom: 0,
+                                            child: _PlayerControlsBar(
+                                              player: _player,
+                                              store: widget.store,
+                                              visible: _videoHovered ||
+                                                  _playlistDrawerOpen ||
+                                                  _menusOpen > 0,
+                                              showQueueControls: hasQueue,
+                                              onTogglePlaylist: () => setState(
+                                                () => _playlistDrawerOpen =
+                                                    !_playlistDrawerOpen,
+                                              ),
+                                              playlistOpen: _playlistDrawerOpen,
+                                              onMenuOpened: () =>
+                                                  setState(() => _menusOpen++),
+                                              onMenuClosed: () => setState(
+                                                () => _menusOpen =
+                                                    (_menusOpen - 1)
+                                                        .clamp(0, 99),
+                                              ),
+                                              isFullScreen: _isFullScreen,
+                                              onToggleFullScreen:
+                                                  _toggleFullScreen,
+                                            ),
+                                          ),
+                                        if (_showingVideo &&
+                                            hasQueue &&
+                                            _playlistDrawerOpen)
+                                          Positioned(
+                                            right: 0,
+                                            top: 0,
+                                            bottom: 0,
+                                            width: 360,
+                                            child: _PlaylistDrawer(
+                                              player: _player,
+                                              onClose: () => setState(
+                                                () =>
+                                                    _playlistDrawerOpen = false,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
+                          if (!hideChrome)
+                            _StatusBar(
+                              player: _player,
+                              hostInfo: _hostInfo,
+                              serverError: _serverError,
+                              discoveryError: _discoveryError,
+                              phase: _server.phase,
+                            ),
                         ],
                       ),
-                    ),
-                    if (!hideChrome)
-                      _StatusBar(
-                        player: _player,
-                        hostInfo: _hostInfo,
-                        serverError: _serverError,
-                        discoveryError: _discoveryError,
-                        phase: _server.phase,
-                      ),
-                  ],
-                ),
-              ],
-            );
-          },
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
         ),
       ),
-    ),
-  ),
-),
-);
+    );
   }
 
   Widget _buildScreen() {
@@ -583,7 +635,8 @@ class _NavSidebar extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
                 child: Row(
                   children: [
-                    const Icon(Icons.cast_connected, size: 16, color: Colors.tealAccent),
+                    const Icon(Icons.cast_connected,
+                        size: 16, color: Colors.tealAccent),
                     const SizedBox(width: 8),
                     const Text(
                       'PlayBridge',
@@ -596,7 +649,6 @@ class _NavSidebar extends StatelessWidget {
                   ],
                 ),
               ),
-
               if (hasMedia) ...[
                 _NavItem(
                   icon: playerState == 'playing'
@@ -608,14 +660,14 @@ class _NavSidebar extends StatelessWidget {
                   onTap: onShowVideo,
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Divider(
                     height: 1,
                     color: Colors.white.withValues(alpha: 0.08),
                   ),
                 ),
               ],
-
               _NavItem(
                 icon: Icons.cast,
                 label: 'Cast',
@@ -634,11 +686,10 @@ class _NavSidebar extends StatelessWidget {
                 selected: !showingVideo && dest == _Dest.favorites,
                 onTap: () => onDestSelect(_Dest.favorites),
               ),
-
-                      const Spacer(),
-
+              const Spacer(),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: Divider(
                   height: 1,
                   color: Colors.white.withValues(alpha: 0.08),
@@ -676,9 +727,8 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fg = selected
-        ? (accent ? Colors.tealAccent : Colors.white)
-        : Colors.white54;
+    final fg =
+        selected ? (accent ? Colors.tealAccent : Colors.white) : Colors.white54;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -759,8 +809,11 @@ class _StatusBar extends StatelessWidget {
           child: Row(
             children: [
               Icon(
-                serverError != null ? Icons.error_outline : Icons.cast_connected,
-                color: serverError != null ? Colors.redAccent : Colors.greenAccent,
+                serverError != null
+                    ? Icons.error_outline
+                    : Icons.cast_connected,
+                color:
+                    serverError != null ? Colors.redAccent : Colors.greenAccent,
                 size: 16,
               ),
               const SizedBox(width: 8),
@@ -839,7 +892,8 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
   Widget build(BuildContext context) {
     final p = widget.player;
     final dur = p.durationMs.toDouble();
-    final pos = (_dragValue ?? p.positionMs.toDouble()).clamp(0.0, dur > 0 ? dur : 1.0);
+    final pos =
+        (_dragValue ?? p.positionMs.toDouble()).clamp(0.0, dur > 0 ? dur : 1.0);
     final hasDuration = dur > 0;
 
     return IgnorePointer(
@@ -869,41 +923,43 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         child: Text(
                           _fmt(Duration(milliseconds: pos.toInt())),
                           textAlign: TextAlign.right,
-                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.white70),
                         ),
                       ),
                       Expanded(
                         child: ExcludeFocus(
                           child: SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            trackHeight: 3,
-                            thumbShape:
-                                const RoundSliderThumbShape(enabledThumbRadius: 6),
-                            overlayShape:
-                                const RoundSliderOverlayShape(overlayRadius: 12),
+                            data: SliderTheme.of(context).copyWith(
+                              trackHeight: 3,
+                              thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 6),
+                              overlayShape: const RoundSliderOverlayShape(
+                                  overlayRadius: 12),
+                            ),
+                            child: Slider(
+                              min: 0,
+                              max: hasDuration ? dur : 1,
+                              value: pos,
+                              onChanged: hasDuration
+                                  ? (v) => setState(() => _dragValue = v)
+                                  : null,
+                              onChangeEnd: hasDuration
+                                  ? (v) {
+                                      p.seek(Duration(milliseconds: v.toInt()));
+                                      setState(() => _dragValue = null);
+                                    }
+                                  : null,
+                            ),
                           ),
-                          child: Slider(
-                            min: 0,
-                            max: hasDuration ? dur : 1,
-                            value: pos,
-                            onChanged: hasDuration
-                                ? (v) => setState(() => _dragValue = v)
-                                : null,
-                            onChangeEnd: hasDuration
-                                ? (v) {
-                                    p.seek(Duration(milliseconds: v.toInt()));
-                                    setState(() => _dragValue = null);
-                                  }
-                                : null,
-                          ),
-                        ),
                         ),
                       ),
                       SizedBox(
                         width: 56,
                         child: Text(
                           _fmt(Duration(milliseconds: p.durationMs)),
-                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.white70),
                         ),
                       ),
                     ],
@@ -1128,12 +1184,14 @@ class _PlaylistDrawer extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
                 child: Row(
                   children: [
-                    const Icon(Icons.playlist_play, size: 20, color: Colors.white54),
+                    const Icon(Icons.playlist_play,
+                        size: 20, color: Colors.white54),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'Up next  ·  ${player.queue.length} item${player.queue.length == 1 ? '' : 's'}',
-                        style: const TextStyle(fontSize: 13, color: Colors.white70),
+                        style: const TextStyle(
+                            fontSize: 13, color: Colors.white70),
                       ),
                     ),
                     IconButton(

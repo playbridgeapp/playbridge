@@ -29,7 +29,8 @@ class CertManager {
     String commonName = 'PlayBridge Desktop',
     Directory? dir,
   }) async {
-    final tlsDir = dir ?? Directory('${(await getApplicationSupportDirectory()).path}/tls');
+    final tlsDir = dir ??
+        Directory('${(await getApplicationSupportDirectory()).path}/tls');
     if (!tlsDir.existsSync()) tlsDir.createSync(recursive: true);
 
     final cert = File('${tlsDir.path}/$_certFile');
@@ -70,7 +71,8 @@ class CertManager {
 
   /// `sha256/<base64( SHA-256( DER SubjectPublicKeyInfo ) )>`.
   static String _spkiPin(RSAPublicKey pub) {
-    final pem = CryptoUtils.encodeRSAPublicKeyToPem(pub); // "PUBLIC KEY" == SPKI
+    final pem =
+        CryptoUtils.encodeRSAPublicKeyToPem(pub); // "PUBLIC KEY" == SPKI
     final b64 = pem
         .replaceAll('-----BEGIN PUBLIC KEY-----', '')
         .replaceAll('-----END PUBLIC KEY-----', '')

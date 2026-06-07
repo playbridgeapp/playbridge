@@ -1,0 +1,52 @@
+name: Extension PR Checks
+# protocol submodule: playbridgeapp/playbridge-protocol
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'extension/**'
+      - 'protocol/**'
+      - '.gitmodules'
+      - '.github/workflows/extension_pr.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: extension-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ./extension
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # esbuild (npm run build) does NOT type-check, so do it explicitly.
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      # Validate the built add-on the same way AMO will before the release
+      # signing pipeline runs. Catches manifest / API issues early.
+      - name: Lint extension (web-ext)
+        run: npx --yes web-ext lint --source-dir dist

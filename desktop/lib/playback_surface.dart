@@ -9,7 +9,8 @@ const _kSubtitleBottomDefault = 24.0;
 const _kSubtitleBottomWithControls = 138.0; // clears ~114px controls bar
 
 class PlaybackSurface extends StatefulWidget {
-  const PlaybackSurface({super.key, required this.controller, this.controlsVisible = false});
+  const PlaybackSurface(
+      {super.key, required this.controller, this.controlsVisible = false});
 
   final PlayerController controller;
   final bool controlsVisible;

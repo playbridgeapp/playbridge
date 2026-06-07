@@ -1,0 +1,71 @@
+name: Android PR Checks
+# Two independent Gradle roots:
+#   mobile/android -> PlayBridgePhone (:app, :shared)
+#   tv/android     -> PlayBridgeTV    (:player:app, :browser:app, :shared)
+# :shared is the KMP module at repo-root /shared, included by both roots.
+# PR checks build the DEBUG variant only (auto-signed with the debug key),
+# so no release keystore / secrets are required.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'mobile/android/**'
+      - 'tv/android/**'
+      - 'shared/**'
+      - 'protocol/**'
+      - 'gradle/**'
+      - '.gitmodules'
+      - '.github/workflows/android_pr.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: phone
+            dir: mobile/android
+          - name: tv
+            dir: tv/android
+    name: ${{ matrix.name }}
+    defaults:
+      run:
+        working-directory: ./${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # Blocking gate: compile all apps + run unit tests across every module
+      # (including :shared's KMP host tests). Lint is excluded here and run as
+      # a separate non-blocking step below.
+      - name: Assemble (debug) & test
+        run: ./gradlew assembleDebug check -x lint -x lintDebug --stacktrace
+
+      # Android Lint currently reports pre-existing errors (tracked separately).
+      # Non-blocking for now: surfaces issues on every run without failing PRs.
+      # TODO: adopt a lint baseline, fix the backlog, then make this blocking.
+      - name: Android Lint (non-blocking)
+        continue-on-error: true
+        run: ./gradlew lintDebug --stacktrace
