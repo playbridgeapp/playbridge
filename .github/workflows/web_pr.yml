@@ -1,0 +1,46 @@
+name: Web PR Checks
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'web/site/**'
+      - '.github/workflows/web_pr.yml'
+  workflow_dispatch:
+
+# Cancel superseded runs on the same PR.
+concurrency:
+  group: web-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ./web/site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/site/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type & Svelte check
+        run: pnpm check
+
+      - name: Build
+        run: pnpm build

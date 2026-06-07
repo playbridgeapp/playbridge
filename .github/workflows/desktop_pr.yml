@@ -1,0 +1,50 @@
+name: Desktop PR Checks
+# Flutter (libmpv/media_kit) desktop receiver.
+# Analyze + test run on a single Linux runner without native builds;
+# the cross-platform release build stays in desktop_build.yml.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'desktop/**'
+      - 'protocol/**'
+      - '.gitmodules'
+      - '.github/workflows/desktop_pr.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ./desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test
