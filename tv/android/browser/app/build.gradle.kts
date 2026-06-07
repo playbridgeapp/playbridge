@@ -13,6 +13,11 @@ android {
         version = release(36)
     }
 
+    lint {
+        // Existing issues are recorded in lint-baseline.xml; CI fails only on NEW ones.
+        baseline = file("lint-baseline.xml")
+    }
+
     defaultConfig {
         applicationId = "com.playbridge.browser"
         minSdk = 26

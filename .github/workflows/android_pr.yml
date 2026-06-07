@@ -57,15 +57,9 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # Blocking gate: compile all apps + run unit tests across every module
-      # (including :shared's KMP host tests). Lint is excluded here and run as
-      # a separate non-blocking step below.
-      - name: Assemble (debug) & test
-        run: ./gradlew assembleDebug check -x lint -x lintDebug --stacktrace
-
-      # Android Lint currently reports pre-existing errors (tracked separately).
-      # Non-blocking for now: surfaces issues on every run without failing PRs.
-      # TODO: adopt a lint baseline, fix the backlog, then make this blocking.
-      - name: Android Lint (non-blocking)
-        continue-on-error: true
-        run: ./gradlew lintDebug --stacktrace
+      # Blocking gate: compile all apps, run unit tests across every module
+      # (including :shared's KMP host tests), and run Android Lint. Pre-existing
+      # lint issues are recorded in per-module lint-baseline.xml files, so Lint
+      # fails only on NEW issues a change introduces.
+      - name: Assemble (debug), test & lint
+        run: ./gradlew assembleDebug check --stacktrace
