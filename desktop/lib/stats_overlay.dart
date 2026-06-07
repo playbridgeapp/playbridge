@@ -63,17 +63,23 @@ class _StatsOverlayState extends State<StatsOverlay> {
               ),
               _Row('FPS', _fps(s)),
               _Row('Bitrate', _bitrate(s)),
-              _Row('Decoder', s.hwdec == null || s.hwdec == 'no'
-                  ? 'software'
-                  : 'hw (${s.hwdec})'),
-              _Row('A/V sync', s.avsync == null
-                  ? '—'
-                  : '${(s.avsync! * 1000).toStringAsFixed(0)} ms',
+              _Row(
+                  'Decoder',
+                  s.hwdec == null || s.hwdec == 'no'
+                      ? 'software'
+                      : 'hw (${s.hwdec})'),
+              _Row(
+                  'A/V sync',
+                  s.avsync == null
+                      ? '—'
+                      : '${(s.avsync! * 1000).toStringAsFixed(0)} ms',
                   warn: s.avsync != null && s.avsync!.abs() > 0.1),
               _Row('Video', _video(s)),
-              _Row('Cache', s.cacheDuration == null
-                  ? '—'
-                  : '${s.cacheDuration!.toStringAsFixed(1)} s'),
+              _Row(
+                  'Cache',
+                  s.cacheDuration == null
+                      ? '—'
+                      : '${s.cacheDuration!.toStringAsFixed(1)} s'),
             ],
           ),
         );
@@ -93,7 +99,8 @@ class _StatsOverlayState extends State<StatsOverlay> {
   }
 
   String _video(PlaybackStats s) {
-    final res = (s.width != null && s.height != null) ? '${s.width}×${s.height}' : '—';
+    final res =
+        (s.width != null && s.height != null) ? '${s.width}×${s.height}' : '—';
     return s.videoCodec == null ? res : '$res  ${s.videoCodec}';
   }
 }

@@ -52,7 +52,8 @@ class _PairScreenState extends State<PairScreen> {
         return StatefulBuilder(builder: (ctx, setDialogState) {
           return Dialog(
             backgroundColor: const Color(0xFF1A1A1A),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: SizedBox(
               width: 520,
               child: Padding(
@@ -63,11 +64,13 @@ class _PairScreenState extends State<PairScreen> {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.devices, size: 20, color: Colors.white54),
+                        const Icon(Icons.devices,
+                            size: 20, color: Colors.white54),
                         const SizedBox(width: 10),
                         const Text(
                           'Paired Devices',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w600),
                         ),
                         const Spacer(),
                         if (local.isNotEmpty)
@@ -116,7 +119,8 @@ class _PairScreenState extends State<PairScreen> {
                             return _DialogDeviceRow(
                               device: device,
                               onForget: () async {
-                                await widget.store.forgetDevice(device.deviceUUID);
+                                await widget.store
+                                    .forgetDevice(device.deviceUUID);
                                 final updated = widget.store.pairedDevices;
                                 setDialogState(() => local = updated);
                                 setState(() => _devices = updated);
@@ -172,7 +176,8 @@ class _PairScreenState extends State<PairScreen> {
                   error: widget.discoveryError != null,
                 ),
                 if (widget.tlsError != null)
-                  _InfoLine(label: 'Secure', value: widget.tlsError!, error: true),
+                  _InfoLine(
+                      label: 'Secure', value: widget.tlsError!, error: true),
                 if (_devices.isNotEmpty) ...[
                   const SizedBox(height: 24),
                   _ManageDevicesButton(
@@ -217,8 +222,7 @@ class _PairScreenState extends State<PairScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 40, vertical: 16),
                       ),
-                      child:
-                          const Text('Deny', style: TextStyle(fontSize: 18)),
+                      child: const Text('Deny', style: TextStyle(fontSize: 18)),
                     ),
                   ],
                 ),
@@ -253,7 +257,8 @@ class _PairScreenState extends State<PairScreen> {
                   error: widget.discoveryError != null,
                 ),
                 if (widget.tlsError != null)
-                  _InfoLine(label: 'Secure', value: widget.tlsError!, error: true),
+                  _InfoLine(
+                      label: 'Secure', value: widget.tlsError!, error: true),
                 if (_devices.isNotEmpty) ...[
                   const SizedBox(height: 24),
                   _ManageDevicesButton(
@@ -322,7 +327,8 @@ class _DialogDeviceRow extends StatelessWidget {
       ),
       trailing: TextButton.icon(
         onPressed: onForget,
-        icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 15),
+        icon:
+            const Icon(Icons.delete_outline, color: Colors.redAccent, size: 15),
         label: const Text('Forget',
             style: TextStyle(color: Colors.redAccent, fontSize: 13)),
       ),

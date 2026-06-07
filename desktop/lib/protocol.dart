@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:playbridge_protocol/messages.pb.dart';
 
 export 'package:playbridge_protocol/messages.pb.dart'
@@ -85,7 +86,7 @@ PlayPayload _parsePlayPayload(Map<String, dynamic> p) {
   try {
     proto.mergeFromProto3Json(p, ignoreUnknownFields: true);
   } catch (e) {
-    print('PlayPayload proto3 parse failed, falling back to url-only: $e');
+    debugPrint('PlayPayload proto3 parse failed, falling back to url-only: $e');
     if (p['url'] case final String u) proto.url = u;
   }
   return proto;
@@ -129,7 +130,9 @@ Command parseCommand(String json) {
             return PlaylistJumpCmd((payload?['index'] ?? 0) as int);
           case 'queue_add':
             final item = payload?['item'];
-            if (item is Map<String, dynamic>) return QueueAddCmd(_parsePlayPayload(item));
+            if (item is Map<String, dynamic>) {
+              return QueueAddCmd(_parsePlayPayload(item));
+            }
             return const UnknownCmd('queue_add_no_item');
           default:
             return UnknownCmd(action ?? 'no_action');
@@ -178,7 +181,8 @@ String authResponseJson({
       if (browsers.isNotEmpty) 'browsers': browsers,
     });
 
-String contextJson(String active) => jsonEncode({'type': 'context', 'active': active});
+String contextJson(String active) =>
+    jsonEncode({'type': 'context', 'active': active});
 
 String statusJson({
   required String state,

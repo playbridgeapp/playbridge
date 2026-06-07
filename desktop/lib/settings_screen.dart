@@ -88,7 +88,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _Tile(
               icon: Icons.insights,
               title: 'Show playback stats',
-              subtitle: 'Overlay dropped frames, fps, bitrate… (toggle with the I key). '
+              subtitle:
+                  'Overlay dropped frames, fps, bitrate… (toggle with the I key). '
                   'Internal MPV only.',
               trailing: ValueListenableBuilder<bool>(
                 valueListenable: widget.showStats,
@@ -143,7 +144,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _Tile(
               icon: Icons.lock,
               title: 'Allow insecure connections (ws)',
-              subtitle: "Off = encrypted wss only. Enable for older senders that "
+              subtitle:
+                  "Off = encrypted wss only. Enable for older senders that "
                   "can't use TLS (e.g. the browser extension).",
               trailing: Switch(
                 value: widget.store.allowInsecure,
@@ -161,7 +163,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _Tile(
                 icon: Icons.launch,
                 title: 'Launch at login',
-                subtitle: _isSandboxed ? 'Not available in sandboxed builds' : null,
+                subtitle:
+                    _isSandboxed ? 'Not available in sandboxed builds' : null,
                 trailing: _autoLaunchEnabled == null
                     ? const SizedBox(
                         width: 20,
@@ -234,7 +237,8 @@ class _Tile extends StatelessWidget {
     return ListTile(
       dense: true,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      leading: Icon(icon, size: 20, color: danger ? Colors.redAccent : Colors.white54),
+      leading: Icon(icon,
+          size: 20, color: danger ? Colors.redAccent : Colors.white54),
       title: Text(
         title,
         style: TextStyle(
@@ -243,7 +247,8 @@ class _Tile extends StatelessWidget {
         ),
       ),
       subtitle: subtitle != null
-          ? Text(subtitle!, style: const TextStyle(color: Colors.white38, fontSize: 12))
+          ? Text(subtitle!,
+              style: const TextStyle(color: Colors.white38, fontSize: 12))
           : null,
       trailing: trailing,
       onTap: onTap,

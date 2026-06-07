@@ -49,7 +49,8 @@ class TrayController with TrayListener {
       await trayManager.setIcon('assets/tray_icon.png', isTemplate: true);
       debugPrint('[tray] icon set from assets/tray_icon.png');
     } catch (e) {
-      debugPrint('[tray] setIcon(asset) failed: $e — will retry with title fallback');
+      debugPrint(
+          '[tray] setIcon(asset) failed: $e — will retry with title fallback');
       // Fallback: macOS menu bar accepts a text label when no icon is available.
       try {
         await trayManager.setTitle('PB');
@@ -89,10 +90,9 @@ class TrayController with TrayListener {
     final status = switch (phase) {
       PairingPhase.idle => '${store.deviceName}  ·  waiting for phone',
       PairingPhase.awaitingApproval => 'Approve connection on screen…',
-      PairingPhase.authenticated =>
-        player.queue.isNotEmpty
-            ? 'Playing: ${player.currentTitle ?? '—'}'
-            : 'Paired · idle',
+      PairingPhase.authenticated => player.queue.isNotEmpty
+          ? 'Playing: ${player.currentTitle ?? '—'}'
+          : 'Paired · idle',
     };
     try {
       await trayManager.setToolTip('PlayBridge\n$status');

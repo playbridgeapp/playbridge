@@ -28,12 +28,14 @@ class HistoryScreen extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(24, 24, 16, 8),
               child: Row(
                 children: [
-                  Text('History', style: Theme.of(context).textTheme.titleLarge),
+                  Text('History',
+                      style: Theme.of(context).textTheme.titleLarge),
                   const Spacer(),
                   if (items.any((i) => !i.isFavorite))
                     TextButton(
                       onPressed: () => store.clearHistory(),
-                      child: const Text('Clear', style: TextStyle(color: Colors.white38)),
+                      child: const Text('Clear',
+                          style: TextStyle(color: Colors.white38)),
                     ),
                 ],
               ),
@@ -46,7 +48,8 @@ class HistoryScreen extends StatelessWidget {
                     children: [
                       Icon(Icons.history, size: 64, color: Colors.white12),
                       SizedBox(height: 12),
-                      Text('No history yet', style: TextStyle(color: Colors.white38)),
+                      Text('No history yet',
+                          style: TextStyle(color: Colors.white38)),
                       SizedBox(height: 4),
                       Text(
                         'Videos you cast will appear here.',
@@ -59,7 +62,8 @@ class HistoryScreen extends StatelessWidget {
             else
               Expanded(
                 child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   itemCount: items.length,
                   itemBuilder: (context, i) => _HistoryTile(
                     item: items[i],
@@ -93,7 +97,8 @@ class _HistoryTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      leading: const Icon(Icons.play_circle_outline, color: Colors.white38, size: 22),
+      leading: const Icon(Icons.play_circle_outline,
+          color: Colors.white38, size: 22),
       title: Text(
         item.title,
         maxLines: 1,
@@ -108,7 +113,8 @@ class _HistoryTile extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            tooltip: item.isFavorite ? 'Remove from favorites' : 'Add to favorites',
+            tooltip:
+                item.isFavorite ? 'Remove from favorites' : 'Add to favorites',
             icon: Icon(
               item.isFavorite ? Icons.star : Icons.star_border,
               color: item.isFavorite ? Colors.amber : Colors.white38,

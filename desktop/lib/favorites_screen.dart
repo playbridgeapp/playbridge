@@ -26,7 +26,8 @@ class FavoritesScreen extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
-              child: Text('Favorites', style: Theme.of(context).textTheme.titleLarge),
+              child: Text('Favorites',
+                  style: Theme.of(context).textTheme.titleLarge),
             ),
             if (items.isEmpty)
               const Expanded(
@@ -36,7 +37,8 @@ class FavoritesScreen extends StatelessWidget {
                     children: [
                       Icon(Icons.star_border, size: 64, color: Colors.white12),
                       SizedBox(height: 12),
-                      Text('No favorites yet', style: TextStyle(color: Colors.white38)),
+                      Text('No favorites yet',
+                          style: TextStyle(color: Colors.white38)),
                       SizedBox(height: 4),
                       Text(
                         'Star items in History to save them here.',
@@ -49,7 +51,8 @@ class FavoritesScreen extends StatelessWidget {
             else
               Expanded(
                 child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   itemCount: items.length,
                   itemBuilder: (context, i) {
                     final item = items[i];
@@ -57,7 +60,8 @@ class FavoritesScreen extends StatelessWidget {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      leading: const Icon(Icons.star, color: Colors.amber, size: 20),
+                      leading:
+                          const Icon(Icons.star, color: Colors.amber, size: 20),
                       title: Text(
                         item.title,
                         maxLines: 1,
@@ -69,12 +73,14 @@ class FavoritesScreen extends StatelessWidget {
                         children: [
                           IconButton(
                             tooltip: 'Remove from favorites',
-                            icon: const Icon(Icons.star, color: Colors.amber, size: 20),
+                            icon: const Icon(Icons.star,
+                                color: Colors.amber, size: 20),
                             onPressed: () => store.toggleFavorite(item.url),
                           ),
                           IconButton(
                             tooltip: 'Cast now',
-                            icon: const Icon(Icons.cast, color: Colors.tealAccent, size: 20),
+                            icon: const Icon(Icons.cast,
+                                color: Colors.tealAccent, size: 20),
                             onPressed: () {
                               player.playUrl(item.url, title: item.title);
                               onNavigateToNowPlaying();

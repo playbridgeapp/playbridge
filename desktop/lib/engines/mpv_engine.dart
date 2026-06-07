@@ -60,9 +60,11 @@ class MpvEngine extends PlayerEngine {
   Track get track => player.state.track;
 
   @override
-  Future<void> setAudioTrack(dynamic t) => player.setAudioTrack(t as AudioTrack);
+  Future<void> setAudioTrack(dynamic t) =>
+      player.setAudioTrack(t as AudioTrack);
   @override
-  Future<void> setSubtitleTrack(dynamic t) => player.setSubtitleTrack(t as SubtitleTrack);
+  Future<void> setSubtitleTrack(dynamic t) =>
+      player.setSubtitleTrack(t as SubtitleTrack);
 
   @override
   Future<void> open(QueueItem item) => openPlaylist([item], 0);
@@ -83,7 +85,8 @@ class MpvEngine extends PlayerEngine {
       if (native is NativePlayer) {
         for (var i = 0; i < subs.length; i++) {
           try {
-            await native.command(['sub-add', subs[i], 'auto', 'External ${i + 1}']);
+            await native
+                .command(['sub-add', subs[i], 'auto', 'External ${i + 1}']);
           } catch (e) {
             debugPrint('[mpv] sub-add failed: $e');
           }
@@ -134,14 +137,16 @@ class MpvEngine extends PlayerEngine {
 
   /// Latest sampled stats, or null while collection is off. Sampled ~1/sec only
   /// while [setStatsCollecting] is enabled, so there's zero cost when hidden.
-  final ValueNotifier<PlaybackStats?> stats = ValueNotifier<PlaybackStats?>(null);
+  final ValueNotifier<PlaybackStats?> stats =
+      ValueNotifier<PlaybackStats?>(null);
   Timer? _statsTimer;
 
   void setStatsCollecting(bool active) {
     if (active) {
       if (_statsTimer != null) return;
       unawaited(_pollStats());
-      _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) => _pollStats());
+      _statsTimer =
+          Timer.periodic(const Duration(seconds: 1), (_) => _pollStats());
     } else {
       _statsTimer?.cancel();
       _statsTimer = null;
@@ -162,23 +167,24 @@ class MpvEngine extends PlayerEngine {
       }
     }
 
-    int? asInt(String? s) => s == null ? null : int.tryParse(s.split('.').first);
+    int? asInt(String? s) =>
+        s == null ? null : int.tryParse(s.split('.').first);
     double? asDouble(String? s) => s == null ? null : double.tryParse(s);
 
     final r = await Future.wait([
-      read('frame-drop-count'),          // 0  dropped by VO
-      read('decoder-frame-drop-count'),  // 1  dropped by decoder
-      read('estimated-vf-fps'),          // 2
-      read('container-fps'),             // 3
-      read('estimated-display-fps'),     // 4
-      read('video-bitrate'),             // 5
-      read('audio-bitrate'),             // 6
-      read('hwdec-current'),             // 7
-      read('avsync'),                    // 8
-      read('width'),                     // 9
-      read('height'),                    // 10
-      read('video-codec'),               // 11
-      read('demuxer-cache-duration'),    // 12
+      read('frame-drop-count'), // 0  dropped by VO
+      read('decoder-frame-drop-count'), // 1  dropped by decoder
+      read('estimated-vf-fps'), // 2
+      read('container-fps'), // 3
+      read('estimated-display-fps'), // 4
+      read('video-bitrate'), // 5
+      read('audio-bitrate'), // 6
+      read('hwdec-current'), // 7
+      read('avsync'), // 8
+      read('width'), // 9
+      read('height'), // 10
+      read('video-codec'), // 11
+      read('demuxer-cache-duration'), // 12
     ]);
 
     stats.value = PlaybackStats(
