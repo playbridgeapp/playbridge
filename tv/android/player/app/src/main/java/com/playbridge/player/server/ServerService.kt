@@ -36,7 +36,6 @@ class ServerService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocketServer: WebSocketServer? = null
-    private var bluetoothServer: BluetoothServer? = null
     private lateinit var pairingStore: PairingStore
     private lateinit var overlayWindow: OverlayWindowHelper
 
@@ -200,12 +199,6 @@ class ServerService : Service() {
             val ip = getLocalIpAddress(applicationContext) ?: "unknown"
             val allowInsecure = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 .getBoolean("allow_insecure_ws", false)
-
-            bluetoothServer = BluetoothServer(applicationContext) { command ->
-                handleMessage(command)
-            }.also { server ->
-                server.start()
-            }
 
             val tlsDir = java.io.File(filesDir, "tls").also { it.mkdirs() }
             webSocketServer = WebSocketServer(
@@ -765,11 +758,8 @@ class ServerService : Service() {
             }
             registrationListener = null
         }
-        // Stop server synchronously
         webSocketServer?.stop()
         webSocketServer = null
-        bluetoothServer?.stop()
-        bluetoothServer = null
         // Remove overlay window if still visible
         overlayWindow.hide()
         // Cancel scope after stopping server
