@@ -13,6 +13,16 @@ android {
         version = release(36)
     }
 
+    lint {
+        // Existing issues are recorded in lint-baseline.xml; CI fails only on NEW ones.
+        baseline = file("lint-baseline.xml")
+        // The vendored IAMF decoder AAR ships a libiamf.so that isn't 16 KB
+        // page-aligned upstream (not fixable here). Its lint message embeds an
+        // absolute path, which breaks baseline matching across machines/CI, so
+        // disable the check rather than baseline it.
+        disable += "Aligned16KB"
+    }
+
     defaultConfig {
         applicationId = "com.playbridge.player"
         minSdk = 26
