@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Delete
@@ -66,6 +68,8 @@ fun ConnectionScreen(
 
     val knownUuids = history.mapNotNull { it.uuid.takeIf(String::isNotEmpty) }.toSet()
     val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
+    // Native receivers we've paired with, by IP — used to hide a DLNA twin of a known TV.
+    val knownNativeIps = history.filterNot { it.isDlna }.map { it.ip }.toSet()
 
     val knownDevices = history.map { saved ->
         val live = liveMatch(saved)
@@ -81,6 +85,8 @@ fun ConnectionScreen(
     }
     val newDevices = discoveredDevices
         .filter { d -> if (d.uuid.isNotEmpty()) d.uuid !in knownUuids else "${d.ip}:${d.port}" !in knownIpPorts }
+        // Don't show a DLNA renderer as a second row for a TV we've already paired natively.
+        .filterNot { d -> d.isDlna && d.ip in knownNativeIps }
         .map { UnifiedDevice(connectDevice = it, historyEntry = null, isOnline = true, lastConnected = null) }
 
     val unifiedDevices = (newDevices + knownDevices)
@@ -388,12 +394,21 @@ fun ConnectionScreen(
                         TvDeviceRow(
                             device = device,
                             onClick = {
-                                onDeviceSelected(
-                                    device.connectDevice.ip,
-                                    device.connectDevice.port,
-                                    device.connectDevice.name,
-                                    device.connectDevice.uuid
-                                )
+                                if (device.connectDevice.isDlna) {
+                                    // DLNA dispatch is wired in the next chunk; for now just acknowledge.
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(
+                                            "DLNA: ${device.connectDevice.name} — casting is wired up next"
+                                        )
+                                    }
+                                } else {
+                                    onDeviceSelected(
+                                        device.connectDevice.ip,
+                                        device.connectDevice.port,
+                                        device.connectDevice.name,
+                                        device.connectDevice.uuid
+                                    )
+                                }
                             },
                             onRemove = device.historyEntry?.let { entry ->
                                 { viewModel.removeDeviceFromHistory(entry) }
@@ -471,18 +486,36 @@ fun TvDeviceRow(
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(
-                    imageVector = Icons.Default.Tv,
+                    imageVector = if (device.connectDevice.isDlna) Icons.Default.Cast else Icons.Default.Tv,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(32.dp)
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = device.connectDevice.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = device.connectDevice.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (device.connectDevice.isDlna) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "DLNA",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
                     Text(
                         text = "${device.connectDevice.ip}:${device.connectDevice.port}",
                         style = MaterialTheme.typography.bodySmall,

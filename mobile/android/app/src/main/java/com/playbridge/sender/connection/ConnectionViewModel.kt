@@ -10,11 +10,16 @@ import com.playbridge.sender.data.history.DatabaseProvider
 import kotlinx.coroutines.Dispatchers
 import com.playbridge.sender.data.history.CommandHistoryEntity
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.cast.dlna.DeviceDescription
+import com.playbridge.sender.cast.dlna.DlnaDiscovery
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.OkHttpClient
+import java.net.URI
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class ConnectionViewModel(
     application: Application,
@@ -31,10 +36,36 @@ class ConnectionViewModel(
     val connectionState: StateFlow<WebSocketClient.ConnectionState> = webSocketClient.connectionState
     val tvDevice: Flow<TvDevice?> = connectionStore.tvDevice
 
-    // Map NsdHelper.DiscoveredDevice to TvDevice for simpler UI handling
-    val discoveredDevices: StateFlow<List<TvDevice>> = nsdHelper.discoveredDevices.map { devices ->
-        devices.map { TvDevice(ip = it.ip, port = it.port, name = it.name, token = "", uuid = it.uuid, wssPort = it.wssPort) }
+    // OkHttp + continuous SSDP discovery for third-party DLNA renderers, run alongside mDNS.
+    private val dlnaHttp = OkHttpClient.Builder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .build()
+    private val dlnaDiscovery = DlnaDiscovery(application, dlnaHttp)
+
+    // Native (mDNS) + DLNA (SSDP) discovery merged into one list for the UI.
+    val discoveredDevices: StateFlow<List<TvDevice>> = combine(
+        nsdHelper.discoveredDevices,
+        dlnaDiscovery.renderers,
+    ) { native, renderers ->
+        val nativeTv = native.map {
+            TvDevice(ip = it.ip, port = it.port, name = it.name, token = "", uuid = it.uuid, wssPort = it.wssPort)
+        }
+        ConnectionMerge.mergeDiscovered(nativeTv, renderers.map { it.toDlnaTvDevice() })
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    private fun DeviceDescription.Renderer.toDlnaTvDevice(): TvDevice {
+        val uri = avTransportControlUrl?.let { runCatching { URI(it) }.getOrNull() }
+        return TvDevice(
+            ip = uri?.host.orEmpty(),
+            port = (uri?.port ?: -1).takeIf { it > 0 } ?: 0,
+            token = "",
+            name = friendlyName,
+            uuid = udn ?: location,
+            isDlna = true,
+            controlUrl = avTransportControlUrl,
+        )
+    }
 
     val deviceHistory: Flow<List<TvDevice>> = connectionStore.deviceHistory
 
@@ -85,14 +116,16 @@ class ConnectionViewModel(
             }
         }
 
-        // Manage background NSD discovery
+        // Manage background discovery (mDNS + DLNA SSDP)
         viewModelScope.launch {
             connectionState.collect { state ->
                 if (state !is WebSocketClient.ConnectionState.Connected &&
                     state !is WebSocketClient.ConnectionState.Connecting) {
                     nsdHelper.startDiscovery()
+                    dlnaDiscovery.start(viewModelScope)
                 } else {
                     nsdHelper.stopDiscovery()
+                    dlnaDiscovery.stop()
                 }
             }
         }
@@ -217,10 +250,12 @@ class ConnectionViewModel(
     }
     fun startDiscovery() {
         nsdHelper.startDiscovery()
+        dlnaDiscovery.start(viewModelScope)
     }
 
     fun stopDiscovery() {
         nsdHelper.stopDiscovery()
+        dlnaDiscovery.stop()
     }
 
     override fun onCleared() {
@@ -230,5 +265,6 @@ class ConnectionViewModel(
         // would make every later reconnect fail with "executor rejected".
         webSocketClient.disconnect()
         nsdHelper.stopDiscovery()
+        dlnaDiscovery.stop()
     }
 }

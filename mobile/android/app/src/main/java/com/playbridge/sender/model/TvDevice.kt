@@ -23,5 +23,9 @@ data class TvDevice(
     // TvCapabilityOptions. Empty until we've authed with a capability-reporting receiver.
     val players: List<String> = emptyList(),
     val browsers: List<String> = emptyList(),
+    // DLNA/UPnP renderer discovered via SSDP (not the native WS receiver). When true,
+    // [controlUrl] is the AVTransport SOAP endpoint and there is no token/pairing.
+    val isDlna: Boolean = false,
+    val controlUrl: String? = null,
     val lastConnected: Long = System.currentTimeMillis()
 )
