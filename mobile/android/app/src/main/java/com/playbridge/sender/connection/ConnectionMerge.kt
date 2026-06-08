@@ -16,12 +16,10 @@ object ConnectionMerge {
     }
 
     /**
-     * Merge native (mDNS) and DLNA (SSDP) discovery into one list. When the same
-     * physical device appears on both (its IP is already in the native set), drop the
-     * DLNA twin — the native receiver is full-featured, the DLNA renderer reduced.
+     * Combine native (mDNS) and DLNA (SSDP) discovery into one list. We intentionally
+     * keep BOTH entries when one device offers both, so the user can choose the
+     * full-featured native path or the DLNA renderer (distinguished by a badge).
      */
-    fun mergeDiscovered(native: List<TvDevice>, dlna: List<TvDevice>): List<TvDevice> {
-        val nativeIps = native.map { it.ip }.toSet()
-        return native + dlna.filter { it.ip.isNotEmpty() && it.ip !in nativeIps }
-    }
+    fun mergeDiscovered(native: List<TvDevice>, dlna: List<TvDevice>): List<TvDevice> =
+        native + dlna.filter { it.ip.isNotEmpty() }
 }

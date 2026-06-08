@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cast
@@ -52,6 +53,7 @@ fun ConnectionScreen(
     val connectionState by viewModel.connectionState.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
+    val activeDlnaTarget by viewModel.activeDlnaTarget.collectAsState()
 
     // Build a single "Your TVs" list: saved devices annotated with live online
     // status, plus any freshly-discovered TVs that aren't saved yet. This replaces
@@ -68,8 +70,6 @@ fun ConnectionScreen(
 
     val knownUuids = history.mapNotNull { it.uuid.takeIf(String::isNotEmpty) }.toSet()
     val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
-    // Native receivers we've paired with, by IP — used to hide a DLNA twin of a known TV.
-    val knownNativeIps = history.filterNot { it.isDlna }.map { it.ip }.toSet()
 
     val knownDevices = history.map { saved ->
         val live = liveMatch(saved)
@@ -85,8 +85,6 @@ fun ConnectionScreen(
     }
     val newDevices = discoveredDevices
         .filter { d -> if (d.uuid.isNotEmpty()) d.uuid !in knownUuids else "${d.ip}:${d.port}" !in knownIpPorts }
-        // Don't show a DLNA renderer as a second row for a TV we've already paired natively.
-        .filterNot { d -> d.isDlna && d.ip in knownNativeIps }
         .map { UnifiedDevice(connectDevice = it, historyEntry = null, isOnline = true, lastConnected = null) }
 
     val unifiedDevices = (newDevices + knownDevices)
@@ -198,6 +196,72 @@ fun ConnectionScreen(
             contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+
+            // Active DLNA cast target (mutually exclusive with a native connection).
+            val dlnaTarget = activeDlnaTarget
+            if (dlnaTarget != null) {
+                item {
+                    Text(
+                        text = "Casting via DLNA",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Cast,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = dlnaTarget.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${dlnaTarget.ip} · cast a video to play here",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Button(
+                                    onClick = { viewModel.clearDlnaTarget() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Stop")
+                                }
+                            }
+                        }
+                    }
+                }
+                item { Spacer(modifier = Modifier.height(8.dp)) }
+            }
 
             // Connected TV Section
             if (connectionState is WebSocketClient.ConnectionState.Connected) {
@@ -395,10 +459,10 @@ fun ConnectionScreen(
                             device = device,
                             onClick = {
                                 if (device.connectDevice.isDlna) {
-                                    // DLNA dispatch is wired in the next chunk; for now just acknowledge.
+                                    viewModel.selectDlnaTarget(device.connectDevice)
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar(
-                                            "DLNA: ${device.connectDevice.name} — casting is wired up next"
+                                            "Selected ${device.connectDevice.name} — cast a video to play here"
                                         )
                                     }
                                 } else {
@@ -500,7 +564,10 @@ fun TvDeviceRow(
                         Text(
                             text = device.connectDevice.name,
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         if (device.connectDevice.isDlna) {
                             Surface(
