@@ -71,6 +71,11 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
+        <service
+            android:name=".cast.dlna.DlnaProxyService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- FileProvider for sharing downloaded files with external players -->
         <provider
             android:name="androidx.core.content.FileProvider"

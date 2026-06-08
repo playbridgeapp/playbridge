@@ -18,6 +18,7 @@ import com.playbridge.sender.cast.dlna.DeviceDescription
 import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaDiscovery
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
+import com.playbridge.sender.cast.dlna.DlnaProxyService
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import playbridge.PlayPayload
 import kotlinx.coroutines.flow.*
@@ -247,6 +248,7 @@ class ConnectionViewModel(
         )
         dlnaCastTarget = target
         _activeDlnaTarget.value = device
+        DlnaProxyService.start(getApplication<Application>()) // keep the proxy alive on screen-off
         dlnaStatusJob = viewModelScope.launch { target.status().collect { _dlnaStatus.value = it } }
         Log.d(TAG, "Active DLNA target: ${device.name} ($controlUrl)")
     }
@@ -258,6 +260,7 @@ class ConnectionViewModel(
         dlnaCastTarget = null
         _dlnaStatus.value = null
         _activeDlnaTarget.value = null
+        DlnaProxyService.stop(getApplication<Application>())
     }
 
     /** Cast a media item to the active DLNA target. No-op if none selected. */
@@ -348,5 +351,6 @@ class ConnectionViewModel(
         webSocketClient.disconnect()
         nsdHelper.stopDiscovery()
         dlnaDiscovery.stop()
+        DlnaProxyService.stop(getApplication<Application>())
     }
 }
