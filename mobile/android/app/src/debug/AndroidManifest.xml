@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest additions. Merged only into debug builds, so the DLNA
+  spike has zero footprint in release. Adds a separate "DLNA Spike" launcher
+  icon alongside the normal app icon.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <activity
+            android:name=".dlna.DlnaSpikeActivity"
+            android:exported="true"
+            android:label="DLNA Spike"
+            android:theme="@style/Theme.PlayBridge">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
