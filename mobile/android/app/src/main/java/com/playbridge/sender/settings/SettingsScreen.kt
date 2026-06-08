@@ -224,30 +224,6 @@ private fun SettingsHubContent(
                             )
                         )
                     }
-
-                    // 9. DLNA Spike — debuggable builds only. Launches the src/debug
-                    // harness by class name so this stays decoupled from release.
-                    val isDebuggable = (context.applicationInfo.flags and
-                        android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-                    if (isDebuggable) {
-                        add(
-                            SettingsItemData(
-                                icon = Icons.Default.DeveloperMode,
-                                title = "DLNA Spike (debug)",
-                                subtitle = "Test DLNA/UPnP discovery, control & proxy",
-                                onClick = {
-                                    runCatching {
-                                        context.startActivity(
-                                            android.content.Intent().setClassName(
-                                                context,
-                                                "com.playbridge.sender.dlna.DlnaSpikeActivity"
-                                            )
-                                        )
-                                    }
-                                }
-                            )
-                        )
-                    }
                 }
             }
 
