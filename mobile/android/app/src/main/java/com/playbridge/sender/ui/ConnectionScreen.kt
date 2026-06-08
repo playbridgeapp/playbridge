@@ -6,9 +6,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Delete
@@ -50,6 +53,7 @@ fun ConnectionScreen(
     val connectionState by viewModel.connectionState.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
+    val activeDlnaTarget by viewModel.activeDlnaTarget.collectAsState()
 
     // Build a single "Your TVs" list: saved devices annotated with live online
     // status, plus any freshly-discovered TVs that aren't saved yet. This replaces
@@ -192,6 +196,75 @@ fun ConnectionScreen(
             contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+
+            // Active DLNA cast target (mutually exclusive with a native connection).
+            val dlnaTarget = activeDlnaTarget
+            if (dlnaTarget != null) {
+                item {
+                    Text(
+                        text = "Casting via DLNA",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Cast,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = dlnaTarget.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${dlnaTarget.ip} · cast a video to play here",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Button(
+                                    onClick = {
+                                        viewModel.dlnaStop()
+                                        viewModel.clearDlnaTarget()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Disconnect")
+                                }
+                            }
+                        }
+                    }
+                }
+                item { Spacer(modifier = Modifier.height(8.dp)) }
+            }
 
             // Connected TV Section
             if (connectionState is WebSocketClient.ConnectionState.Connected) {
@@ -388,12 +461,21 @@ fun ConnectionScreen(
                         TvDeviceRow(
                             device = device,
                             onClick = {
-                                onDeviceSelected(
-                                    device.connectDevice.ip,
-                                    device.connectDevice.port,
-                                    device.connectDevice.name,
-                                    device.connectDevice.uuid
-                                )
+                                if (device.connectDevice.isDlna) {
+                                    viewModel.selectDlnaTarget(device.connectDevice)
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(
+                                            "Selected ${device.connectDevice.name} — cast a video to play here"
+                                        )
+                                    }
+                                } else {
+                                    onDeviceSelected(
+                                        device.connectDevice.ip,
+                                        device.connectDevice.port,
+                                        device.connectDevice.name,
+                                        device.connectDevice.uuid
+                                    )
+                                }
                             },
                             onRemove = device.historyEntry?.let { entry ->
                                 { viewModel.removeDeviceFromHistory(entry) }
@@ -471,18 +553,39 @@ fun TvDeviceRow(
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(
-                    imageVector = Icons.Default.Tv,
+                    imageVector = if (device.connectDevice.isDlna) Icons.Default.Cast else Icons.Default.Tv,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(32.dp)
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = device.connectDevice.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = device.connectDevice.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (device.connectDevice.isDlna) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "DLNA",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
                     Text(
                         text = "${device.connectDevice.ip}:${device.connectDevice.port}",
                         style = MaterialTheme.typography.bodySmall,

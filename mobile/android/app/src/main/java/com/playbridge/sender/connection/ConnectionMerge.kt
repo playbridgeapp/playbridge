@@ -14,4 +14,12 @@ object ConnectionMerge {
             ?: discovered.find { it.ip == device.ip && it.port == device.port }
         return device.copy(wssPort = match?.wssPort ?: device.wssPort)
     }
+
+    /**
+     * Combine native (mDNS) and DLNA (SSDP) discovery into one list. We intentionally
+     * keep BOTH entries when one device offers both, so the user can choose the
+     * full-featured native path or the DLNA renderer (distinguished by a badge).
+     */
+    fun mergeDiscovered(native: List<TvDevice>, dlna: List<TvDevice>): List<TvDevice> =
+        native + dlna.filter { it.ip.isNotEmpty() }
 }

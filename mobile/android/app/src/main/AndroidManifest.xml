@@ -15,6 +15,12 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" />
 
+    <!-- Phone Files: enumerate on-device videos/audio to cast (Android 13+ granular media perms; legacy below 33) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
         android:name=".PlayBridgeApplication"
         android:allowBackup="true"
@@ -64,6 +70,11 @@
             android:name=".cast.MediaPlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <service
+            android:name=".cast.dlna.DlnaProxyService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- FileProvider for sharing downloaded files with external players -->
         <provider

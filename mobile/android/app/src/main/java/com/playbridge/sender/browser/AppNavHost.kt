@@ -163,6 +163,9 @@ fun AppNavHost(
     val discoveredDevices by connectionViewModel.discoveredDevices.collectAsState()
     val history by connectionViewModel.deviceHistory.collectAsState(initial = emptyList())
     val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
+    val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
+    val dlnaStatus by connectionViewModel.dlnaStatus.collectAsState()
+    val dlnaMediaTitle by connectionViewModel.dlnaMediaTitle.collectAsState()
     val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
     val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
 
@@ -638,7 +641,49 @@ fun AppNavHost(
                     BackHandler {
                         onScreenChange(lastMainScreen)
                     }
-                    RemoteControlScreen(
+                    val dlna = activeDlnaTarget
+                    if (dlna != null) {
+                        // Unified remote: feed the native RemoteControlScreen from the DLNA target,
+                        // with dlnaMode hiding native-only controls (tracks/volume/loop).
+                        RemoteControlScreen(
+                            activeContext = "player",
+                            onBack = { onScreenChange(lastMainScreen) },
+                            onRemoteKey = {},
+                            onMouseMove = { _, _ -> },
+                            onMouseClick = {},
+                            onMouseScroll = { _, _ -> },
+                            onPlayerControl = { cmd ->
+                                when (cmd) {
+                                    "play" -> connectionViewModel.dlnaPlay()
+                                    "pause" -> connectionViewModel.dlnaPause()
+                                    "stop" -> connectionViewModel.dlnaStop()
+                                    "seek_back" -> connectionViewModel.dlnaSeek(
+                                        ((dlnaStatus?.positionMs ?: 0L) - 10_000L).coerceAtLeast(0L),
+                                    )
+                                    "seek_forward" -> connectionViewModel.dlnaSeek(
+                                        (dlnaStatus?.positionMs ?: 0L) + 10_000L,
+                                    )
+                                }
+                            },
+                            playbackState = when (dlnaStatus?.state) {
+                                PlaybackState.PLAYING -> "playing"
+                                PlaybackState.BUFFERING -> "buffering"
+                                PlaybackState.PAUSED -> "paused"
+                                else -> "paused"
+                            },
+                            dlnaMode = true,
+                            isLive = dlnaStatus?.isLive == true,
+                            positionMs = dlnaStatus?.positionMs ?: 0L,
+                            durationMs = dlnaStatus?.durationMs ?: 0L,
+                            mediaTitle = dlnaMediaTitle ?: dlna.name,
+                            onSeekTo = { connectionViewModel.dlnaSeek(it) },
+                            tvName = dlna.name,
+                            onDisconnectTv = {
+                                connectionViewModel.clearDlnaTarget()
+                                onScreenChange(lastMainScreen)
+                            },
+                        )
+                    } else RemoteControlScreen(
                         activeContext = tvActiveContext,
                         playbackState = tvPlayback?.state,
                         positionMs = tvPlayback?.positionMs ?: 0L,
@@ -1119,6 +1164,20 @@ fun AppNavHost(
                         onNavigate = { screen ->
                             onScreenChange(screen)
                         }
+                    )
+                }
+                Screen.PhoneFiles -> {
+                    BackHandler { onScreenChange(Screen.Dashboard) }
+                    PhoneFilesScreen(
+                        viewModel = connectionViewModel,
+                        onBack = { onScreenChange(Screen.Dashboard) },
+                        onOpenRemote = if (activeDlnaTarget != null ||
+                            connectionState is WebSocketClient.ConnectionState.Connected
+                        ) {
+                            { onScreenChange(Screen.Remote) }
+                        } else {
+                            null
+                        },
                     )
                 }
                 Screen.DebridLibrary -> {

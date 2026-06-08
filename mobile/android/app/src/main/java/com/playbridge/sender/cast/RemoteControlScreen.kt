@@ -113,6 +113,8 @@ fun RemoteControlScreen(
     onBrowserControl: (String) -> Unit = {},
     onPlayerControl: (String) -> Unit = {},
     playbackState: String? = null,
+    dlnaMode: Boolean = false,
+    isLive: Boolean = false,
     positionMs: Long = 0L,
     durationMs: Long = 0L,
     mediaTitle: String? = null,
@@ -177,14 +179,32 @@ fun RemoteControlScreen(
         ) {
             // Persistent connected-TV tile — the constant anchor across player/browser/idle, so
             // the controls below can crossfade without the screen feeling like it teleported.
-            ConnectedTvChip(
-                tvName = tvName,
-                connectionState = connectionState,
-                availableTvDevices = availableTvDevices,
-                selectedTvDevice = selectedTvDevice,
-                onTvDeviceSelect = onTvDeviceSelect,
-                onDisconnectTv = onDisconnectTv
-            )
+            if (dlnaMode) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Casting via DLNA · ${tvName ?: "renderer"}",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onDisconnectTv) { Text("Disconnect") }
+                }
+            } else {
+                ConnectedTvChip(
+                    tvName = tvName,
+                    connectionState = connectionState,
+                    availableTvDevices = availableTvDevices,
+                    selectedTvDevice = selectedTvDevice,
+                    onTvDeviceSelect = onTvDeviceSelect,
+                    onDisconnectTv = onDisconnectTv
+                )
+            }
             Spacer(modifier = Modifier.height(12.dp))
 
             AnimatedContent(
@@ -210,17 +230,20 @@ fun RemoteControlScreen(
                                 episodeLabel = episodeLabelFor(currentEpisodeIndex, episodes),
                                 positionMs = positionMs,
                                 durationMs = durationMs,
+                                isLive = isLive,
                                 onSeekTo = onSeekTo
                             )
 
-                            // ── Audio / Subtitle track pickers + More ──
-                            TrackChipsRow(
-                                audioTracks = audioTracks,
-                                subtitleTracks = subtitleTracks,
-                                onSelectAudio = onSelectAudio,
-                                onSelectSubtitle = onSelectSubtitle,
-                                onMore = { showSettingsSheet = true }
-                            )
+                            // Native-only: track pickers/settings — hidden for DLNA renderers.
+                            if (!dlnaMode) {
+                                TrackChipsRow(
+                                    audioTracks = audioTracks,
+                                    subtitleTracks = subtitleTracks,
+                                    onSelectAudio = onSelectAudio,
+                                    onSelectSubtitle = onSelectSubtitle,
+                                    onMore = { showSettingsSheet = true }
+                                )
+                            }
 
                             // ── Episode list (fills available space) ──
                             EpisodesList(
@@ -230,15 +253,19 @@ fun RemoteControlScreen(
                                 modifier = Modifier.weight(1f)
                             )
 
-                            // ── Volume + transport controls ──
-                            VolumeRow(
-                                onVolumeUp = { onRemoteKey("volume_up") },
-                                onVolumeDown = { onRemoteKey("volume_down") }
-                            )
+                            // ── Volume + transport controls ── (volume is native-only for now)
+                            if (!dlnaMode) {
+                                VolumeRow(
+                                    onVolumeUp = { onRemoteKey("volume_up") },
+                                    onVolumeDown = { onRemoteKey("volume_down") }
+                                )
+                            }
                             // No Back/Home here — Stop already exits playback, so they'd be redundant.
                             MediaControlRow(
                                 isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
-                                onPlayerControl = onPlayerControl
+                                onPlayerControl = onPlayerControl,
+                                showLoop = !dlnaMode,
+                                showSeek = !isLive
                             )
                         }
 
@@ -780,7 +807,12 @@ private fun DpadBtn(icon: ImageVector, desc: String, onClick: () -> Unit) {
 
 
 @Composable
-private fun MediaControlRow(isPlaying: Boolean, onPlayerControl: (String) -> Unit) {
+private fun MediaControlRow(
+    isPlaying: Boolean,
+    onPlayerControl: (String) -> Unit,
+    showLoop: Boolean = true,
+    showSeek: Boolean = true,
+) {
     var isLooping by remember { mutableStateOf(false) }
 
     Row(
@@ -793,12 +825,14 @@ private fun MediaControlRow(isPlaying: Boolean, onPlayerControl: (String) -> Uni
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Seek -10s
-        LabeledIconButton(
-            icon = Icons.Default.Replay10,
-            label = "-10s",
-            tint = MaterialTheme.colorScheme.onSurface,
-            onClick = { onPlayerControl("seek_back") }
-        )
+        if (showSeek) {
+            LabeledIconButton(
+                icon = Icons.Default.Replay10,
+                label = "-10s",
+                tint = MaterialTheme.colorScheme.onSurface,
+                onClick = { onPlayerControl("seek_back") }
+            )
+        }
 
         // Play/Pause toggle — reflects the TV's actual state
         LabeledIconButton(
@@ -809,24 +843,28 @@ private fun MediaControlRow(isPlaying: Boolean, onPlayerControl: (String) -> Uni
         )
 
         // Seek +10s
-        LabeledIconButton(
-            icon = Icons.Default.Forward10,
-            label = "+10s",
-            tint = MaterialTheme.colorScheme.onSurface,
-            onClick = { onPlayerControl("seek_forward") }
-        )
+        if (showSeek) {
+            LabeledIconButton(
+                icon = Icons.Default.Forward10,
+                label = "+10s",
+                tint = MaterialTheme.colorScheme.onSurface,
+                onClick = { onPlayerControl("seek_forward") }
+            )
+        }
 
         // Loop toggle
-        LabeledIconButton(
-            icon = Icons.Default.Repeat,
-            label = "Loop",
-            tint = if (isLooping) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            onClick = {
-                val next = !isLooping
-                onPlayerControl(if (next) "loop_on" else "loop_off")
-                isLooping = next
-            }
-        )
+        if (showLoop) {
+            LabeledIconButton(
+                icon = Icons.Default.Repeat,
+                label = "Loop",
+                tint = if (isLooping) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                onClick = {
+                    val next = !isLooping
+                    onPlayerControl(if (next) "loop_on" else "loop_off")
+                    isLooping = next
+                }
+            )
+        }
 
         // Stop
         LabeledIconButton(
@@ -931,6 +969,7 @@ private fun NowPlayingPanel(
     episodeLabel: String?,
     positionMs: Long,
     durationMs: Long,
+    isLive: Boolean = false,
     onSeekTo: (Long) -> Unit
 ) {
     val hasDuration = durationMs > 0L
@@ -977,16 +1016,18 @@ private fun NowPlayingPanel(
         )
 
         Row(modifier = Modifier.fillMaxWidth()) {
+            // Show the real elapsed position even when duration is unknown (DLNA streams that
+            // don't report a total) — sliderValue is clamped to [0,duration] and would pin to 0.
             Text(
-                text = formatTime(sliderValue.toLong()),
+                text = formatTime(if (dragging) dragValue.toLong() else positionMs),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = if (hasDuration) formatTime(durationMs) else "--:--",
+                text = if (isLive) "LIVE" else if (hasDuration) formatTime(durationMs) else "--:--",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (isLive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

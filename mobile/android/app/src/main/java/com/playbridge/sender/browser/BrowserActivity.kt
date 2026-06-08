@@ -318,6 +318,7 @@ class BrowserActivity : ComponentActivity() {
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
             val context = LocalContext.current
             val connectionState by connectionViewModel.connectionState.collectAsState()
+            val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
             val scope = rememberCoroutineScope()
 
             // Suggestions State
@@ -763,6 +764,44 @@ class BrowserActivity : ComponentActivity() {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
 
                 scope.launch {
+                    // DLNA: a third-party renderer is the active target — cast via the proxy, skip WS.
+                    val dlnaTarget = connectionViewModel.activeDlnaTarget.value
+                    if (dlnaTarget != null) {
+                        val video = detectedVideos.filter { !it.isSubtitle }
+                            .sortedWith(
+                                compareByDescending<DetectedVideo> { v ->
+                                    val hasMaster = v.url.contains("master", ignoreCase = true)
+                                    val base = when {
+                                        v.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
+                                        v.isPlayable == true && (v.url.contains(".m3u8", ignoreCase = true) || v.url.contains(".mpd", ignoreCase = true)) -> 4
+                                        v.isPlayable == false -> 1
+                                        else -> 2
+                                    }
+                                    if (hasMaster) base + 1 else base
+                                }.thenByDescending { it.timestamp }
+                            )
+                            .firstOrNull()
+                        if (video == null) {
+                            Toast.makeText(this@BrowserActivity, "No video detected to cast", Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
+                        val headers = VideoDetector.mediaHeaders(video)
+                        if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
+                            headers["Referer"] = video.originUrl
+                        }
+                        connectionViewModel.playOnDlna(
+                            com.playbridge.sender.cast.MediaItem(
+                                url = video.url,
+                                headers = headers,
+                                mimeType = video.contentType,
+                                title = video.title ?: selectedTab?.content?.title,
+                            )
+                        )
+                        Toast.makeText(this@BrowserActivity, "Casting to ${dlnaTarget.name}", Toast.LENGTH_SHORT).show()
+                        if (autoSwitchToRemote) currentScreen = Screen.Remote
+                        return@launch
+                    }
+
                     if (connectionState !is WebSocketClient.ConnectionState.Connected) {
                         tvDevice?.let { device ->
                             Toast.makeText(this@BrowserActivity, "Connecting to ${device.name}...", Toast.LENGTH_SHORT).show()
@@ -980,7 +1019,9 @@ class BrowserActivity : ComponentActivity() {
 
             // Auto-reconnect to TV when opening the cast sheet
             LaunchedEffect(showVideoSheet) {
-                if (showVideoSheet && connectionState is WebSocketClient.ConnectionState.Disconnected) {
+                // Don't auto-reconnect the native receiver when a DLNA target is active.
+                if (showVideoSheet && connectionState is WebSocketClient.ConnectionState.Disconnected &&
+                    connectionViewModel.activeDlnaTarget.value == null) {
                     tvDevice?.let { device ->
                         Log.d("BrowserActivity", "Cast sheet opened while disconnected. Retrying connection to ${device.name}")
                         connectionViewModel.connect(device)
@@ -1156,12 +1197,18 @@ class BrowserActivity : ComponentActivity() {
                                             },
                                             onRefresh = { session.reload() },
                                             onStop = { session.stopLoading() },
-                                            onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                                {
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                                    currentScreen = Screen.Remote
+                                            onRemoteClick = when {
+                                                connectionState is WebSocketClient.ConnectionState.Connected -> {
+                                                    {
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                        currentScreen = Screen.Remote
+                                                    }
                                                 }
-                                            } else null
+                                                activeDlnaTarget != null -> {
+                                                    { currentScreen = Screen.Remote }
+                                                }
+                                                else -> null
+                                            }
                                         )
 
                                     // Find on Page Bar
@@ -1288,6 +1335,7 @@ class BrowserActivity : ComponentActivity() {
                             Screen.AddonSettings -> {}
                             Screen.DebridLibrary -> {}
                             Screen.Dashboard -> {}
+                            Screen.PhoneFiles -> {}
                         }
                     },
                         bottomBar = {
@@ -1534,7 +1582,28 @@ class BrowserActivity : ComponentActivity() {
                         castSheetBrowseOverride = null
                         pendingContentPayload = null
                     },
-                    onVideoClick = { video, subs ->
+                    onVideoClick = onVideoClick@ { video, subs ->
+                         // DLNA: a third-party renderer is the active target — cast via the proxy.
+                         val dlnaTarget = connectionViewModel.activeDlnaTarget.value
+                         if (dlnaTarget != null) {
+                             val dlnaHeaders = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
+                             if (!video.originUrl.isNullOrEmpty() && dlnaHeaders.keys.none { it.equals("Referer", ignoreCase = true) }) {
+                                 dlnaHeaders["Referer"] = video.originUrl
+                             }
+                             connectionViewModel.playOnDlna(
+                                 com.playbridge.sender.cast.MediaItem(
+                                     url = video.url,
+                                     headers = dlnaHeaders,
+                                     mimeType = video.contentType,
+                                     title = video.title ?: selectedTab?.content?.title,
+                                 )
+                             )
+                             Toast.makeText(this@BrowserActivity, "Casting to ${dlnaTarget.name}", Toast.LENGTH_SHORT).show()
+                             showVideoSheet = false
+                             forcePlaylistSheet = null
+                             if (autoSwitchToRemote) currentScreen = Screen.Remote
+                             return@onVideoClick
+                         }
                          // A bundle (e.g. "Play All" from the debrid screen) carries its real items in
                          // playlistPayload with a "playlist://…" sentinel URL; send it as a playlist,
                          // not as a single video (otherwise the TV tries to play the sentinel URL).
@@ -1631,14 +1700,20 @@ class BrowserActivity : ComponentActivity() {
                     onPlayerModeChange = { mode ->
                         composeScope.launch { settingsRepository.setTvPlayerMode(mode) }
                     },
-                    availableTvDevices = remember(discoveredDevices, history) {
-                        (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
+                    availableTvDevices = remember(discoveredDevices, history, activeDlnaTarget) {
+                        (history + discoveredDevices + listOfNotNull(activeDlnaTarget))
+                            .distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
                     },
-                    selectedTvDevice = tvDevice,
-                    onTvChange = { device -> connectionViewModel.connect(device) },
-                    tvConnectionState = when (connectionState) {
-                        is WebSocketClient.ConnectionState.Connected -> true
-                        is WebSocketClient.ConnectionState.Error -> false
+                    // When a DLNA renderer is the active target, show it as the destination.
+                    selectedTvDevice = activeDlnaTarget ?: tvDevice,
+                    onTvChange = { device ->
+                        if (device.isDlna) connectionViewModel.selectDlnaTarget(device)
+                        else connectionViewModel.connect(device)
+                    },
+                    tvConnectionState = when {
+                        activeDlnaTarget != null -> true
+                        connectionState is WebSocketClient.ConnectionState.Connected -> true
+                        connectionState is WebSocketClient.ConnectionState.Error -> false
                         else -> null
                     },
                     browseUrl = castSheetBrowseOverride ?: currentUrl,

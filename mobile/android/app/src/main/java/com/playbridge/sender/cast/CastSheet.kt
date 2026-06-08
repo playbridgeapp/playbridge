@@ -433,7 +433,10 @@ fun CastSheet(
                             onSelect = { uuid ->
                                 availableTvDevices.find { it.uuid == uuid }?.let { onTvChange(it) }
                             },
-                            chipLabelColor = tvLabelColorHeader
+                            chipLabelColor = tvLabelColorHeader,
+                            // Pin the capsule so a long device name ellipsises instead of
+                            // pushing the Send button off the right edge.
+                            fixedWidth = 140.dp
                         )
                     }
                     if (castAction != "browse" && videos.isNotEmpty()) {
