@@ -1134,6 +1134,13 @@ fun AppNavHost(
                         }
                     )
                 }
+                Screen.PhoneFiles -> {
+                    BackHandler { onScreenChange(Screen.Dashboard) }
+                    PhoneFilesScreen(
+                        viewModel = connectionViewModel,
+                        onBack = { onScreenChange(Screen.Dashboard) },
+                    )
+                }
                 Screen.DebridLibrary -> {
                     BackHandler { onFinishActivity() }
                     DebridLibraryScreen(

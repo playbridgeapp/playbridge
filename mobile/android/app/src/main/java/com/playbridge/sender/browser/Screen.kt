@@ -23,4 +23,5 @@ sealed class Screen {
     object AddonSettings : Screen()
     data class LibraryDetail(val id: String, val type: String, val source: String? = null) : Screen()
     object Dashboard : Screen()
+    object PhoneFiles : Screen()
 }

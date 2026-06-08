@@ -2,6 +2,7 @@ package com.playbridge.sender.connection
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -17,6 +18,8 @@ import com.playbridge.sender.cast.dlna.DeviceDescription
 import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaDiscovery
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
+import com.playbridge.shared.protocol.createSingleVideoCommandJson
+import playbridge.PlayPayload
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -267,6 +270,31 @@ class ConnectionViewModel(
     fun dlnaPause() { dlnaCastTarget?.let { t -> viewModelScope.launch { t.pause() } } }
     fun dlnaStop() { dlnaCastTarget?.let { t -> viewModelScope.launch { t.stop() } } }
     fun dlnaSeek(positionMs: Long) { dlnaCastTarget?.let { t -> viewModelScope.launch { t.seekTo(positionMs) } } }
+
+    /**
+     * Cast an on-device file (content:// URI) to the active target. Prefers an active
+     * DLNA renderer; otherwise a connected native receiver (served via the proxy so
+     * the TV can fetch it). Returns false if no target is available.
+     */
+    fun castLocalFile(uriString: String, mime: String?, title: String?): Boolean {
+        val dlna = dlnaCastTarget
+        if (dlna != null) {
+            viewModelScope.launch { dlna.load(MediaItem(url = uriString, mimeType = mime, title = title)) }
+            return true
+        }
+        if (connectionState.value is WebSocketClient.ConnectionState.Connected) {
+            viewModelScope.launch {
+                val proxyUrl = DlnaProxyHolder.proxy(getApplication<Application>())
+                    .publishLocal(Uri.parse(uriString), mime)
+                val cmd = createSingleVideoCommandJson(
+                    PlayPayload(url = proxyUrl, title = title ?: "Phone file", content_type = mime),
+                )
+                sendCommandAndRecord(cmd, "play", proxyUrl, title)
+            }
+            return true
+        }
+        return false
+    }
 
     fun disconnect() {
         webSocketClient.disconnect()

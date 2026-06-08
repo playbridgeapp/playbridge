@@ -337,6 +337,13 @@ fun DashboardScreen(
                     subtitle = "Recent casts",
                     screen = Screen.CastHistory,
                     gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00))
+                ),
+                DashboardItem(
+                    icon = Icons.Default.Folder,
+                    title = "Phone Files",
+                    subtitle = "Cast videos & audio",
+                    screen = Screen.PhoneFiles,
+                    gradientColors = listOf(Color(0xFF4527A0), Color(0xFF5E35B1))
                 )
             )
 
@@ -360,21 +367,25 @@ fun DashboardScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Bottom row: 3 cards (Debrid + Connection + Cast History)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items.drop(2).forEachIndexed { index, item ->
-                    DashboardCard(
-                        item = item,
-                        isActive = isCurrentScreen(currentScreen, item.screen),
-                        animDelay = 260 + index * 80,
-                        visible = visible,
-                        modifier = Modifier.weight(1f),
-                        tall = false,
-                        onClick = { onNavigate(item.screen) }
-                    )
+            // Remaining cards, 3 per row (wraps as more are added).
+            items.drop(2).chunked(3).forEachIndexed { rowIdx, rowItems ->
+                if (rowIdx > 0) Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    rowItems.forEachIndexed { index, item ->
+                        DashboardCard(
+                            item = item,
+                            isActive = isCurrentScreen(currentScreen, item.screen),
+                            animDelay = 260 + index * 80,
+                            visible = visible,
+                            modifier = Modifier.weight(1f),
+                            tall = false,
+                            onClick = { onNavigate(item.screen) }
+                        )
+                    }
+                    repeat(3 - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
                 }
             }
 

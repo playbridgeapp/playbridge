@@ -1335,6 +1335,7 @@ class BrowserActivity : ComponentActivity() {
                             Screen.AddonSettings -> {}
                             Screen.DebridLibrary -> {}
                             Screen.Dashboard -> {}
+                            Screen.PhoneFiles -> {}
                         }
                     },
                         bottomBar = {
