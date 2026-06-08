@@ -1,4 +1,4 @@
-package com.playbridge.sender.dlna
+package com.playbridge.sender.cast.dlna
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -9,8 +9,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
- * Minimal AVTransport (UPnP) SOAP control client for the DLNA spike.
- * One instance per renderer control URL.
+ * Minimal AVTransport (UPnP) SOAP control client. One instance per renderer
+ * control URL.
  */
 class AvTransportClient(
     private val controlUrl: String,

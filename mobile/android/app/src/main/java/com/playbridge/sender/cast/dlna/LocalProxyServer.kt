@@ -1,4 +1,4 @@
-package com.playbridge.sender.dlna
+package com.playbridge.sender.cast.dlna
 
 import android.content.ContentResolver
 import android.net.Uri
@@ -15,38 +15,42 @@ import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
+import java.util.Collections
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 /**
- * Dependency-free local HTTP proxy for the DLNA spike.
- *
- * A DLNA renderer fetches the media URL itself and cannot send our headers, so we
- * register the real source here and hand the renderer a plain-HTTP proxy URL. Two
- * source kinds:
+ * Local HTTP proxy that lets a DLNA renderer fetch media the phone has the rights
+ * or headers for. Two source kinds:
  *  - [Entry.Remote]: a web stream — re-requested upstream with the captured headers
  *    (Referer/Cookie/UA), redirects followed, `Range` forwarded; `.m3u8` playlists
- *    are rewritten so every sub-request also carries headers (see [rewritePlaylist]).
- *  - [Entry.Local]: a local file (`content://`/SAF) — served straight from
- *    ContentResolver with HTTP range support so the renderer can seek.
+ *    are rewritten so every sub-request also carries headers ([rewritePlaylist]).
+ *  - [Entry.Local]: a local file (`content://`/SAF) — served from ContentResolver
+ *    with HTTP range support so the renderer can seek.
  *
- * Raw ServerSocket (no NanoHTTPD/Ktor) to match the hand-rolled SSDP/AVTransport
- * layer and keep the spike dependency-free.
+ * Uses short opaque tokens (renderer-friendly URLs) backed by an **LRU-bounded
+ * map**, so a live HLS stream that mints thousands of segment URLs can't grow
+ * memory without limit — old, no-longer-requested segments are evicted.
+ *
+ * Raw ServerSocket (no NanoHTTPD/Ktor) — matches the hand-rolled SSDP/AVTransport
+ * layer and adds no dependency.
  */
 class LocalProxyServer(
     private val http: OkHttpClient,
     private val resolver: ContentResolver,
 ) {
-
     sealed interface Entry {
-        val mime: String?
-        data class Remote(val url: String, val headers: Map<String, String>, override val mime: String?) : Entry
-        data class Local(val uri: Uri, override val mime: String?) : Entry
+        data class Remote(val url: String, val headers: Map<String, String>, val mime: String?) : Entry
+        data class Local(val uri: Uri, val mime: String?) : Entry
     }
 
-    private val entries = ConcurrentHashMap<String, Entry>()
-    private val urlToToken = ConcurrentHashMap<String, String>() // dedup remote re-registrations
+    // accessOrder=true + removeEldestEntry => LRU eviction; synchronized for the accept threads.
+    private val entries: MutableMap<String, Entry> = Collections.synchronizedMap(
+        object : LinkedHashMap<String, Entry>(256, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Entry>): Boolean =
+                size > MAX_ENTRIES
+        },
+    )
     private var server: ServerSocket? = null
     @Volatile private var running = false
     var port: Int = 0
@@ -68,25 +72,15 @@ class LocalProxyServer(
         runCatching { server?.close() }
         server = null
         entries.clear()
-        urlToToken.clear()
     }
 
     /** Register a remote web stream; returns the proxy URL to hand the renderer. */
     fun publish(url: String, headers: Map<String, String>, mime: String?): String =
-        registerRemote(url, filterHeaders(headers), mime)
+        register(Entry.Remote(url, filterHeaders(headers), mime), guessExt(url, mime))
 
-    /** Register a local file (content:// or file URI); returns the proxy URL. */
-    fun publishLocal(uri: Uri, mime: String?): String {
-        val token = UUID.randomUUID().toString().replace("-", "")
-        entries[token] = Entry.Local(uri, mime)
-        val ext = when {
-            mime?.contains("matroska") == true -> ".mkv"
-            mime?.contains("webm") == true -> ".webm"
-            mime?.contains("quicktime") == true -> ".mov"
-            else -> ".mp4"
-        }
-        return "http://${lanIp()}:$port/$token$ext"
-    }
+    /** Register a local file (content:// / file Uri); returns the proxy URL. */
+    fun publishLocal(uri: Uri, mime: String?): String =
+        register(Entry.Local(uri, mime), extForMime(mime))
 
     /** Drop browser-context headers CDNs reject from a different origin (matches mediaHeaders). */
     private fun filterHeaders(headers: Map<String, String>): Map<String, String> =
@@ -96,11 +90,10 @@ class LocalProxyServer(
                 lk != "host" && lk != "accept-encoding" && lk != "connection" && lk != "range"
         }
 
-    private fun registerRemote(url: String, headers: Map<String, String>, mime: String?): String {
-        val token = urlToToken.getOrPut(url) {
-            UUID.randomUUID().toString().replace("-", "").also { entries[it] = Entry.Remote(url, headers, mime) }
-        }
-        return "http://${lanIp()}:$port/$token${guessExt(url, mime)}"
+    private fun register(entry: Entry, ext: String): String {
+        val token = UUID.randomUUID().toString().replace("-", "").take(16)
+        entries[token] = entry
+        return "http://${lanIp()}:$port/$token$ext"
     }
 
     private fun acceptLoop(s: ServerSocket) {
@@ -227,7 +220,38 @@ class LocalProxyServer(
         out.flush()
     }
 
-    /** Parse a simple `bytes=START-` / `bytes=START-END` range. (Suffix `-N` not handled.) */
+    /** Rewrite every URL in an m3u8 to a proxy URL so headers reach all sub-requests. */
+    private fun rewritePlaylist(body: String, baseUrl: String, headers: Map<String, String>): String {
+        val uriAttr = Regex("URI=\"([^\"]*)\"")
+        return body.lineSequence().joinToString("\n") { raw ->
+            val line = raw.trimEnd('\r')
+            when {
+                line.isBlank() -> line
+                line.startsWith("#") ->
+                    uriAttr.replace(line) { m -> "URI=\"${proxify(m.groupValues[1], baseUrl, headers)}\"" }
+                else -> proxify(line, baseUrl, headers)
+            }
+        }
+    }
+
+    private fun proxify(ref: String, baseUrl: String, headers: Map<String, String>): String {
+        val abs = resolve(baseUrl, ref)
+        val mime = if (abs.substringBefore('?').endsWith(".m3u8", true)) {
+            "application/vnd.apple.mpegurl"
+        } else {
+            null
+        }
+        // headers already filtered (inherited from the parent playlist registration)
+        return register(Entry.Remote(abs, headers, mime), guessExt(abs, mime))
+    }
+
+    private fun resolve(base: String, ref: String): String =
+        if (ref.startsWith("http://", true) || ref.startsWith("https://", true)) {
+            ref
+        } else {
+            runCatching { URI(base).resolve(ref).toString() }.getOrDefault(ref)
+        }
+
     private fun parseRange(range: String?, total: Long): Pair<Long, Long>? {
         if (range == null || total <= 0) return null
         val m = Regex("bytes=(\\d*)-(\\d*)").find(range) ?: return null
@@ -252,37 +276,6 @@ class LocalProxyServer(
         }
     }
 
-    /** Rewrite every URL in an m3u8 to a proxy URL so headers reach all sub-requests. */
-    private fun rewritePlaylist(body: String, baseUrl: String, headers: Map<String, String>): String {
-        val uriAttr = Regex("URI=\"([^\"]*)\"")
-        return body.lineSequence().joinToString("\n") { raw ->
-            val line = raw.trimEnd('\r')
-            when {
-                line.isBlank() -> line
-                line.startsWith("#") ->
-                    uriAttr.replace(line) { m -> "URI=\"${proxify(m.groupValues[1], baseUrl, headers)}\"" }
-                else -> proxify(line, baseUrl, headers)
-            }
-        }
-    }
-
-    private fun proxify(ref: String, baseUrl: String, headers: Map<String, String>): String {
-        val abs = resolve(baseUrl, ref)
-        val mime = if (abs.substringBefore('?').endsWith(".m3u8", true)) {
-            "application/vnd.apple.mpegurl"
-        } else {
-            null
-        }
-        return registerRemote(abs, headers, mime) // headers already filtered (inherited from parent)
-    }
-
-    private fun resolve(base: String, ref: String): String =
-        if (ref.startsWith("http://", true) || ref.startsWith("https://", true)) {
-            ref
-        } else {
-            runCatching { URI(base).resolve(ref).toString() }.getOrDefault(ref)
-        }
-
     private fun writeStatus(out: OutputStream, code: Int, msg: String) {
         out.write("HTTP/1.1 $code $msg\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
         out.flush()
@@ -291,11 +284,15 @@ class LocalProxyServer(
     private fun guessExt(url: String, mime: String?): String {
         val fromUrl = url.substringBefore('?').substringAfterLast('.', "")
         if (fromUrl.length in 2..4) return ".$fromUrl"
-        return when {
-            mime?.contains("webm") == true -> ".webm"
-            mime?.contains("matroska") == true -> ".mkv"
-            else -> ".mp4"
-        }
+        return extForMime(mime)
+    }
+
+    private fun extForMime(mime: String?): String = when {
+        mime?.contains("mpegurl", true) == true -> ".m3u8"
+        mime?.contains("webm", true) == true -> ".webm"
+        mime?.contains("matroska", true) == true -> ".mkv"
+        mime?.contains("quicktime", true) == true -> ".mov"
+        else -> ".mp4"
     }
 
     private fun lanIp(): String =
@@ -309,5 +306,6 @@ class LocalProxyServer(
 
     companion object {
         private const val TAG = "LocalProxyServer"
+        private const val MAX_ENTRIES = 10_000
     }
 }

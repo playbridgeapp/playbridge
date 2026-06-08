@@ -1,4 +1,4 @@
-package com.playbridge.sender.dlna
+package com.playbridge.sender.cast.dlna
 
 import android.util.Log
 import android.util.Xml
@@ -11,7 +11,7 @@ import java.net.URI
 
 /**
  * Fetches and parses a UPnP device-description document to locate the
- * AVTransport (and RenderingControl) SOAP control endpoints. DLNA spike only.
+ * AVTransport (and RenderingControl) SOAP control endpoints.
  */
 class DeviceDescription(private val http: OkHttpClient) {
 

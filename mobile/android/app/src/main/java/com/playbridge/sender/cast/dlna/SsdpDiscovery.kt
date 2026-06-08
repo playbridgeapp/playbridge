@@ -1,4 +1,4 @@
-package com.playbridge.sender.dlna
+package com.playbridge.sender.cast.dlna
 
 import android.content.Context
 import android.net.wifi.WifiManager
@@ -12,11 +12,11 @@ import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 
 /**
- * Minimal SSDP (UPnP discovery) client for the DLNA spike.
+ * Minimal SSDP (UPnP discovery) client.
  *
  * Sends multicast M-SEARCH requests and collects the unicast replies, returning
- * the distinct device-description LOCATION URLs. Throwaway — not wired into the
- * production discovery path (that lives in connection/NsdHelper.kt).
+ * the distinct device-description LOCATION URLs. Runs alongside the native mDNS
+ * discovery (`connection/NsdHelper`).
  */
 class SsdpDiscovery(private val context: Context) {
 
@@ -38,7 +38,7 @@ class SsdpDiscovery(private val context: Context) {
         // Android silently drops inbound multicast/UDP unless we hold this lock.
         val wifi = context.applicationContext
             .getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val lock = wifi.createMulticastLock("playbridge-ssdp-spike").apply {
+        val lock = wifi.createMulticastLock("playbridge-ssdp").apply {
             setReferenceCounted(true)
             acquire()
         }
