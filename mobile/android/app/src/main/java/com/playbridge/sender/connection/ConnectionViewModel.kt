@@ -10,8 +10,12 @@ import com.playbridge.sender.data.history.DatabaseProvider
 import kotlinx.coroutines.Dispatchers
 import com.playbridge.sender.data.history.CommandHistoryEntity
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.cast.MediaItem
+import com.playbridge.sender.cast.dlna.AvTransportClient
 import com.playbridge.sender.cast.dlna.DeviceDescription
+import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaDiscovery
+import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -71,6 +75,11 @@ class ConnectionViewModel(
 
     private val _autoConnectEnabled = MutableStateFlow(prefs.getBoolean("auto_connect_tv", true))
     val autoConnectEnabled: StateFlow<Boolean> = _autoConnectEnabled.asStateFlow()
+
+    // --- DLNA cast target (third-party renderer; no WS session) ---
+    private val _activeDlnaTarget = MutableStateFlow<TvDevice?>(null)
+    val activeDlnaTarget: StateFlow<TvDevice?> = _activeDlnaTarget.asStateFlow()
+    private var dlnaCastTarget: DlnaCastTarget? = null
 
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
     private val phoneDeviceName: String = Build.MODEL
@@ -202,6 +211,8 @@ class ConnectionViewModel(
     }
 
     fun connect(device: TvDevice) {
+        // Connecting natively supersedes any DLNA target.
+        clearDlnaTarget()
         viewModelScope.launch {
             // wss_port is a live property of the receiver; a saved/history entry may
             // predate TLS, so prefer the port from current discovery.
@@ -213,6 +224,38 @@ class ConnectionViewModel(
             webSocketClient.connect(merged.ip, merged.port, merged.token, merged.name, phoneDeviceName, phoneDeviceUUID, merged.wssPort, merged.certFingerprint)
         }
     }
+
+    /** Select a DLNA renderer as the active cast target (drops any native session). */
+    fun selectDlnaTarget(device: TvDevice) {
+        val controlUrl = device.controlUrl ?: return
+        webSocketClient.disconnect() // a single target is active at a time
+        dlnaCastTarget?.release()
+        dlnaCastTarget = DlnaCastTarget(
+            id = device.uuid,
+            name = device.name,
+            avTransport = AvTransportClient(controlUrl, DlnaProxyHolder.httpClient),
+            proxy = DlnaProxyHolder.proxy(getApplication<Application>()),
+        )
+        _activeDlnaTarget.value = device
+        Log.d(TAG, "Active DLNA target: ${device.name} ($controlUrl)")
+    }
+
+    fun clearDlnaTarget() {
+        dlnaCastTarget?.release()
+        dlnaCastTarget = null
+        _activeDlnaTarget.value = null
+    }
+
+    /** Cast a media item to the active DLNA target. No-op if none selected. */
+    fun playOnDlna(media: MediaItem) {
+        val target = dlnaCastTarget ?: return
+        viewModelScope.launch { target.load(media) }
+    }
+
+    fun dlnaPlay() { dlnaCastTarget?.let { t -> viewModelScope.launch { t.play() } } }
+    fun dlnaPause() { dlnaCastTarget?.let { t -> viewModelScope.launch { t.pause() } } }
+    fun dlnaStop() { dlnaCastTarget?.let { t -> viewModelScope.launch { t.stop() } } }
+    fun dlnaSeek(positionMs: Long) { dlnaCastTarget?.let { t -> viewModelScope.launch { t.seekTo(positionMs) } } }
 
     fun disconnect() {
         webSocketClient.disconnect()
