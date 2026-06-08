@@ -163,6 +163,8 @@ fun AppNavHost(
     val discoveredDevices by connectionViewModel.discoveredDevices.collectAsState()
     val history by connectionViewModel.deviceHistory.collectAsState(initial = emptyList())
     val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
+    val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
+    val dlnaStatus by connectionViewModel.dlnaStatus.collectAsState()
     val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
     val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
 
@@ -638,7 +640,18 @@ fun AppNavHost(
                     BackHandler {
                         onScreenChange(lastMainScreen)
                     }
-                    RemoteControlScreen(
+                    val dlna = activeDlnaTarget
+                    if (dlna != null) {
+                        DlnaNowPlayingScreen(
+                            deviceName = dlna.name,
+                            status = dlnaStatus,
+                            onPlay = { connectionViewModel.dlnaPlay() },
+                            onPause = { connectionViewModel.dlnaPause() },
+                            onSeekTo = { connectionViewModel.dlnaSeek(it) },
+                            onStop = { connectionViewModel.dlnaStop() },
+                            onBack = { onScreenChange(lastMainScreen) },
+                        )
+                    } else RemoteControlScreen(
                         activeContext = tvActiveContext,
                         playbackState = tvPlayback?.state,
                         positionMs = tvPlayback?.positionMs ?: 0L,

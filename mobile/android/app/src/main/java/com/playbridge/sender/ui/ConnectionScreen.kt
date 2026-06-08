@@ -251,10 +251,13 @@ fun ConnectionScreen(
                                 horizontalArrangement = Arrangement.End
                             ) {
                                 Button(
-                                    onClick = { viewModel.clearDlnaTarget() },
+                                    onClick = {
+                                        viewModel.dlnaStop()
+                                        viewModel.clearDlnaTarget()
+                                    },
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                                 ) {
-                                    Text("Stop")
+                                    Text("Disconnect")
                                 }
                             }
                         }

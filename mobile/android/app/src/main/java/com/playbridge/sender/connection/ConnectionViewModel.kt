@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import com.playbridge.sender.data.history.CommandHistoryEntity
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.cast.MediaItem
+import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.dlna.AvTransportClient
 import com.playbridge.sender.cast.dlna.DeviceDescription
 import com.playbridge.sender.cast.dlna.DlnaCastTarget
@@ -18,6 +19,7 @@ import com.playbridge.sender.cast.dlna.DlnaDiscovery
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
@@ -79,7 +81,10 @@ class ConnectionViewModel(
     // --- DLNA cast target (third-party renderer; no WS session) ---
     private val _activeDlnaTarget = MutableStateFlow<TvDevice?>(null)
     val activeDlnaTarget: StateFlow<TvDevice?> = _activeDlnaTarget.asStateFlow()
+    private val _dlnaStatus = MutableStateFlow<PlaybackStatus?>(null)
+    val dlnaStatus: StateFlow<PlaybackStatus?> = _dlnaStatus.asStateFlow()
     private var dlnaCastTarget: DlnaCastTarget? = null
+    private var dlnaStatusJob: Job? = null
 
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
     private val phoneDeviceName: String = Build.MODEL
@@ -229,20 +234,26 @@ class ConnectionViewModel(
     fun selectDlnaTarget(device: TvDevice) {
         val controlUrl = device.controlUrl ?: return
         webSocketClient.disconnect() // a single target is active at a time
+        dlnaStatusJob?.cancel()
         dlnaCastTarget?.release()
-        dlnaCastTarget = DlnaCastTarget(
+        val target = DlnaCastTarget(
             id = device.uuid,
             name = device.name,
             avTransport = AvTransportClient(controlUrl, DlnaProxyHolder.httpClient),
             proxy = DlnaProxyHolder.proxy(getApplication<Application>()),
         )
+        dlnaCastTarget = target
         _activeDlnaTarget.value = device
+        dlnaStatusJob = viewModelScope.launch { target.status().collect { _dlnaStatus.value = it } }
         Log.d(TAG, "Active DLNA target: ${device.name} ($controlUrl)")
     }
 
     fun clearDlnaTarget() {
+        dlnaStatusJob?.cancel()
+        dlnaStatusJob = null
         dlnaCastTarget?.release()
         dlnaCastTarget = null
+        _dlnaStatus.value = null
         _activeDlnaTarget.value = null
     }
 

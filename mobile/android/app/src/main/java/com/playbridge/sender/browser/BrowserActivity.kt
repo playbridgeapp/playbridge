@@ -798,6 +798,7 @@ class BrowserActivity : ComponentActivity() {
                             )
                         )
                         Toast.makeText(this@BrowserActivity, "Casting to ${dlnaTarget.name}", Toast.LENGTH_SHORT).show()
+                        if (autoSwitchToRemote) currentScreen = Screen.Remote
                         return@launch
                     }
 
@@ -1196,12 +1197,18 @@ class BrowserActivity : ComponentActivity() {
                                             },
                                             onRefresh = { session.reload() },
                                             onStop = { session.stopLoading() },
-                                            onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                                {
-                                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                                    currentScreen = Screen.Remote
+                                            onRemoteClick = when {
+                                                connectionState is WebSocketClient.ConnectionState.Connected -> {
+                                                    {
+                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                                        currentScreen = Screen.Remote
+                                                    }
                                                 }
-                                            } else null
+                                                activeDlnaTarget != null -> {
+                                                    { currentScreen = Screen.Remote }
+                                                }
+                                                else -> null
+                                            }
                                         )
 
                                     // Find on Page Bar
@@ -1593,6 +1600,7 @@ class BrowserActivity : ComponentActivity() {
                              Toast.makeText(this@BrowserActivity, "Casting to ${dlnaTarget.name}", Toast.LENGTH_SHORT).show()
                              showVideoSheet = false
                              forcePlaylistSheet = null
+                             if (autoSwitchToRemote) currentScreen = Screen.Remote
                              return@onVideoClick
                          }
                          // A bundle (e.g. "Play All" from the debrid screen) carries its real items in
