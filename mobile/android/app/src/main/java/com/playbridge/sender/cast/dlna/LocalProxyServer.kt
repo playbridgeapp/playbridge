@@ -56,6 +56,11 @@ class LocalProxyServer(
     var port: Int = 0
         private set
 
+    /** True when the current HLS stream is live (media playlist without #EXT-X-ENDLIST). */
+    @Volatile
+    var isLiveStream = false
+        private set
+
     fun start(): Int {
         if (running) return port
         val s = ServerSocket(0)
@@ -75,12 +80,16 @@ class LocalProxyServer(
     }
 
     /** Register a remote web stream; returns the proxy URL to hand the renderer. */
-    fun publish(url: String, headers: Map<String, String>, mime: String?): String =
-        register(Entry.Remote(url, filterHeaders(headers), mime), guessExt(url, mime))
+    fun publish(url: String, headers: Map<String, String>, mime: String?): String {
+        isLiveStream = false // re-learned when an HLS media playlist is served
+        return register(Entry.Remote(url, filterHeaders(headers), mime), guessExt(url, mime))
+    }
 
     /** Register a local file (content:// / file Uri); returns the proxy URL. */
-    fun publishLocal(uri: Uri, mime: String?): String =
-        register(Entry.Local(uri, mime), extForMime(mime))
+    fun publishLocal(uri: Uri, mime: String?): String {
+        isLiveStream = false
+        return register(Entry.Local(uri, mime), extForMime(mime))
+    }
 
     /** Drop browser-context headers CDNs reject from a different origin (matches mediaHeaders). */
     private fun filterHeaders(headers: Map<String, String>): Map<String, String> =
@@ -222,6 +231,8 @@ class LocalProxyServer(
 
     /** Rewrite every URL in an m3u8 to a proxy URL so headers reach all sub-requests. */
     private fun rewritePlaylist(body: String, baseUrl: String, headers: Map<String, String>): String {
+        // A media playlist (#EXTINF) without #EXT-X-ENDLIST is a live stream.
+        if (body.contains("#EXTINF")) isLiveStream = !body.contains("#EXT-X-ENDLIST")
         val uriAttr = Regex("URI=\"([^\"]*)\"")
         return body.lineSequence().joinToString("\n") { raw ->
             val line = raw.trimEnd('\r')

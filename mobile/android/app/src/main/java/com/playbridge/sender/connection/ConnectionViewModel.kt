@@ -87,6 +87,8 @@ class ConnectionViewModel(
     val activeDlnaTarget: StateFlow<TvDevice?> = _activeDlnaTarget.asStateFlow()
     private val _dlnaStatus = MutableStateFlow<PlaybackStatus?>(null)
     val dlnaStatus: StateFlow<PlaybackStatus?> = _dlnaStatus.asStateFlow()
+    private val _dlnaMediaTitle = MutableStateFlow<String?>(null)
+    val dlnaMediaTitle: StateFlow<String?> = _dlnaMediaTitle.asStateFlow()
     private var dlnaCastTarget: DlnaCastTarget? = null
     private var dlnaStatusJob: Job? = null
 
@@ -259,6 +261,7 @@ class ConnectionViewModel(
         dlnaCastTarget?.release()
         dlnaCastTarget = null
         _dlnaStatus.value = null
+        _dlnaMediaTitle.value = null
         _activeDlnaTarget.value = null
         DlnaProxyService.stop(getApplication<Application>())
     }
@@ -266,6 +269,7 @@ class ConnectionViewModel(
     /** Cast a media item to the active DLNA target. No-op if none selected. */
     fun playOnDlna(media: MediaItem) {
         val target = dlnaCastTarget ?: return
+        _dlnaMediaTitle.value = media.title
         viewModelScope.launch { target.load(media) }
     }
 
@@ -279,10 +283,13 @@ class ConnectionViewModel(
      * DLNA renderer; otherwise a connected native receiver (served via the proxy so
      * the TV can fetch it). Returns false if no target is available.
      */
-    fun castLocalFile(uriString: String, mime: String?, title: String?): Boolean {
+    fun castLocalFile(uriString: String, mime: String?, title: String?, durationMs: Long = 0L): Boolean {
         val dlna = dlnaCastTarget
         if (dlna != null) {
-            viewModelScope.launch { dlna.load(MediaItem(url = uriString, mimeType = mime, title = title)) }
+            _dlnaMediaTitle.value = title
+            viewModelScope.launch {
+                dlna.load(MediaItem(url = uriString, mimeType = mime, title = title, durationMs = durationMs))
+            }
             return true
         }
         if (connectionState.value is WebSocketClient.ConnectionState.Connected) {

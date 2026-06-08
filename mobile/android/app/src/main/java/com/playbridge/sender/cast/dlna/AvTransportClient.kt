@@ -44,6 +44,12 @@ class AvTransportClient(
         return tag(resp, "CurrentTransportState")
     }
 
+    /** Total duration via GetMediaInfo — renderers often report it here when GetPositionInfo's is 0. */
+    suspend fun getMediaDuration(): String? {
+        val resp = action("GetMediaInfo", "<InstanceID>0</InstanceID>") ?: return null
+        return tag(resp, "MediaDuration")
+    }
+
     /** POST a SOAP action; returns the response body on HTTP 200, else null (logged). */
     private suspend fun action(name: String, args: String): String? = withContext(Dispatchers.IO) {
         val body = SOAP_HEAD + "<u:$name xmlns:u=\"$SERVICE\">$args</u:$name>" + SOAP_TAIL

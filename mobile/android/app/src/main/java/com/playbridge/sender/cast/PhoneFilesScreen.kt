@@ -28,9 +28,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +75,7 @@ import kotlinx.coroutines.withContext
 fun PhoneFilesScreen(
     viewModel: ConnectionViewModel,
     onBack: () -> Unit,
+    onOpenRemote: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -111,7 +114,7 @@ fun PhoneFilesScreen(
     }
 
     fun cast(media: PhoneMediaItem) {
-        val ok = viewModel.castLocalFile(media.uri.toString(), media.mimeType, media.title)
+        val ok = viewModel.castLocalFile(media.uri.toString(), media.mimeType, media.title, media.durationMs)
         scope.launch {
             snackbar.showSnackbar(if (ok) "Casting ${media.title}" else "Connect or select a device first")
         }
@@ -129,6 +132,13 @@ fun PhoneFilesScreen(
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
+        floatingActionButton = {
+            if (onOpenRemote != null) {
+                FloatingActionButton(onClick = onOpenRemote) {
+                    Icon(Icons.Default.SettingsRemote, contentDescription = "Open remote")
+                }
+            }
+        },
     ) { pad ->
         Box(modifier = Modifier.padding(pad).fillMaxSize()) {
             when {

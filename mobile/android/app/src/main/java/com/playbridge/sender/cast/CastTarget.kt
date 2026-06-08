@@ -91,6 +91,8 @@ data class MediaItem(
     val title: String? = null,
     val artUrl: String? = null,
     val subtitles: List<SubtitleRef> = emptyList(),
+    /** Known duration (e.g. from MediaStore for local files); 0 if unknown. */
+    val durationMs: Long = 0L,
 )
 
 data class SubtitleRef(
@@ -103,6 +105,8 @@ data class PlaybackStatus(
     val state: PlaybackState,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
+    /** Live stream (no fixed duration) — UI shows a LIVE indicator instead of a seekbar. */
+    val isLive: Boolean = false,
 )
 
 enum class PlaybackState { IDLE, BUFFERING, PLAYING, PAUSED, STOPPED, ERROR }
