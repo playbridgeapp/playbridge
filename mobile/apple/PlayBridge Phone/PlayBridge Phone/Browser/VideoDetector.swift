@@ -1,0 +1,67 @@
+import Foundation
+
+/// Receives detection messages bridged from `DetectionScript` and maintains the per-tab list of
+/// playable streams. Port of the native side of `cast/VideoDetector.kt` (dedup, classification,
+/// `mediaHeaders`). One instance per browser tab.
+final class VideoDetector: ObservableObject {
+    @Published private(set) var videos: [DetectedVideo] = []
+
+    private var seen = Set<String>()
+
+    /// Headers the receiver's player can't use / shouldn't be forwarded (port of the Kotlin
+    /// PLAYER_SKIP_HEADERS intent).
+    private static let skipHeaders: Set<String> = [
+        "host", "connection", "accept-encoding", "content-length",
+        "upgrade-insecure-requests", "range",
+    ]
+    private static let fallbackUA =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+    /// Ingest one `{type:'video', url, contentType, detectedBy, originUrl}` message.
+    func ingest(_ body: [String: Any]) {
+        guard let url = body["url"] as? String, !url.isEmpty else { return }
+        let contentType = (body["contentType"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let kind = DetectedVideo.classify(url: url, contentType: contentType)
+
+        if seen.contains(url) {
+            // Upgrade an existing entry's content-type if we learned a better one.
+            if let ct = contentType, let idx = videos.firstIndex(where: { $0.url == url }), videos[idx].contentType == nil {
+                videos[idx].contentType = ct
+                videos[idx].kind = DetectedVideo.classify(url: url, contentType: ct)
+            }
+            return
+        }
+        seen.insert(url)
+        let video = DetectedVideo(
+            url: url,
+            contentType: contentType,
+            detectedBy: (body["detectedBy"] as? String) ?? "unknown",
+            originUrl: body["originUrl"] as? String,
+            headers: [:],
+            kind: kind
+        )
+        videos.append(video)
+    }
+
+    func clear() {
+        seen.removeAll()
+        videos = []
+    }
+
+    /// Build the header map to send with a cast (skip-list filter + UA fallback + Referer),
+    /// mirroring `VideoDetector.mediaHeaders`.
+    static func mediaHeaders(for video: DetectedVideo) -> [String: String] {
+        var result: [String: String] = [:]
+        for (k, v) in video.headers where !skipHeaders.contains(k.lowercased()) {
+            result[k] = v
+        }
+        if !result.keys.contains(where: { $0.caseInsensitiveCompare("User-Agent") == .orderedSame }) {
+            result["User-Agent"] = fallbackUA
+        }
+        if let origin = video.originUrl, !origin.isEmpty,
+           !result.keys.contains(where: { $0.caseInsensitiveCompare("Referer") == .orderedSame }) {
+            result["Referer"] = origin
+        }
+        return result
+    }
+}
