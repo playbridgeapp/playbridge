@@ -5,18 +5,14 @@ name: Android PR Checks
 # :shared is the KMP module at repo-root /shared, included by both roots.
 # PR checks build the DEBUG variant only (auto-signed with the debug key),
 # so no release keystore / secrets are required.
+#
+# Runs on every PR to main so the required `phone` / `tv` statuses always
+# report, but the Gradle build only runs when android-relevant paths change
+# (see the paths-filter step). On unrelated PRs each leg is a no-op pass.
 
 on:
   pull_request:
     branches: [ "main" ]
-    paths:
-      - 'mobile/android/**'
-      - 'tv/android/**'
-      - 'shared/**'
-      - 'protocol/**'
-      - 'gradle/**'
-      - '.gitmodules'
-      - '.github/workflows/android_pr.yml'
   workflow_dispatch:
 
 concurrency:
@@ -25,6 +21,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   check:
@@ -43,11 +40,26 @@ jobs:
       run:
         working-directory: ./${{ matrix.dir }}
     steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'mobile/android/**'
+              - 'tv/android/**'
+              - 'shared/**'
+              - 'protocol/**'
+              - 'gradle/**'
+              - '.gitmodules'
+              - '.github/workflows/android_pr.yml'
+
       - uses: actions/checkout@v4
+        if: steps.filter.outputs.relevant == 'true'
         with:
           submodules: recursive
 
       - name: Set up JDK 17
+        if: steps.filter.outputs.relevant == 'true'
         uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -55,6 +67,7 @@ jobs:
           cache: gradle
 
       - name: Grant execute permission for gradlew
+        if: steps.filter.outputs.relevant == 'true'
         run: chmod +x gradlew
 
       # Blocking gate: compile all apps, run unit tests across every module
@@ -62,4 +75,5 @@ jobs:
       # lint issues are recorded in per-module lint-baseline.xml files, so Lint
       # fails only on NEW issues a change introduces.
       - name: Assemble (debug), test & lint
+        if: steps.filter.outputs.relevant == 'true'
         run: ./gradlew assembleDebug check --stacktrace
