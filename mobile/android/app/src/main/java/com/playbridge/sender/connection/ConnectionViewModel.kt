@@ -23,6 +23,7 @@ import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import playbridge.PlayPayload
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -92,6 +93,13 @@ class ConnectionViewModel(
     private var dlnaCastTarget: DlnaCastTarget? = null
     private var dlnaStatusJob: Job? = null
 
+    // Foreground scan session. Discovery is time-boxed (SCAN_WINDOW_MS) so the SSDP
+    // M-SEARCH loop and mDNS listener don't run forever; the UI binds [isScanning] for
+    // the spinner and shows a Rescan affordance once a window elapses. rescan() re-arms it.
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+    private var scanTimeoutJob: Job? = null
+
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
     private val phoneDeviceName: String = Build.MODEL
     private val phoneDeviceUUID: String = prefs.getString("pb_phone_uuid", null)
@@ -136,16 +144,17 @@ class ConnectionViewModel(
             }
         }
 
-        // Manage background discovery (mDNS + DLNA SSDP)
+        // Manage discovery (mDNS + DLNA SSDP). A time-boxed scan window fires whenever we
+        // enter a not-connected state (startup, disconnect, connect failure, each retry —
+        // which also covers reconnecting a saved TV that roamed to a new IP), and stops as
+        // soon as we connect. No always-on SSDP loop in the background.
         viewModelScope.launch {
             connectionState.collect { state ->
                 if (state !is WebSocketClient.ConnectionState.Connected &&
                     state !is WebSocketClient.ConnectionState.Connecting) {
-                    nsdHelper.startDiscovery()
-                    dlnaDiscovery.start(viewModelScope)
+                    startDiscovery()
                 } else {
-                    nsdHelper.stopDiscovery()
-                    dlnaDiscovery.stop()
+                    stopDiscovery()
                 }
             }
         }
@@ -340,14 +349,31 @@ class ConnectionViewModel(
         Log.d(TAG, "Sending command payload: $commandJson")
         webSocketClient.send(commandJson)
     }
+    /**
+     * Start a time-boxed scan: run mDNS + DLNA SSDP discovery for [SCAN_WINDOW_MS], then
+     * stop automatically. Idempotent for the engines (their start() is a no-op when already
+     * running); calling again re-arms the timeout, so this doubles as rescan().
+     */
     fun startDiscovery() {
+        scanTimeoutJob?.cancel()
         nsdHelper.startDiscovery()
         dlnaDiscovery.start(viewModelScope)
+        _isScanning.value = true
+        scanTimeoutJob = viewModelScope.launch {
+            delay(SCAN_WINDOW_MS)
+            stopDiscovery()
+        }
     }
 
+    /** User-triggered re-scan (e.g. the Rescan button); restarts the scan window. */
+    fun rescan() = startDiscovery()
+
     fun stopDiscovery() {
+        scanTimeoutJob?.cancel()
+        scanTimeoutJob = null
         nsdHelper.stopDiscovery()
         dlnaDiscovery.stop()
+        _isScanning.value = false
     }
 
     override fun onCleared() {
@@ -359,5 +385,10 @@ class ConnectionViewModel(
         nsdHelper.stopDiscovery()
         dlnaDiscovery.stop()
         DlnaProxyService.stop(getApplication<Application>())
+    }
+
+    companion object {
+        // Two-plus DLNA SSDP refresh cycles (6s each) plus headroom for mDNS resolves.
+        private const val SCAN_WINDOW_MS = 15_000L
     }
 }

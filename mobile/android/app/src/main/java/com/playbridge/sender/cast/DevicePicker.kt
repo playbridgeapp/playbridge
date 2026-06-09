@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Card
@@ -24,6 +25,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -210,7 +212,7 @@ fun DeviceConnectionSheet(
         connectionState is WebSocketClient.ConnectionState.WaitingForApproval ||
         connectionState is WebSocketClient.ConnectionState.Retrying
     val onPhone = !isConnected && !isConnecting && activeDlnaTarget == null
-    val isScanning = onPhone
+    val isScanning by viewModel.isScanning.collectAsState()
 
     // Discover only while the sheet is open (mirrors ConnectionScreen).
     DisposableEffect(Unit) {
@@ -300,12 +302,21 @@ fun DeviceConnectionSheet(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                } else {
+                    IconButton(onClick = { viewModel.rescan() }) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Rescan for TVs",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 
             if (unified.isEmpty()) {
                 Text(
-                    text = "Looking for TVs on your network…",
+                    text = if (isScanning) "Looking for TVs on your network…"
+                    else "No TVs found. Tap the refresh icon to scan again.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 8.dp)

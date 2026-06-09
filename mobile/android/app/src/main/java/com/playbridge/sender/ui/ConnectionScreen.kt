@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
@@ -60,9 +61,7 @@ fun ConnectionScreen(
     // the old split Discovered/Known sections, whose dedup left "Discovered" stuck
     // on an endless "Searching…" spinner once every TV on the network was saved.
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
-    val isConnecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
-        connectionState is WebSocketClient.ConnectionState.WaitingForApproval
-    val isScanning = !isConnected && !isConnecting
+    val isScanning by viewModel.isScanning.collectAsState()
 
     val unifiedDevices = buildUnifiedDevices(discoveredDevices, history, tvDevice, isConnected)
     
@@ -356,84 +355,92 @@ fun ConnectionScreen(
             }
 
             // Your TVs — unified list of saved + currently-discovered devices.
-            if (unifiedDevices.isNotEmpty() || isScanning) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Your TVs",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (isScanning) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                Text(
-                                    "Scanning…",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+            // Always shown so the Rescan affordance is available after a scan window
+            // elapses (discovery is time-boxed — see ConnectionViewModel.startDiscovery).
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Your TVs",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (isScanning) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Text(
+                                "Scanning…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = { viewModel.rescan() }) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Rescan for TVs",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                         }
                     }
                 }
+            }
 
-                if (unifiedDevices.isEmpty()) {
-                    // First run: nothing saved and nothing discovered on the network yet.
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                            )
+            if (unifiedDevices.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "Looking for TVs on your network…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Text(
+                                if (isScanning) "Looking for TVs on your network…"
+                                else "No TVs found. Tap the refresh icon to scan again.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
-                } else {
-                    items(unifiedDevices) { device ->
-                        TvDeviceRow(
-                            device = device,
-                            onClick = {
-                                if (device.connectDevice.isDlna) {
-                                    viewModel.selectDlnaTarget(device.connectDevice)
-                                    coroutineScope.launch {
-                                        snackbarHostState.showSnackbar(
-                                            "Selected ${device.connectDevice.name} — cast a video to play here"
-                                        )
-                                    }
-                                } else {
-                                    onDeviceSelected(
-                                        device.connectDevice.ip,
-                                        device.connectDevice.port,
-                                        device.connectDevice.name,
-                                        device.connectDevice.uuid
+                }
+            } else {
+                items(unifiedDevices) { device ->
+                    TvDeviceRow(
+                        device = device,
+                        onClick = {
+                            if (device.connectDevice.isDlna) {
+                                viewModel.selectDlnaTarget(device.connectDevice)
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "Selected ${device.connectDevice.name} — cast a video to play here"
                                     )
                                 }
-                            },
-                            onRemove = device.historyEntry?.let { entry ->
-                                { viewModel.removeDeviceFromHistory(entry) }
+                            } else {
+                                onDeviceSelected(
+                                    device.connectDevice.ip,
+                                    device.connectDevice.port,
+                                    device.connectDevice.name,
+                                    device.connectDevice.uuid
+                                )
                             }
-                        )
-                    }
+                        },
+                        onRemove = device.historyEntry?.let { entry ->
+                            { viewModel.removeDeviceFromHistory(entry) }
+                        }
+                    )
                 }
             }
         }
