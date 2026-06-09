@@ -92,7 +92,9 @@ button { font-family: inherit; cursor: pointer; }
 .wrap {
   max-width: 1080px;
   margin: 0 auto;
-  padding: 0 32px;
+  /* Use padding-inline (not the `padding` shorthand) so .wrap never resets the
+     block padding that .section / .hero set — otherwise sections collapse on mobile. */
+  padding-inline: 32px;
 }
 
 h1, h2, h3, h4 {
@@ -221,18 +223,17 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 
 .nav__mobile-menu {
   position: fixed;
-  top: 63px;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   background: rgba(6, 9, 30, 0.98);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  z-index: 1000;
+  /* Below the nav (z-index 50) so the logo + close button stay on top and tappable. */
+  z-index: 40;
   display: flex;
   flex-direction: column;
-  padding: 48px 24px;
-  border-top: 1px solid var(--line);
+  justify-content: center;
+  /* Top padding clears the sticky nav bar regardless of its exact height. */
+  padding: 88px 24px 48px;
 }
 
 .nav__mobile-links {
@@ -354,6 +355,8 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .platform:hover { background: linear-gradient(180deg, rgba(200,220,255,0.025), transparent); }
 .platform:nth-child(odd)  { padding-right: 32px; border-right: 1px solid var(--line); }
 .platform:nth-child(even) { padding-left: 32px; }
+/* A lone platform in a group spans the full row (no dangling divider). */
+.platform:only-child { grid-column: 1 / -1; padding-right: 0; border-right: 0; }
 .platform__icon {
   width: 36px; height: 36px;
   color: var(--accent);
@@ -650,10 +653,20 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   .faq__btn { padding: 16px; font-size: 14px; }
   .faq__panel { padding: 0 16px; }
   .faq__item--open .faq__panel { padding: 0 16px 16px; }
+  /* Roomier tap targets for inline link lists on touch screens. */
+  .footer ul a { display: inline-block; padding-block: 4px; }
+  .platform__link { padding-block: 6px; }
+  .os__ctas { flex-direction: column; align-items: stretch; }
+  .os__ctas .btn { justify-content: center; }
+}
+
+@media (max-width: 400px) {
+  .hero h1 { font-size: 34px; }
+  .hero__sub { font-size: 16px; }
 }
 
 @media (max-width: 560px) {
   .footer__grid { grid-template-columns: 1fr; }
   .footer__bottom { flex-direction: column; gap: 10px; align-items: flex-start; }
-  .wrap { padding: 0 20px; }
+  .wrap { padding-inline: 20px; }
 }

@@ -42,19 +42,22 @@
       {/if}
     </button>
   </div>
-
-  {#if mobileMenuOpen}
-    <div class="nav__mobile-menu">
-      <div class="nav__mobile-links">
-        <a href="/#how" onclick={closeMenu}>How it works</a>
-        <a href="/#platforms" onclick={closeMenu}>Platforms</a>
-        <a href="/#features" onclick={closeMenu}>Features</a>
-        <a href="/#install" onclick={closeMenu}>Install</a>
-        <a href="/#faq" onclick={closeMenu}>FAQ</a>
-        <a class="btn btn--primary nav__mobile-github" href={SITE.github} rel="noopener" target="_blank" onclick={closeMenu}>
-          <Icon name="github" size={14} /> GitHub
-        </a>
-      </div>
-    </div>
-  {/if}
 </nav>
+
+<!-- Rendered OUTSIDE <nav> on purpose: the nav's backdrop-filter would otherwise
+     become the containing block for this position:fixed overlay and clip it to the
+     nav bar. As a sibling of <nav>, it resolves against the viewport. -->
+{#if mobileMenuOpen}
+  <div class="nav__mobile-menu">
+    <div class="nav__mobile-links">
+      <a href="/#how" onclick={closeMenu}>How it works</a>
+      <a href="/#platforms" onclick={closeMenu}>Platforms</a>
+      <a href="/#features" onclick={closeMenu}>Features</a>
+      <a href="/#install" onclick={closeMenu}>Install</a>
+      <a href="/#faq" onclick={closeMenu}>FAQ</a>
+      <a class="btn btn--primary nav__mobile-github" href={SITE.github} rel="noopener" target="_blank" onclick={closeMenu}>
+        <Icon name="github" size={14} /> GitHub
+      </a>
+    </div>
+  </div>
+{/if}
