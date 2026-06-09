@@ -92,9 +92,9 @@ fun LibraryDetailScreen(
     viewModel: LibraryViewModel,
     tvName: String? = null,
     isTvConnected: Boolean = false,
-    availableTvDevices: List<TvDevice> = emptyList(),
     selectedTvDevice: TvDevice? = null,
     onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
+    onOpenConnectionScreen: () -> Unit = {},
     onSendStreamToTv: (url: String, title: String, headers: Map<String, String>?, contentType: String?) -> Unit = { _, _, _, _ -> },
     onBack: () -> Unit,
     onShare: (title: String, imdbId: String?) -> Unit = { _, _ -> },
@@ -742,9 +742,8 @@ fun LibraryDetailScreen(
                                     watchOnTv = it
                                     browserPrefs.edit().putBoolean("watch_on_tv", it).apply()
                                 },
-                                availableTvDevices = availableTvDevices,
                                 selectedTvDevice = selectedTvDevice,
-                                onTvDeviceSelect = onTvDeviceSelect,
+                                onOpenConnectionScreen = onOpenConnectionScreen,
                                 onWatchOnTv = {
                                     if (isSeries && firstEpisodeForTv != null) {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
@@ -838,9 +837,8 @@ fun LibraryDetailScreen(
                                         browserPrefs.edit().putBoolean("watch_on_tv", it).apply()
                                     },
                                     watchLabel = "Watch $epLabel",
-                                    availableTvDevices = availableTvDevices,
                                     selectedTvDevice = selectedTvDevice,
-                                    onTvDeviceSelect = onTvDeviceSelect,
+                                    onOpenConnectionScreen = onOpenConnectionScreen,
                                     onWatchOnTv = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType

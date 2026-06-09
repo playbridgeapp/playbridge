@@ -71,8 +71,7 @@ import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
 import com.playbridge.sender.settings.SettingsScreen
-import com.playbridge.sender.cast.ChipDropdown
-import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.cast.DeviceChip
 import com.playbridge.sender.connection.WebSocketClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -102,11 +101,8 @@ fun LibraryScreen(
     tvIp: String?,
     tvPort: Int?,
     tvName: String? = null,
-    availableTvDevices: List<TvDevice> = emptyList(),
-    selectedTvDevice: TvDevice? = null,
     connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
-    onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
-    onDisconnectTv: (() -> Unit)? = null,
+    onOpenConnectionScreen: () -> Unit = {},
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
@@ -145,11 +141,8 @@ fun LibraryScreen(
             tvIp = tvIp,
             tvPort = tvPort,
             tvName = tvName,
-            availableTvDevices = availableTvDevices,
-            selectedTvDevice = selectedTvDevice,
             connectionState = connectionState,
-            onTvDeviceSelect = onTvDeviceSelect,
-            onDisconnectTv = onDisconnectTv,
+            onOpenConnectionScreen = onOpenConnectionScreen,
             onMenuClick = onMenuClick,
             onMovieClick = onMovieClick,
             onTvShowClick = onTvShowClick,
@@ -178,11 +171,8 @@ private fun LibraryScreenContent(
     tvIp: String?,
     tvPort: Int?,
     tvName: String?,
-    availableTvDevices: List<TvDevice> = emptyList(),
-    selectedTvDevice: TvDevice? = null,
     connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
-    onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
-    onDisconnectTv: (() -> Unit)? = null,
+    onOpenConnectionScreen: () -> Unit = {},
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
     onTvShowClick: (Int) -> Unit,
@@ -441,64 +431,14 @@ private fun LibraryScreenContent(
                                         .focusRequester(searchFocusRequester)
                                 )
                             } else {
-                                val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
-                                val isConnecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
-                                                   connectionState is WebSocketClient.ConnectionState.Retrying ||
-                                                   connectionState is WebSocketClient.ConnectionState.WaitingForApproval
-
-                                val selectedLabel = when {
-                                    isConnected -> "Watching on: $tvName"
-                                    isConnecting -> "Connecting to: $tvName..."
-                                    else -> "Watching on: This Device"
-                                }
-
-                                val connectedGreen = Color(0xFF4CAF50)
-                                val connectingOrange = Color(0xFFFF9800)
-
-                                val leadingIconVector = when {
-                                    isConnected -> Icons.Default.Tv
-                                    isConnecting -> Icons.Default.Tv
-                                    else -> Icons.Default.Smartphone
-                                }
-
-                                val leadingIconTint = when {
-                                    isConnected -> connectedGreen
-                                    isConnecting -> connectingOrange
-                                    else -> Color.White.copy(alpha = 0.7f)
-                                }
-
-                                val chipLabelColor = when {
-                                    isConnected -> connectedGreen
-                                    isConnecting -> connectingOrange
-                                    else -> Color.Unspecified
-                                }
-
-                                ChipDropdown(
-                                    selectedLabel = selectedLabel,
-                                    options = listOf("phone" to "This Device") + availableTvDevices.map { 
-                                        (it.uuid.ifBlank { it.ip }) to (it.name.ifBlank { it.ip }) 
-                                    },
-                                    selectedValue = if (isConnected || isConnecting) (selectedTvDevice?.uuid ?: selectedTvDevice?.ip ?: "tv") else "phone",
-                                    onSelect = { value ->
-                                        if (value == "phone") {
-                                            onDisconnectTv?.invoke()
-                                            browserPrefs.edit().putBoolean("watch_on_tv", false).apply()
-                                        } else {
-                                            browserPrefs.edit().putBoolean("watch_on_tv", true).apply()
-                                            availableTvDevices.find { it.uuid == value || it.ip == value }?.let {
-                                                onTvDeviceSelect?.invoke(it)
-                                            }
-                                        }
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = leadingIconVector,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(13.dp),
-                                            tint = leadingIconTint
-                                        )
-                                    },
-                                    chipLabelColor = chipLabelColor
+                                // Shared device picker: tap opens a bottom-sheet connection screen.
+                                // watch_on_tv is also reconciled by the LaunchedEffect above; these
+                                // hooks just set it optimistically on selection.
+                                DeviceChip(
+                                    showThisDevice = true,
+                                    onPickedThisDevice = { browserPrefs.edit().putBoolean("watch_on_tv", false).apply() },
+                                    onPickedDevice = { browserPrefs.edit().putBoolean("watch_on_tv", true).apply() },
+                                    onOpenAllDevices = onOpenConnectionScreen
                                 )
                             }
                         },

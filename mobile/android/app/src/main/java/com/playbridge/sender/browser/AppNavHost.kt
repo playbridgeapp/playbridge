@@ -678,10 +678,6 @@ fun AppNavHost(
                             mediaTitle = dlnaMediaTitle ?: dlna.name,
                             onSeekTo = { connectionViewModel.dlnaSeek(it) },
                             tvName = dlna.name,
-                            onDisconnectTv = {
-                                connectionViewModel.clearDlnaTarget()
-                                onScreenChange(lastMainScreen)
-                            },
                         )
                     } else RemoteControlScreen(
                         activeContext = tvActiveContext,
@@ -774,15 +770,9 @@ fun AppNavHost(
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson(command))
                             if (command == "stop") { connectionCoordinator.tvActiveContext.value = "idle" }
                         },
-                        // Connected-TV tile — same device switcher as the Library top bar.
+                        // Connected-device status pill (switching/disconnecting lives in the Library cast picker).
                         tvName = tvDevice?.name,
-                        connectionState = connectionState,
-                        availableTvDevices = remember(discoveredDevices, history) {
-                            (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
-                        },
-                        selectedTvDevice = tvDevice,
-                        onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
-                        onDisconnectTv = { connectionViewModel.disconnect() }
+                        connectionState = connectionState
                     )
                 }
                 Screen.Home -> {
@@ -818,13 +808,8 @@ fun AppNavHost(
                         tvIp = tvDevice?.ip,
                         tvPort = tvDevice?.port,
                         tvName = tvDevice?.name,
-                        availableTvDevices = remember(discoveredDevices, history) {
-                            (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
-                        },
-                        selectedTvDevice = tvDevice,
                         connectionState = connectionState,
-                        onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
-                        onDisconnectTv = { connectionViewModel.disconnect() },
+                        onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
                         onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
                             {
@@ -864,11 +849,9 @@ fun AppNavHost(
                                 onScreenChange(Screen.Remote)
                             }
                         } else null,
-                        availableTvDevices = remember(discoveredDevices, history) {
-                            (history + discoveredDevices).distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
-                        },
                         selectedTvDevice = tvDevice,
                         onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
+                        onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
                         onPlayTrailer = { trailerUrl ->
                             onCastSheetInitialModeChange("browse")
                             onCastSheetBrowseOverrideChange(trailerUrl)

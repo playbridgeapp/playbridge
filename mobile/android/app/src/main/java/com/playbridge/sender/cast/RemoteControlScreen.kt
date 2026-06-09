@@ -2,7 +2,6 @@ package com.playbridge.sender.cast
 import com.playbridge.sender.library.*
 import com.playbridge.sender.browser.*
 import com.playbridge.sender.connection.WebSocketClient
-import com.playbridge.sender.model.TvDevice
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
@@ -135,13 +134,10 @@ fun RemoteControlScreen(
     onSwitchEngine: (String) -> Unit = {},
     onAddSubtitleUrl: (String) -> Unit = {},
     onSearchSubtitles: (suspend () -> List<SubtitleOption>)? = null,
-    // Connected-TV tile (mirrors the Library top-bar device switcher)
+    // Connected-device status pill: shows what you're controlling (and which protocol for DLNA).
+    // It's status-only — switching/disconnecting lives in the cast picker (Library / cast sheet).
     tvName: String? = null,
-    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
-    availableTvDevices: List<TvDevice> = emptyList(),
-    selectedTvDevice: TvDevice? = null,
-    onTvDeviceSelect: (TvDevice) -> Unit = {},
-    onDisconnectTv: () -> Unit = {}
+    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected
 ) {
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showAddSubtitle by remember { mutableStateOf(false) }
@@ -177,34 +173,15 @@ fun RemoteControlScreen(
                 .padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Persistent connected-TV tile — the constant anchor across player/browser/idle, so
-            // the controls below can crossfade without the screen feeling like it teleported.
-            if (dlnaMode) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "Casting via DLNA · ${tvName ?: "renderer"}",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = onDisconnectTv) { Text("Disconnect") }
-                }
-            } else {
-                ConnectedTvChip(
-                    tvName = tvName,
-                    connectionState = connectionState,
-                    availableTvDevices = availableTvDevices,
-                    selectedTvDevice = selectedTvDevice,
-                    onTvDeviceSelect = onTvDeviceSelect,
-                    onDisconnectTv = onDisconnectTv
-                )
-            }
+            // Persistent connected-device status pill — the constant anchor across player/browser/
+            // idle, so the controls below can crossfade without the screen feeling like it teleported.
+            // Status-only: it states what you're controlling (and tags DLNA); switching/disconnecting
+            // happens at the cast picker, not here (so native and DLNA read identically).
+            ConnectedTvChip(
+                deviceName = tvName,
+                connectionState = connectionState,
+                isDlna = dlnaMode
+            )
             Spacer(modifier = Modifier.height(12.dp))
 
             AnimatedContent(
@@ -350,67 +327,84 @@ private fun remoteContextOf(active: String): RemoteContext = when (active) {
 }
 
 /**
- * Persistent connected-TV tile shown at the top of the remote — the same device switcher the
- * Library top bar uses ([ChipDropdown]): tap to switch TV, or pick "This Device" to disconnect.
+ * Persistent connected-device status pill at the top of the remote: states what you're controlling,
+ * and tags the protocol ("DLNA") so the active casting flow is unmistakable. Status-only — switching
+ * and disconnecting live in the cast picker. Native maps [connectionState]; DLNA ([isDlna]) is always
+ * "connected" to its renderer.
  */
 @Composable
 private fun ConnectedTvChip(
-    tvName: String?,
+    deviceName: String?,
     connectionState: WebSocketClient.ConnectionState,
-    availableTvDevices: List<TvDevice>,
-    selectedTvDevice: TvDevice?,
-    onTvDeviceSelect: (TvDevice) -> Unit,
-    onDisconnectTv: () -> Unit
+    isDlna: Boolean = false
 ) {
-    val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
-    val isConnecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
-        connectionState is WebSocketClient.ConnectionState.Retrying ||
-        connectionState is WebSocketClient.ConnectionState.WaitingForApproval
-
-    val selectedLabel = when {
-        isConnected -> "Watching on: ${tvName ?: "TV"}"
-        isConnecting -> "Connecting to: ${tvName ?: "TV"}..."
-        else -> "Watching on: This Device"
-    }
+    val isConnected = isDlna || connectionState is WebSocketClient.ConnectionState.Connected
+    val isConnecting = !isDlna && (
+        connectionState is WebSocketClient.ConnectionState.Connecting ||
+            connectionState is WebSocketClient.ConnectionState.Retrying ||
+            connectionState is WebSocketClient.ConnectionState.WaitingForApproval
+        )
 
     val connectedGreen = Color(0xFF4CAF50)
     val connectingOrange = Color(0xFFFF9800)
-
-    val leadingIconVector = if (isConnected || isConnecting) Icons.Default.Tv else Icons.Default.Smartphone
-    val leadingIconTint = when {
+    val accent = when {
         isConnected -> connectedGreen
         isConnecting -> connectingOrange
-        else -> Color.White.copy(alpha = 0.7f)
-    }
-    val chipLabelColor = when {
-        isConnected -> connectedGreen
-        isConnecting -> connectingOrange
-        else -> Color.Unspecified
+        else -> Color.White.copy(alpha = 0.6f)
     }
 
-    ChipDropdown(
-        selectedLabel = selectedLabel,
-        options = listOf("phone" to "This Device") + availableTvDevices.map {
-            (it.uuid.ifBlank { it.ip }) to (it.name.ifBlank { it.ip })
-        },
-        selectedValue = if (isConnected || isConnecting) (selectedTvDevice?.uuid ?: selectedTvDevice?.ip ?: "tv") else "phone",
-        onSelect = { value ->
-            if (value == "phone") {
-                onDisconnectTv()
-            } else {
-                availableTvDevices.find { it.uuid == value || it.ip == value }?.let { onTvDeviceSelect(it) }
-            }
-        },
-        leadingIcon = {
-            Icon(
-                imageVector = leadingIconVector,
-                contentDescription = null,
-                modifier = Modifier.size(13.dp),
-                tint = leadingIconTint
+    val name = deviceName ?: if (isDlna) "renderer" else "TV"
+    val label = when {
+        isDlna -> "Casting to $name"
+        isConnected -> "Watching on $name"
+        isConnecting -> "Connecting to $name…"
+        else -> "Not connected"
+    }
+    val icon = when {
+        isDlna -> Icons.Default.Cast
+        isConnected || isConnecting -> Icons.Default.Tv
+        else -> Icons.Default.Smartphone
+    }
+
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = accent.copy(alpha = 0.15f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.5f))
+    ) {
+        Row(
+            modifier = Modifier
+                .heightIn(min = 36.dp)
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = accent)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 240.dp)
             )
-        },
-        chipLabelColor = chipLabelColor
-    )
+            if (isDlna) ProtocolBadge(text = "DLNA", accent = accent)
+        }
+    }
+}
+
+/** Small uppercase protocol tag (e.g. "DLNA") so the active casting flow is unmistakable. */
+@Composable
+private fun ProtocolBadge(text: String, accent: Color) {
+    Surface(shape = RoundedCornerShape(4.dp), color = accent.copy(alpha = 0.25f)) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = accent,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
 }
 
 /**

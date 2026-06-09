@@ -323,9 +323,8 @@ internal fun SplitPlayButton(
     watchOnTv: Boolean,
     onWatchOnTvChange: (Boolean) -> Unit,
     watchLabel: String = "Watch",
-    availableTvDevices: List<TvDevice> = emptyList(),
     selectedTvDevice: TvDevice? = null,
-    onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
+    onOpenConnectionScreen: () -> Unit = {},
     onWatchOnTv: () -> Unit,
     onWatchOnTvLongClick: (() -> Unit)? = null,
     onWatchOnPhone: () -> Unit = {},
@@ -341,7 +340,6 @@ internal fun SplitPlayButton(
     val playerOptions = TvCapabilityOptions.playerOptions(selectedTvDevice)
     val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
     var showProvidersSheet by remember { mutableStateOf(false) }
-    var showDeviceMenu by remember { mutableStateOf(false) }
 
     val topProvider = watchProviders.firstOrNull()
     val isBusy = isTvResolving || isPhoneResolving
@@ -363,56 +361,14 @@ internal fun SplitPlayButton(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "Watching on",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.4f)
-            )
-            val connectedGreen = Color(0xFF4CAF50)
-
-            ChipDropdown(
-                fixedWidth = 150.dp,
-                selectedLabel = if (watchOnTv) {
-                    if (!tvName.isNullOrBlank()) "TV ($tvName)" else "TV"
-                } else "This Device",
-                options = listOf("phone" to "This Device") + availableTvDevices.map { (it.uuid.ifBlank { it.ip }) to (it.name.ifBlank { it.ip }) },
-                selectedValue = if (watchOnTv) (selectedTvDevice?.uuid ?: selectedTvDevice?.ip ?: "tv") else "phone",
-                onSelect = { value ->
-                    if (value == "phone") {
-                        onWatchOnTvChange(false)
-                    } else {
-                        onWatchOnTvChange(true)
-                        availableTvDevices.find { it.uuid == value || it.ip == value }?.let {
-                            onTvDeviceSelect?.invoke(it)
-                        }
-                    }
-                },
-                toggleAction = {
-                    val togglingToTv = !watchOnTv
-                    onWatchOnTvChange(togglingToTv)
-                    // If switching to TV and not connected, try to connect to the selected device
-                    if (togglingToTv && !isTvConnected && selectedTvDevice != null) {
-                        onTvDeviceSelect?.invoke(selectedTvDevice)
-                    }
-                },
-                chipLabelColor = if (watchOnTv && isTvConnected) connectedGreen else Color.Unspecified,
+            // Shared device picker (tap opens the bottom-sheet connection screen). watch_on_tv
+            // follows the picker's selection via these hooks.
+            DeviceChip(
+                showThisDevice = true,
                 themeColor = themeColor,
-                leadingIcon = {
-                    Icon(
-                        imageVector = if (watchOnTv) Icons.Default.Tv else Icons.Default.PhoneAndroid,
-                        contentDescription = null,
-                        modifier = Modifier.size(13.dp),
-                        tint = if (watchOnTv && isTvConnected) connectedGreen else Color.White.copy(alpha = 0.7f)
-                    )
-                },
-                trailingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.SwapHoriz,
-                        contentDescription = "Switch destination",
-                        modifier = Modifier.size(13.dp),
-                        tint = Color.White.copy(alpha = 0.45f)
-                    )
-                }
+                onPickedThisDevice = { onWatchOnTvChange(false) },
+                onPickedDevice = { onWatchOnTvChange(true) },
+                onOpenAllDevices = onOpenConnectionScreen
             )
 
             // Player-mode + proxy chips (only meaningful when casting to TV).
