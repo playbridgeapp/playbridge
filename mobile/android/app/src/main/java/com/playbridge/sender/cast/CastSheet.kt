@@ -75,10 +75,8 @@ fun CastSheet(
     isTvPlaying: Boolean = false,
     playerMode: String = "tv",
     onPlayerModeChange: (String) -> Unit = {},
-    availableTvDevices: List<TvDevice> = emptyList(),
     selectedTvDevice: TvDevice? = null,
-    onTvChange: (TvDevice) -> Unit = {},
-    tvConnectionState: Boolean? = null,  // true = connected, false = error, null = neutral
+    onOpenAllDevices: () -> Unit = {},
     browseUrl: String = "",
     onBrowseClick: ((String, Boolean) -> Unit)? = null,
     onOpenNewTab: ((String) -> Unit)? = null,
@@ -419,26 +417,13 @@ fun CastSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    val showTvDropdownHeader = availableTvDevices.size > 1 || (availableTvDevices.size == 1 && selectedTvDevice == null)
-                    if (showTvDropdownHeader) {
-                        val tvLabelColorHeader = when (tvConnectionState) {
-                            true  -> Color(0xFF4CAF50)
-                            false -> MaterialTheme.colorScheme.error
-                            null  -> Color.Unspecified
-                        }
-                        ChipDropdown(
-                            selectedLabel = selectedTvDevice?.name ?: "None",
-                            options = availableTvDevices.map { it.uuid to it.name },
-                            selectedValue = selectedTvDevice?.uuid ?: "",
-                            onSelect = { uuid ->
-                                availableTvDevices.find { it.uuid == uuid }?.let { onTvChange(it) }
-                            },
-                            chipLabelColor = tvLabelColorHeader,
-                            // Pin the capsule so a long device name ellipsises instead of
-                            // pushing the Send button off the right edge.
-                            fixedWidth = 140.dp
-                        )
-                    }
+                    // Shared device picker (TV-only here — no "This Device" when casting). Pinned
+                    // width so a long device name ellipsises instead of pushing Send off the edge.
+                    DeviceChip(
+                        showThisDevice = false,
+                        fixedWidth = 140.dp,
+                        onOpenAllDevices = onOpenAllDevices
+                    )
                     if (castAction != "browse" && videos.isNotEmpty()) {
                         IconButton(onClick = onClear) {
                             Icon(

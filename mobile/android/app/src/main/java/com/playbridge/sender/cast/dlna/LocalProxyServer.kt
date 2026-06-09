@@ -61,6 +61,15 @@ class LocalProxyServer(
     var isLiveStream = false
         private set
 
+    /**
+     * Total duration (ms) of the current HLS VOD, summed from the media playlist's
+     * #EXTINF tags; 0 when unknown or live. `MediaMetadataRetriever` can't open an
+     * .m3u8, so this is the only reliable HLS duration source — see DlnaCastTarget.
+     */
+    @Volatile
+    var vodDurationMs = 0L
+        private set
+
     fun start(): Int {
         if (running) return port
         val s = ServerSocket(0)
@@ -82,12 +91,14 @@ class LocalProxyServer(
     /** Register a remote web stream; returns the proxy URL to hand the renderer. */
     fun publish(url: String, headers: Map<String, String>, mime: String?): String {
         isLiveStream = false // re-learned when an HLS media playlist is served
+        vodDurationMs = 0L
         return register(Entry.Remote(url, filterHeaders(headers), mime), guessExt(url, mime))
     }
 
     /** Register a local file (content:// / file Uri); returns the proxy URL. */
     fun publishLocal(uri: Uri, mime: String?): String {
         isLiveStream = false
+        vodDurationMs = 0L
         return register(Entry.Local(uri, mime), extForMime(mime))
     }
 
@@ -231,8 +242,13 @@ class LocalProxyServer(
 
     /** Rewrite every URL in an m3u8 to a proxy URL so headers reach all sub-requests. */
     private fun rewritePlaylist(body: String, baseUrl: String, headers: Map<String, String>): String {
-        // A media playlist (#EXTINF) without #EXT-X-ENDLIST is a live stream.
-        if (body.contains("#EXTINF")) isLiveStream = !body.contains("#EXT-X-ENDLIST")
+        // Only a media playlist (#EXTINF) carries liveness/duration; the master (variants) has
+        // neither, so leave the publish()-reset values in place for it. VOD => #EXT-X-ENDLIST.
+        if (body.contains("#EXTINF")) {
+            val live = !body.contains("#EXT-X-ENDLIST")
+            isLiveStream = live
+            vodDurationMs = if (live) 0L else sumExtInf(body)
+        }
         val uriAttr = Regex("URI=\"([^\"]*)\"")
         return body.lineSequence().joinToString("\n") { raw ->
             val line = raw.trimEnd('\r')
@@ -318,5 +334,17 @@ class LocalProxyServer(
     companion object {
         private const val TAG = "LocalProxyServer"
         private const val MAX_ENTRIES = 10_000
+
+        /** Sum a VOD media playlist's segment durations (#EXTINF:<seconds>[,title]) → ms. */
+        fun sumExtInf(body: String): Long {
+            var totalSec = 0.0
+            body.lineSequence().forEach { raw ->
+                val line = raw.trim()
+                if (line.startsWith("#EXTINF:")) {
+                    line.substring(8).substringBefore(',').trim().toDoubleOrNull()?.let { totalSec += it }
+                }
+            }
+            return (totalSec * 1000).toLong()
+        }
     }
 }

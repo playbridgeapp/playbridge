@@ -64,42 +64,7 @@ fun ConnectionScreen(
         connectionState is WebSocketClient.ConnectionState.WaitingForApproval
     val isScanning = !isConnected && !isConnecting
 
-    fun liveMatch(device: TvDevice): TvDevice? =
-        if (device.uuid.isNotEmpty()) discoveredDevices.find { it.uuid == device.uuid }
-        else discoveredDevices.find { it.ip == device.ip && it.port == device.port }
-
-    val knownUuids = history.mapNotNull { it.uuid.takeIf(String::isNotEmpty) }.toSet()
-    val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
-
-    val knownDevices = history.map { saved ->
-        val live = liveMatch(saved)
-        UnifiedDevice(
-            // A saved entry's IP/port can go stale; prefer the live mDNS values when online.
-            connectDevice = if (live != null)
-                saved.copy(ip = live.ip, port = live.port, wssPort = live.wssPort ?: saved.wssPort)
-            else saved,
-            historyEntry = saved,
-            isOnline = live != null,
-            lastConnected = saved.lastConnected
-        )
-    }
-    val newDevices = discoveredDevices
-        .filter { d -> if (d.uuid.isNotEmpty()) d.uuid !in knownUuids else "${d.ip}:${d.port}" !in knownIpPorts }
-        .map { UnifiedDevice(connectDevice = it, historyEntry = null, isOnline = true, lastConnected = null) }
-
-    val unifiedDevices = (newDevices + knownDevices)
-        // The currently-connected TV has its own card above; don't list it twice.
-        .filterNot { u ->
-            isConnected && tvDevice?.let { c ->
-                (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
-                    (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
-            } == true
-        }
-        .sortedWith(
-            compareByDescending<UnifiedDevice> { it.isOnline }
-                // Newly-discovered (no lastConnected) sort to the top of the online group.
-                .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
-        )
+    val unifiedDevices = buildUnifiedDevices(discoveredDevices, history, tvDevice, isConnected)
     
     // Start discovery when screen is visible
     DisposableEffect(Unit) {
@@ -134,22 +99,9 @@ fun ConnectionScreen(
         }
     }
 
-    // When a device is selected, check history for a saved token.
-    fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") {
-        val existing = if (uuid.isNotEmpty()) {
-            history.find { it.uuid == uuid } ?: history.find { it.ip == ip && it.port == port }
-        } else {
-            history.find { it.ip == ip && it.port == port }
-        }
-
-        if (existing != null && existing.token.isNotEmpty()) {
-            // Saved token — reconnect directly (no pairing prompt).
-            viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
-        } else {
-            // No token — connect with empty token; WebSocketClient will send pairing_request.
-            viewModel.connect(TvDevice(ip = ip, port = port, token = "", name = name, uuid = uuid))
-        }
-    }
+    // When a device is selected, check history for a saved token (shared with the device-picker sheet).
+    fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") =
+        connectKnownOrPair(viewModel, history, ip, port, name, uuid)
 
     Scaffold(
         topBar = {
@@ -512,6 +464,79 @@ data class UnifiedDevice(
     val lastConnected: Long?
 ) {
     val isKnown: Boolean get() = historyEntry != null
+}
+
+/**
+ * Merge saved + freshly-discovered TVs into a single "Your TVs" list, annotated with live online
+ * status. Shared by [ConnectionScreen] and the device-picker sheet so both show identical results.
+ * Saved entries adopt live mDNS ip/port when online (a saved address can go stale); the
+ * currently-connected device is dropped (it has its own card above the list).
+ */
+fun buildUnifiedDevices(
+    discovered: List<TvDevice>,
+    history: List<TvDevice>,
+    connectedDevice: TvDevice?,
+    isConnected: Boolean
+): List<UnifiedDevice> {
+    fun liveMatch(device: TvDevice): TvDevice? =
+        if (device.uuid.isNotEmpty()) discovered.find { it.uuid == device.uuid }
+        else discovered.find { it.ip == device.ip && it.port == device.port }
+
+    val knownUuids = history.mapNotNull { it.uuid.takeIf(String::isNotEmpty) }.toSet()
+    val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
+
+    val knownDevices = history.map { saved ->
+        val live = liveMatch(saved)
+        UnifiedDevice(
+            connectDevice = if (live != null)
+                saved.copy(ip = live.ip, port = live.port, wssPort = live.wssPort ?: saved.wssPort)
+            else saved,
+            historyEntry = saved,
+            isOnline = live != null,
+            lastConnected = saved.lastConnected
+        )
+    }
+    val newDevices = discovered
+        .filter { d -> if (d.uuid.isNotEmpty()) d.uuid !in knownUuids else "${d.ip}:${d.port}" !in knownIpPorts }
+        .map { UnifiedDevice(connectDevice = it, historyEntry = null, isOnline = true, lastConnected = null) }
+
+    return (newDevices + knownDevices)
+        .filterNot { u ->
+            isConnected && connectedDevice?.let { c ->
+                (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
+                    (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
+            } == true
+        }
+        .sortedWith(
+            compareByDescending<UnifiedDevice> { it.isOnline }
+                // Newly-discovered (no lastConnected) sort to the top of the online group.
+                .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
+        )
+}
+
+/**
+ * Connect to a TV, reusing a saved pairing token when we have one (silent reconnect) and otherwise
+ * connecting with an empty token so [WebSocketClient] sends a pairing request. Shared by
+ * [ConnectionScreen] and the device-picker sheet.
+ */
+fun connectKnownOrPair(
+    viewModel: ConnectionViewModel,
+    history: List<TvDevice>,
+    ip: String,
+    port: Int,
+    name: String,
+    uuid: String = ""
+) {
+    val existing = if (uuid.isNotEmpty()) {
+        history.find { it.uuid == uuid } ?: history.find { it.ip == ip && it.port == port }
+    } else {
+        history.find { it.ip == ip && it.port == port }
+    }
+    if (existing != null && existing.token.isNotEmpty()) {
+        viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
+    } else {
+        viewModel.connect(TvDevice(ip = ip, port = port, token = "", name = name, uuid = uuid))
+    }
 }
 
 private fun formatLastSeen(millis: Long): String {

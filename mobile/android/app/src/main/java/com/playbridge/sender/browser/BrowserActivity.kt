@@ -1700,21 +1700,11 @@ class BrowserActivity : ComponentActivity() {
                     onPlayerModeChange = { mode ->
                         composeScope.launch { settingsRepository.setTvPlayerMode(mode) }
                     },
-                    availableTvDevices = remember(discoveredDevices, history, activeDlnaTarget) {
-                        (history + discoveredDevices + listOfNotNull(activeDlnaTarget))
-                            .distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
-                    },
                     // When a DLNA renderer is the active target, show it as the destination.
                     selectedTvDevice = activeDlnaTarget ?: tvDevice,
-                    onTvChange = { device ->
-                        if (device.isDlna) connectionViewModel.selectDlnaTarget(device)
-                        else connectionViewModel.connect(device)
-                    },
-                    tvConnectionState = when {
-                        activeDlnaTarget != null -> true
-                        connectionState is WebSocketClient.ConnectionState.Connected -> true
-                        connectionState is WebSocketClient.ConnectionState.Error -> false
-                        else -> null
+                    onOpenAllDevices = {
+                        showVideoSheet = false
+                        currentScreen = Screen.Connection
                     },
                     browseUrl = castSheetBrowseOverride ?: currentUrl,
                     onBrowseClick = { selectedMode, desktopMode ->
