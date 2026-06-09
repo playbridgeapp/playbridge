@@ -167,16 +167,23 @@ class ConnectionViewModel(
                 if (_autoConnectEnabled.value && savedDevice != null && savedDevice.uuid.isNotEmpty()) {
                     val matchedDevice = devices.find { it.uuid == savedDevice.uuid }
                     if (matchedDevice != null && (matchedDevice.ip != savedDevice.ip || matchedDevice.port != savedDevice.port || matchedDevice.wssPort != savedDevice.wssPort)) {
-                        Log.d(TAG, "NSD discovered saved TV at new IP/port: ${matchedDevice.ip}:${matchedDevice.port} (wss=${matchedDevice.wssPort}). Updating and reconnecting.")
                         val updatedDevice = savedDevice.copy(
                             ip = matchedDevice.ip,
                             port = matchedDevice.port,
                             name = matchedDevice.name,
                             wssPort = matchedDevice.wssPort
                         )
+                        // Always keep the saved address fresh for the next (manual) connect.
                         connectionStore.saveTvDevice(updatedDevice)
                         connectionStore.addToHistory(updatedDevice)
-                        webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name, phoneDeviceName, phoneDeviceUUID, updatedDevice.wssPort, updatedDevice.certFingerprint)
+                        // Only chase the new address by actually reconnecting while a connection
+                        // attempt is in flight (a retry trying the now-stale address). Discovery
+                        // also runs just to populate the device picker from an idle state — we must
+                        // not spontaneously connect then, or opening the Cast sheet would auto-connect.
+                        if (connectionState.value is WebSocketClient.ConnectionState.Retrying) {
+                            Log.d(TAG, "NSD found saved TV at new ${matchedDevice.ip}:${matchedDevice.port} mid-retry — reconnecting.")
+                            webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name, phoneDeviceName, phoneDeviceUUID, updatedDevice.wssPort, updatedDevice.certFingerprint)
+                        }
                     }
                 }
             }
@@ -233,6 +240,11 @@ class ConnectionViewModel(
     fun connect(device: TvDevice) {
         // Connecting natively supersedes any DLNA target.
         clearDlnaTarget()
+        // A deliberate connect (user picked or cast to a device) re-enables auto-connect, which a
+        // prior manual disconnect turned off. Set the flag directly rather than via
+        // setAutoConnectEnabled() — its enable side-effect would kick off a second connect.
+        _autoConnectEnabled.value = true
+        prefs.edit().putBoolean("auto_connect_tv", true).apply()
         viewModelScope.launch {
             // wss_port is a live property of the receiver; a saved/history entry may
             // predate TLS, so prefer the port from current discovery.

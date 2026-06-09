@@ -1017,13 +1017,16 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            // Auto-reconnect to TV when opening the cast sheet
+            // Auto-reconnect to the last TV when opening the cast sheet — but only while
+            // auto-connect is still enabled. A manual disconnect turns it off, so reopening the
+            // sheet then respects that choice instead of immediately reconnecting.
             LaunchedEffect(showVideoSheet) {
                 // Don't auto-reconnect the native receiver when a DLNA target is active.
                 if (showVideoSheet && connectionState is WebSocketClient.ConnectionState.Disconnected &&
-                    connectionViewModel.activeDlnaTarget.value == null) {
+                    connectionViewModel.activeDlnaTarget.value == null &&
+                    connectionViewModel.autoConnectEnabled.value) {
                     tvDevice?.let { device ->
-                        Log.d("BrowserActivity", "Cast sheet opened while disconnected. Retrying connection to ${device.name}")
+                        Log.d("BrowserActivity", "Cast sheet opened while disconnected. Reconnecting to ${device.name}")
                         connectionViewModel.connect(device)
                     }
                 }

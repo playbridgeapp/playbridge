@@ -421,6 +421,7 @@ fun CastSheet(
                     // width so a long device name ellipsises instead of pushing Send off the edge.
                     DeviceChip(
                         showThisDevice = false,
+                        castStatusLabel = true,
                         fixedWidth = 140.dp,
                         onOpenAllDevices = onOpenAllDevices
                     )

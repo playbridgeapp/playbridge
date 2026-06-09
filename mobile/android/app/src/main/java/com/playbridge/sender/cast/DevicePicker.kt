@@ -68,6 +68,8 @@ private val ConnectingOrange = Color(0xFFFF9800)
  * through [onPickedThisDevice] / [onPickedDevice] (e.g. the `watch_on_tv` preference).
  *
  * @param showThisDevice include a "This Device" (play on phone) entry — false in the Cast sheet.
+ * @param castStatusLabel use cast-target status wording ("<device name>" when connected,
+ *   "Not connected" otherwise) instead of the default "Watching on: …" framing. True in the Cast sheet.
  * @param onOpenAllDevices open the full TV Connection screen (manual connect, DLNA, auto-connect).
  */
 @Composable
@@ -75,6 +77,7 @@ fun DeviceChip(
     onOpenAllDevices: () -> Unit,
     modifier: Modifier = Modifier,
     showThisDevice: Boolean = true,
+    castStatusLabel: Boolean = false,
     themeColor: Color = Color.Unspecified,
     fixedWidth: Dp? = null,
     onPickedThisDevice: (() -> Unit)? = null,
@@ -95,6 +98,11 @@ fun DeviceChip(
 
     val name = activeDlnaTarget?.name ?: tvDevice?.name
     val label = when {
+        castStatusLabel -> when {
+            isConnected -> name ?: "TV"
+            isConnecting -> "Connecting…"
+            else -> "Not connected"
+        }
         isConnected -> "Watching on: ${name ?: "TV"}"
         isConnecting -> "Connecting to: ${name ?: "TV"}…"
         else -> "Watching on: This Device"
