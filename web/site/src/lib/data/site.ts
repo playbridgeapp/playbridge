@@ -280,19 +280,3 @@ export const INSTALL_TABS: InstallTab[] = [
   //   ]
   // }
 ];
-
-export const FAQ: Array<[string, string]> = [
-  ['Do I need an account?', 'Never. PlayBridge has no concept of users — there is nothing to sign up for.'],
-  ['Does it work over the internet?', 'No. PlayBridge is local-network only by design. Your traffic never leaves your home.'],
-  ['Is it really free?', 'Yes, fully open source under GPLv3. No paywalls, no tiers, no telemetry.'],
-  ['What video formats are supported?', 'Anything ExoPlayer, MPV, VLC, or AVPlayer can play — essentially everything.'],
-  ['Can I use it without Stremio or Debrid?', 'Yes. Paste any URL, drop in any file, point it at any media server.'],
-  ['How is this different from AirPlay or Chromecast?', 'Not tied to one manufacturer. Same protocol across Android, Android TV, Apple TV, and desktop.']
-];
-
-export const STATS: Array<[string, string]> = [
-  ['4.2k', 'GitHub stars'],
-  ['GPL-3.0', 'License'],
-  ['v2.4.1', 'Version'],
-  ['87', 'Contributors']
-];
