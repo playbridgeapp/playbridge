@@ -30,10 +30,38 @@ export const PLAYERS: Platform[] = [
   { icon: 'desktop', name: 'Desktop', desc: 'macOS, Windows, and Linux receiver.' }
 ];
 
-export const STEPS: Array<[string, string]> = [
-  ['01', 'Browse on your phone'],
-  ['02', 'Tap cast'],
-  ['03', 'Lean back']
+export type Step = {
+  num: string;
+  title: string;
+  desc: string;
+  phase: 'Set up once' | 'Every time';
+};
+
+export const STEPS: Step[] = [
+  {
+    num: '01',
+    title: 'Install a player on your TV',
+    desc: 'Put the receiver on the screen you watch on — Android TV, Apple TV, or a Mac / Windows / Linux desktop.',
+    phase: 'Set up once'
+  },
+  {
+    num: '02',
+    title: 'Install the sender on your phone',
+    desc: 'The Android app is your remote, search bar, and browser, all in one.',
+    phase: 'Set up once'
+  },
+  {
+    num: '03',
+    title: 'Connect on the same Wi-Fi',
+    desc: 'They discover each other automatically. Approve your phone on the TV once and it stays trusted.',
+    phase: 'Set up once'
+  },
+  {
+    num: '04',
+    title: 'Browse on phone, watch on TV',
+    desc: 'Pick a video on your phone and tap cast — it plays on the big screen instantly.',
+    phase: 'Every time'
+  }
 ];
 
 export type FeatureItem = {
