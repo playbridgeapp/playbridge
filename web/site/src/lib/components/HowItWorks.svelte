@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '$lib/icons/Icon.svelte';
+  import BridgeDiagram from './visuals/BridgeDiagram.svelte';
   import { STEPS } from '$lib/data/site';
 </script>
 
@@ -12,6 +13,10 @@
       <strong>sender</strong> that runs on your phone. Install both, keep them on the same
       Wi-Fi, and your phone drives the big screen — no account, no cables, no cloud.
     </p>
+  </div>
+
+  <div class="how__diagram">
+    <BridgeDiagram />
   </div>
 
   <div class="steps">
@@ -54,6 +59,8 @@
     background: rgba(74, 144, 226, 0.1);
     border-color: rgba(74, 144, 226, 0.25);
   }
+
+  .how__diagram { margin: -16px 0 64px; }
 
   .how__cta { margin-top: 48px; }
 </style>
