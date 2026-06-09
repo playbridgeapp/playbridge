@@ -92,7 +92,9 @@ button { font-family: inherit; cursor: pointer; }
 .wrap {
   max-width: 1080px;
   margin: 0 auto;
-  padding: 0 32px;
+  /* Use padding-inline (not the `padding` shorthand) so .wrap never resets the
+     block padding that .section / .hero set — otherwise sections collapse on mobile. */
+  padding-inline: 32px;
 }
 
 h1, h2, h3, h4 {
@@ -221,18 +223,17 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 
 .nav__mobile-menu {
   position: fixed;
-  top: 63px;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   background: rgba(6, 9, 30, 0.98);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  z-index: 1000;
+  /* Below the nav (z-index 50) so the logo + close button stay on top and tappable. */
+  z-index: 40;
   display: flex;
   flex-direction: column;
-  padding: 48px 24px;
-  border-top: 1px solid var(--line);
+  justify-content: center;
+  /* Top padding clears the sticky nav bar regardless of its exact height. */
+  padding: 88px 24px 48px;
 }
 
 .nav__mobile-links {
@@ -315,9 +316,9 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .section-head .eyebrow { display: block; margin-bottom: 16px; }
 .section-head p { margin-top: 16px; font-size: 15px; }
 
-.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .step {
-  padding: 28px;
+  padding: 24px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(200,220,255,0.03), rgba(200,220,255,0.01));
@@ -354,6 +355,8 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .platform:hover { background: linear-gradient(180deg, rgba(200,220,255,0.025), transparent); }
 .platform:nth-child(odd)  { padding-right: 32px; border-right: 1px solid var(--line); }
 .platform:nth-child(even) { padding-left: 32px; }
+/* A lone platform in a group spans the full row (no dangling divider). */
+.platform:only-child { grid-column: 1 / -1; padding-right: 0; border-right: 0; }
 .platform__icon {
   width: 36px; height: 36px;
   color: var(--accent);
@@ -396,33 +399,6 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .feature__copy h3 { font-size: 22px; letter-spacing: -0.02em; font-weight: 500; margin-bottom: 10px; }
 .feature__copy p { font-size: 15px; max-width: 360px; }
 .feature__visual { display: flex; justify-content: flex-end; }
-
-.os { padding-block: 120px; border-top: 1px solid var(--line); text-align: left; }
-.os__inner { max-width: 640px; }
-.os__stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0;
-  margin-top: 48px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  overflow: hidden;
-  background: linear-gradient(180deg, rgba(200,220,255,0.025), rgba(200,220,255,0.005));
-  backdrop-filter: blur(10px);
-}
-.os__stats > div { padding: 22px 24px; border-right: 1px solid var(--line); }
-.os__stats > div:last-child { border-right: 0; }
-.os__stat__val {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 22px; color: var(--text); letter-spacing: -0.02em;
-  display: block;
-}
-.os__stat__lbl {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint);
-  text-transform: uppercase; margin-top: 6px; display: block;
-}
-.os__ctas { margin-top: 32px; display: flex; gap: 10px; }
 
 .installer {
   border-radius: 16px;
@@ -485,47 +461,6 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .installer__steps li .n { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-faint); }
 .installer__steps li strong { color: var(--text); font-weight: 500; display: block; margin-bottom: 4px; }
 
-.faq {
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: linear-gradient(180deg, rgba(200,220,255,0.025), rgba(200,220,255,0.005));
-  backdrop-filter: blur(10px);
-  overflow: hidden;
-}
-.faq__item { border-bottom: 1px solid var(--line); }
-.faq__item:last-child { border-bottom: 0; }
-.faq__btn {
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  color: var(--text);
-  padding: 24px 28px;
-  font-family: inherit;
-  font-size: 16px;
-  font-weight: 500;
-  display: flex; justify-content: space-between; align-items: center;
-  gap: 16px;
-  letter-spacing: -0.01em;
-  transition: background .15s ease;
-}
-.faq__btn:hover { background: rgba(200,220,255,0.025); }
-.faq__chev {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-  transition: transform .25s ease, color .15s ease;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 13px;
-  width: 22px; height: 22px;
-  display: grid; place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-}
-.faq__item--open .faq__chev { transform: rotate(45deg); color: var(--accent); border-color: var(--accent); }
-.faq__panel { max-height: 0; overflow: hidden; transition: max-height .3s ease, padding .25s ease; padding: 0 28px; }
-.faq__item--open .faq__panel { max-height: 200px; padding: 0 28px 24px; }
-.faq__panel p { font-size: 15px; max-width: 680px; }
-
 .footer { border-top: 1px solid var(--line); padding-block: 64px 48px; }
 .footer__grid {
   display: grid;
@@ -559,16 +494,13 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 @media (max-width: 900px) {
   .section { padding-block: 80px; }
   .hero { padding-block: 60px 40px; }
-  .steps { grid-template-columns: 1fr; gap: 32px; }
+  .steps { grid-template-columns: repeat(2, 1fr); gap: 16px; }
   .platforms { grid-template-columns: 1fr; }
   .platform:nth-child(odd) { padding-right: 0; border-right: 0; }
   .platform:nth-child(even) { padding-left: 0; }
   .feature { grid-template-columns: 1fr; gap: 16px; padding: 32px 0; }
   .feature__visual { justify-content: flex-start; margin-top: 16px; }
   .installer__panel { gap: 32px; padding: 24px; }
-  .os__stats { grid-template-columns: repeat(2, 1fr); }
-  .os__stats > div:nth-child(2) { border-right: 0; }
-  .os__stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .footer__grid { grid-template-columns: 1fr 1fr; }
   .nav__links { display: none; }
   .nav__actions { display: none; }
@@ -639,6 +571,7 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 @media (max-width: 600px) {
   .nav__actions .btn:not(.btn--primary) { display: none; }
   .logo span { font-size: 14px; }
+  .steps { grid-template-columns: 1fr; }
   .hero { text-align: center; }
   .hero h1 { margin: 0 auto; }
   .hero__sub { margin: 16px auto 0; }
@@ -647,13 +580,18 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   .scene { aspect-ratio: 16 / 10; }
   .tv { width: 75%; }
   .phone { width: 28%; }
-  .faq__btn { padding: 16px; font-size: 14px; }
-  .faq__panel { padding: 0 16px; }
-  .faq__item--open .faq__panel { padding: 0 16px 16px; }
+  /* Roomier tap targets for inline link lists on touch screens. */
+  .footer ul a { display: inline-block; padding-block: 4px; }
+  .platform__link { padding-block: 6px; }
+}
+
+@media (max-width: 400px) {
+  .hero h1 { font-size: 34px; }
+  .hero__sub { font-size: 16px; }
 }
 
 @media (max-width: 560px) {
   .footer__grid { grid-template-columns: 1fr; }
   .footer__bottom { flex-direction: column; gap: 10px; align-items: flex-start; }
-  .wrap { padding: 0 20px; }
+  .wrap { padding-inline: 20px; }
 }

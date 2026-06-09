@@ -19,20 +19,49 @@ export type Platform = {
 };
 
 export const SENDERS: Platform[] = [
-  { icon: 'android', name: 'Android app', desc: 'Browse, search, and send anything to a player.' },
-  { icon: 'firefox', name: 'Firefox extension', desc: 'Send links from any tab — right-click → cast.' }
+  { icon: 'android', name: 'Android app', desc: 'Browse, search, and send anything to a player.' }
+  // Hidden for now — the Firefox extension sender is not being promoted.
+  // { icon: 'firefox', name: 'Firefox extension', desc: 'Send links from any tab — right-click → cast.' }
 ];
 
 export const PLAYERS: Platform[] = [
-  { icon: 'tv', name: 'Android TV', desc: 'Plays anything. Ad-blocked browser built in.' },
+  { icon: 'tv', name: 'Android TV', desc: 'Plays anything. Optional GeckoView + uBlock Origin browser plugin.' },
   { icon: 'apple', name: 'Apple TV', desc: 'Native tvOS receiver with AVPlayer.' },
   { icon: 'desktop', name: 'Desktop', desc: 'macOS, Windows, and Linux receiver.' }
 ];
 
-export const STEPS: Array<[string, string]> = [
-  ['01', 'Browse on your phone'],
-  ['02', 'Tap cast'],
-  ['03', 'Lean back']
+export type Step = {
+  num: string;
+  title: string;
+  desc: string;
+  phase: 'Set up once' | 'Every time';
+};
+
+export const STEPS: Step[] = [
+  {
+    num: '01',
+    title: 'Install a player on your TV',
+    desc: 'Put the receiver on the screen you watch on — Android TV, Apple TV, or a Mac / Windows / Linux desktop.',
+    phase: 'Set up once'
+  },
+  {
+    num: '02',
+    title: 'Install the sender on your phone',
+    desc: 'The Android app is your remote, search bar, and browser, all in one.',
+    phase: 'Set up once'
+  },
+  {
+    num: '03',
+    title: 'Connect on the same Wi-Fi',
+    desc: 'They discover each other automatically. Approve your phone on the TV once and it stays trusted.',
+    phase: 'Set up once'
+  },
+  {
+    num: '04',
+    title: 'Browse on phone, watch on TV',
+    desc: 'Pick a video on your phone and tap cast — it plays on the big screen instantly.',
+    phase: 'Every time'
+  }
 ];
 
 export type FeatureItem = {
@@ -81,8 +110,8 @@ export const FEATURES: FeatureItem[] = [
   },
   {
     tag: 'BROWSER',
-    title: 'Ad-free TV browser.',
-    desc: 'EasyList + cosmetic filtering, on by default. The TV browser is clean from the first tap.',
+    title: 'Ad-free GeckoView browser.',
+    desc: "The TV player's built-in System WebView can't block ads. An optional GeckoView plugin adds Mozilla's engine so uBlock Origin runs natively — clean from the first tap.",
     visual: 'browser'
   }
 ];
@@ -97,6 +126,9 @@ export type InstallTab = {
   cmd: string;
   downloadUrl?: string;
   meta: Array<[string, string]>;
+  // hidden tabs are not rendered as tabs, but their data may still be referenced
+  // (e.g. the TV browser is surfaced as a GeckoView plugin inside the Android TV tab).
+  hidden?: boolean;
 };
 
 export type DesktopPlatform = {
@@ -188,11 +220,11 @@ export const INSTALL_TABS: InstallTab[] = [
     ]
   },
   {
-    id: 'tvplayer',
-    label: 'TV Player',
+    id: 'androidtv',
+    label: 'Android TV',
     role: 'player',
     icon: 'tv',
-    title: 'Android TV Player',
+    title: 'Android TV',
     steps: [
       ['Download', 'Use Downloader app on TV with code 9557748.'],
       ['Install', 'Sideload via adb install or follow Downloader prompts.'],
@@ -207,15 +239,17 @@ export const INSTALL_TABS: InstallTab[] = [
     ]
   },
   {
+    // Not a standalone tab — surfaced as a GeckoView plugin inside the Android TV tab.
     id: 'tvbrowser',
-    label: 'TV Browser',
+    label: 'GeckoView Browser',
     role: 'player',
     icon: 'tv',
-    title: 'Android TV Browser',
+    title: 'GeckoView Browser Plugin',
+    hidden: true,
     steps: [
-      ['Download', 'TV Browser APK from GitHub Releases.'],
-      ['Sideload', 'adb install or Downloader app.'],
-      ['Approve devices', 'Allow the first phone that connects.']
+      ['Download', 'GeckoView browser plugin APK from GitHub Releases.'],
+      ['Sideload', 'adb install or Downloader app — installs alongside the player.'],
+      ['Browse ad-free', 'EasyList + cosmetic filtering on by default.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-tv-browser&expanded=true',
     downloadUrl: '/download/tv-browser',
@@ -253,39 +287,24 @@ export const INSTALL_TABS: InstallTab[] = [
     cmd: '',
     meta: []
   },
-  {
-    id: 'firefox',
-    label: 'Firefox',
-    role: 'sender',
-    icon: 'firefox',
-    title: 'Firefox extension',
-    steps: [
-      ['Download', 'Latest .xpi from GitHub Releases.'],
-      ['Install', 'Drag the .xpi onto Firefox.'],
-      ['Right-click links', 'Send any link to a player.']
-    ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-firefox-extension&expanded=true',
-    downloadUrl: '/download/firefox',
-    meta: [
-      ['sha256', '77fa…d3e2'],
-      ['size', '3.2 MB'],
-      ['min', 'Firefox 109']
-    ]
-  }
-];
-
-export const FAQ: Array<[string, string]> = [
-  ['Do I need an account?', 'Never. PlayBridge has no concept of users — there is nothing to sign up for.'],
-  ['Does it work over the internet?', 'No. PlayBridge is local-network only by design. Your traffic never leaves your home.'],
-  ['Is it really free?', 'Yes, fully open source under GPLv3. No paywalls, no tiers, no telemetry.'],
-  ['What video formats are supported?', 'Anything ExoPlayer, MPV, VLC, or AVPlayer can play — essentially everything.'],
-  ['Can I use it without Stremio or Debrid?', 'Yes. Paste any URL, drop in any file, point it at any media server.'],
-  ['How is this different from AirPlay or Chromecast?', 'Not tied to one manufacturer. Same protocol across Android, Apple TV, Linux, Firefox.']
-];
-
-export const STATS: Array<[string, string]> = [
-  ['4.2k', 'GitHub stars'],
-  ['GPL-3.0', 'License'],
-  ['v2.4.1', 'Version'],
-  ['87', 'Contributors']
+  // Hidden for now — the Firefox extension sender is not being promoted.
+  // {
+  //   id: 'firefox',
+  //   label: 'Firefox',
+  //   role: 'sender',
+  //   icon: 'firefox',
+  //   title: 'Firefox extension',
+  //   steps: [
+  //     ['Download', 'Latest .xpi from GitHub Releases.'],
+  //     ['Install', 'Drag the .xpi onto Firefox.'],
+  //     ['Right-click links', 'Send any link to a player.']
+  //   ],
+  //   cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-firefox-extension&expanded=true',
+  //   downloadUrl: '/download/firefox',
+  //   meta: [
+  //     ['sha256', '77fa…d3e2'],
+  //     ['size', '3.2 MB'],
+  //     ['min', 'Firefox 109']
+  //   ]
+  // }
 ];
