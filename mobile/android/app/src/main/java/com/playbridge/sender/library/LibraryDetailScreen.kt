@@ -92,6 +92,8 @@ fun LibraryDetailScreen(
     viewModel: LibraryViewModel,
     tvName: String? = null,
     isTvConnected: Boolean = false,
+    /** A DLNA renderer is the active cast target (no WS session) — suppresses native reconnects. */
+    isDlnaActive: Boolean = false,
     selectedTvDevice: TvDevice? = null,
     onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
     onOpenConnectionScreen: () -> Unit = {},
@@ -99,7 +101,9 @@ fun LibraryDetailScreen(
     onBack: () -> Unit,
     onShare: (title: String, imdbId: String?) -> Unit = { _, _ -> },
     forcedSource: String? = null,
-    onOpenRemote: (() -> Unit)? = null,
+    /** Reports the poster's extracted dominant color so the host can theme app-wide
+     *  chrome (the NowPlayingBar) to match this screen. */
+    onDominantColorChange: (Color?) -> Unit = {},
 ) {
     val context = LocalContext.current
     val subtitleService = remember { StremioSubtitleService(addonRepository) }
@@ -135,6 +139,25 @@ fun LibraryDetailScreen(
     var hubAddon by remember { mutableStateOf<InstalledAddonEntity?>(null) }
     var resolutionJob by remember { mutableStateOf<Job?>(null) }
     var dominantColor by remember { mutableStateOf<Color?>(null) }
+
+    // Surface the poster color to the host (NowPlayingBar theming); clear it on leave.
+    LaunchedEffect(dominantColor) { onDominantColorChange(dominantColor) }
+    DisposableEffect(Unit) { onDispose { onDominantColorChange(null) } }
+
+    // Cross-session resume points for this title (PlaybackProgressTracker, keyed by tmdbId).
+    val resumeRows by remember(resolvedTmdbId) {
+        viewModel.resumeFor(resolvedTmdbId ?: -1)
+    }.collectAsState(initial = emptyList())
+
+    /** Saved resume position (ms) for an episode (or the movie when [episode] is null). */
+    fun resumePositionFor(episode: StremioVideo?): Long? =
+        if (episode != null) {
+            resumeRows.firstOrNull {
+                it.season == (episode.season ?: selectedSeason) && it.episode == episode.episode
+            }?.positionMs
+        } else {
+            resumeRows.firstOrNull { it.mediaType == "movie" }?.positionMs
+        }
 
     // Episode selection for stream picker
     var currentEpisodeSelection by remember { mutableStateOf<StremioVideo?>(null) }
@@ -341,10 +364,14 @@ fun LibraryDetailScreen(
             ?: return null
 
         val currentImdbId = resolvedImdbId
+        val startIndex = if (targetEpisode != null) {
+            videos.indexOfFirst { it.season == targetEpisode.season && it.episode == targetEpisode.episode }.coerceAtLeast(0)
+        } else 0
+
         val items = videos.mapIndexed { index, vid ->
             val streamId = if (currentImdbId != null) "$currentImdbId:${vid.season}:${vid.episode}" else vid.id
             val streamType = if (currentImdbId != null) "series" else addonType
-            
+
             val hubUrl = StreamingUtils.buildPlayUrl(
                 hub, streamType, streamId, context
             )
@@ -354,13 +381,11 @@ fun LibraryDetailScreen(
                 title = "$displayTitle S${vid.season}E${vid.episode}${if (vid.title.isNotBlank()) " - ${vid.title}" else ""}",
                 content_type = "series",
                 detected_by = "library",
-                visual_metadata = buildVisualMetadata(vid)
+                visual_metadata = buildVisualMetadata(vid),
+                // Resume only the episode the user explicitly chose to start with.
+                start_position_ms = if (index == startIndex) resumePositionFor(vid) else null
             )
         }
-            
-        val startIndex = if (targetEpisode != null) {
-            videos.indexOfFirst { it.season == targetEpisode.season && it.episode == targetEpisode.episode }.coerceAtLeast(0)
-        } else 0
 
         return playbridge.PlaylistPayload(
             items = items,
@@ -508,7 +533,8 @@ fun LibraryDetailScreen(
                                 title = resTitle,
                                 content_type = if (isSeries) "series" else "movie",
                                 detected_by = "library",
-                                visual_metadata = buildVisualMetadata(episode)
+                                visual_metadata = buildVisualMetadata(episode),
+                                start_position_ms = resumePositionFor(episode)
                             )
                             sendToTv(payload, episode, finalSelection.stream.behaviorHints?.bingeGroup)
                         }
@@ -582,8 +608,9 @@ fun LibraryDetailScreen(
 
     val triggerWatch: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = triggerWatch@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
         // Reconnect attempt before sending — covers the case where auto-connect
-        // failed or the socket dropped while the user was on this screen.
-        if (!forPhone && !isTvConnected && selectedTvDevice != null) {
+        // failed or the socket dropped while the user was on this screen. Never
+        // while a DLNA renderer is the target: connecting natively would clear it.
+        if (!forPhone && !isTvConnected && !isDlnaActive && selectedTvDevice != null) {
             onTvDeviceSelect?.invoke(selectedTvDevice)
         }
 
@@ -624,7 +651,8 @@ fun LibraryDetailScreen(
                         title = resTitle,
                         content_type = "movie",
                         detected_by = "library",
-                        visual_metadata = buildVisualMetadata(null)
+                        visual_metadata = buildVisualMetadata(null),
+                        start_position_ms = resumePositionFor(null)
                     ))
                 }
                 return@triggerWatch
@@ -658,7 +686,8 @@ fun LibraryDetailScreen(
                         title = streamPickerTitle,
                         content_type = if (isSeries) "series" else "movie",
                         detected_by = "library",
-                        visual_metadata = buildVisualMetadata(currentEpisodeSelection)
+                        visual_metadata = buildVisualMetadata(currentEpisodeSelection),
+                        start_position_ms = resumePositionFor(currentEpisodeSelection)
                     )
                     sendToTv(payload, currentEpisodeSelection, resolved.stream.behaviorHints?.bingeGroup)
                 }
@@ -727,7 +756,13 @@ fun LibraryDetailScreen(
                         if (!isSeries || !hasEpisodes) {
                             // Movie or series with no episodes
                             val firstEpisodeForTv = episodesInSeason.firstOrNull()
+                            val movieResume = if (!isSeries) {
+                                resumeRows.firstOrNull { it.mediaType == "movie" }
+                            } else null
                             SplitPlayButton(
+                                watchLabel = movieResume
+                                    ?.let { "Resume · ${formatResumeTime(it.positionMs)}" }
+                                    ?: "Watch",
                                 isTvResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV,
                                 isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
                                 resolvingLabel = "Finding streams…",
@@ -821,6 +856,9 @@ fun LibraryDetailScreen(
                             } ?: episodesInSeason.firstOrNull()
                             if (nextUnwatchedEpisode != null) {
                                 val epLabel = "S${selectedSeason.toString().padStart(2, '0')}E${(nextUnwatchedEpisode.episode ?: 1).toString().padStart(2, '0')}"
+                                val epResume = resumeRows.firstOrNull {
+                                    it.season == selectedSeason && it.episode == nextUnwatchedEpisode.episode
+                                }
                                 SplitPlayButton(
                                     isTvResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.TV,
                                     isPhoneResolving = resolutionState.isResolving && resolutionState.target == ResolutionTarget.PHONE,
@@ -836,7 +874,9 @@ fun LibraryDetailScreen(
                                         watchOnTv = it
                                         browserPrefs.edit().putBoolean("watch_on_tv", it).apply()
                                     },
-                                    watchLabel = "Watch $epLabel",
+                                    watchLabel = epResume
+                                        ?.let { "Resume $epLabel · ${formatResumeTime(it.positionMs)}" }
+                                        ?: "Watch $epLabel",
                                     selectedTvDevice = selectedTvDevice,
                                     onOpenConnectionScreen = onOpenConnectionScreen,
                                     onWatchOnTv = {
@@ -1020,6 +1060,13 @@ fun LibraryDetailScreen(
                                 hasAddon = canResolveStreams,
                                 isResolving = resolutionState.isResolving && resolutionState.episodeId == epNum,
                                 isWatched = isEpWatched,
+                                resumeFraction = resumeRows.firstOrNull {
+                                    it.season == selectedSeason && it.episode == epNum
+                                }?.let { r ->
+                                    if (r.durationMs > 0) {
+                                        (r.positionMs.toFloat() / r.durationMs).coerceIn(0f, 1f)
+                                    } else null
+                                },
                                 onClick = {
                                     if (canResolveStreams) {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${epNum}" else episode.id
@@ -1261,33 +1308,7 @@ fun LibraryDetailScreen(
             )
         )
 
-        // Remote shortcut — shown only when a TV is connected (gated by a non-null callback).
-        // Matches the back/more buttons: circular, filled with the poster's dominant color.
-        onOpenRemote?.let { openRemote ->
-            val fabBg = dominantColor ?: Color.Black
-            val fabIcon = if (fabBg.luminance() > 0.5f) Color.Black else Color.White
-            Surface(
-                onClick = openRemote,
-                shape = CircleShape,
-                color = fabBg,
-                shadowElevation = 6.dp,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(20.dp)
-                    .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
-            ) {
-                Box(
-                    modifier = Modifier.size(56.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.SettingsRemote,
-                        contentDescription = "Remote",
-                        tint = fabIcon,
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
-            }
-        }
+        // (The remote FAB lived here; replaced by the app-wide NowPlayingBar, which
+        // picks up this screen's dominant color via onDominantColorChange.)
     }
 }

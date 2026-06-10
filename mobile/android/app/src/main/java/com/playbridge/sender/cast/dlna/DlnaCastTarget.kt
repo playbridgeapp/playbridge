@@ -60,6 +60,15 @@ class DlnaCastTarget(
         avTransport.setAvTransportUri(proxyUrl)
         avTransport.play()
 
+        // Resume point: seek once the renderer has begun playback (an immediate Seek is
+        // ignored by most renderers while still TRANSITIONING).
+        if (media.startPositionMs > 0 && !proxy.isLiveStream) {
+            scope.launch {
+                delay(2_500)
+                runCatching { avTransport.seek(formatTime(media.startPositionMs)) }
+            }
+        }
+
         // If duration is still unknown, probe it in the background (non-blocking) for non-HLS VOD.
         // HLS gets its duration from the playlist (proxy.vodDurationMs) — and MediaMetadataRetriever
         // can't open an .m3u8 anyway — so skip the (8s-timeout) probe for it.

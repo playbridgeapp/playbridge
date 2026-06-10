@@ -93,6 +93,10 @@ data class MediaItem(
     val subtitles: List<SubtitleRef> = emptyList(),
     /** Known duration (e.g. from MediaStore for local files); 0 if unknown. */
     val durationMs: Long = 0L,
+    /** Resume point — start playback here (native: EXTRA_START_POSITION; DLNA: Seek after load). */
+    val startPositionMs: Long = 0L,
+    /** Library identity (tmdb/imdb/season/episode) for watch-progress tracking; null = untracked. */
+    val visualMetadata: playbridge.VisualMetadata? = null,
 )
 
 data class SubtitleRef(

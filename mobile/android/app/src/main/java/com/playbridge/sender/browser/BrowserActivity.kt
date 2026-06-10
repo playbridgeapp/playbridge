@@ -841,7 +841,12 @@ class BrowserActivity : ComponentActivity() {
                             )
                         )
                         if (connectionViewModel.webSocketClient.send(cmd)) {
-                            connectionCoordinator.tvActiveContext.value = "player"
+                            // Library content — record identity for the progress tracker.
+                            connectionCoordinator.startLocalPlaybackSession(
+                                tmdbId = content.visual_metadata?.tmdb_id?.toIntOrNull(),
+                                season = content.visual_metadata?.season,
+                                episodeStart = content.visual_metadata?.episode,
+                            )
                             if (autoSwitchToRemote) {
                                 connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                 currentScreen = Screen.Remote
@@ -873,7 +878,9 @@ class BrowserActivity : ComponentActivity() {
                                 payload = playbridge.PlaylistPayload(items = video.playlistPayload!!)
                             )
                             if (connectionViewModel.webSocketClient.send(cmd)) {
-                                connectionCoordinator.tvActiveContext.value = "player"
+                                // Browser content has no library identity — clear it so the
+                                // progress tracker can't attribute it to the previous title.
+                                connectionCoordinator.startLocalPlaybackSession(null, null, null)
                                 if (autoSwitchToRemote) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                     currentScreen = Screen.Remote
@@ -902,7 +909,7 @@ class BrowserActivity : ComponentActivity() {
                             )
                             connectionViewModel.sendCommandAndRecord(cmd, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
                             if (connectionViewModel.webSocketClient.send(cmd)) {
-                                connectionCoordinator.tvActiveContext.value = "player"
+                                connectionCoordinator.startLocalPlaybackSession(null, null, null) // browser content
                                 session?.let { tabManager.pauseMedia(it) }
                                 if (autoSwitchToRemote) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
@@ -1656,7 +1663,11 @@ class BrowserActivity : ComponentActivity() {
                              }
                              else -> false
                          }
-                         if (sent) Toast.makeText(this@BrowserActivity, "Play command sent to TV", Toast.LENGTH_SHORT).show()
+                         if (sent) {
+                             // Cast-sheet content is browser-detected — no library identity.
+                             connectionCoordinator.startLocalPlaybackSession(null, null, null)
+                             Toast.makeText(this@BrowserActivity, "Play command sent to TV", Toast.LENGTH_SHORT).show()
+                         }
                          showVideoSheet = false
                          forcePlaylistSheet = null
                     },

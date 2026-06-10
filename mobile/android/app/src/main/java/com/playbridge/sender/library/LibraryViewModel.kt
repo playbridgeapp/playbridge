@@ -840,6 +840,9 @@ class LibraryViewModel(
     fun isWatchlisted(tmdbId: Int): Flow<Boolean> =
         watchlistDao.isWatchlisted(tmdbId)
 
+    /** Cross-session resume points for one show/movie (written by PlaybackProgressTracker). */
+    fun resumeFor(tmdbId: Int) = database.playbackResumeDao().observeForTmdb(tmdbId)
+
     fun getTracked(tmdbId: Int): Flow<WatchlistEntity?> =
         watchlistDao.getById(tmdbId)
 

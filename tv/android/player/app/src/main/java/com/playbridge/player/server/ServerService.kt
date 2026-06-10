@@ -528,6 +528,11 @@ class ServerService : Service() {
                         firstItem.max_bitrate_cap_mbps?.let {
                             putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, it)
                         }
+                        // Resume point from the phone's content-keyed resume store —
+                        // both player engines already honour EXTRA_START_POSITION.
+                        firstItem.start_position_ms?.takeIf { it > 0 }?.let {
+                            putExtra(EXTRA_START_POSITION, it)
+                        }
                     }
                     putExtra(EXTRA_IS_PLAYLIST, true)
                     putExtra(EXTRA_PLAYLIST_INDEX, payload.start_index)

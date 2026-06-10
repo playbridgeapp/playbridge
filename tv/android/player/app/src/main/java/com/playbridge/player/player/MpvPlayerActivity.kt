@@ -184,6 +184,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
     })
 
+    /** Live queue (incl. queue_add-appended episodes) for engine switches. */
+    override fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
+        coordinator.playlist to coordinator.index
+
     private var playJob: kotlinx.coroutines.Job? = null
     private lateinit var composeView: androidx.compose.ui.platform.ComposeView
     private var navigationJob: kotlinx.coroutines.Job? = null

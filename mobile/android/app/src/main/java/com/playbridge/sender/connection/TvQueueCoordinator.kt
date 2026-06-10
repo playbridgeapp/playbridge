@@ -2,8 +2,6 @@ package com.playbridge.sender.connection
 
 import android.content.Context
 import android.util.Log
-import com.playbridge.sender.cast.QualityFilter
-import com.playbridge.sender.cast.StreamSelector
 import com.playbridge.sender.data.library.AddonRepository
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.player.AutoPickPrefs
@@ -192,23 +190,8 @@ class TvQueueCoordinator(
         return subtitleService.getAllSubtitleUrls(vm?.imdb_id, vm?.season, vm?.episode, pref)
     }
 
-    private suspend fun resolveBest(p: TvEpisodeQueuePlan, index: Int): String? {
-        val streams = runCatching {
-            addonRepository.resolveStreamsOnce(p.streamType, p.items[index].streamId, p.forcedSource)
-        }.getOrNull() ?: return null
-
-        val best = StreamSelector.matchBingeGroup(streams, p.bingeGroup)
-            ?: StreamSelector.selectBest(
-                streams = streams,
-                preferredQuality = QualityFilter.fromKey(autoPick.qualityKey) ?: QualityFilter.ALL,
-                maxMbps = autoPick.maxMbps,
-                runtimeMinutes = 45,
-                preferredAddon = autoPick.addonKey.takeIf { it.isNotEmpty() },
-                preferredSourceTypes = autoPick.sourceTypes
-            )
-            ?: streams.firstOrNull()
-        return best?.stream?.url
-    }
+    private suspend fun resolveBest(p: TvEpisodeQueuePlan, index: Int): String? =
+        EpisodeStreamResolver.resolveBest(addonRepository, p, index, autoPick)
 
     /**
      * When idle, if the TV is already playing a series whose `playlist_status` carries the echoed
