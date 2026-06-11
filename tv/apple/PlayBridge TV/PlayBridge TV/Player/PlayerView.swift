@@ -151,7 +151,11 @@ struct PlayerView: View {
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
-                    .id(currentURL)
+                    // Stable identity: episode advances reuse the live mpv core
+                    // (updateUIViewController issues `loadfile replace`) instead of
+                    // paying a full mpv re-init per item. Switching engines still
+                    // tears it down via the branch change.
+                    .id("mpv-engine")
                 } else {
                     NativePlayerView(
                         url: currentURL,

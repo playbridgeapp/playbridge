@@ -35,6 +35,24 @@ struct MPVPlayerView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: MPVViewController, context: Context) {
         uiViewController.isPreBuffering = isPreBuffering
+        // Keep callbacks current (they're cheap value assignments).
+        uiViewController.onDismiss = onDismiss
+        uiViewController.onExit = onExit
+        uiViewController.onSwitch = onSwitch
+        uiViewController.onBroadcast = onBroadcast
+        // Episode advance on the LIVE mpv core: the controller (and its initialised
+        // handle, render layer, caches) is reused — `loadfile replace` swaps the
+        // media. This is what makes back-to-back episodes start fast and gapless
+        // instead of paying a full mpv re-init per item.
+        if uiViewController.url != url {
+            uiViewController.loadNewItem(
+                url: url,
+                headers: headers,
+                subtitles: subtitles,
+                initialTime: initialTime,
+                title: title
+            )
+        }
     }
 
     /// Deterministic teardown. SwiftUI calls this when it removes the representable's
@@ -270,6 +288,29 @@ class MPVViewController: UIViewController {
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 
+    /// Swap in the next item on the live mpv core (episode advance). All per-item
+    /// state is reset; the handle, render context, and demuxer caches survive.
+    func loadNewItem(url: URL, headers: [String: String]?, subtitles: [String]?,
+                     initialTime: Double, title: String?) {
+        self.url = url
+        self.headers = headers
+        self.subtitles = subtitles
+        self.initialTime = initialTime
+        self.mediaTitle = title
+
+        // Per-item resets (mirrors what a fresh controller would start with).
+        didApplyTrackPreferences = false
+        ignoreTimeUpdatesUntil = .distantPast
+        playbackState.title = title ?? ""
+        playbackState.currentTime = 0
+        playbackState.duration = 0
+        playbackState.userPaused = false
+        playbackState.audioTracks = []
+        playbackState.subtitleTracks = []
+
+        loadFile(url)
+    }
+
     private func loadFile(_ url: URL) {
         guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
         pendingExternalSubtitles = subtitles ?? []
@@ -292,6 +333,10 @@ class MPVViewController: UIViewController {
 
             if self.initialTime > 0 {
                 mpv_set_property_string(handle, "start", String(format: "%.2f", self.initialTime))
+            } else {
+                // The handle persists across episodes now — clear a previous item's
+                // resume point or the next file would start there too.
+                mpv_set_property_string(handle, "start", "none")
             }
             let path = url.isFileURL ? url.path : url.absoluteString
             self.mpvCommand(handle, ["loadfile", path, "replace"])
@@ -320,6 +365,20 @@ class MPVViewController: UIViewController {
             onFileLoaded()
 
         case MPV_EVENT_END_FILE:
+            // The handle is reused across episodes: our own `loadfile replace`
+            // (advance/loop) also emits END_FILE, with reason STOP/REDIRECT.
+            // Only a natural EOF or a hard error may advance the playlist —
+            // otherwise the replace that *performs* an advance would immediately
+            // trigger another one and skip episodes.
+            if let efPtr = event.data?.assumingMemoryBound(to: mpv_event_end_file.self) {
+                // `reason` is a plain int in the C struct; compare against the
+                // enum's raw values.
+                let reason = UInt32(bitPattern: efPtr.pointee.reason)
+                guard reason == MPV_END_FILE_REASON_EOF.rawValue
+                        || reason == MPV_END_FILE_REASON_ERROR.rawValue else {
+                    break
+                }
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 if self.playbackState.isLooping {
