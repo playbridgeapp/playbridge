@@ -371,11 +371,8 @@ class MPVViewController: UIViewController {
             // otherwise the replace that *performs* an advance would immediately
             // trigger another one and skip episodes.
             if let efPtr = event.data?.assumingMemoryBound(to: mpv_event_end_file.self) {
-                // `reason` is a plain int in the C struct; compare against the
-                // enum's raw values.
-                let reason = UInt32(bitPattern: efPtr.pointee.reason)
-                guard reason == MPV_END_FILE_REASON_EOF.rawValue
-                        || reason == MPV_END_FILE_REASON_ERROR.rawValue else {
+                let reason = efPtr.pointee.reason
+                guard reason == MPV_END_FILE_REASON_EOF || reason == MPV_END_FILE_REASON_ERROR else {
                     break
                 }
             }
