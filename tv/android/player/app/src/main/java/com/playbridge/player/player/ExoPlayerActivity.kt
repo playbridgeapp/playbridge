@@ -593,6 +593,9 @@ class ExoPlayerActivity : PlayerActivity() {
     private var playJob: kotlinx.coroutines.Job? = null
     /** Serialises Stremio series navigation. Cancelled before each new nav request. */
     private var navigationJob: kotlinx.coroutines.Job? = null
+    /** The player instance the activity listener is attached to (attach-once guard
+     *  now that the player survives episode advances). */
+    private var listenerAttachedPlayer: androidx.media3.common.Player? = null
 
     private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
         
@@ -603,7 +606,13 @@ class ExoPlayerActivity : PlayerActivity() {
         FileLogger.i(TAG, "Content Type: $contentType")
         FileLogger.i(TAG, "===========================================")
 
-        releasePlayer()
+        // Do NOT releasePlayer() here: engine.load() swaps the media source on the
+        // live player (see ExoPlayerEngine.reloadOnLivePlayer), which kills the
+        // per-episode rebuild — black gap, surface re-attach, decoder warm-up.
+        // Full release stays reserved for teardown paths (onStop/onDestroy/engine
+        // switch). Only clear transient per-item callbacks.
+        stuckBufferHandler.removeCallbacksAndMessages(null)
+        cancelPlaybackWatchdog()
 
         playJob?.cancel()
         playJob = lifecycleScope.launch(Dispatchers.Main) {
@@ -704,18 +713,27 @@ class ExoPlayerActivity : PlayerActivity() {
         )
 
         lifecycleScope.launch {
-            // Restore playback position from history if no explicit start position was provided
+            engine?.load(payload)
+
+            // Restore playback position from history if no explicit start position was
+            // provided. This runs AFTER load(): the player is reused across items now,
+            // so a seek issued earlier would land on the *previous* episode still
+            // playing. After load() the player is preparing the new item and the seek
+            // (or the pendingResumePosition stash, if the player is idle) targets it.
             if (pendingResumePosition <= 0L) {
                 FileLogger.d(TAG, "No explicit start position, attempting to restore from history...")
                 progressManager.restoreProgress(url)
             }
 
-            engine?.load(payload)
-
             // Re-apply activity-specific player settings after engine creates the player
             engine?.getExoPlayer()?.let { exoPlayer ->
                 playerView.player = exoPlayer
-                exoPlayer.addListener(createPlayerListener())
+                // The player instance is reused across episodes now — attach the
+                // activity listener once per instance, not once per item.
+                if (listenerAttachedPlayer !== exoPlayer) {
+                    exoPlayer.addListener(createPlayerListener())
+                    listenerAttachedPlayer = exoPlayer
+                }
                 exoPlayer.prepare()
                 exoPlayer.playWhenReady = true
             }
@@ -1100,6 +1118,7 @@ class ExoPlayerActivity : PlayerActivity() {
             FileLogger.e(TAG, "Error releasing player: ${e.message}", e)
         }
         engine = null
+        listenerAttachedPlayer = null
     }
 
     /**

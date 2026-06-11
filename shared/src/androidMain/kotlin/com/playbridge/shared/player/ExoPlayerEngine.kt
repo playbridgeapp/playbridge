@@ -81,18 +81,35 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     override suspend fun load(payload: PlayPayload) {
         logger.i(TAG, "load() called with url: ${payload.url}")
         currentPayload = payload
-        release() // Release previous instance if any
-        initializePlayer(payload)
+        val livePlayer = player
+        if (livePlayer != null) {
+            // Episode advance / replacement cast: swap the media on the LIVE player.
+            // Avoids a full release + rebuild (renderers, surface re-attach, decoder
+            // warm-up) per item — the black gap between episodes — and preserves
+            // player-level state like trackSelectionParameters.
+            reloadOnLivePlayer(livePlayer, payload)
+        } else {
+            initializePlayer(payload)
+        }
     }
 
-    private fun initializePlayer(payload: PlayPayload) {
-        val bufCfg = AndroidBufferConfig.compute(context)
-        logger.i(TAG, "Initializing player with buffer config: maxBufferMs=${bufCfg.maxBufferMs}, targetBytes=${bufCfg.targetBytes}")
+    /**
+     * Per-item media source bundle. Headers, the network-stack choice, and HLS
+     * detection all depend on the payload, so they're rebuilt per item — letting
+     * the player itself be reused across items.
+     */
+    private class PerItemSource(
+        val mediaSourceFactory: androidx.media3.exoplayer.source.MediaSource.Factory,
+        val mediaItem: MediaItem,
+    ) {
+        fun createMediaSource() = mediaSourceFactory.createMediaSource(mediaItem)
+    }
 
+    private fun buildPerItemSource(payload: PlayPayload): PerItemSource {
         // 1. Extract credentials and prepare Headers
         var finalUrl = payload.url
         val requestProperties = HashMap<String, String>()
-        
+
         payload.headers.forEach { (key, value) ->
             if (!key.equals("Range", ignoreCase = true) && !key.equals("Accept-Encoding", ignoreCase = true)) {
                 requestProperties[key] = value
@@ -141,6 +158,117 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
         logger.i(TAG, "Final Request Headers: $requestProperties")
 
+        // Network stack:
+        // 1. Browser-captured streams (detectedBy is not null) use the legacy DefaultHttpDataSource for live stream compatibility.
+        // 2. Direct Hub/Debrid streams use OkHttp with IPv4-First DNS for performance.
+        val isBrowserStream = !payload.detected_by.isNullOrEmpty()
+
+        val httpDataSourceFactory = if (isBrowserStream) {
+            logger.i(TAG, "Using Legacy Network Stack (DefaultHttpDataSource) for browser-captured stream: ${payload.detected_by}")
+            DefaultHttpDataSource.Factory()
+                .setUserAgent(userAgent)
+                .setDefaultRequestProperties(requestProperties)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(20_000)
+                .setReadTimeoutMs(20_000)
+        } else {
+            logger.i(TAG, "Using Modern Network Stack (OkHttp) with IPv4-First DNS")
+            val okHttpClient = OkHttpClient.Builder()
+                .dns(IPv4FirstDns())
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .retryOnConnectionFailure(true)
+                .build()
+
+            OkHttpDataSource.Factory(okHttpClient)
+                .setUserAgent(userAgent)
+                .setDefaultRequestProperties(requestProperties)
+        }
+
+        val isHls = (payload.detected_by == "body_content_m3u8") ||
+                    (payload.detected_by == "url_pattern_m3u8") ||
+                    (payload.content_type == "application/vnd.apple.mpegurl") ||
+                    (payload.content_type == "application/x-mpegurl") ||
+                    (payload.content_type == MimeTypes.APPLICATION_M3U8) ||
+                    (payload.content_type.isNullOrEmpty() && (payload.url.contains(".m3u8") || payload.url.contains(".jpg")))
+
+        logger.i(TAG, "Content detection: isHls=$isHls (detectedBy=${payload.detected_by}, contentType=${payload.content_type})")
+
+        val mediaSourceFactory = if (isHls) {
+            logger.i(TAG, "Using HlsMediaSource.Factory")
+            HlsMediaSource.Factory(httpDataSourceFactory)
+                .setAllowChunklessPreparation(true)
+                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
+        } else {
+            logger.i(TAG, "Using DefaultMediaSourceFactory")
+            val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
+                .setConstantBitrateSeekingEnabled(true)
+                .setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
+            DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
+                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
+        }
+
+        val builder = MediaItem.Builder().setUri(finalUrl)
+        if (payload.title != null) {
+            builder.setMediaId(payload.title!!)
+        }
+        if (isHls) {
+            builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        } else if (!payload.content_type.isNullOrEmpty()) {
+            builder.setMimeType(payload.content_type)
+        }
+
+        return PerItemSource(mediaSourceFactory, builder.build())
+    }
+
+    /**
+     * Swap the media on the live player (no rebuild). Per-item track preferences
+     * are layered onto the current parameters; stale per-item overrides are
+     * cleared (they reference the previous item's track groups anyway).
+     */
+    private fun reloadOnLivePlayer(exoPlayer: ExoPlayer, payload: PlayPayload) {
+        logger.i(TAG, "Reusing live ExoPlayer for new item (no rebuild)")
+
+        val paramsBuilder = exoPlayer.trackSelectionParameters.buildUpon().clearOverrides()
+        payload.preferred_audio_language?.let {
+            logger.i(TAG, "Applying preferred audio language: $it")
+            paramsBuilder.setPreferredAudioLanguage(it)
+        }
+        payload.preferred_subtitle_language?.let {
+            logger.i(TAG, "Applying preferred subtitle language: $it")
+            paramsBuilder.setPreferredTextLanguage(it)
+            paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+        }
+        payload.default_video_quality?.let { quality ->
+            val (maxW, maxH) = when (quality.lowercase()) {
+                "720p"        -> 1280 to 720
+                "1080p"       -> 1920 to 1080
+                "2160p", "4k" -> 3840 to 2160
+                else          -> null to null
+            }
+            if (maxW != null && maxH != null) {
+                paramsBuilder.setMaxVideoSize(maxW, maxH)
+            }
+        }
+        payload.max_bitrate_cap_mbps?.let { cap ->
+            paramsBuilder.setMaxVideoBitrate((cap * 1_000_000).toInt())
+        }
+        exoPlayer.trackSelectionParameters = paramsBuilder.build()
+
+        exoPlayer.setMediaSource(buildPerItemSource(payload).createMediaSource())
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = true
+        startProgressTracker()
+    }
+
+    private fun initializePlayer(payload: PlayPayload) {
+        val bufCfg = AndroidBufferConfig.compute(context)
+        logger.i(TAG, "Initializing player with buffer config: maxBufferMs=${bufCfg.maxBufferMs}, targetBytes=${bufCfg.targetBytes}")
+
+        val perItem = buildPerItemSource(payload)
+
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 15_000, 
@@ -172,35 +300,6 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                     }
                 }
             }
-        }
-
-        // Determine which network stack to use: 
-        // 1. Browser-captured streams (detectedBy is not null) use the legacy DefaultHttpDataSource for live stream compatibility.
-        // 2. Direct Hub/Debrid streams use OkHttp with IPv4-First DNS for performance.
-        val isBrowserStream = !payload.detected_by.isNullOrEmpty()
-
-        val httpDataSourceFactory = if (isBrowserStream) {
-            logger.i(TAG, "Using Legacy Network Stack (DefaultHttpDataSource) for browser-captured stream: ${payload.detected_by}")
-            DefaultHttpDataSource.Factory()
-                .setUserAgent(userAgent)
-                .setDefaultRequestProperties(requestProperties)
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(20_000)
-                .setReadTimeoutMs(20_000)
-        } else {
-            logger.i(TAG, "Using Modern Network Stack (OkHttp) with IPv4-First DNS")
-            val okHttpClient = OkHttpClient.Builder()
-                .dns(IPv4FirstDns())
-                .connectTimeout(20, TimeUnit.SECONDS)
-                .readTimeout(20, TimeUnit.SECONDS)
-                .followRedirects(true)
-                .followSslRedirects(true)
-                .retryOnConnectionFailure(true)
-                .build()
-
-            OkHttpDataSource.Factory(okHttpClient)
-                .setUserAgent(userAgent)
-                .setDefaultRequestProperties(requestProperties)
         }
 
         val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
@@ -250,35 +349,11 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             setParameters(params)
         }
 
-        // 3. Media Source Factory
-        val isHls = (payload.detected_by == "body_content_m3u8") ||
-                    (payload.detected_by == "url_pattern_m3u8") ||
-                    (payload.content_type == "application/vnd.apple.mpegurl") ||
-                    (payload.content_type == "application/x-mpegurl") ||
-                    (payload.content_type == MimeTypes.APPLICATION_M3U8) ||
-                    (payload.content_type.isNullOrEmpty() && (payload.url.contains(".m3u8") || payload.url.contains(".jpg")))
-
-        logger.i(TAG, "Content detection: isHls=$isHls (detectedBy=${payload.detected_by}, contentType=${payload.content_type})")
-
-        val mediaSourceFactory = if (isHls) {
-            logger.i(TAG, "Using HlsMediaSource.Factory")
-            HlsMediaSource.Factory(httpDataSourceFactory)
-                .setAllowChunklessPreparation(true)
-                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
-        } else {
-            logger.i(TAG, "Using DefaultMediaSourceFactory")
-            val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
-                .setConstantBitrateSeekingEnabled(true)
-                .setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
-            DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
-                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
-        }
-
         player = ExoPlayer.Builder(context)
             .setRenderersFactory(renderersFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector!!)
-            .setMediaSourceFactory(mediaSourceFactory)
+            .setMediaSourceFactory(perItem.mediaSourceFactory)
             .setSeekForwardIncrementMs(10_000)
             .setReleaseTimeoutMs(3_000) // Prevent hanging during engine transitions
             // Many proxy/debrid streams reach the end without signalling EOS, so the player sits
@@ -292,20 +367,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 exoPlayer.addListener(playerListener)
                 videoFilterManager.setPlayer(exoPlayer)
 
-                val builder = MediaItem.Builder().setUri(finalUrl)
-                if (payload.title != null) {
-                    builder.setMediaId(payload.title)
-                }
-                if (isHls) {
-                    builder.setMimeType(MimeTypes.APPLICATION_M3U8)
-                } else if (!payload.content_type.isNullOrEmpty()) {
-                    builder.setMimeType(payload.content_type)
-                }
-
-                val mediaItem = builder.build()
-                val mediaSource = mediaSourceFactory.createMediaSource(mediaItem)
-
-                exoPlayer.setMediaSource(mediaSource)
+                exoPlayer.setMediaSource(perItem.createMediaSource())
                 exoPlayer.prepare()
                 }
         startProgressTracker()
