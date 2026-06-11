@@ -248,8 +248,9 @@ class _PrePlayOverlayState extends State<PrePlayOverlay> {
       );
 
   Widget _countdownRing() {
-    final progress =
-        widget.countdownSeconds > 0 ? _remaining / widget.countdownSeconds : 0.0;
+    final progress = widget.countdownSeconds > 0
+        ? _remaining / widget.countdownSeconds
+        : 0.0;
     return SizedBox(
       width: 44,
       height: 44,

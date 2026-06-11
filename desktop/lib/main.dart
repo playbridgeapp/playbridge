@@ -179,9 +179,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   /// The video keeps buffering underneath, muted; volume is restored on start.
   void _maybeShowPrePlay() {
     final idx = _player.currentIndex;
-    final item = (idx >= 0 && idx < _player.queue.length)
-        ? _player.queue[idx]
-        : null;
+    final item =
+        (idx >= 0 && idx < _player.queue.length) ? _player.queue[idx] : null;
     if (item == null || !item.hasPrePlayMetadata) return;
     _prePlayPrevVolume ??= _player.volume;
     unawaited(_player.setVolume(0));
@@ -598,8 +597,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                             _prePlayItem != null)
                                           Positioned.fill(
                                             child: PrePlayOverlay(
-                                              key: ValueKey(
-                                                  _prePlayItem!.url),
+                                              key: ValueKey(_prePlayItem!.url),
                                               item: _prePlayItem!,
                                               onStart: _dismissPrePlay,
                                             ),
@@ -955,9 +953,8 @@ class _TitleOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final idx = player.currentIndex;
-    final item = (idx >= 0 && idx < player.queue.length)
-        ? player.queue[idx]
-        : null;
+    final item =
+        (idx >= 0 && idx < player.queue.length) ? player.queue[idx] : null;
     final title = item?.title ?? player.currentTitle ?? '';
     if (title.isEmpty) return const SizedBox.shrink();
 
