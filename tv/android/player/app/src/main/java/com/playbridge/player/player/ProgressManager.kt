@@ -181,10 +181,19 @@ class ProgressManager(
             return null
         }
 
-        val width = surfaceView.width
-        val height = surfaceView.height
+        val srcWidth = surfaceView.width
+        val srcHeight = surfaceView.height
 
-        if (width <= 0 || height <= 0) return null
+        if (srcWidth <= 0 || srcHeight <= 0) return null
+
+        // Thumbnail-sized capture: PixelCopy scales into the destination bitmap, so
+        // there's no reason to read back the full surface. A ~640px-wide bitmap cuts
+        // the allocation (8MB -> <1MB at 1080p) and the later JPEG encode ~9x — this
+        // runs on the episode auto-advance path, so it must stay cheap.
+        val maxWidth = 640
+        val scale = if (srcWidth > maxWidth) maxWidth.toFloat() / srcWidth else 1f
+        val width = (srcWidth * scale).toInt().coerceAtLeast(1)
+        val height = (srcHeight * scale).toInt().coerceAtLeast(1)
 
         return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
             try {

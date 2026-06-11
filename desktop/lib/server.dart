@@ -10,6 +10,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'cert_manager.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
+import 'player_engine.dart';
 import 'protocol.dart';
 
 const int kDefaultPort = 8765;
@@ -94,6 +95,7 @@ class ReceiverServer extends ChangeNotifier {
 
     player.addListener(_broadcastStatus);
     player.indexChanges.addListener(_broadcastPlaylistStatus);
+    player.queueChanges.addListener(_broadcastPlaylistStatus);
     _statusTimer = Timer.periodic(
       const Duration(milliseconds: 500),
       (_) => _broadcastStatus(),
@@ -164,6 +166,7 @@ class ReceiverServer extends ChangeNotifier {
     _approvalTimeout?.cancel();
     player.removeListener(_broadcastStatus);
     player.indexChanges.removeListener(_broadcastPlaylistStatus);
+    player.queueChanges.removeListener(_broadcastPlaylistStatus);
     for (final c in _all.toList()) {
       await c.sink.close();
     }
@@ -359,14 +362,7 @@ class ReceiverServer extends ChangeNotifier {
         _lastPlayUrl = startUrl;
         _lastPlayAt = now;
         unawaited(player.playPlaylist(
-          items
-              .map((p) => (
-                    url: p.url,
-                    title: p.titleOrNull ?? p.url,
-                    headers: p.headersOrNull,
-                    subtitles: p.subtitlesOrNull,
-                  ))
-              .toList(),
+          items.map(_toQueueItem).toList(),
           startIndex,
           isRemote: true,
         ));
@@ -375,24 +371,55 @@ class ReceiverServer extends ChangeNotifier {
         unawaited(player.jumpTo(index));
         _broadcastPlaylistStatus();
       case QueueAddCmd(:final item):
-        if (player.queue.isEmpty) {
-          unawaited(player.playUrl(
-            item.url,
-            title: item.titleOrNull,
-            headers: item.headersOrNull,
-            subtitles: item.subtitlesOrNull,
-            isRemote: true,
-          ));
-        }
+        // Appends to the live queue; if idle, starts playback.
+        // playlist_status broadcast happens via the queueChanges listener.
+        unawaited(player.queueAdd(_toQueueItem(item), isRemote: true));
       case ControlCmd(:final command):
         debugPrint('[server] control: $command');
+        // Parameterized commands (phone seekbar + track pickers).
+        if (command.startsWith('seek_to:')) {
+          final ms = int.tryParse(command.substring('seek_to:'.length));
+          if (ms != null) {
+            final dur = player.durationMs;
+            var target = ms < 0 ? 0 : ms;
+            if (dur > 0 && target > dur) target = dur;
+            unawaited(player.seek(Duration(milliseconds: target)));
+          }
+          break;
+        }
+        if (command.startsWith('audio_track:')) {
+          unawaited(player
+              .selectAudioTrackById(command.substring('audio_track:'.length)));
+          break;
+        }
+        if (command.startsWith('sub_track:')) {
+          unawaited(player
+              .selectSubtitleTrackById(command.substring('sub_track:'.length)));
+          break;
+        }
         switch (command) {
           case 'play':
             unawaited(player.resume());
           case 'pause':
             unawaited(player.pause());
+          case 'toggle':
+            unawaited(
+                player.state == 'playing' ? player.pause() : player.resume());
           case 'stop':
-            unawaited(player.pause());
+            // Real stop: clear the queue and report idle so the phone's
+            // remote leaves player mode (Android finishes the activity here).
+            unawaited(player.stop());
+            for (final c in _authed) {
+              c.sink.add(contextJson('idle'));
+            }
+          case 'seek_back':
+            final pos = player.positionMs - 10000;
+            unawaited(player.seek(Duration(milliseconds: pos < 0 ? 0 : pos)));
+          case 'seek_forward':
+            final dur = player.durationMs;
+            var target = player.positionMs + 10000;
+            if (dur > 0 && target > dur) target = dur;
+            unawaited(player.seek(Duration(milliseconds: target)));
         }
       case UnknownCmd(:final type):
         debugPrint('[server] unknown command: $type');
@@ -400,6 +427,40 @@ class ReceiverServer extends ChangeNotifier {
         break;
     }
   }
+
+  /// Map an incoming [PlayPayload] onto a [QueueItem], carrying the resume
+  /// point and the metadata echoed back in `playlist_status`.
+  QueueItem _toQueueItem(PlayPayload p) => QueueItem(
+        url: p.url,
+        title: p.titleOrNull ?? p.url,
+        headers: p.headersOrNull,
+        subtitles: p.subtitlesOrNull,
+        startPositionMs: p.startPositionMsOrNull,
+        bingeGroup: p.bingeGroupOrNull,
+        season: p.seasonOrNull,
+        episode: p.episodeOrNull,
+        imdbId: p.imdbIdOrNull,
+        backdropUrl: p.backdropUrlOrNull,
+        posterUrl: p.posterUrlOrNull,
+        logoUrl: p.logoUrlOrNull,
+        overview: p.overviewOrNull,
+        year: p.yearOrNull,
+        rating: p.ratingOrNull,
+        runtime: p.runtimeOrNull,
+        episodeTitle: p.episodeTitleOrNull,
+      );
+
+  List<PlaylistStatusItem> _playlistStatusItems() => [
+        for (var i = 0; i < player.queue.length; i++)
+          (
+            index: i,
+            title: player.queue[i].title,
+            season: player.queue[i].season,
+            episode: player.queue[i].episode,
+            imdbId: player.queue[i].imdbId,
+            bingeGroup: player.queue[i].bingeGroup,
+          ),
+      ];
 
   void _broadcastStatus() {
     if (_authed.isEmpty) return;
@@ -412,16 +473,38 @@ class ReceiverServer extends ChangeNotifier {
     for (final c in _authed) {
       c.sink.add(msg);
     }
+    _broadcastTracksIfChanged();
+  }
+
+  /// Last `tracks` JSON sent, to avoid re-sending an unchanged list on every
+  /// status tick.
+  String? _lastTracksJson;
+
+  String _currentTracksJson() => tracksJson(
+        audio: [
+          for (final t in player.audioTrackInfos)
+            (id: t.id, name: t.name, selected: t.selected),
+        ],
+        subtitle: [
+          for (final t in player.subtitleTrackInfos)
+            (id: t.id, name: t.name, selected: t.selected),
+        ],
+      );
+
+  void _broadcastTracksIfChanged() {
+    if (_authed.isEmpty) return;
+    final msg = _currentTracksJson();
+    if (msg == _lastTracksJson) return;
+    _lastTracksJson = msg;
+    for (final c in _authed) {
+      c.sink.add(msg);
+    }
   }
 
   void _broadcastPlaylistStatus() {
     if (_authed.isEmpty) return;
-    final items = [
-      for (var i = 0; i < player.queue.length; i++)
-        (index: i, title: player.queue[i].title),
-    ];
     final msg = playlistStatusJson(
-      items: items,
+      items: _playlistStatusItems(),
       currentIndex: player.currentIndex.clamp(0, player.queue.length),
     );
     for (final c in _authed) {
@@ -431,13 +514,11 @@ class ReceiverServer extends ChangeNotifier {
 
   void _sendPlaylistStatusTo(WebSocketChannel c) {
     if (player.queue.isEmpty) return;
-    final items = [
-      for (var i = 0; i < player.queue.length; i++)
-        (index: i, title: player.queue[i].title),
-    ];
     c.sink.add(playlistStatusJson(
-      items: items,
+      items: _playlistStatusItems(),
       currentIndex: player.currentIndex.clamp(0, player.queue.length),
     ));
+    // Sync the track pickers too for a client that connected mid-playback.
+    c.sink.add(_currentTracksJson());
   }
 }

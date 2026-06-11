@@ -1,5 +1,31 @@
 import SwiftUI
 
+/// Session-scoped track preferences shared by all three engines, so a pick made on one
+/// episode carries into the next — the player views (and their underlying players) are
+/// recreated per item, losing any in-player selection state. AVPlayer matches by language
+/// tag, VLC/MPV by track display name (stable across episodes of the same release).
+/// Reset by the WebSocket server when a new cast session starts.
+final class TrackPreferences {
+    static let shared = TrackPreferences()
+
+    /// Language tag of the picked track (AVPlayer; locale id or extended language tag).
+    var audioLanguage: String?
+    var subtitleLanguage: String?
+    /// Display name of the picked track (VLC/MPV).
+    var audioName: String?
+    var subtitleName: String?
+    /// Explicit "subtitles off" pick — also carried forward.
+    var subtitlesOff = false
+
+    func reset() {
+        audioLanguage = nil
+        subtitleLanguage = nil
+        audioName = nil
+        subtitleName = nil
+        subtitlesOff = false
+    }
+}
+
 struct PlayerView: View {
     let payload: Playbridge_PlayPayload
     let onDismiss: () -> Void
@@ -49,7 +75,27 @@ struct PlayerView: View {
         return preferredPlayer
     }
 
+    /// Initial seek for `item` (seconds): an engine-switch resume wins; otherwise honor
+    /// the phone's `start_position_ms` resume point seeded from its resume store.
+    private func initialSeekTime(for item: Playbridge_PlayPayload) -> Double {
+        if resumeTime > 0 { return resumeTime }
+        if item.hasStartPositionMs, item.startPositionMs > 0 {
+            return Double(item.startPositionMs) / 1000.0
+        }
+        return 0
+    }
+
+    /// Consume the start position of the item at `index` once we navigate away from it,
+    /// so jumping back to it later starts from the beginning (matches the other receivers).
+    private func consumeStartPosition(at index: Int) {
+        guard index >= 0, index < playlistStore.items.count else { return }
+        if playlistStore.items[index].hasStartPositionMs {
+            playlistStore.items[index].clearStartPositionMs()
+        }
+    }
+
     private func handleNext() {
+        consumeStartPosition(at: playlistStore.currentIndex)
         if let nextRequest = playlistStore.next(), let nextURL = nextRequest.validURL {
             historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil)
             resumeTime = 0
@@ -59,6 +105,7 @@ struct PlayerView: View {
     }
 
     private func handleJump(to index: Int) {
+        consumeStartPosition(at: playlistStore.currentIndex)
         if let jumpRequest = playlistStore.jumpTo(index: index), let jumpURL = jumpRequest.validURL {
             historyStore.addToHistory(url: jumpURL, title: jumpRequest.titleOrNil, headers: jumpRequest.headersOrNil)
             resumeTime = 0
@@ -78,7 +125,7 @@ struct PlayerView: View {
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
                         subtitles: currentRequest.subtitlesOrNil,
-                        initialTime: resumeTime,
+                        initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
                         onDismiss: handleNext,
@@ -94,7 +141,7 @@ struct PlayerView: View {
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
                         subtitles: currentRequest.subtitlesOrNil,
-                        initialTime: resumeTime,
+                        initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
                         onDismiss: handleNext,
@@ -109,7 +156,7 @@ struct PlayerView: View {
                     NativePlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
-                        initialTime: resumeTime,
+                        initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
                         onDismiss: handleNext,  // end-of-video → try next item

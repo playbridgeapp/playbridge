@@ -17,6 +17,7 @@ import 'pair_screen.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
 import 'playback_surface.dart';
+import 'preplay_overlay.dart';
 import 'server.dart';
 import 'settings_screen.dart';
 import 'shader_background.dart';
@@ -88,6 +89,16 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   bool _hadMedia = false;
   String? _lastTrackedUrl;
+
+  /// Last coarse player state the shell was built for. The root builder no
+  /// longer listens to the player directly (see build), so real transitions
+  /// (queue, state, index) trigger a setState here instead.
+  (bool, int, String, int)? _lastCoarse;
+
+  // Pre-play screen state: the item being introduced, and the volume to
+  // restore once playback starts (video buffers muted behind the overlay).
+  QueueItem? _prePlayItem;
+  double? _prePlayPrevVolume;
 
   String _hostInfo = 'starting…';
   String? _serverError;
@@ -161,6 +172,29 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     if (!_showingVideo) {
       setState(() => _showingVideo = true);
     }
+    _maybeShowPrePlay();
+  }
+
+  /// Show the pre-play screen for remote casts that carry visual metadata.
+  /// The video keeps buffering underneath, muted; volume is restored on start.
+  void _maybeShowPrePlay() {
+    final idx = _player.currentIndex;
+    final item = (idx >= 0 && idx < _player.queue.length)
+        ? _player.queue[idx]
+        : null;
+    if (item == null || !item.hasPrePlayMetadata) return;
+    _prePlayPrevVolume ??= _player.volume;
+    unawaited(_player.setVolume(0));
+    setState(() => _prePlayItem = item);
+  }
+
+  void _dismissPrePlay() {
+    final prev = _prePlayPrevVolume;
+    _prePlayPrevVolume = null;
+    if (prev != null) unawaited(_player.setVolume(prev));
+    if (_prePlayItem != null && mounted) {
+      setState(() => _prePlayItem = null);
+    }
   }
 
   void _handlePlayerChange() {
@@ -173,10 +207,24 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
     // Falling edge: playback ended → leave video view.
     if (!hasMedia && _hadMedia) {
+      _dismissPrePlay();
       setState(() => _showingVideo = false);
     }
 
     _hadMedia = hasMedia;
+
+    // Coarse shell rebuild on real transitions only (the root builder doesn't
+    // listen to the player; per-frame position ticks stay out of the shell).
+    final coarse = (
+      hasMedia,
+      _player.queue.length,
+      _player.state,
+      _player.currentIndex,
+    );
+    if (coarse != _lastCoarse) {
+      _lastCoarse = coarse;
+      if (mounted) setState(() {});
+    }
 
     // Record history when the active track changes.
     if (hasMedia) {
@@ -356,8 +404,13 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
             autofocus: true,
             child: Scaffold(
               backgroundColor: Colors.transparent,
+              // Deliberately NOT listening to _player here: it notifies on every
+              // ~200ms position tick, and rebuilding the whole shell (backdrop
+              // blurs included) at 5Hz steals frame time from the video. The
+              // controls/status bars listen to the player themselves; structural
+              // changes arrive via the coarse setState in _handlePlayerChange.
               body: AnimatedBuilder(
-                animation: Listenable.merge([_server, _player, _showStats]),
+                animation: Listenable.merge([_server, _showStats]),
                 builder: (context, _) {
                   final hasMedia = _player.queue.isNotEmpty;
                   final hasQueue = _player.queue.length > 1;
@@ -522,6 +575,33 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                 () =>
                                                     _playlistDrawerOpen = false,
                                               ),
+                                            ),
+                                          ),
+                                        // Title scrim along the top — same
+                                        // visibility as the controls bar, so
+                                        // the title is reachable in fullscreen.
+                                        if (_showingVideo && hasMedia)
+                                          Positioned(
+                                            left: 0,
+                                            right: 0,
+                                            top: 0,
+                                            child: _TitleOverlay(
+                                              player: _player,
+                                              visible: _videoHovered ||
+                                                  _playlistDrawerOpen ||
+                                                  _menusOpen > 0,
+                                            ),
+                                          ),
+                                        // Pre-play screen for casts with
+                                        // metadata; sits above everything.
+                                        if (_showingVideo &&
+                                            _prePlayItem != null)
+                                          Positioned.fill(
+                                            child: PrePlayOverlay(
+                                              key: ValueKey(
+                                                  _prePlayItem!.url),
+                                              item: _prePlayItem!,
+                                              onStart: _dismissPrePlay,
                                             ),
                                           ),
                                       ],
@@ -788,6 +868,14 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Self-listening for the live position readout (see _PlayerControlsBar).
+    return ListenableBuilder(
+      listenable: player,
+      builder: (context, _) => _buildBar(context),
+    );
+  }
+
+  Widget _buildBar(BuildContext context) {
     final pos = Duration(milliseconds: player.positionMs);
     final dur = Duration(milliseconds: player.durationMs);
     final phaseLabel = switch (phase) {
@@ -856,6 +944,77 @@ class _StatusBar extends StatelessWidget {
 
 // ─── Player controls bar ─────────────────────────────────────────────────────
 
+/// Auto-hiding title scrim along the top of the video — mirrors the controls
+/// bar visibility so the title is visible in fullscreen on hover.
+class _TitleOverlay extends StatelessWidget {
+  const _TitleOverlay({required this.player, required this.visible});
+
+  final PlayerController player;
+  final bool visible;
+
+  @override
+  Widget build(BuildContext context) {
+    final idx = player.currentIndex;
+    final item = (idx >= 0 && idx < player.queue.length)
+        ? player.queue[idx]
+        : null;
+    final title = item?.title ?? player.currentTitle ?? '';
+    if (title.isEmpty) return const SizedBox.shrink();
+
+    final hasEpisode = item?.season != null && item?.episode != null;
+    final subtitle = hasEpisode
+        ? 'S${item!.season} · E${item.episode}'
+            '${item.episodeTitle != null ? '  ${item.episodeTitle}' : ''}'
+        : null;
+
+    return IgnorePointer(
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 150),
+        opacity: visible ? 1.0 : 0.0,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 36),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xB3000000), Color(0x00000000)],
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+              if (subtitle != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.white.withValues(alpha: 0.75),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PlayerControlsBar extends StatefulWidget {
   const _PlayerControlsBar({
     required this.player,
@@ -890,6 +1049,16 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
 
   @override
   Widget build(BuildContext context) {
+    // Self-listening: the shell no longer rebuilds on player ticks, so the
+    // scrubber/buttons subscribe to the player here, scoping the ~5Hz position
+    // rebuilds to just this bar.
+    return ListenableBuilder(
+      listenable: widget.player,
+      builder: (context, _) => _buildBar(context),
+    );
+  }
+
+  Widget _buildBar(BuildContext context) {
     final p = widget.player;
     final dur = p.durationMs.toDouble();
     final pos =

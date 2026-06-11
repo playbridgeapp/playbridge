@@ -76,11 +76,21 @@ class WebSocketServer: ObservableObject {
         set { UserDefaults.standard.set(Array(newValue), forKey: authorizedTokensKey) }
     }
 
+    /// Re-broadcasts `playlist_status` whenever the queue changes — including index moves
+    /// driven by the player UI (next/jump), which never pass through the server.
+    private var playlistCancellable: AnyCancellable?
+
     init(historyStore: HistoryStore? = nil, playlistStore: PlaylistStore? = nil) {
         self.historyStore = historyStore
         self.playlistStore = playlistStore
         self.localIP = getIPAddress()
         self.pairedDevicesList = storedPairedDevices
+
+        // objectWillChange fires *before* the mutation lands; the debounce hop onto the
+        // main queue ensures we serialize the post-mutation queue state.
+        playlistCancellable = playlistStore?.objectWillChange
+            .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.broadcastPlaylistStatus() }
 
         NotificationCenter.default.addObserver(
             self,
@@ -456,6 +466,34 @@ class WebSocketServer: ObservableObject {
     /// Posted when a client (re)connects; the active player re-broadcasts status + tracks.
     static let resyncRequest = Notification.Name("PlayBridgeResync")
 
+    /// Broadcast the current queue as `playlist_status`, matching the Android receiver's
+    /// format. Echoes each item's series context (season/episode/imdbId/bingeGroup) so the
+    /// phone can re-attach its lazy episode queue and match watch progress. Always sends —
+    /// even when empty — so the phone clears a stale episode list.
+    func broadcastPlaylistStatus() {
+        guard let store = playlistStore else { return }
+        let items: [[String: Any]] = store.items.enumerated().map { index, item in
+            var obj: [String: Any] = [
+                "index": index,
+                "title": item.titleOrNil ?? "Item \(index + 1)",
+            ]
+            if item.hasVisualMetadata {
+                let vm = item.visualMetadata
+                if vm.hasSeason { obj["season"] = Int(vm.season) }
+                if vm.hasEpisode { obj["episode"] = Int(vm.episode) }
+                if vm.hasImdbID { obj["imdbId"] = vm.imdbID }
+            }
+            if item.hasBingeGroup { obj["bingeGroup"] = item.bingeGroup }
+            return obj
+        }
+        broadcast([
+            "type": "playlist_status",
+            "items": items,
+            "currentIndex": store.items.isEmpty ? 0 : max(store.currentIndex, 0),
+            "totalCount": store.items.count,
+        ])
+    }
+
     /// Send a JSON object to every connected client (now-playing status, tracks, context, …).
     func broadcast(_ json: [String: Any]) {
         guard !connectedConnections.isEmpty,
@@ -493,6 +531,10 @@ class WebSocketServer: ObservableObject {
             // Re-sync now-playing for a client that connected mid-playback: context + a nudge
             // for the active player to re-broadcast its status/tracks.
             self.broadcast(["type": "context", "active": self.currentPlayRequest != nil ? "player" : "idle"])
+            // Sync the queue too, so a re-connecting phone can re-attach its episode queue.
+            if self.playlistStore?.items.isEmpty == false {
+                self.broadcastPlaylistStatus()
+            }
             NotificationCenter.default.post(name: Self.resyncRequest, object: nil)
         }
     }
@@ -617,6 +659,7 @@ class WebSocketServer: ObservableObject {
         print("WebSocket Play: \(payload.titleOrNil ?? "No Title") - \(url)")
         historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil)
         DispatchQueue.main.async {
+            TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.playlistStore?.clear()
             self.playlistStore?.addToQueue(item: payload)
             self.currentPlayRequest = payload
@@ -628,6 +671,7 @@ class WebSocketServer: ObservableObject {
         print("WebSocket Playlist: \(valid.count)/\(payload.items.count) items, startIndex: \(payload.startIndex)")
         guard !valid.isEmpty else { return }
         DispatchQueue.main.async {
+            TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.playlistStore?.setPlaylist(items: valid, startIndex: Int(payload.startIndex))
             if let first = self.playlistStore?.currentItem, let firstURL = first.validURL {
                 self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil)

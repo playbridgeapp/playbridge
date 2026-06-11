@@ -59,12 +59,142 @@ class MpvEngine extends PlayerEngine {
   @override
   Track get track => player.state.track;
 
+  // ─── Track selection ────────────────────────────────────────────────────
+  //
+  // Selections are remembered as *language* preferences (plus an explicit
+  // subs-off flag) and re-applied after every item open, so a pick made on
+  // episode 3 carries into episode 4 — track ids differ between files, but
+  // languages don't.
+
+  String? _preferredAudioLang;
+  String? _preferredSubLang;
+  bool _subsOff = false;
+
   @override
-  Future<void> setAudioTrack(dynamic t) =>
-      player.setAudioTrack(t as AudioTrack);
+  Future<void> setAudioTrack(dynamic t) async {
+    final track = t as AudioTrack;
+    _rememberAudioPref(track);
+    await player.setAudioTrack(track);
+  }
+
   @override
-  Future<void> setSubtitleTrack(dynamic t) =>
-      player.setSubtitleTrack(t as SubtitleTrack);
+  Future<void> setSubtitleTrack(dynamic t) async {
+    final track = t as SubtitleTrack;
+    _rememberSubPref(track);
+    await player.setSubtitleTrack(track);
+  }
+
+  void _rememberAudioPref(AudioTrack track) {
+    if (track.id == 'auto') {
+      _preferredAudioLang = null;
+    } else if (track.id != 'no') {
+      final lang = track.language;
+      if (lang != null && lang.isNotEmpty) _preferredAudioLang = lang;
+    }
+  }
+
+  void _rememberSubPref(SubtitleTrack track) {
+    if (track.id == 'no') {
+      _subsOff = true;
+      _preferredSubLang = null;
+    } else if (track.id == 'auto') {
+      _subsOff = false;
+      _preferredSubLang = null;
+    } else {
+      _subsOff = false;
+      final lang = track.language;
+      if (lang != null && lang.isNotEmpty) _preferredSubLang = lang;
+    }
+  }
+
+  String _trackName(String id, String? title, String? language, int n) {
+    if (title != null && title.isNotEmpty) {
+      return language != null && language.isNotEmpty ? '$title ($language)' : title;
+    }
+    if (language != null && language.isNotEmpty) return language;
+    return 'Track $n';
+  }
+
+  bool _isRealTrack(String id) => id != 'auto' && id != 'no';
+
+  @override
+  List<TrackInfo> get audioTrackInfos {
+    final current = player.state.track.audio.id;
+    final real =
+        player.state.tracks.audio.where((t) => _isRealTrack(t.id)).toList();
+    return [
+      for (var i = 0; i < real.length; i++)
+        TrackInfo(
+          id: real[i].id,
+          name: _trackName(real[i].id, real[i].title, real[i].language, i + 1),
+          selected: real[i].id == current,
+        ),
+    ];
+  }
+
+  @override
+  List<TrackInfo> get subtitleTrackInfos {
+    final current = player.state.track.subtitle.id;
+    final real =
+        player.state.tracks.subtitle.where((t) => _isRealTrack(t.id)).toList();
+    return [
+      TrackInfo(id: 'no', name: 'Off', selected: current == 'no'),
+      for (var i = 0; i < real.length; i++)
+        TrackInfo(
+          id: real[i].id,
+          name: _trackName(real[i].id, real[i].title, real[i].language, i + 1),
+          selected: real[i].id == current,
+        ),
+    ];
+  }
+
+  @override
+  Future<void> selectAudioTrackById(String id) async {
+    if (id == 'auto') return setAudioTrack(AudioTrack.auto());
+    if (id == 'no') return setAudioTrack(AudioTrack.no());
+    final match = player.state.tracks.audio.where((t) => t.id == id);
+    if (match.isNotEmpty) await setAudioTrack(match.first);
+  }
+
+  @override
+  Future<void> selectSubtitleTrackById(String id) async {
+    if (id == 'auto') return setSubtitleTrack(SubtitleTrack.auto());
+    if (id == 'no') return setSubtitleTrack(SubtitleTrack.no());
+    final match = player.state.tracks.subtitle.where((t) => t.id == id);
+    if (match.isNotEmpty) await setSubtitleTrack(match.first);
+  }
+
+  /// Re-apply remembered preferences once the new item's tracks are known.
+  /// Called after every open; waits (bounded) for mpv to enumerate tracks.
+  Future<void> _reapplyTrackPrefs() async {
+    if (_preferredAudioLang == null && _preferredSubLang == null && !_subsOff) {
+      return;
+    }
+    var retries = 0;
+    while (player.state.tracks.audio.where((t) => _isRealTrack(t.id)).isEmpty &&
+        retries < 30) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      retries++;
+    }
+
+    final audioLang = _preferredAudioLang;
+    if (audioLang != null) {
+      final match = player.state.tracks.audio
+          .where((t) => _isRealTrack(t.id) && t.language == audioLang);
+      if (match.isNotEmpty) await player.setAudioTrack(match.first);
+    }
+
+    if (_subsOff) {
+      await player.setSubtitleTrack(SubtitleTrack.no());
+    } else {
+      final subLang = _preferredSubLang;
+      if (subLang != null) {
+        final match = player.state.tracks.subtitle
+            .where((t) => _isRealTrack(t.id) && t.language == subLang);
+        if (match.isNotEmpty) await player.setSubtitleTrack(match.first);
+      }
+    }
+  }
 
   @override
   Future<void> open(QueueItem item) => openPlaylist([item], 0);
@@ -94,6 +224,7 @@ class MpvEngine extends PlayerEngine {
       }
     }
     await player.play();
+    unawaited(_reapplyTrackPrefs());
   }
 
   @override
@@ -127,6 +258,17 @@ class MpvEngine extends PlayerEngine {
         await native.setProperty('demuxer-max-bytes', '314572800');
         await native.setProperty('demuxer-max-back-bytes', '104857600');
         await native.setProperty('network-timeout', '60');
+        // Tuning ported from the tvOS receiver (see MPVPlayerView.swift):
+        // - framedrop=decoder+vo: when decode can't keep up (high-bitrate HEVC),
+        //   drop at the decoder too instead of letting A/V drift — the default
+        //   "vo" only drops already-decoded frames.
+        // - demuxer-readahead-secs + audio-buffer: debrid hosts stall in bursts;
+        //   a deeper time-based readahead and a 1s audio buffer ride over them.
+        // (video-sync=display-resync is deliberately NOT set: media_kit's render
+        // API doesn't report vsync timing, so it can't engage and may misbehave.)
+        await native.setProperty('framedrop', 'decoder+vo');
+        await native.setProperty('demuxer-readahead-secs', '30');
+        await native.setProperty('audio-buffer', '1.0');
       } catch (e) {
         debugPrint('[mpv] failed to tune: $e');
       }

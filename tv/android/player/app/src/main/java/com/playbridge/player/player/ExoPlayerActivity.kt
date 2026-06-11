@@ -1184,6 +1184,12 @@ class ExoPlayerActivity : PlayerActivity() {
                         .setTrackTypeDisabled(trackType, id == "off")
                         .clearOverridesOfType(trackType)
                         .build()
+                    // Drop the carried language preference so the next episode's
+                    // player (rebuilt per item) doesn't resurrect the old pick.
+                    when (type) {
+                        "audio" -> preferredAudioLanguage = null
+                        "sub" -> preferredSubtitleLanguage = null
+                    }
                 } else {
                     // Composite ID: "groupIndex:trackIndex"
                     val parts = id.split(":")
@@ -1201,6 +1207,17 @@ class ExoPlayerActivity : PlayerActivity() {
                                 )
                             )
                             .build()
+                        // The override only binds to *this* item's track groups; the
+                        // player is released and rebuilt on episode advance, so carry
+                        // the pick forward as a language preference (re-applied at
+                        // player construction, like the phone's payload preference).
+                        val pickedLanguage = group.getTrackFormat(trackIdx).language
+                        if (!pickedLanguage.isNullOrBlank()) {
+                            when (type) {
+                                "audio" -> preferredAudioLanguage = pickedLanguage
+                                "sub" -> preferredSubtitleLanguage = pickedLanguage
+                            }
+                        }
                     }
                 }
             }
