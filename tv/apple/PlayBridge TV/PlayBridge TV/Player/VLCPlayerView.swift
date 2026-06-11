@@ -182,19 +182,47 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         }
 
         /// Select a subtitle track by list index, or turn subtitles off when index < 0.
+        /// Records the pick in [TrackPreferences] so the next episode (fresh player)
+        /// re-applies it by track name.
         private func selectSubtitleTrack(at index: Int) {
             if index < 0 {
                 mediaPlayer.deselectAllTextTracks()
+                TrackPreferences.shared.subtitlesOff = true
+                TrackPreferences.shared.subtitleName = nil
             } else {
                 let textTracks = mediaPlayer.textTracks
-                if textTracks.indices.contains(index) { textTracks[index].isSelectedExclusively = true }
+                if textTracks.indices.contains(index) {
+                    textTracks[index].isSelectedExclusively = true
+                    TrackPreferences.shared.subtitlesOff = false
+                    TrackPreferences.shared.subtitleName = textTracks[index].trackName
+                }
             }
         }
 
-        /// Select an audio track by list index.
+        /// Select an audio track by list index. Records the pick (see above).
         private func selectAudioTrack(at index: Int) {
             let audioTracks = mediaPlayer.audioTracks
-            if audioTracks.indices.contains(index) { audioTracks[index].isSelectedExclusively = true }
+            if audioTracks.indices.contains(index) {
+                audioTracks[index].isSelectedExclusively = true
+                TrackPreferences.shared.audioName = audioTracks[index].trackName
+            }
+        }
+
+        /// Re-apply the session's track preferences (by display name) once tracks are
+        /// enumerated, so picks carry across episodes. Selects directly — bypassing the
+        /// recording setters — so applying never overwrites the stored preference.
+        private func applyPreferredTracks() {
+            let prefs = TrackPreferences.shared
+            if let name = prefs.audioName,
+               let idx = mediaPlayer.audioTracks.firstIndex(where: { $0.trackName == name }) {
+                mediaPlayer.audioTracks[idx].isSelectedExclusively = true
+            }
+            if prefs.subtitlesOff {
+                mediaPlayer.deselectAllTextTracks()
+            } else if let name = prefs.subtitleName,
+                      let idx = mediaPlayer.textTracks.firstIndex(where: { $0.trackName == name }) {
+                mediaPlayer.textTracks[idx].isSelectedExclusively = true
+            }
         }
 
         private func updateAudioTracks() {
@@ -520,9 +548,14 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 // appear — every playable file has audio, so this self-terminates instead of
                 // re-enumerating tracks (and taking the player lock) on every tick forever.
                 if !self.didFetchTracks {
+                    if !self.mediaPlayer.audioTracks.isEmpty {
+                        self.didFetchTracks = true
+                        // Carry the session's track picks into this episode before the
+                        // lists are published to the overlay/phone.
+                        self.applyPreferredTracks()
+                    }
                     self.updateSubtitleTracks()
                     self.updateAudioTracks()
-                    if !self.mediaPlayer.audioTracks.isEmpty { self.didFetchTracks = true }
                 }
             }
         }
