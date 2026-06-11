@@ -49,18 +49,7 @@ fun PlayerControlsOverlay(
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
-        // PrePlay Overlay (Bottom layer)
-        state.prePlayMetadata?.let { metadata ->
-            com.playbridge.player.preplay.PrePlayScreen(
-                metadata = metadata,
-                isLaunching = state.isPrePlayLaunching,
-                launchCountdown = state.prePlayCountdown,
-                onStartNow = onPrePlayStartNow,
-                onBack = onPrePlayBack
-            )
-        }
-
-        // Main Controls Overlay (Top layer)
+        // Main Controls Overlay
         AnimatedVisibility(
             visible = state.isVisible,
             enter = fadeIn(),
@@ -237,6 +226,19 @@ fun PlayerControlsOverlay(
             SubtitleOverlay(
                 text = state.currentSubtitleText,
                 modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+
+        // PrePlay Overlay — TOP layer, deliberately last: it must cover the
+        // buffering spinner and the subtitle overlay (which otherwise bleed
+        // through while the player pre-buffers a resume position underneath).
+        state.prePlayMetadata?.let { metadata ->
+            com.playbridge.player.preplay.PrePlayScreen(
+                metadata = metadata,
+                isLaunching = state.isPrePlayLaunching,
+                launchCountdown = state.prePlayCountdown,
+                onStartNow = onPrePlayStartNow,
+                onBack = onPrePlayBack
             )
         }
     }
