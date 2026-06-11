@@ -72,6 +72,14 @@ Comprehensive project documentation is available:
 - **[Contributing](CONTRIBUTING.md)**: Setup instructions and contribution guidelines.
 - **[Security Policy](SECURITY.md)**: Security considerations and vulnerability reporting.
 
+### Cast demo page
+
+Sites can cast directly into PlayBridge via the injected `window.playbridge.cast()` page bridge.
+A live demo that exercises all payload shapes (single video, HLS, playlist with `startIndex`,
+bare array) plus the browser's video detection paths is hosted at
+**[playbridge.app/cast-demo](https://playbridge.app/cast-demo/)** — open it in the PlayBridge
+phone browser. Source: [`web/site/static/cast-demo/`](web/site/static/cast-demo/index.html).
+
 ## Build Instructions
 
 ### Prerequisites

@@ -36,8 +36,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
 import org.koin.compose.koinInject
 
-private val REGEX_PLAYBRIDGE_TITLE = Regex("\\[PlayBridge:(\\d+)\\]")
-
 /**
  * Sets up the [EngineSession.Observer] and GeckoSession delegate proxies
  * (NavigationDelegate, ContentDelegate) for the active browser session.
@@ -58,7 +56,6 @@ fun SessionObserverSetup(
     previousUrl: MutableState<String>,
     pendingDownload: MutableState<PendingDownload?>,
     isDesktopMode: Boolean,
-    detectVideosEnabled: Boolean,
     isSecureConnection: MutableState<Boolean>,
     siteSecurityInfo: MutableState<SiteSecurityInfo?>,
     pendingPopup: MutableState<PendingPopup?>,
@@ -66,7 +63,6 @@ fun SessionObserverSetup(
     onMagnetDetected: (String) -> Unit,
     onStremioAddonDetected: (String) -> Unit,
     onTorrentDownloaded: (ByteArray) -> Unit,
-    onVideoHashDetected: (String, String) -> Unit,  // (url, kotlinTabId)
     onFullScreenChange: (Boolean, Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -130,29 +126,23 @@ fun SessionObserverSetup(
                 }
 
                 currentUrl.value = url
-
-                // Clear detected videos only when navigating to a different page
-                if (baseUrl != previousBaseUrl && previousBaseUrl.isNotEmpty()) {
-                    if (selectedTab != null) {
-                        VideoDetector.clearTab(selectedTab.id)
-                        Log.d(TAG, "Cleared detected videos for tab ${selectedTab.id} - navigated from $previousBaseUrl to $baseUrl")
-                    }
-                }
-
                 previousUrl.value = url
 
-                // Check for playbridge-video hash signal from content script
-                if (detectVideosEnabled && url.contains("#playbridge-video=")) {
-                    val tabId = selectedTab?.id ?: "_unknown"
-                    onVideoHashDetected(url, tabId)
-                }
+                // NOTE: detected videos are no longer cleared here. Reset happens
+                // in two places that both cover reloads (same-URL loads):
+                //  - ProgressDelegate.onPageStart below (precise, local)
+                //  - the extension's webNavigation.onCommitted handler, which also
+                //    clears the extension's own per-tab seen-URL state so videos
+                //    are re-reported on the fresh page (Components.processMessage
+                //    "navigation").
+                // Video detections themselves arrive via native messaging
+                // (Components.processMessage), not the old URL-hash signal.
             }
 
             override fun onLoadingStateChange(loading: Boolean) {
                 isLoading.value = loading
             }
 
-            // Detect video count from page title [PlayBridge:X] marker
             override fun onTitleChange(title: String) {
                 Log.d(TAG, "Title changed: $title")
                 if (selectedTab != null) {
@@ -176,12 +166,6 @@ fun SessionObserverSetup(
                             )
                         )
                     }
-                }
-
-                val match = REGEX_PLAYBRIDGE_TITLE.find(title)
-                if (match != null) {
-                    val count = match.groupValues[1].toIntOrNull() ?: 0
-                    Log.d(TAG, "PlayBridge video count detected: $count")
                 }
             }
 
@@ -570,6 +554,16 @@ fun SessionObserverSetup(
                             when (method.name) {
                                 "onPageStart" -> {
                                     isLoading.value = true
+                                    // Reset detected videos on every top-level page
+                                    // load start — including reloads of the same URL,
+                                    // which the old baseUrl-diff check missed. The
+                                    // sheet count starts at 0 and repopulates as the
+                                    // page loads. onPageStart does not fire for
+                                    // same-document (hash/pushState) navigations, so
+                                    // SPA route changes keep their detected videos.
+                                    selectedTabState.value?.id?.let { tabId ->
+                                        VideoDetector.clearTab(tabId)
+                                    }
                                 }
                                 "onPageStop" -> {
                                     isLoading.value = false
