@@ -109,7 +109,9 @@ class MpvEngine extends PlayerEngine {
 
   String _trackName(String id, String? title, String? language, int n) {
     if (title != null && title.isNotEmpty) {
-      return language != null && language.isNotEmpty ? '$title ($language)' : title;
+      return language != null && language.isNotEmpty
+          ? '$title ($language)'
+          : title;
     }
     if (language != null && language.isNotEmpty) return language;
     return 'Track $n';

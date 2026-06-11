@@ -100,7 +100,8 @@ class PlaybackStats {
 /// Engine-agnostic description of a selectable track, in the shape the phone
 /// remote expects (`tracks` message: id/name/selected).
 class TrackInfo {
-  const TrackInfo({required this.id, required this.name, this.selected = false});
+  const TrackInfo(
+      {required this.id, required this.name, this.selected = false});
   final String id;
   final String name;
   final bool selected;

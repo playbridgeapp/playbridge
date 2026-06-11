@@ -30,7 +30,8 @@ extension PlayPayloadX on PlayPayload {
       ? visualMetadata.imdbId
       : null;
 
-  String? _vm(bool Function(VisualMetadata) has, String Function(VisualMetadata) get) {
+  String? _vm(
+      bool Function(VisualMetadata) has, String Function(VisualMetadata) get) {
     if (!hasVisualMetadata()) return null;
     if (!has(visualMetadata)) return null;
     final v = get(visualMetadata);
