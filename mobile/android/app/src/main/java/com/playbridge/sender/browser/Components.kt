@@ -47,6 +47,14 @@ object Components {
     var tabManager: TabManager? = null
     var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?) -> Unit)? = null
 
+    /**
+     * Mirrors the "detect videos" setting. Detection messages from the extension
+     * arrive over native messaging regardless of the setting, so they are gated
+     * here. Kept in sync from BrowserActivity.
+     */
+    @Volatile
+    var detectVideosEnabled: Boolean = true
+
     val applicationScope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
     )
@@ -387,6 +395,16 @@ object Components {
                             onBridgeCastRequest?.invoke(listOf(PlayPayload(url = url, title = title)), 0, null)
                         }
                     }
+                } else if (type == "navigation") {
+                    // Top-level navigation (including reloads) committed in a tab:
+                    // the extension has cleared its per-tab detection state and
+                    // will re-report videos as the new page loads — reset ours too
+                    // so the cast sheet count starts from 0.
+                    val kotlinTabId = resolveKotlinTabId(jsonObject)
+                    VideoDetector.clearTab(kotlinTabId)
+                    Log.d(TAG, "Navigation committed — cleared detected videos for tab $kotlinTabId")
+                } else if (type == "video_detected" && !detectVideosEnabled) {
+                    Log.d(TAG, "Video detection disabled — ignoring detection message")
                 } else {
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
                     VideoDetector.onMessageReceived(jsonObject, kotlinTabId)

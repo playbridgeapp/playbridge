@@ -1,6 +1,9 @@
 // PlayBridge Video Detector - Background Script
-// Detects video URLs per-tab and sends them to content script for storage
-// Uses per-tab Maps so each tab tracks its own videos independently
+// Detects video URLs per-tab via webRequest interception and reports them to the
+// native app over GeckoView native messaging (runtime.sendNativeMessage).
+// Per-tab state is reset on every top-level navigation (including reloads).
+
+const NATIVE_APP_ID = 'browser';
 
 const VIDEO_CONTENT_TYPES = [
     'video/',
@@ -14,7 +17,13 @@ const VIDEO_CONTENT_TYPES = [
     '.srt'
 ];
 
-console.log('[VideoDetector BG] Starting (Per-Tab Mode)...');
+const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.m4v', '.wmv', '.3gp'];
+const SUBTITLE_EXTENSIONS = ['.vtt', '.srt'];
+// HLS/DASH media segments — not playable streams on their own; suppress so they
+// don't flood the detected-videos list before the segment-prefix cleanup in Kotlin.
+const SEGMENT_EXTENSIONS = ['.ts', '.m4s', '.fmp4', '.cmfv', '.cmfa'];
+
+console.log('[VideoDetector BG] Starting (Native Messaging Mode)...');
 
 // Per-tab video storage
 const tabVideos = new Map();           // geckoTabId → [{url, ...}]
@@ -27,6 +36,8 @@ const requestHeadersMap = new Map();
 // Configuration for cleanup
 const CLEANUP_INTERVAL_MS = 30000; // 30 seconds
 const HEADER_TTL_MS = 60000; // 1 minute
+
+const DEBUG = false; // Set to true for verbose logging
 
 // Periodic cleanup to prevent memory leaks from incomplete requests
 setInterval(() => {
@@ -43,6 +54,22 @@ setInterval(() => {
     }
 }, CLEANUP_INTERVAL_MS);
 
+// ── Native messaging ──────────────────────────────────────────────────────────
+// GeckoView routes runtime.sendNativeMessage(NATIVE_APP_ID, ...) to the
+// MessageDelegate registered in Components.kt (processMessage). This replaces
+// the old document.title / localStorage / URL-hash signaling hacks, which were
+// racy (100ms restore window, coalesced location changes) and broke on sites
+// that manage their own hash/history.
+function sendToNative(message) {
+    try {
+        browser.runtime.sendNativeMessage(NATIVE_APP_ID, message).catch((e) => {
+            if (DEBUG) console.log('[VideoDetector BG] sendNativeMessage failed:', e?.message);
+        });
+    } catch (e) {
+        console.error('[VideoDetector BG] sendNativeMessage threw:', e);
+    }
+}
+
 // Helper: get or create per-tab structures
 function getTabVideos(tabId) {
     if (!tabVideos.has(tabId)) tabVideos.set(tabId, []);
@@ -57,12 +84,12 @@ function getTabHeadersCaptured(tabId) {
     return tabHeadersCaptured.get(tabId);
 }
 
-// Clean up state for a closed tab
+// Clean up state for a tab (closed or navigated away)
 function cleanupTab(tabId) {
     tabVideos.delete(tabId);
     tabSeenUrls.delete(tabId);
     tabHeadersCaptured.delete(tabId);
-    console.log(`[VideoDetector BG] Cleaned up tab ${tabId}`);
+    if (DEBUG) console.log(`[VideoDetector BG] Cleaned up tab ${tabId}`);
 }
 
 // Listen for tab removal to free memory
@@ -70,14 +97,42 @@ browser.tabs.onRemoved.addListener((tabId) => {
     cleanupTab(tabId);
 });
 
-// Send video to content script for storage (per-tab)
-function notifyContentScript(video, tabId, headers = null) {
+// ── Navigation reset ──────────────────────────────────────────────────────────
+// On every committed top-level navigation (including reloads and back/forward),
+// clear this tab's detection state so previously-seen URLs are re-reported, and
+// tell the native side to reset its list for the tab. Without this, the
+// seenUrls/headersCaptured sets suppressed re-detection after a reload or when
+// returning to a previously visited page. onCommitted does not fire for
+// same-document navigations (hash changes / pushState), so SPA route changes
+// keep their detected videos.
+browser.webNavigation.onCommitted.addListener((details) => {
+    if (details.frameId !== 0) return;
+    cleanupTab(details.tabId);
+    sendToNative({
+        type: 'navigation',
+        tabId: details.tabId,
+        url: details.url,
+        // originUrl lets the native side resolve the Kotlin tab ID with the
+        // same logic used for video messages.
+        originUrl: details.url,
+        transitionType: details.transitionType || '',
+        timestamp: Date.now()
+    });
+    if (DEBUG) console.log(`[VideoDetector BG] Navigation committed tab=${details.tabId} (${details.transitionType}): ${details.url.substring(0, 80)}`);
+});
+
+// ── Reporting ─────────────────────────────────────────────────────────────────
+// Dedupe per tab, store, and push to the native app. Requests without a real
+// tab ID (e.g. fired from service workers have tabId === -1) are still sent —
+// the native side resolves the Kotlin tab from originUrl, falling back to the
+// selected tab.
+function reportVideo(video, tabId, headers = null) {
     const hasHeaders = headers && Object.keys(headers).length > 0;
     const seenUrls = getTabSeenUrls(tabId);
     const headersCaptured = getTabHeadersCaptured(tabId);
 
     if (seenUrls.has(video.url)) {
-        // If we already saw this URL, check if we're improving it with headers
+        // If we already saw this URL, only continue if we're improving it with headers
         if (headersCaptured.has(video.url) || !hasHeaders) {
             return;
         }
@@ -98,18 +153,13 @@ function notifyContentScript(video, tabId, headers = null) {
         videos.push(video);
     }
 
-    const count = videos.length;
-    console.log('[VideoDetector BG] VIDEO DETECTED tab=' + tabId + ' #' + count + ' (Headers: ' + hasHeaders + '): ' + video.url.substring(0, 80));
+    console.log('[VideoDetector BG] VIDEO DETECTED tab=' + tabId + ' #' + videos.length +
+        ' (Headers: ' + hasHeaders + ', by: ' + video.detectedBy + '): ' + video.url.substring(0, 80));
 
-    // Send to content script in the specific tab only
-    if (tabId && tabId > 0) {
-        browser.tabs.sendMessage(tabId, {
-            type: 'video_detected',
-            ...video
-        }).catch(e => {
-            // Ignore tab closed errors
-        });
-    }
+    sendToNative({
+        type: 'video_detected',
+        ...video
+    });
 
     // Store in extension storage as backup (per-tab)
     const allVideos = [];
@@ -122,10 +172,6 @@ function notifyContentScript(video, tabId, headers = null) {
         count: allVideos.length
     });
 }
-
-
-
-const DEBUG = false; // Set to false to disable verbose logging
 
 // 0. Log all requests (Debug)
 browser.webRequest.onBeforeRequest.addListener(
@@ -141,7 +187,7 @@ browser.webRequest.onBeforeRequest.addListener(
 browser.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
         if (details.method === 'OPTIONS') return;
-        
+
         const headers = {};
         if (details.requestHeaders) {
             details.requestHeaders.forEach(h => {
@@ -165,123 +211,108 @@ browser.webRequest.onBeforeSendHeaders.addListener(
     ["requestHeaders"]
 );
 
-
 // 2. Confirm Video & Merge Headers (Forward)
-// We check the response Content-Type. If it's a video, we retrieve the stored headers.
+// All URL-based checks run even when the response has NO Content-Type header —
+// sketchy live-stream origins frequently omit it, and the old code skipped
+// every check (including the m3u8 body sniffer) in that case.
 browser.webRequest.onHeadersReceived.addListener(
     (details) => {
         const contentTypeHeader = details.responseHeaders?.find(
             h => h.name.toLowerCase() === 'content-type'
         );
+        const contentType = contentTypeHeader ? contentTypeHeader.value.toLowerCase() : '';
+        if (DEBUG) console.log(`[VideoDetector BG] Response: ${details.url} | Content-Type: ${contentType || 'none'}`);
 
-        const contentType = contentTypeHeader ? contentTypeHeader.value.toLowerCase() : 'unknown';
-        if (DEBUG) console.log(`[VideoDetector BG] Response: ${details.url} | Content-Type: ${contentType}`);
-
-        // Always check map for cleanup, but first use it if video
         const storedData = requestHeadersMap.get(details.requestId);
+        const urlFull = details.url.toLowerCase();
+        const urlPath = urlFull.split('?')[0]; // Ignore query params for extension checks
 
-        if (contentTypeHeader) {
-            const isVideoContentType = VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
-            const isM3u8Url = details.url.toLowerCase().includes('m3u8');
+        // Suppress HLS/DASH media segments early
+        if (SEGMENT_EXTENSIONS.some(ext => urlPath.endsWith(ext))) {
+            if (storedData) requestHeadersMap.delete(details.requestId);
+            return;
+        }
 
-            // Check for common video extensions
-            const videoExtensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.m4v', '.wmv', '.3gp'];
-            const urlLower = details.url.toLowerCase().split('?')[0]; // Ignore query params
-            const hasVideoExtension = videoExtensions.some(ext => urlLower.endsWith(ext));
+        const isVideoContentType = contentType !== '' && VIDEO_CONTENT_TYPES.some(type => contentType.includes(type));
+        const isM3u8Url = urlFull.includes('m3u8');
+        // DASH manifests are often served as text/xml or octet-stream, which the
+        // content-type list misses — match the URL like we do for m3u8.
+        const isMpdUrl = urlPath.endsWith('.mpd') || urlFull.includes('.mpd?');
+        const hasVideoExtension = VIDEO_EXTENSIONS.some(ext => urlPath.endsWith(ext));
+        const hasSubtitleExtension = SUBTITLE_EXTENSIONS.some(ext => urlPath.endsWith(ext));
 
-            // Suppress HLS/DASH media segments — they are not playable streams on their own
-            // and would flood the detected-videos list before the segment-prefix cleanup in Kotlin.
-            const segmentExtensions = ['.ts', '.m4s', '.fmp4', '.cmfv', '.cmfa'];
-            if (segmentExtensions.some(ext => urlLower.endsWith(ext))) {
-                if (storedData) requestHeadersMap.delete(details.requestId);
-                return;
-            }
-            
-            // Check for subtitle extensions
-            const subtitleExtensions = ['.vtt', '.srt'];
-            const hasSubtitleExtension = subtitleExtensions.some(ext => urlLower.endsWith(ext));
-            
-            // If it's octet-stream, we MUST rely on extension.
-            // But we can also be more aggressive: if it ends in .mp4, it's a video, period.
-            const isVideoExtensionMatch = hasVideoExtension && (
-                contentType.includes('octet-stream') || 
-                contentType.includes('application/x-google-chrome-pdf') || // sometimes misidentified?
-                contentType.includes('binary') ||
-                !contentType // or no content type?
-            );
+        const isVideo = isVideoContentType || isM3u8Url || isMpdUrl || hasVideoExtension || hasSubtitleExtension;
 
-            const isVideo = isVideoContentType || isM3u8Url || isVideoExtensionMatch || hasVideoExtension || hasSubtitleExtension; 
-            // hasVideoExtension covers cases where server sends wrong type (e.g. text/plain for .mp4)
+        if (isVideo) {
+            if (DEBUG) console.log(`[VideoDetector BG] CONFIRMED VIDEO (Type: ${contentType || 'none'}): ${details.url.substring(0, 50)}...`);
 
-            if (isVideo) {
-                if (DEBUG) console.log(`[VideoDetector BG] CONFIRMED VIDEO (Type: ${contentType}, URL match: ${isM3u8Url || hasVideoExtension}): ${details.url.substring(0, 50)}...`);
+            const headers = storedData ? storedData.headers : null;
 
-                const headers = storedData ? storedData.headers : null;
-                
-                let detectedBy = 'unknown';
-                if (isVideoContentType) detectedBy = 'content_type';
-                else if (isM3u8Url) detectedBy = 'url_pattern_m3u8';
-                else if (hasVideoExtension) detectedBy = 'url_extension';
-                else if (hasSubtitleExtension) detectedBy = 'subtitle_extension';
+            let detectedBy = 'unknown';
+            if (isVideoContentType) detectedBy = 'content_type';
+            else if (isM3u8Url) detectedBy = 'url_pattern_m3u8';
+            else if (isMpdUrl) detectedBy = 'url_pattern_mpd';
+            else if (hasVideoExtension) detectedBy = 'url_extension';
+            else if (hasSubtitleExtension) detectedBy = 'subtitle_extension';
 
-                notifyContentScript({
-                    url: details.url,
-                    tabId: details.tabId,
-                    contentType: contentType,
-                    detectedBy: detectedBy,
-                    originUrl: details.originUrl || '',
-                    timestamp: Date.now()
-                }, details.tabId, headers);
-            } else {
-                // Check if it's a potential hidden M3U8 stream in a generic response type
-                const skipTypes = ['image', 'font', 'stylesheet', 'script'];
-                if (details.statusCode === 200 && !skipTypes.includes(details.type)) {
-                    try {
-                        const filter = browser.webRequest.filterResponseData(details.requestId);
-                        const decoder = new TextDecoder("utf-8");
-                        let checked = false;
-                        let accumulatedData = "";
+            reportVideo({
+                url: details.url,
+                tabId: details.tabId,
+                contentType: contentType || null,
+                detectedBy: detectedBy,
+                originUrl: details.originUrl || '',
+                timestamp: Date.now()
+            }, details.tabId, headers);
+        } else {
+            // Check if it's a potential hidden M3U8 stream in a generic (or absent)
+            // response type by sniffing the first bytes of the body for #EXTM3U.
+            const skipTypes = ['image', 'font', 'stylesheet', 'script'];
+            if (details.statusCode === 200 && !skipTypes.includes(details.type)) {
+                try {
+                    const filter = browser.webRequest.filterResponseData(details.requestId);
+                    const decoder = new TextDecoder("utf-8");
+                    let checked = false;
+                    let accumulatedData = "";
 
-                        filter.ondata = (event) => {
-                            if (checked) {
-                                filter.write(event.data);
-                                return;
+                    filter.ondata = (event) => {
+                        if (checked) {
+                            filter.write(event.data);
+                            return;
+                        }
+
+                        filter.write(event.data); // pass data through unchanged
+                        accumulatedData += decoder.decode(event.data, { stream: true });
+
+                        if (accumulatedData.length >= 7) {
+                            checked = true;
+                            const trimmed = accumulatedData.trim();
+                            if (trimmed.startsWith("#EXTM3U")) {
+                                console.log(`[VideoDetector BG] HIDDEN M3U8 DETECTED in body: ${details.url.substring(0, 50)}...`);
+                                const headers = storedData ? storedData.headers : null;
+                                reportVideo({
+                                    url: details.url,
+                                    tabId: details.tabId,
+                                    contentType: contentType || null,
+                                    detectedBy: 'body_content_m3u8',
+                                    originUrl: details.originUrl || '',
+                                    timestamp: Date.now()
+                                }, details.tabId, headers);
                             }
-                            
-                            filter.write(event.data); // pass data through unchanged
-                            accumulatedData += decoder.decode(event.data, { stream: true });
-                            
-                            if (accumulatedData.length >= 7) {
-                                checked = true;
-                                const trimmed = accumulatedData.trim();
-                                if (trimmed.startsWith("#EXTM3U")) {
-                                    if (DEBUG) console.log(`[VideoDetector BG] HIDDEN M3U8 DETECTED in body: ${details.url.substring(0, 50)}...`);
-                                    const headers = storedData ? storedData.headers : null;
-                                    notifyContentScript({
-                                        url: details.url,
-                                        tabId: details.tabId,
-                                        contentType: contentType,
-                                        detectedBy: 'body_content_m3u8',
-                                        originUrl: details.originUrl || '',
-                                        timestamp: Date.now()
-                                    }, details.tabId, headers);
-                                }
-                                // Stop intercepting further chunks to save resources
-                                filter.disconnect();
-                            }
-                        };
+                            // Stop intercepting further chunks to save resources
+                            filter.disconnect();
+                        }
+                    };
 
-                        filter.onstop = (event) => {
-                            try { filter.disconnect(); } catch (e) {}
-                        };
-                        
-                        filter.onerror = (event) => {
-                            if (DEBUG) console.log(`[VideoDetector BG] Filter error: ${filter.error}`);
-                        };
-                    } catch (e) {
-                         // filterResponseData might throw if request cannot be filtered
-                         if (DEBUG) console.error(`[VideoDetector BG] filterResponseData error:`, e);
-                    }
+                    filter.onstop = (event) => {
+                        try { filter.disconnect(); } catch (e) {}
+                    };
+
+                    filter.onerror = (event) => {
+                        if (DEBUG) console.log(`[VideoDetector BG] Filter error: ${filter.error}`);
+                    };
+                } catch (e) {
+                    // filterResponseData might throw if request cannot be filtered
+                    if (DEBUG) console.error(`[VideoDetector BG] filterResponseData error:`, e);
                 }
             }
         }
@@ -291,18 +322,16 @@ browser.webRequest.onHeadersReceived.addListener(
         if (details.type === 'main_frame' && details.statusCode >= 400) {
             console.log(`[VideoDetector BG] HTTP ERROR detected: ${details.statusCode} for ${details.url}`);
 
-            // We use the "browser" port if available, or just log it.
-            // Native app will listen for messages of type 'http_error'
             const errorMsg = {
                 type: 'http_error',
                 url: details.url,
+                originUrl: details.url,
                 statusCode: details.statusCode,
                 tabId: details.tabId,
                 timestamp: Date.now()
             };
 
-            // Send to native side directly via runtime.sendMessage (Components.kt message delegate)
-            browser.runtime.sendMessage(errorMsg).catch(() => {});
+            sendToNative(errorMsg);
 
             // Also update storage so polling can find it if needed
             browser.storage.local.set({
@@ -323,18 +352,16 @@ browser.webRequest.onHeadersReceived.addListener(
 // Handle messages from content scripts
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Video element detected by DOM observer in content.js
-    if (message.action === 'dom_video_found') {
-        const tabId = sender.tab?.id;
-        if (tabId && tabId > 0) {
-            notifyContentScript({
-                url: message.url,
-                tabId: tabId,
-                contentType: null,
-                detectedBy: 'dom_video_element',
-                originUrl: message.origin,
-                timestamp: Date.now()
-            }, tabId, null); // headers arrive later via webRequest and will update this entry
-        }
+    if (message.action === 'dom_video_found' || message.action === 'player_video_found') {
+        const tabId = sender.tab?.id ?? -1;
+        reportVideo({
+            url: message.url,
+            tabId: tabId,
+            contentType: null,
+            detectedBy: message.action === 'player_video_found' ? 'player_config' : 'dom_video_element',
+            originUrl: message.origin,
+            timestamp: Date.now()
+        }, tabId, null); // headers arrive later via webRequest and will update this entry
         return false;
     }
     if (message.action === 'getVideos') {
@@ -361,8 +388,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'cast') {
         // Forward to native app (Components.kt onBridgeCastRequest) via GeckoView Port
         try {
-            const port = browser.runtime.connectNative("browser");
-            
+            const port = browser.runtime.connectNative(NATIVE_APP_ID);
+
             // Listen for feedback from native app
             port.onMessage.addListener((response) => {
                 console.log('[VideoDetector BG] Feedback received from native:', response);
@@ -388,4 +415,4 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
 });
 
-console.log('[VideoDetector BG] Loaded (Per-Tab Mode)');
+console.log('[VideoDetector BG] Loaded (Native Messaging Mode)');

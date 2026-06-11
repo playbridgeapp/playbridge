@@ -682,6 +682,11 @@ class BrowserActivity : ComponentActivity() {
             }
 
             val detectVideosEnabled by settingsRepository.detectVideos.collectAsState(initial = true)
+            // Detection messages now arrive via native messaging (Components.processMessage),
+            // so the setting is enforced there rather than at the old hash-signal parse site.
+            LaunchedEffect(detectVideosEnabled) {
+                Components.detectVideosEnabled = detectVideosEnabled
+            }
             var isDesktopMode by remember { mutableStateOf(false) }
             var isSecureConnection by remember { mutableStateOf(false) }
             var siteSecurityInfo by remember { mutableStateOf<SiteSecurityInfo?>(null) }
@@ -1091,7 +1096,6 @@ class BrowserActivity : ComponentActivity() {
                 previousUrl = previousUrlState,
                 pendingDownload = pendingDownloadState,
                 isDesktopMode = isDesktopMode,
-                detectVideosEnabled = detectVideosEnabled,
                 isSecureConnection = isSecureConnectionState,
                 siteSecurityInfo = siteSecurityInfoState,
                 pendingPopup = pendingPopupState,
@@ -1129,29 +1133,6 @@ class BrowserActivity : ComponentActivity() {
                 },
                 onTorrentDownloaded = { bytes ->
                     interceptedTorrentBytes = bytes
-                },
-                onVideoHashDetected = { url, kotlinTabId ->
-                    try {
-                        val hashData = url.substringAfter("#playbridge-video=")
-                        val decoded = java.net.URLDecoder.decode(hashData, "UTF-8")
-                        Log.d(TAG, "PlayBridge video signal for tab $kotlinTabId: $decoded")
-
-                        val json = kotlinx.serialization.json.Json.parseToJsonElement(decoded)
-                        if (json is kotlinx.serialization.json.JsonObject) {
-                            VideoDetector.onMessageReceived(kotlinx.serialization.json.JsonObject(mapOf(
-                                "type" to kotlinx.serialization.json.JsonPrimitive("video_detected"),
-                                "url" to (json["url"] ?: kotlinx.serialization.json.JsonPrimitive("")),
-                                "contentType" to (json["contentType"] ?: kotlinx.serialization.json.JsonNull),
-                                "detectedBy" to (json["detectedBy"] ?: kotlinx.serialization.json.JsonPrimitive("unknown")),
-                                "originUrl" to (json["originUrl"] ?: kotlinx.serialization.json.JsonNull),
-                                "headers" to (json["headers"] ?: kotlinx.serialization.json.JsonNull),
-                                "timestamp" to (json["timestamp"] ?: kotlinx.serialization.json.JsonPrimitive(System.currentTimeMillis()))
-                            )), kotlinTabId)
-                            Log.d(TAG, "Video added to VideoDetector for tab $kotlinTabId from hash signal")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error parsing playbridge-video hash", e)
-                    }
                 },
                 onFullScreenChange = { fullScreen, isPortrait ->
                     isFullscreenVideoPortrait = isPortrait
