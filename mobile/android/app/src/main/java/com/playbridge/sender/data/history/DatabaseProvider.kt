@@ -94,6 +94,25 @@ object DatabaseProvider {
         }
     }
 
+    private val MIGRATION_16_17 = object : Migration(16, 17) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Content-keyed cross-session resume positions (PROGRESS_TRACKING_PLAN.md P1.5).
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `playback_resume` (" +
+                    "`contentKey` TEXT NOT NULL, " +
+                    "`tmdbId` INTEGER NOT NULL, " +
+                    "`mediaType` TEXT NOT NULL, " +
+                    "`season` INTEGER, " +
+                    "`episode` INTEGER, " +
+                    "`title` TEXT, " +
+                    "`positionMs` INTEGER NOT NULL, " +
+                    "`durationMs` INTEGER NOT NULL, " +
+                    "`updatedAt` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`contentKey`))"
+            )
+        }
+    }
+
     @Volatile
     private var INSTANCE: HistoryDatabase? = null
 
@@ -104,7 +123,7 @@ object DatabaseProvider {
                 HistoryDatabase::class.java,
                 "history_database"
             )
-            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
+            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
             .fallbackToDestructiveMigration()
             .build()
             INSTANCE = instance

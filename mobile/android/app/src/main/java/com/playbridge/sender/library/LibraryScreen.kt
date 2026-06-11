@@ -374,23 +374,7 @@ private fun LibraryScreenContent(
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        floatingActionButtonPosition = androidx.compose.material3.FabPosition.End,
-        floatingActionButton = {
-            // Remote shortcut — available on every library tab when a TV is connected.
-            val onRemote = onRemoteClick
-            if (onRemote != null && !isSearching && selectedTab < 3) {
-                FloatingActionButton(
-                    onClick = onRemote,
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                ) {
-                    Icon(
-                        Icons.Default.SettingsRemote,
-                        contentDescription = "Remote"
-                    )
-                }
-            }
-        },
+        // (The remote FAB lived here; replaced by the app-wide NowPlayingBar.)
         topBar = {
             if (selectedTab < 3) {
                 Column {

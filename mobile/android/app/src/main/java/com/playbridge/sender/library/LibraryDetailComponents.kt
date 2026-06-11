@@ -743,6 +743,8 @@ internal fun EpisodeItem(
     hasAddon: Boolean = false,
     isResolving: Boolean = false,
     isWatched: Boolean = false,
+    /** 0..1 — partial-watch progress (resume point); renders a bar on the thumbnail. */
+    resumeFraction: Float? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onToggleWatched: () -> Unit = {},
@@ -857,6 +859,24 @@ internal fun EpisodeItem(
                                 color = Color.White,
                         )
                     }
+                }
+
+                // Resume progress bar (partial watch) along the thumbnail's bottom edge.
+                if (resumeFraction != null && !isWatched) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .background(Color.White.copy(alpha = 0.3f))
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth(resumeFraction)
+                            .height(3.dp)
+                            .background(themeColor)
+                    )
                 }
             }
 

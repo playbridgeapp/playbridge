@@ -183,6 +183,10 @@ class ExoPlayerActivity : PlayerActivity() {
             finish()
         }
     })
+
+    /** Live queue (incl. queue_add-appended episodes) for engine switches. */
+    override fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
+        coordinator.playlist to coordinator.index
     private var lastVolume: Float = 1.0f
     private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
 
@@ -935,6 +939,8 @@ class ExoPlayerActivity : PlayerActivity() {
                         }
 
                         if (!coordinator.isEmpty) {
+                            // Refresh the store too — it misses queue_add-appended episodes.
+                            PlaylistStore.currentPlaylist = coordinator.playlist
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_IS_PLAYLIST, true)
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_PLAYLIST_INDEX, coordinator.index)
                         }

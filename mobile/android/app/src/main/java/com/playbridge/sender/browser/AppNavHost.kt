@@ -149,6 +149,7 @@ fun AppNavHost(
     val libraryViewModel: LibraryViewModel = koinViewModel()
     val connectionCoordinator: ConnectionCoordinator = koinInject()
     val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
+    val dlnaQueueCoordinator: com.playbridge.sender.connection.DlnaQueueCoordinator = koinInject()
     val historyDao: HistoryDao = koinInject()
     val bookmarkDao: BookmarkDao = koinInject()
     val addonRepository: AddonRepository = koinInject()
@@ -201,6 +202,10 @@ fun AppNavHost(
 
     // State to determine if search focus should be requested
     var shouldFocusSearch by remember { mutableStateOf(false) }
+
+    // Poster dominant color reported by the library detail screen — themes the
+    // NowPlayingBar to match while that screen is up.
+    var libraryDetailAccent by remember { mutableStateOf<androidx.compose.ui.graphics.Color?>(null) }
 
     AnimatedContent(
         targetState = currentScreen,
@@ -843,12 +848,8 @@ fun AppNavHost(
                         viewModel = libraryViewModel,
                         tvName = tvDevice?.name,
                         isTvConnected = connectionState is WebSocketClient.ConnectionState.Connected,
-                        onOpenRemote = if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                            {
-                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                onScreenChange(Screen.Remote)
-                            }
-                        } else null,
+                        isDlnaActive = activeDlnaTarget != null,
+                        onDominantColorChange = { libraryDetailAccent = it },
                         selectedTvDevice = tvDevice,
                         onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
                         onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
@@ -857,7 +858,23 @@ fun AppNavHost(
                             onCastSheetBrowseOverrideChange(trailerUrl)
                             onShowVideoSheetChange(true)
                         },
-                        onPlayPayloadToTv = { payload ->
+                        onPlayPayloadToTv = onPlayPayload@{ payload ->
+                            // DLNA renderer is the active target — play via the local proxy, no WS.
+                            // (Subtitles/prefs are native-receiver features; skipped on DLNA.)
+                            activeDlnaTarget?.let { dlna ->
+                                connectionViewModel.playOnDlna(
+                                    MediaItem(
+                                        url = payload.url,
+                                        headers = payload.headers,
+                                        title = payload.title,
+                                        startPositionMs = payload.start_position_ms ?: 0L,
+                                        visualMetadata = payload.visual_metadata,
+                                    )
+                                )
+                                Toast.makeText(context, "Casting to ${dlna.name}", Toast.LENGTH_SHORT).show()
+                                if (autoSwitchToRemote) onScreenChange(Screen.Remote)
+                                return@onPlayPayload
+                            }
                             scope.launch {
                                 // Fetch addon subtitles (preferred language) in parallel with the
                                 // connection setup so they can be bundled into the play command without
@@ -899,12 +916,13 @@ fun AppNavHost(
                                     )
                                 )
                                 if (connectionViewModel.webSocketClient.send(cmd)) {
-                                    if (payload.content_type == "series") {
-                                        connectionCoordinator.nowPlayingTvId.value = payload.visual_metadata?.tmdb_id?.toIntOrNull()
-                                        connectionCoordinator.nowPlayingSeason.value = payload.visual_metadata?.season
-                                        connectionCoordinator.nowPlayingEpisodeStart.value = payload.visual_metadata?.episode ?: 1
-                                    }
-                                    connectionCoordinator.tvActiveContext.value = "player"
+                                    // Record identity (movies too; season stays null) and clear the
+                                    // previous session's stale playback snapshots in one step.
+                                    connectionCoordinator.startLocalPlaybackSession(
+                                        tmdbId = payload.visual_metadata?.tmdb_id?.toIntOrNull(),
+                                        season = payload.visual_metadata?.season,
+                                        episodeStart = payload.visual_metadata?.episode,
+                                    )
                                     if (autoSwitchToRemote) {
                                         connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                         onScreenChange(Screen.Remote)
@@ -913,7 +931,20 @@ fun AppNavHost(
                                 }
                             }
                         },
-                        onStartTvEpisodeQueue = { current, plan ->
+                        onStartTvEpisodeQueue = onStartQueue@{ current, plan ->
+                            // DLNA can't hold a queue — the phone drives episode advance:
+                            // DlnaQueueCoordinator loads the start episode and watches the
+                            // renderer's position to resolve & load each next one.
+                            activeDlnaTarget?.let { dlna ->
+                                dlnaQueueCoordinator.start(plan)
+                                Toast.makeText(
+                                    context,
+                                    "Casting to ${dlna.name} — episodes will auto-advance",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                if (autoSwitchToRemote) onScreenChange(Screen.Remote)
+                                return@onStartQueue
+                            }
                             scope.launch {
                                 // Fetch the start episode's subtitles in parallel with connecting.
                                 val startSubsDeferred = async {
@@ -956,10 +987,11 @@ fun AppNavHost(
                                 // Send the current episode as a one-item playlist, then let the
                                 // coordinator resolve & queue_add the rest (it appends after this).
                                 if (connectionViewModel.webSocketClient.send(createSingleVideoCommandJson(currentCmd))) {
-                                    connectionCoordinator.nowPlayingTvId.value = current.visual_metadata?.tmdb_id?.toIntOrNull()
-                                    connectionCoordinator.nowPlayingSeason.value = current.visual_metadata?.season
-                                    connectionCoordinator.nowPlayingEpisodeStart.value = current.visual_metadata?.episode ?: 1
-                                    connectionCoordinator.tvActiveContext.value = "player"
+                                    connectionCoordinator.startLocalPlaybackSession(
+                                        tmdbId = current.visual_metadata?.tmdb_id?.toIntOrNull(),
+                                        season = current.visual_metadata?.season,
+                                        episodeStart = current.visual_metadata?.episode,
+                                    )
 
                                     tvQueueCoordinator.start(
                                         plan.copy(items = plan.items.map { it.copy(template = decorate(it.template)) })
@@ -987,7 +1019,28 @@ fun AppNavHost(
                                 onShowVideoSheetChange(true)
                             }
                         },
-                        onSendStreamToTv = { url, title, headers, contentType ->
+                        onSendStreamToTv = onSendStream@{ url, title, headers, contentType ->
+                            activeDlnaTarget?.let { dlna ->
+                                connectionViewModel.playOnDlna(
+                                    MediaItem(
+                                        url = url,
+                                        headers = headers ?: emptyMap(),
+                                        // contentType here is the play-payload kind ("movie"/"series");
+                                        // only forward real MIME types to the proxy.
+                                        mimeType = contentType?.takeIf { it.contains('/') },
+                                        title = title,
+                                    )
+                                )
+                                Toast.makeText(context, "Casting to ${dlna.name}", Toast.LENGTH_SHORT).show()
+                                if (autoSwitchToRemote) onScreenChange(Screen.Remote)
+                                return@onSendStream
+                            }
+                            // Proxied sends carry no metadata here — clear identity now
+                            // (synchronously: for series the caller immediately re-sets it
+                            // via onNowPlayingStarted) so movies can't inherit a stale one.
+                            connectionCoordinator.nowPlayingTvId.value = null
+                            connectionCoordinator.nowPlayingSeason.value = null
+                            connectionCoordinator.clearPlaybackSnapshots()
                             scope.launch {
                                 // Ensure connected before sending
                                 val device = tvDevice
@@ -1028,7 +1081,30 @@ fun AppNavHost(
                                 }
                             }
                         },
-                        onPlayPlaylistToTv = { playlist ->
+                        onPlayPlaylistToTv = onPlayPlaylist@{ playlist ->
+                            // DLNA: no renderer-side playlist — run the Hub playlist through the
+                            // phone-driven advancer (items already carry resolved/Hub urls).
+                            activeDlnaTarget?.let { dlna ->
+                                if (playlist.items.isEmpty()) return@onPlayPlaylist
+                                dlnaQueueCoordinator.start(
+                                    com.playbridge.sender.connection.TvEpisodeQueuePlan(
+                                        streamType = "series",
+                                        forcedSource = null,
+                                        bingeGroup = null,
+                                        startIndex = playlist.start_index.coerceIn(0, playlist.items.lastIndex),
+                                        items = playlist.items.map {
+                                            com.playbridge.sender.connection.TvQueueEpisode(streamId = "", template = it)
+                                        }
+                                    )
+                                )
+                                Toast.makeText(
+                                    context,
+                                    "Casting to ${dlna.name} — episodes will auto-advance",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                if (autoSwitchToRemote) onScreenChange(Screen.Remote)
+                                return@onPlayPlaylist
+                            }
                             scope.launch {
                                 // Fetch the start episode's subtitles in parallel with connecting.
                                 val startVm = playlist.items.getOrNull(playlist.start_index)?.visual_metadata
@@ -1070,11 +1146,11 @@ fun AppNavHost(
                                 }
                                 val finalPlaylist = playlist.copy(items = itemsWithPrefs)
                                 if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))) {
-                                    connectionCoordinator.nowPlayingTvId.value = screenNumericId
-                                    connectionCoordinator.nowPlayingSeason.value = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.season ?: 1
-                                    connectionCoordinator.nowPlayingEpisodeStart.value = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.episode ?: 1
-
-                                    connectionCoordinator.tvActiveContext.value = "player"
+                                    connectionCoordinator.startLocalPlaybackSession(
+                                        tmdbId = screenNumericId,
+                                        season = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.season ?: 1,
+                                        episodeStart = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.episode,
+                                    )
                                     if (autoSwitchToRemote) {
                                         connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                         onScreenChange(Screen.Remote)
@@ -1154,13 +1230,7 @@ fun AppNavHost(
                     PhoneFilesScreen(
                         viewModel = connectionViewModel,
                         onBack = { onScreenChange(Screen.Dashboard) },
-                        onOpenRemote = if (activeDlnaTarget != null ||
-                            connectionState is WebSocketClient.ConnectionState.Connected
-                        ) {
-                            { onScreenChange(Screen.Remote) }
-                        } else {
-                            null
-                        },
+                        onOpenAllDevices = { onScreenChange(Screen.Connection) },
                     )
                 }
                 Screen.DebridLibrary -> {
@@ -1175,6 +1245,69 @@ fun AppNavHost(
                             onForcedVideosChange(listOf(video))
                             onShowVideoSheetChange(true)
                         }
+                    )
+                }
+            }
+
+            // ── Now-playing mini-bar ─────────────────────────────────────────────
+            // Persistent across the main (non-browser) screens while a cast session is
+            // active; tap → Remote. Hidden on Browser (bottom toolbar), Remote
+            // (redundant), and the other full-bleed screens.
+            val showNowPlayingBar = targetScreen == Screen.Dashboard ||
+                targetScreen == Screen.Library ||
+                targetScreen == Screen.Connection ||
+                targetScreen == Screen.PhoneFiles ||
+                targetScreen == Screen.DebridLibrary ||
+                targetScreen is Screen.LibraryDetail
+            if (showNowPlayingBar) {
+                val dlnaActive = activeDlnaTarget != null
+                val dlnaHasMedia = dlnaActive && (dlnaMediaTitle != null || dlnaStatus != null)
+                val nativePlaying = tvActiveContext == "player" &&
+                    connectionState is WebSocketClient.ConnectionState.Connected
+                if (dlnaHasMedia || nativePlaying) {
+                    NowPlayingBar(
+                        deviceName = activeDlnaTarget?.name ?: tvDevice?.name ?: "TV",
+                        title = if (dlnaActive) dlnaMediaTitle else tvPlayback?.title,
+                        isPlaying = if (dlnaActive) {
+                            dlnaStatus?.state == PlaybackState.PLAYING
+                        } else {
+                            tvPlayback?.state == "playing"
+                        },
+                        isDlna = dlnaActive,
+                        onPlayPause = {
+                            if (dlnaActive) {
+                                if (dlnaStatus?.state == PlaybackState.PLAYING) {
+                                    connectionViewModel.dlnaPause()
+                                } else {
+                                    connectionViewModel.dlnaPlay()
+                                }
+                            } else {
+                                val cmd = if (tvPlayback?.state == "playing") "pause" else "play"
+                                connectionViewModel.webSocketClient.send(
+                                    com.playbridge.shared.protocol.createControlCommandJson(cmd)
+                                )
+                            }
+                        },
+                        onClick = {
+                            if (!dlnaActive) {
+                                connectionViewModel.webSocketClient.send(
+                                    com.playbridge.shared.protocol.createContextQueryJson()
+                                )
+                            }
+                            onScreenChange(Screen.Remote)
+                        },
+                        // Poster-matched accent on the library detail screen (the old FAB's
+                        // dynamic styling); FAB-like primaryContainer elsewhere.
+                        accentColor = if (targetScreen is Screen.LibraryDetail) libraryDetailAccent else null,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            // Clear the system navigation bar, plus the Library's bottom
+                            // NavigationBar (80dp content height) on the Library screen.
+                            .padding(
+                                bottom = WindowInsets.navigationBars.asPaddingValues()
+                                    .calculateBottomPadding() +
+                                    if (targetScreen == Screen.Library) 80.dp else 0.dp
+                            )
                     )
                 }
             }

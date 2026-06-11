@@ -125,6 +125,28 @@ class ConnectionCoordinator(
         }
     }
 
+    /**
+     * Begin a locally-initiated playback session: record the library identity (nulls
+     * for unidentified content like browser videos/phone files), clear the playback
+     * snapshots left over from the previous session — the TV pushes fresh status and
+     * playlist_status within a second, but the progress tracker must never pair the
+     * NEW identity with the OLD position (it would instantly "watch" the new item) —
+     * and flip the context to "player".
+     */
+    fun startLocalPlaybackSession(tmdbId: Int?, season: Int?, episodeStart: Int?) {
+        nowPlayingTvId.value = tmdbId
+        nowPlayingSeason.value = season
+        nowPlayingEpisodeStart.value = episodeStart ?: 1
+        clearPlaybackSnapshots()
+        tvActiveContext.value = "player"
+    }
+
+    /** Drop the last-known status/playlist (stale once new content is being sent). */
+    fun clearPlaybackSnapshots() {
+        tvPlayback.value = null
+        tvPlaylistState.value = null
+    }
+
     private fun clearPlayerStates() {
         tvPlaylistState.value = null
         tvPlayback.value = null

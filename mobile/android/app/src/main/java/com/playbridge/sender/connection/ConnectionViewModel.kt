@@ -11,14 +11,12 @@ import com.playbridge.sender.data.history.DatabaseProvider
 import kotlinx.coroutines.Dispatchers
 import com.playbridge.sender.data.history.CommandHistoryEntity
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackStatus
-import com.playbridge.sender.cast.dlna.AvTransportClient
 import com.playbridge.sender.cast.dlna.DeviceDescription
-import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaDiscovery
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
-import com.playbridge.sender.cast.dlna.DlnaProxyService
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import playbridge.PlayPayload
 import kotlinx.coroutines.flow.*
@@ -37,7 +35,8 @@ class ConnectionViewModel(
     val webSocketClient: WebSocketClient = WebSocketClient(),
     private val connectionStore: ConnectionStore = ConnectionStore(application),
     private val nsdHelper: NsdHelper = NsdHelper(application),
-    private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application)
+    private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
+    private val castSessionManager: CastSessionManager
 ) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"
@@ -83,15 +82,10 @@ class ConnectionViewModel(
     private val _autoConnectEnabled = MutableStateFlow(prefs.getBoolean("auto_connect_tv", true))
     val autoConnectEnabled: StateFlow<Boolean> = _autoConnectEnabled.asStateFlow()
 
-    // --- DLNA cast target (third-party renderer; no WS session) ---
-    private val _activeDlnaTarget = MutableStateFlow<TvDevice?>(null)
-    val activeDlnaTarget: StateFlow<TvDevice?> = _activeDlnaTarget.asStateFlow()
-    private val _dlnaStatus = MutableStateFlow<PlaybackStatus?>(null)
-    val dlnaStatus: StateFlow<PlaybackStatus?> = _dlnaStatus.asStateFlow()
-    private val _dlnaMediaTitle = MutableStateFlow<String?>(null)
-    val dlnaMediaTitle: StateFlow<String?> = _dlnaMediaTitle.asStateFlow()
-    private var dlnaCastTarget: DlnaCastTarget? = null
-    private var dlnaStatusJob: Job? = null
+    // --- DLNA cast target (owned by CastSessionManager so a cast survives this VM) ---
+    val activeDlnaTarget: StateFlow<TvDevice?> = castSessionManager.activeDlnaTarget
+    val dlnaStatus: StateFlow<PlaybackStatus?> = castSessionManager.dlnaStatus
+    val dlnaMediaTitle: StateFlow<String?> = castSessionManager.dlnaMediaTitle
 
     // Foreground scan session. Discovery is time-boxed (SCAN_WINDOW_MS) so the SSDP
     // M-SEARCH loop and mDNS listener don't run forever; the UI binds [isScanning] for
@@ -173,17 +167,12 @@ class ConnectionViewModel(
                             name = matchedDevice.name,
                             wssPort = matchedDevice.wssPort
                         )
-                        // Always keep the saved address fresh for the next (manual) connect.
+                        // Only keep the saved address fresh for the next (manual/on-demand)
+                        // connect — never spontaneously connect from discovery, or opening
+                        // the Cast sheet would auto-connect. (The old mid-retry reconnect is
+                        // gone along with automatic retries.)
                         connectionStore.saveTvDevice(updatedDevice)
                         connectionStore.addToHistory(updatedDevice)
-                        // Only chase the new address by actually reconnecting while a connection
-                        // attempt is in flight (a retry trying the now-stale address). Discovery
-                        // also runs just to populate the device picker from an idle state — we must
-                        // not spontaneously connect then, or opening the Cast sheet would auto-connect.
-                        if (connectionState.value is WebSocketClient.ConnectionState.Retrying) {
-                            Log.d(TAG, "NSD found saved TV at new ${matchedDevice.ip}:${matchedDevice.port} mid-retry — reconnecting.")
-                            webSocketClient.connect(updatedDevice.ip, updatedDevice.port, updatedDevice.token, updatedDevice.name, phoneDeviceName, phoneDeviceUUID, updatedDevice.wssPort, updatedDevice.certFingerprint)
-                        }
                     }
                 }
             }
@@ -258,46 +247,17 @@ class ConnectionViewModel(
     }
 
     /** Select a DLNA renderer as the active cast target (drops any native session). */
-    fun selectDlnaTarget(device: TvDevice) {
-        val controlUrl = device.controlUrl ?: return
-        webSocketClient.disconnect() // a single target is active at a time
-        dlnaStatusJob?.cancel()
-        dlnaCastTarget?.release()
-        val target = DlnaCastTarget(
-            id = device.uuid,
-            name = device.name,
-            avTransport = AvTransportClient(controlUrl, DlnaProxyHolder.httpClient),
-            proxy = DlnaProxyHolder.proxy(getApplication<Application>()),
-        )
-        dlnaCastTarget = target
-        _activeDlnaTarget.value = device
-        DlnaProxyService.start(getApplication<Application>()) // keep the proxy alive on screen-off
-        dlnaStatusJob = viewModelScope.launch { target.status().collect { _dlnaStatus.value = it } }
-        Log.d(TAG, "Active DLNA target: ${device.name} ($controlUrl)")
-    }
+    fun selectDlnaTarget(device: TvDevice) = castSessionManager.selectDlnaTarget(device)
 
-    fun clearDlnaTarget() {
-        dlnaStatusJob?.cancel()
-        dlnaStatusJob = null
-        dlnaCastTarget?.release()
-        dlnaCastTarget = null
-        _dlnaStatus.value = null
-        _dlnaMediaTitle.value = null
-        _activeDlnaTarget.value = null
-        DlnaProxyService.stop(getApplication<Application>())
-    }
+    fun clearDlnaTarget() = castSessionManager.clearDlnaTarget()
 
     /** Cast a media item to the active DLNA target. No-op if none selected. */
-    fun playOnDlna(media: MediaItem) {
-        val target = dlnaCastTarget ?: return
-        _dlnaMediaTitle.value = media.title
-        viewModelScope.launch { target.load(media) }
-    }
+    fun playOnDlna(media: MediaItem) = castSessionManager.playOnDlna(media)
 
-    fun dlnaPlay() { dlnaCastTarget?.let { t -> viewModelScope.launch { t.play() } } }
-    fun dlnaPause() { dlnaCastTarget?.let { t -> viewModelScope.launch { t.pause() } } }
-    fun dlnaStop() { dlnaCastTarget?.let { t -> viewModelScope.launch { t.stop() } } }
-    fun dlnaSeek(positionMs: Long) { dlnaCastTarget?.let { t -> viewModelScope.launch { t.seekTo(positionMs) } } }
+    fun dlnaPlay() = castSessionManager.dlnaPlay()
+    fun dlnaPause() = castSessionManager.dlnaPause()
+    fun dlnaStop() = castSessionManager.dlnaStop()
+    fun dlnaSeek(positionMs: Long) = castSessionManager.dlnaSeek(positionMs)
 
     /**
      * Cast an on-device file (content:// URI) to the active target. Prefers an active
@@ -305,12 +265,10 @@ class ConnectionViewModel(
      * the TV can fetch it). Returns false if no target is available.
      */
     fun castLocalFile(uriString: String, mime: String?, title: String?, durationMs: Long = 0L): Boolean {
-        val dlna = dlnaCastTarget
-        if (dlna != null) {
-            _dlnaMediaTitle.value = title
-            viewModelScope.launch {
-                dlna.load(MediaItem(url = uriString, mimeType = mime, title = title, durationMs = durationMs))
-            }
+        if (castSessionManager.isDlnaActive) {
+            castSessionManager.playOnDlna(
+                MediaItem(url = uriString, mimeType = mime, title = title, durationMs = durationMs)
+            )
             return true
         }
         if (connectionState.value is WebSocketClient.ConnectionState.Connected) {
@@ -321,6 +279,9 @@ class ConnectionViewModel(
                     PlayPayload(url = proxyUrl, title = title ?: "Phone file", content_type = mime),
                 )
                 sendCommandAndRecord(cmd, "play", proxyUrl, title)
+                // The TV only reports context when queried — flip it locally like every
+                // other play path, so the session FGS + NowPlayingBar engage.
+                castSessionManager.notifyNativePlaybackStarted()
             }
             return true
         }
@@ -390,13 +351,15 @@ class ConnectionViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        // WebSocketClient is a process-wide singleton reused by the next Activity/ViewModel, so
-        // only close the socket here — destroy() shuts down its OkHttp executor permanently, which
-        // would make every later reconnect fail with "executor rejected".
-        webSocketClient.disconnect()
         nsdHelper.stopDiscovery()
         dlnaDiscovery.stop()
-        DlnaProxyService.stop(getApplication<Application>())
+        // While a cast session is active, CastSessionManager + CastSessionService own the
+        // socket's lifetime — episode queueing must survive this ViewModel (screen-off /
+        // activity death). Otherwise close the socket as before. Never destroy(): the
+        // WebSocketClient singleton's OkHttp executor must stay usable for reconnects.
+        if (!castSessionManager.hasActiveSession.value) {
+            webSocketClient.disconnect()
+        }
     }
 
     companion object {

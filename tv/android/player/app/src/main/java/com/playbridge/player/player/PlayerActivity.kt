@@ -462,6 +462,15 @@ abstract class PlayerActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Live queue snapshot for engine switches: (items, currentIndex). Overridden by the
+     * engine activities to expose their [PlaybackCoordinator] state — the coordinator is
+     * the only place that has queue_add-appended episodes (PlaylistStore only holds the
+     * playlist as originally launched).
+     */
+    protected open fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
+        emptyList<playbridge.PlayPayload>() to 0
+
     protected fun switchPlayer(newMode: String) {
         val currentPosition = getCurrentPosition()
         val pm = getPlayerProgressManager()
@@ -509,6 +518,20 @@ abstract class PlayerActivity : ComponentActivity() {
         }
         if (pm?.externalSubtitleUrl != null) {
             newIntent.putExtra(ServerService.EXTRA_EXTERNAL_SUBTITLE_URL, pm.externalSubtitleUrl)
+        }
+
+        // Carry the live queue across the switch. The cloned intent's playlist extras are
+        // stale (start index from the original launch) and PlaylistStore misses everything
+        // queue_add appended since — refresh both from the coordinator so the new engine
+        // rebuilds the exact same queue at the exact same episode.
+        val (queueItems, queueIndex) = playlistSnapshot()
+        if (queueItems.isNotEmpty()) {
+            PlaylistStore.currentPlaylist = queueItems
+            newIntent.putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
+            newIntent.putExtra(ServerService.EXTRA_PLAYLIST_INDEX, queueIndex)
+        } else {
+            newIntent.removeExtra(ServerService.EXTRA_IS_PLAYLIST)
+            newIntent.removeExtra(ServerService.EXTRA_PLAYLIST_INDEX)
         }
 
         newIntent.putExtra("extra_start_position", currentPosition)

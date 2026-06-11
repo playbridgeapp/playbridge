@@ -13,11 +13,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,11 +32,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -75,11 +77,12 @@ import kotlinx.coroutines.withContext
 fun PhoneFilesScreen(
     viewModel: ConnectionViewModel,
     onBack: () -> Unit,
-    onOpenRemote: (() -> Unit)? = null,
+    onOpenAllDevices: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    var showDevicePicker by remember { mutableStateOf(false) }
 
     val requiredPerms = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -115,8 +118,11 @@ fun PhoneFilesScreen(
 
     fun cast(media: PhoneMediaItem) {
         val ok = viewModel.castLocalFile(media.uri.toString(), media.mimeType, media.title, media.durationMs)
-        scope.launch {
-            snackbar.showSnackbar(if (ok) "Casting ${media.title}" else "Connect or select a device first")
+        if (ok) {
+            scope.launch { snackbar.showSnackbar("Casting ${media.title}") }
+        } else {
+            // No active target — open the device picker instead of just complaining.
+            showDevicePicker = true
         }
     }
 
@@ -129,16 +135,20 @@ fun PhoneFilesScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = {
+                    // Same cast-target chip as the Library / Cast sheet — shows the active
+                    // device (native or DLNA) and opens the device picker on tap.
+                    DeviceChip(
+                        onOpenAllDevices = onOpenAllDevices,
+                        showThisDevice = false,
+                        castStatusLabel = true,
+                        modifier = Modifier.padding(end = 12.dp),
+                    )
+                },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
-        floatingActionButton = {
-            if (onOpenRemote != null) {
-                FloatingActionButton(onClick = onOpenRemote) {
-                    Icon(Icons.Default.SettingsRemote, contentDescription = "Open remote")
-                }
-            }
-        },
+        // (The remote FAB lived here; replaced by the app-wide NowPlayingBar.)
     ) { pad ->
         Box(modifier = Modifier.padding(pad).fillMaxSize()) {
             when {
@@ -171,13 +181,33 @@ fun PhoneFilesScreen(
                             )
                         }
                     } else {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            // Keep the last row clear of the system navigation bar and the
+                            // overlaid NowPlayingBar.
+                            contentPadding = PaddingValues(
+                                bottom = WindowInsets.navigationBars.asPaddingValues()
+                                    .calculateBottomPadding() + 84.dp
+                            ),
+                        ) {
                             items(shown) { media -> PhoneMediaRow(media) { cast(media) } }
                         }
                     }
                 }
             }
         }
+    }
+
+    // Opened when the user taps a file with no active cast target.
+    if (showDevicePicker) {
+        DeviceConnectionSheet(
+            onDismiss = { showDevicePicker = false },
+            onOpenAllDevices = {
+                showDevicePicker = false
+                onOpenAllDevices()
+            },
+            showThisDevice = false,
+        )
     }
 }
 
