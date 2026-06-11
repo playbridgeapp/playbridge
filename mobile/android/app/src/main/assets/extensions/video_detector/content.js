@@ -6,9 +6,12 @@
 // Listen for messages from background script
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'bridge_feedback') {
-        window.dispatchEvent(new CustomEvent('PlayBridgeFeedback', {
-            detail: message
-        }));
+        // cloneInto exports the object into the page compartment — without it,
+        // Firefox's Xray wrappers hide `detail` from page-world listeners.
+        const detail = typeof cloneInto === 'function'
+            ? cloneInto(message, window)
+            : message;
+        window.dispatchEvent(new CustomEvent('PlayBridgeFeedback', { detail }));
     }
     return false;
 });
