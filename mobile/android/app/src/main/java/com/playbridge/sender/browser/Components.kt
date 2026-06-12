@@ -43,9 +43,63 @@ object Components {
     private const val TAG = "Components"
     private lateinit var appContext: Context
     
-    // Reference to TabManager for resolving Kotlin tab IDs from extension messages
-    var tabManager: TabManager? = null
+    /**
+     * Process-wide TabManager singleton. Owning it here (instead of per-Activity)
+     * means live EngineSessions survive Activity recreation (theme change, split
+     * screen, system-initiated recreation) instead of being closed and rebuilt
+     * from scratch — which previously lost history and produced blank tabs.
+     */
+    val tabManager: TabManager = TabManager()
     var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?) -> Unit)? = null
+
+    /**
+     * Hooks for the engine-level [requestInterceptor] (set by SessionObserverSetup).
+     * Magnet/Stremio links are intercepted for ALL tabs at the engine level —
+     * previously this only worked on the selected tab via a delegate proxy.
+     */
+    @Volatile var onMagnetDetected: ((String) -> Unit)? = null
+    @Volatile var onStremioAddonDetected: ((String) -> Unit)? = null
+
+    /**
+     * Engine-level request interceptor (Fenix-style): serves friendly error
+     * pages on load failures and intercepts magnet:/stremio: scheme links.
+     * Replaces the old per-session NavigationDelegate reflection proxy.
+     */
+    private val requestInterceptor = object : mozilla.components.concept.engine.request.RequestInterceptor {
+        override fun onLoadRequest(
+            engineSession: mozilla.components.concept.engine.EngineSession,
+            uri: String,
+            lastUri: String?,
+            hasUserGesture: Boolean,
+            isSameDomain: Boolean,
+            isRedirect: Boolean,
+            isDirectNavigation: Boolean,
+            isSubframeRequest: Boolean,
+        ): mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse? {
+            if (uri.startsWith("magnet:?")) {
+                Log.d(TAG, "Intercepted magnet link: $uri")
+                Handler(Looper.getMainLooper()).post { onMagnetDetected?.invoke(uri) }
+                return mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse.Deny
+            }
+            if (uri.startsWith("stremio://")) {
+                Log.d(TAG, "Intercepted Stremio addon link: $uri")
+                Handler(Looper.getMainLooper()).post { onStremioAddonDetected?.invoke(uri) }
+                return mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse.Deny
+            }
+            return null
+        }
+
+        override fun onErrorRequest(
+            session: mozilla.components.concept.engine.EngineSession,
+            errorType: mozilla.components.browser.errorpages.ErrorType,
+            uri: String?,
+        ): mozilla.components.concept.engine.request.RequestInterceptor.ErrorResponse {
+            Log.e(TAG, "Load error for $uri: $errorType")
+            return mozilla.components.concept.engine.request.RequestInterceptor.ErrorResponse(
+                ErrorPageUtils.generateErrorPage(uri ?: "unknown", "NETWORK_ERROR", errorType.name)
+            )
+        }
+    }
 
     /**
      * Mirrors the "detect videos" setting. Detection messages from the extension
@@ -64,28 +118,86 @@ object Components {
     
     // GeckoRuntime - the core Gecko engine
     val runtime: GeckoRuntime by lazy {
+        // BuildConfig generation is disabled by default on AGP 8+; the
+        // debuggable flag is the dependency-free equivalent of BuildConfig.DEBUG.
+        val isDebugBuild = (appContext.applicationInfo.flags and
+                android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val settings = GeckoRuntimeSettings.Builder()
             .aboutConfigEnabled(true)
             .webManifest(true)
             .javaScriptEnabled(true)
-            .remoteDebuggingEnabled(true)
-            .consoleOutput(true)
+            // Remote debugging only in debug builds — it was previously
+            // always-on, exposing a debugging surface in release builds.
+            .remoteDebuggingEnabled(isDebugBuild)
+            .consoleOutput(isDebugBuild)
+            // Run extensions in their own process (Fenix does the same) so a
+            // video-detector crash can't take web content down with it.
+            .extensionsProcessEnabled(true)
+            .extensionsWebAPIEnabled(true)
             .build()
         val r = GeckoRuntime.create(appContext, settings)
+        // If the runtime dies (Gecko crash/exit), every session is dead and all
+        // tabs would render as permanent white pages — GeckoView does NOTHING
+        // by default when no delegate is set. Exit the process instead: the
+        // next launch starts a fresh runtime and restores tabs from the DB.
+        r.delegate = GeckoRuntime.Delegate {
+            Log.e(TAG, "GeckoRuntime shut down — exiting process for a clean restart")
+            kotlin.system.exitProcess(0)
+        }
         r.warmUp()
         r
     }
     
     // GeckoEngine wrapper for Mozilla Components
     val engine: GeckoEngine by lazy {
-        GeckoEngine(appContext, runtime = runtime)
+        val isDarkMode = (appContext.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val defaultSettings = mozilla.components.concept.engine.DefaultSettings(
+            // Tracking protection is OFF by default (pre-2026-06 behavior).
+            // recommended() would also enable cookie isolation (dFPI) + purging,
+            // which risks breaking embedded players on streaming sites — the
+            // core PlayBridge use case. If TP is wanted, expose it as a user
+            // setting with per-site exceptions rather than flipping the default.
+            trackingProtectionPolicy = mozilla.components.concept.engine.EngineSession
+                .TrackingProtectionPolicy.none(),
+            // Paint the surface with a theme-appropriate color before first paint
+            // instead of flashing white (a major contributor to perceived
+            // "white blank page" moments, especially in dark mode).
+            clearColor = if (isDarkMode) 0xFF1C1B1F.toInt() else 0xFFFFFFFF.toInt(),
+            // Let websites see the system color scheme (dark mode sites).
+            preferredColorScheme = mozilla.components.concept.engine.mediaquery.PreferredColorScheme.System,
+            // Background tab playback is a core PlayBridge feature.
+            suspendMediaWhenInactive = false,
+            // Error pages + magnet:/stremio: scheme handling for all tabs.
+            requestInterceptor = requestInterceptor,
+        )
+        GeckoEngine(appContext, defaultSettings = defaultSettings, runtime = runtime)
     }
     
     // Central state store for tabs, sessions, etc.
+    // EngineMiddleware OWNS engine session lifecycle (Fenix-style): it creates
+    // sessions on CreateEngineSessionAction (restoring state automatically),
+    // suspends them on SuspendEngineSessionAction, closes them when tabs are
+    // removed, syncs URL/title/back-forward/session-state into the store via
+    // EngineObserver, and marks tabs crashed on content-process death.
+    // trimMemoryAutomatically=false matches Fenix: rely on GeckoView/OS for
+    // memory pressure instead of suspending sessions behind the user's back.
     val store: BrowserStore by lazy {
-        BrowserStore()
+        BrowserStore(
+            middleware = mozilla.components.browser.state.engine.EngineMiddleware.create(
+                engine = engine,
+                trimMemoryAutomatically = false,
+            )
+        )
     }
     
+    // Session use cases (goBack/goForward/loadUrl/reload via the store; used by
+    // SessionFeature rendering and anywhere a tab might not have a live session).
+    val sessionUseCases by lazy {
+        mozilla.components.feature.session.SessionUseCases(store)
+    }
+
     // HTTP client for addon downloads
     val client: Client by lazy {
         OkHttpClient()
@@ -135,6 +247,10 @@ object Components {
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
+
+        // Start mirroring store state (engine sessions, nav state) into
+        // TabManager and ensuring the selected tab has a live session.
+        tabManager.start(store)
 
         // Configure Coil with explicit memory + disk cache so poster images survive
         // screen rotations (memory) and app restarts (disk) without re-downloading.
@@ -272,9 +388,6 @@ object Components {
                     // Set up message delegate on the extension instance to receive messages
                     extension.setMessageDelegate(globalMessageDelegate, "browser")
                     Log.i(TAG, "Message delegate registered on Extension instance: ${extension.id}")
-
-                    // Connect to extension port for bidirectional messaging
-                    connectToExtension(extension)
                 } else {
                     Log.e(TAG, "ensureBuiltIn returned null extension")
                 }
@@ -294,45 +407,12 @@ object Components {
         }
     }
     
-    // Store extension and port for later use
+    // Store extension reference for later use
     private var videoDetectorExtension: GeckoWebExtension? = null
 
-    /**
-     * Connect to extension for bidirectional messaging
-     */
-    private fun connectToExtension(extension: GeckoWebExtension) {
-        Log.i(TAG, "Connecting to extension port...")
-        
-        startVideoPolling()
-    }
-    
-    private var pollingHandler: Handler? = null
-    private val pollingRunnable = object : Runnable {
-        override fun run() {
-            requestVideosFromExtension()
-            pollingHandler?.postDelayed(this, 2000) // Poll every 2 seconds
-        }
-    }
-    
-    /**
-     * Start polling for videos from extension storage
-     */
-    private fun startVideoPolling() {
-        Log.i(TAG, "Starting video polling...")
-        pollingHandler = Handler(Looper.getMainLooper())
-        pollingHandler?.postDelayed(pollingRunnable, 1000)
-    }
-    
-    /**
-     * Request videos from extension - currently not possible to directly call
-     * extension from native side, so we rely on extension pushing updates
-     */
-    private fun requestVideosFromExtension() {
-        // GeckoView doesn't support native -> extension messaging directly
-        // The extension must push updates via the port connection
-        Log.d(TAG, "Polling for video updates...")
-    }
-    
+    // NOTE: the old 2-second "video polling" Handler was removed — it was a
+    // no-op (native→extension messaging isn't possible; the extension pushes
+    // detections itself) that ran forever, including in the background.
 
     /**
      * Process incoming message from extension.
@@ -361,9 +441,9 @@ object Components {
                     Handler(Looper.getMainLooper()).post {
                         // Find the session for the tab and load error page
                         val sessionToLoad = if (tabId != null) {
-                            tabManager?.sessions?.get(resolveKotlinTabId(jsonObject))
+                            tabManager.sessions[resolveKotlinTabId(jsonObject)]
                         } else {
-                            tabManager?.sessions?.get(store.state.selectedTabId)
+                            store.state.selectedTabId?.let { tabManager.sessions[it] }
                         }
 
                         sessionToLoad?.loadUrl(ErrorPageUtils.generateErrorPage(url, statusCode))
@@ -426,21 +506,32 @@ object Components {
             val originUrl = message["originUrl"]?.jsonPrimitive?.content
             if (!originUrl.isNullOrEmpty()) {
                 val state = store.state
-                // Try exact match first
-                val matchedTab = state.tabs.find { tab ->
-                    tab.content.url == originUrl ||
-                    tab.content.url.substringBefore("#") == originUrl.substringBefore("#")
+                // Since EngineMiddleware, ALL tabs have live URLs in the store —
+                // multiple tabs can share a URL/domain. Prefer the selected tab
+                // when it matches, so detections aren't misfiled to a background
+                // tab and the cast sheet (keyed by selected tab) misses them.
+                val selectedTab = state.selectedTabId?.let { id -> state.tabs.find { it.id == id } }
+                fun urlMatches(tabUrl: String) =
+                    tabUrl == originUrl || tabUrl.substringBefore("#") == originUrl.substringBefore("#")
+
+                if (selectedTab != null && urlMatches(selectedTab.content.url)) {
+                    return selectedTab.id
                 }
+                val matchedTab = state.tabs.find { urlMatches(it.content.url) }
                 if (matchedTab != null) {
                     return matchedTab.id
                 }
-                
-                // Try domain match as fallback
+
+                // Try domain match as fallback — selected tab first
                 val originDomain = try { java.net.URI(originUrl).host } catch (e: Exception) { null }
                 if (originDomain != null) {
-                    val domainMatch = state.tabs.find { tab ->
-                        try { java.net.URI(tab.content.url).host == originDomain } catch (e: Exception) { false }
+                    fun domainMatches(tabUrl: String) =
+                        try { java.net.URI(tabUrl).host == originDomain } catch (e: Exception) { false }
+
+                    if (selectedTab != null && domainMatches(selectedTab.content.url)) {
+                        return selectedTab.id
                     }
+                    val domainMatch = state.tabs.find { domainMatches(it.content.url) }
                     if (domainMatch != null) {
                         return domainMatch.id
                     }

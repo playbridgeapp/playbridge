@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -87,7 +88,9 @@ fun CastSheet(
     subtitleService: StremioSubtitleService = StremioSubtitleService(),
     contentPayload: playbridge.PlayPayload? = null,
     onContentClick: (playbridge.PlayPayload) -> Unit = {},
-    onQueueContent: (playbridge.PlayPayload) -> Unit = {}
+    onQueueContent: (playbridge.PlayPayload) -> Unit = {},
+    detectionEnabled: Boolean = true,
+    onEnableDetection: (() -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -614,7 +617,8 @@ fun CastSheet(
 
             if (selectedTab == 0) {
                 if (playableVideos.isEmpty() && contentPayload == null) {
-                    // Empty state
+                    // Empty state — explain WHY it's empty when detection is off,
+                    // instead of a silently empty sheet.
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -622,23 +626,37 @@ fun CastSheet(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
-                            Icons.Default.PlayArrow,
+                            if (detectionEnabled) Icons.Default.PlayArrow else Icons.Default.VideocamOff,
                             contentDescription = null,
                             modifier = Modifier.size(64.dp),
                             tint = MaterialTheme.colorScheme.outline
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            "No videos detected yet",
+                            if (detectionEnabled) "No videos detected yet" else "Video detection is disabled",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Browse a page with video content",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.outline
-                        )
+                        if (detectionEnabled) {
+                            Text(
+                                "Browse a page with video content",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        } else {
+                            Text(
+                                "Videos on pages won't be found while it's off",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            if (onEnableDetection != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                TextButton(onClick = onEnableDetection) {
+                                    Text("Enable video detection")
+                                }
+                            }
+                        }
                     }
                 } else {
                     // Video list
