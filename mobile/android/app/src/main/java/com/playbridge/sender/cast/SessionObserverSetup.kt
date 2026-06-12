@@ -4,44 +4,59 @@ import com.playbridge.sender.browser.*
 import com.playbridge.sender.downloads.PendingDownload
 import com.playbridge.sender.downloads.PendingPopup
 import android.app.AlertDialog
-import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.util.Log
 import android.widget.EditText
-import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import mozilla.components.browser.engine.gecko.GeckoEngineSession
-import mozilla.components.browser.state.action.ContentAction
+import mozilla.components.browser.state.action.EngineAction
 import mozilla.components.browser.state.state.TabSessionState
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.EngineSession
+import mozilla.components.concept.engine.HitResult
+import mozilla.components.concept.engine.mediasession.MediaSession
+import mozilla.components.concept.engine.permission.Permission
+import mozilla.components.concept.engine.permission.PermissionRequest
+import mozilla.components.concept.engine.prompt.Choice
+import mozilla.components.concept.engine.prompt.PromptRequest
+import mozilla.components.concept.engine.window.WindowRequest
 import mozilla.components.concept.fetch.Response
-import org.mozilla.geckoview.GeckoResult
-import org.mozilla.geckoview.GeckoSession
-import org.mozilla.geckoview.MediaSession
 import com.playbridge.sender.data.history.HistoryDao
 import com.playbridge.sender.data.history.HistoryEntity
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.LaunchedEffect
 import org.koin.compose.koinInject
+import java.security.cert.X509Certificate
 
 /**
- * Sets up the [EngineSession.Observer] and GeckoSession delegate proxies
- * (NavigationDelegate, ContentDelegate) for the active browser session.
+ * Registers a single [EngineSession.Observer] on the active browser session.
  *
- * This composable encapsulates ~300 lines that were previously inline inside
- * `BrowserActivity.onCreate`.
+ * Everything here uses public Android Components observer APIs. The previous
+ * implementation replaced GeckoSession delegates via `java.lang.reflect.Proxy`
+ * and field reflection — fragile across AC/GeckoView upgrades and R8. The
+ * mapping is:
+ *
+ * - NavigationDelegate.onNewSession  → [EngineSession.Observer.onWindowRequest]
+ * - NavigationDelegate.onLoadError   → engine-level RequestInterceptor ([Components])
+ * - NavigationDelegate.onLoadRequest (magnet/stremio) → RequestInterceptor
+ * - ContentDelegate.onContextMenu    → [EngineSession.Observer.onLongPress]
+ * - ContentDelegate.onFullScreen     → onFullScreenChange / onMediaFullscreenChanged
+ *   (the portrait check now uses media element dimensions instead of the old
+ *   `javascript:` location-hash injection hack)
+ * - PermissionDelegate (autoplay/DRM) → onContentPermissionRequest
+ * - ProgressDelegate (loading/security) → onLoadingStateChange / onSecurityChange
+ * - PromptDelegate (alert/confirm/prompt/<select>) → onPromptRequest
+ * - MediaSession.Delegate → MediaSessionObserver (registered per tab by TabManager)
  */
 @Composable
 fun SessionObserverSetup(
@@ -76,6 +91,20 @@ fun SessionObserverSetup(
     val whitelistState = rememberUpdatedState(whitelist)
     val blacklistState = rememberUpdatedState(blacklist)
     val selectedTabState = rememberUpdatedState(selectedTab)
+    val fullScreenCb = rememberUpdatedState(onFullScreenChange)
+
+    // Magnet/Stremio links are intercepted at the engine level (RequestInterceptor
+    // in Components) so they work in every tab; wire its callbacks here.
+    val magnetHandler = rememberUpdatedState(onMagnetDetected)
+    val stremioHandler = rememberUpdatedState(onStremioAddonDetected)
+    DisposableEffect(Unit) {
+        Components.onMagnetDetected = { uri -> magnetHandler.value(uri) }
+        Components.onStremioAddonDetected = { uri -> stremioHandler.value(uri) }
+        onDispose {
+            Components.onMagnetDetected = null
+            Components.onStremioAddonDetected = null
+        }
+    }
 
     // Apply desktop user agent when the session changes (tab switch) — no reload,
     // since the page isn't loaded in desktop mode yet anyway.
@@ -88,24 +117,16 @@ fun SessionObserverSetup(
         session.toggleDesktopMode(isDesktopMode, reload = shouldReload)
         Log.d(TAG, "${if (isDesktopMode) "Enabled" else "Disabled"} Desktop Mode (reload=$shouldReload)")
     }
+
     DisposableEffect(session, selectedTab?.id) {
         val observer = object : EngineSession.Observer {
-            override fun onLocationChange(url: String, hasUserGesture: Boolean) {
-                if (url.contains("#playbridge-fullscreen-portrait=")) {
-                    val isPortrait = url.substringAfter("#playbridge-fullscreen-portrait=").toBoolean()
-                    onFullScreenChange(true, isPortrait)
-                    return
-                }
 
-                // Update store state to keep it in sync
-                if (selectedTab != null) {
-                    store.dispatch(
-                        ContentAction.UpdateUrlAction(
-                            sessionId = selectedTab.id,
-                            url = url
-                        )
-                    )
-                }
+            /** Portrait-ness of the last fullscreened media element. */
+            private var lastMediaIsPortrait = false
+
+            override fun onLocationChange(url: String, hasUserGesture: Boolean) {
+                // NOTE: the store's URL is updated by EngineMiddleware's
+                // EngineObserver (for every tab, not just the selected one).
 
                 // Get base URL without hash/fragment
                 val baseUrl = url.substringBefore("#")
@@ -114,7 +135,7 @@ fun SessionObserverSetup(
                 // Record history
                 if (baseUrl != previousBaseUrl && !url.startsWith("about:")) {
                     scope.launch(Dispatchers.IO) {
-                        val title = selectedTab?.content?.title
+                        val title = selectedTabState.value?.content?.title
                         historyDao.insert(
                             HistoryEntity(
                                 url = url,
@@ -127,32 +148,23 @@ fun SessionObserverSetup(
 
                 currentUrl.value = url
                 previousUrl.value = url
-
-                // NOTE: detected videos are no longer cleared here. Reset happens
-                // in two places that both cover reloads (same-URL loads):
-                //  - ProgressDelegate.onPageStart below (precise, local)
-                //  - the extension's webNavigation.onCommitted handler, which also
-                //    clears the extension's own per-tab seen-URL state so videos
-                //    are re-reported on the fresh page (Components.processMessage
-                //    "navigation").
-                // Video detections themselves arrive via native messaging
-                // (Components.processMessage), not the old URL-hash signal.
             }
 
             override fun onLoadingStateChange(loading: Boolean) {
                 isLoading.value = loading
+                if (loading) {
+                    // Reset detected videos on every top-level page load start —
+                    // including reloads of the same URL. Does not fire for
+                    // same-document (hash/pushState) navigations, so SPA route
+                    // changes keep their detected videos. (Was ProgressDelegate
+                    // onPageStart.)
+                    selectedTabState.value?.id?.let { VideoDetector.clearTab(it) }
+                }
             }
 
             override fun onTitleChange(title: String) {
                 Log.d(TAG, "Title changed: $title")
-                if (selectedTab != null) {
-                    store.dispatch(
-                        ContentAction.UpdateTitleAction(
-                            sessionId = selectedTab.id,
-                            title = title
-                        )
-                    )
-                }
+                // Store title is updated by EngineMiddleware's EngineObserver.
 
                 // Update the history database item with the loaded page title
                 val url = currentUrl.value
@@ -169,7 +181,140 @@ fun SessionObserverSetup(
                 }
             }
 
-            // Intercept downloads - this catches XPI files from AMO
+            override fun onSecurityChange(
+                secure: Boolean,
+                host: String?,
+                issuer: String?,
+                certificate: X509Certificate?
+            ) {
+                isSecureConnection.value = secure
+                val certIssuer = certificate?.issuerX500Principal?.name?.let { parseCN(it) } ?: issuer
+                val certValidUntil = certificate?.notAfter?.let {
+                    java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(it)
+                }
+                siteSecurityInfo.value = SiteSecurityInfo(
+                    isSecure = secure,
+                    host = host ?: "",
+                    certIssuer = certIssuer,
+                    certValidUntil = certValidUntil
+                )
+                Log.d(TAG, "Security changed: isSecure=$secure, host=$host, issuer=$certIssuer")
+            }
+
+            // ── Fullscreen ────────────────────────────────────────────
+
+            override fun onMediaFullscreenChanged(
+                fullscreen: Boolean,
+                elementMetadata: MediaSession.ElementMetadata?
+            ) {
+                val isPortrait = elementMetadata != null &&
+                    elementMetadata.width > 0L && elementMetadata.height > 0L &&
+                    elementMetadata.height > elementMetadata.width
+                lastMediaIsPortrait = isPortrait
+                scope.launch(Dispatchers.Main) {
+                    fullScreenCb.value(fullscreen, fullscreen && isPortrait)
+                }
+            }
+
+            override fun onFullScreenChange(enabled: Boolean) {
+                // DOM element fullscreen (non-media or media without a media
+                // session). Use the last known media orientation as the hint.
+                scope.launch(Dispatchers.Main) {
+                    fullScreenCb.value(enabled, enabled && lastMediaIsPortrait)
+                }
+            }
+
+            // ── Long-press context menu ───────────────────────────────
+
+            override fun onLongPress(hitResult: HitResult) {
+                val link = when (hitResult) {
+                    is HitResult.UNKNOWN -> hitResult.src
+                    is HitResult.IMAGE_SRC -> hitResult.uri
+                    is HitResult.IMAGE -> hitResult.src
+                    is HitResult.VIDEO -> hitResult.src
+                    is HitResult.AUDIO -> hitResult.src
+                    else -> null
+                }
+                if (!link.isNullOrEmpty() && (link.startsWith("http://") || link.startsWith("https://"))) {
+                    scope.launch(Dispatchers.Main) { contextMenuUrl.value = link }
+                }
+            }
+
+            // ── Permissions (autoplay + DRM auto-grant) ───────────────
+
+            override fun onContentPermissionRequest(permissionRequest: PermissionRequest) {
+                val granted = permissionRequest.grantIf { perm ->
+                    perm is Permission.ContentAutoPlayAudible ||
+                        perm is Permission.ContentAutoPlayInaudible ||
+                        perm is Permission.ContentMediaKeySystemAccess
+                }
+                if (granted) {
+                    Log.d(TAG, "Granted media permission(s): ${permissionRequest.permissions}")
+                } else {
+                    permissionRequest.reject()
+                }
+            }
+
+            // ── Popups (window.open / target=_blank) ──────────────────
+
+            override fun onWindowRequest(windowRequest: WindowRequest) {
+                if (windowRequest.type == WindowRequest.Type.CLOSE) {
+                    // window.close(): close the tab hosting this session.
+                    val closing = windowRequest.prepare()
+                    val tabId = tabManager.sessions.entries.find { it.value === closing }?.key
+                    if (tabId != null) {
+                        scope.launch(Dispatchers.Main) { tabManager.closeTab(tabId, store) }
+                    }
+                    return
+                }
+
+                val uri = windowRequest.url
+                val popupSession = windowRequest.prepare()
+                val openerUrl = currentUrl.value
+                val openerHost = try {
+                    java.net.URI(openerUrl).host ?: openerUrl
+                } catch (e: Exception) { openerUrl }
+
+                val isWhitelisted = isHostMatch(openerHost, whitelistState.value)
+                val isBlacklisted = isHostMatch(openerHost, blacklistState.value)
+                val shouldBlock = when {
+                    isWhitelisted -> false
+                    isBlacklisted -> true
+                    else -> blockPopupsState.value
+                }
+
+                scope.launch(Dispatchers.Main) {
+                    if (shouldBlock) {
+                        if (isBlacklisted) {
+                            Log.d(TAG, "Popup silently blocked (blacklist) from $openerHost: $uri")
+                            try { popupSession.close() } catch (_: Exception) {}
+                        } else {
+                            Log.d(TAG, "Popup blocked from $openerHost: $uri")
+                            pendingPopup.value = PendingPopup(
+                                openerHost = openerHost,
+                                popupUrl = uri,
+                                engineSession = popupSession,
+                            )
+                        }
+                    } else {
+                        Log.d(TAG, "Auto-opening new tab for popup: $uri")
+                        val tabId = tabManager.createTab(
+                            url = uri,
+                            store = store,
+                            parentId = selectedTabState.value?.id,
+                            select = true
+                        )
+                        // EngineMiddleware registers its EngineObserver on link —
+                        // URL/title/nav/state sync and crash handling for free.
+                        store.dispatch(
+                            EngineAction.LinkEngineSessionAction(tabId, popupSession, skipLoading = true)
+                        )
+                    }
+                }
+            }
+
+            // ── Downloads (XPI install / torrent / general) ───────────
+
             override fun onExternalResource(
                 url: String,
                 fileName: String?,
@@ -184,7 +329,6 @@ fun SessionObserverSetup(
             ) {
                 Log.d(TAG, "Download intercepted: $url, type: $contentType, file: $fileName")
 
-                // Check if this is an XPI file (Firefox extension)
                 if (url.endsWith(".xpi") || contentType == "application/x-xpinstall") {
                     Log.d(TAG, "XPI detected, installing addon from: $url")
                     onXpiDetected(url)
@@ -202,7 +346,6 @@ fun SessionObserverSetup(
                         }
                     }
                 } else {
-                    // General download interception
                     scope.launch(Dispatchers.Main) {
                         if (pendingDownload.value?.url != url) {
                             pendingDownload.value = PendingDownload(
@@ -218,539 +361,132 @@ fun SessionObserverSetup(
                 }
             }
 
-            override fun onStateUpdated(state: mozilla.components.concept.engine.EngineSessionState) {
-                if (selectedTab != null) {
-                    tabManager.engineStates[selectedTab.id] = state
+            // ── Prompts (alert / confirm / prompt / <select>) ─────────
+
+            override fun onPromptRequest(promptRequest: PromptRequest) {
+                Handler(Looper.getMainLooper()).post {
+                    showPrompt(promptRequest)
                 }
             }
-        }
-        session.register(observer)
 
-        // Set up GeckoSession delegates using reflection
-        val geckoEngineSession = session as? GeckoEngineSession
+            private fun showPrompt(promptRequest: PromptRequest) {
+                when (promptRequest) {
+                    is PromptRequest.SingleChoice ->
+                        showSingleChoice(promptRequest.choices, promptRequest.onConfirm, promptRequest.onDismiss)
 
-        var originalNavDelegate: GeckoSession.NavigationDelegate? = null
-        var originalContentDelegate: GeckoSession.ContentDelegate? = null
-        var originalPermissionDelegate: GeckoSession.PermissionDelegate? = null
-        var originalPromptDelegate: GeckoSession.PromptDelegate? = null
-        var originalProgressDelegate: GeckoSession.ProgressDelegate? = null
-        var originalMediaDelegate: MediaSession.Delegate? = null
-        var geckoSessionInstance: GeckoSession? = null
+                    is PromptRequest.MenuChoice ->
+                        showSingleChoice(promptRequest.choices, promptRequest.onConfirm, promptRequest.onDismiss)
 
-        if (geckoEngineSession != null) {
-            try {
-                val field = GeckoEngineSession::class.java.getDeclaredField("geckoSession")
-                field.isAccessible = true
-                val internalSession = field.get(geckoEngineSession) as? GeckoSession
-                geckoSessionInstance = internalSession
-
-                internalSession?.let { gs ->
-                    // NavigationDelegate proxy for onNewSession (open in new tab)
-                    val existingNav = gs.navigationDelegate
-                    originalNavDelegate = existingNav
-
-                    originalMediaDelegate = gs.mediaSessionDelegate
-                    selectedTab?.id?.let { tid ->
-                        gs.mediaSessionDelegate = MediaSessionDelegate(context, tid, tabManager)
-                    }
-
-                    val navProxy = java.lang.reflect.Proxy.newProxyInstance(
-                        GeckoSession.NavigationDelegate::class.java.classLoader,
-                        arrayOf(GeckoSession.NavigationDelegate::class.java)
-                    ) { _, method, args ->
-                        if (method.name == "onNewSession" && args != null && args.size >= 2) {
-                            val uri = args[1] as? String
-                            if (uri != null) {
-                                val openerUrl = currentUrl.value
-                                val openerHost = try {
-                                    java.net.URI(openerUrl).host ?: openerUrl
-                                } catch (e: Exception) { openerUrl }
-
-                                val isWhitelisted = isHostMatch(openerHost, whitelistState.value)
-                                val isBlacklisted = isHostMatch(openerHost, blacklistState.value)
-
-                                val shouldBlock = when {
-                                    isWhitelisted -> false
-                                    isBlacklisted -> true
-                                    else -> blockPopupsState.value
-                                }
-
-                                if (shouldBlock) {
-                                    Log.d(TAG, "Popup blocked from $openerHost: $uri")
-                                    val rawGeckoSession = GeckoSession()
-                                    val newEngineSession = GeckoEngineSession(
-                                        runtime = Components.runtime,
-                                        geckoSessionProvider = { rawGeckoSession },
-                                        openGeckoSession = false
-                                    )
-                                    if (!isBlacklisted) {
-                                        scope.launch(Dispatchers.Main) {
-                                            pendingPopup.value = PendingPopup(
-                                                openerHost = openerHost,
-                                                popupUrl = uri,
-                                                rawGeckoSession = rawGeckoSession,
-                                                engineSession = newEngineSession,
-                                            )
-                                        }
-                                    }
-                                    return@newProxyInstance GeckoResult.fromValue(rawGeckoSession)
-                                }
-
-                                Log.d(TAG, "Auto-opening new tab for popup: $uri")
-                                val rawGeckoSession = GeckoSession()
-                                val newEngineSession = GeckoEngineSession(
-                                    runtime = Components.runtime,
-                                    geckoSessionProvider = { rawGeckoSession },
-                                    openGeckoSession = false
+                    is PromptRequest.MultipleChoice -> {
+                        val flat = flattenChoices(promptRequest.choices)
+                        val labels = flat.map { it.label }.toTypedArray()
+                        val checked = flat.map { it.selected }.toBooleanArray()
+                        AlertDialog.Builder(context)
+                            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                                checked[which] = isChecked
+                            }
+                            .setPositiveButton(android.R.string.ok) { _, _ ->
+                                promptRequest.onConfirm(
+                                    flat.filterIndexed { i, _ -> checked[i] }.toTypedArray()
                                 )
-                                scope.launch(Dispatchers.Main) {
-                                    val tabId = tabManager.createTab(
-                                        url = uri,
-                                        store = store,
-                                        parentId = selectedTab?.id,
-                                        select = true
-                                    )
-                                    tabManager.sessions[tabId] = newEngineSession
-
-                                    // Register standard observer for popup tab
-                                    newEngineSession.register(object : EngineSession.Observer {
-                                        override fun onStateUpdated(state: mozilla.components.concept.engine.EngineSessionState) {
-                                            tabManager.engineStates[tabId] = state
-                                            tabManager.onAnyStateUpdated?.invoke(tabId)
-                                        }
-                                        override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
-                                            val current = tabManager.navigationStates[tabId] ?: TabNavigationState()
-                                            tabManager.navigationStates[tabId] = current.copy(
-                                                canGoBack = canGoBack ?: current.canGoBack,
-                                                canGoForward = canGoForward ?: current.canGoForward
-                                            )
-                                        }
-                                    })
-                                }
-                                return@newProxyInstance GeckoResult.fromValue(rawGeckoSession)
                             }
-                        }
-
-                        if (method.name == "onLoadError" && args != null && args.size >= 3) {
-                            val uri = args[1] as? String ?: "unknown"
-                            val error = args[2] // WebRequestError
-                            Log.e(TAG, "Load error for $uri: $error")
-
-                            // error is a WebRequestError — it has a code, but the error URI must not be http/https
-                            // we'll return a data URI generated from ErrorPageUtils
-                            return@newProxyInstance GeckoResult.fromValue(
-                                ErrorPageUtils.generateErrorPage(uri, "NETWORK_ERROR", error.toString())
-                            )
-                        }
-                        
-                        if (method.name == "onLoadRequest" && args != null && args.size >= 2) {
-                            val request = args[1]
-                            if (request != null) {
-                                try {
-                                    val uriField = request.javaClass.getField("uri")
-                                    val uri = uriField.get(request) as? String
-                                    if (uri != null && uri.startsWith("magnet:?")) {
-                                        Log.d(TAG, "Intercepted magnet link: $uri")
-                                        scope.launch(Dispatchers.Main) {
-                                            onMagnetDetected(uri)
-                                        }
-                                        return@newProxyInstance GeckoResult.fromValue(org.mozilla.geckoview.AllowOrDeny.DENY)
-                                    }
-                                    if (uri != null && uri.startsWith("stremio://")) {
-                                        Log.d(TAG, "Intercepted Stremio addon link: $uri")
-                                        scope.launch(Dispatchers.Main) {
-                                            onStremioAddonDetected(uri)
-                                        }
-                                        return@newProxyInstance GeckoResult.fromValue(org.mozilla.geckoview.AllowOrDeny.DENY)
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Error inspecting load request", e)
-                                }
-                            }
-                        }
-
-                        // Forward to original delegate for everything else
-                        if (existingNav != null) {
-                            try {
-                                if (args != null) method.invoke(existingNav, *args)
-                                else method.invoke(existingNav)
-                            } catch (e: java.lang.reflect.InvocationTargetException) {
-                                throw e.targetException
-                            }
-                        } else {
-                            null
-                        }
-                    } as GeckoSession.NavigationDelegate
-                    gs.navigationDelegate = navProxy
-
-                    // ContentDelegate proxy for context menus
-                    val existingContent = gs.contentDelegate
-                    originalContentDelegate = existingContent
-
-                    if (existingContent != null) {
-                        val contentProxy = java.lang.reflect.Proxy.newProxyInstance(
-                            GeckoSession.ContentDelegate::class.java.classLoader,
-                            arrayOf(GeckoSession.ContentDelegate::class.java)
-                        ) { _, method, args ->
-                            if (method.name == "onContextMenuItemSelected" && args != null && args.size >= 2) {
-                                val item = args[1]
-                                if (item != null) {
-                                    try {
-                                        val idField = item.javaClass.getField("id")
-                                        val id = idField.getInt(item)
-                                        val idOpenInNewTabField = item.javaClass.getField("ID_OPEN_IN_NEW_TAB")
-                                        val idOpenInNewTab = idOpenInNewTabField.getInt(null)
-                                        if (id == idOpenInNewTab) {
-                                            // Actually open the link in a new tab next to current.
-                                            val url = contextMenuUrl.value
-                                            if (!url.isNullOrEmpty()) {
-                                                scope.launch(Dispatchers.Main) {
-                                                    tabManager.createTab(
-                                                        url = url,
-                                                        store = store,
-                                                        parentId = selectedTab?.id,
-                                                        select = false
-                                                    )
-                                                }
-                                            }
-                                            return@newProxyInstance true
-                                        }
-                                    } catch (_: Exception) {}
-                                }
-                            }
-                            if (method.name == "onContextMenu" && args != null && args.size >= 4) {
-                                val element = args[3]
-                                if (element != null) {
-                                    try {
-                                        val linkUriField = element.javaClass.getField("linkUri")
-                                        val linkUri = linkUriField.get(element) as? String
-                                        if (linkUri != null) {
-                                            contextMenuUrl.value = linkUri
-                                        }
-                                    } catch (_: Exception) {}
-                                }
-                            }
-                            if (method.name == "onFullScreen" && args != null && args.size >= 2) {
-                                val fullScreen = args[1] as? Boolean ?: false
-                                val internalGs = gs
-                                scope.launch(Dispatchers.Main) {
-                                    onFullScreenChange(fullScreen, false)
-                                    if (fullScreen && internalGs != null) {
-                                        try {
-                                            val js = """
-                                                javascript:(function() {
-                                                    var el = document.fullscreenElement || document.body;
-                                                    var video = el.tagName === 'VIDEO' ? el : el.querySelector('video');
-                                                    if (!video) {
-                                                        video = document.querySelector('video');
-                                                    }
-                                                    var isPortrait = false;
-                                                    if (video && video.videoWidth && video.videoHeight) {
-                                                        isPortrait = video.videoWidth < video.videoHeight;
-                                                    }
-                                                    window.location.replace(window.location.href.split('#')[0] + '#playbridge-fullscreen-portrait=' + isPortrait);
-                                                    setTimeout(function() {
-                                                        history.replaceState(null, '', window.location.href.split('#')[0]);
-                                                    }, 100);
-                                                })()
-                                            """.trimIndent()
-                                            internalGs.loadUri(js)
-                                        } catch (e: Exception) {
-                                            Log.e(TAG, "Error executing loadUri for fullscreen check", e)
-                                        }
-                                    }
-                                }
-                            }
-                            try {
-                                if (args != null) method.invoke(existingContent, *args)
-                                else method.invoke(existingContent)
-                            } catch (e: java.lang.reflect.InvocationTargetException) {
-                                throw e.targetException
-                            }
-                        } as GeckoSession.ContentDelegate
-                        gs.contentDelegate = contentProxy
-                    } else {
-                        // No existing content delegate — create a minimal one for fullscreen
-                        val fullscreenDelegate = object : GeckoSession.ContentDelegate {
-                            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
-                                scope.launch(Dispatchers.Main) {
-                                    onFullScreenChange(fullScreen, false)
-                                    if (fullScreen) {
-                                        try {
-                                            val js = """
-                                                javascript:(function() {
-                                                    var el = document.fullscreenElement || document.body;
-                                                    var video = el.tagName === 'VIDEO' ? el : el.querySelector('video');
-                                                    if (!video) {
-                                                        video = document.querySelector('video');
-                                                    }
-                                                    var isPortrait = false;
-                                                    if (video && video.videoWidth && video.videoHeight) {
-                                                        isPortrait = video.videoWidth < video.videoHeight;
-                                                    }
-                                                    window.location.replace(window.location.href.split('#')[0] + '#playbridge-fullscreen-portrait=' + isPortrait);
-                                                    setTimeout(function() {
-                                                        history.replaceState(null, '', window.location.href.split('#')[0]);
-                                                    }, 100);
-                                                })()
-                                            """.trimIndent()
-                                            session.loadUri(js)
-                                        } catch (e: Exception) {
-                                            Log.e(TAG, "Error executing loadUri for fullscreen check", e)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        gs.contentDelegate = fullscreenDelegate
+                            .setNegativeButton(android.R.string.cancel) { _, _ -> promptRequest.onDismiss() }
+                            .setOnCancelListener { promptRequest.onDismiss() }
+                            .show()
                     }
-                    
-                    val existingPermission = gs.permissionDelegate
-                    originalPermissionDelegate = existingPermission
-                    gs.permissionDelegate = java.lang.reflect.Proxy.newProxyInstance(
-                        GeckoSession.PermissionDelegate::class.java.classLoader,
-                        arrayOf(GeckoSession.PermissionDelegate::class.java)
-                    ) { _, method, args ->
-                        if (method.name == "onContentPermissionRequest" && args != null && args.size >= 2) {
-                            val perm = args[1] as? GeckoSession.PermissionDelegate.ContentPermission
-                            if (perm != null) {
-                                when (perm.permission) {
-                                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE,
-                                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE,
-                                    GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> {
-                                        Log.d(TAG, "Granting media permission: ${perm.permission} for ${perm.uri}")
-                                        return@newProxyInstance GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
-                                    }
-                                }
-                            }
+
+                    is PromptRequest.Alert -> {
+                        AlertDialog.Builder(context)
+                            .setTitle(promptRequest.title.takeIf { it.isNotBlank() })
+                            .setMessage(promptRequest.message)
+                            .setPositiveButton(android.R.string.ok) { _, _ -> promptRequest.onConfirm(false) }
+                            .setOnCancelListener { promptRequest.onDismiss() }
+                            .show()
+                    }
+
+                    is PromptRequest.Confirm -> {
+                        AlertDialog.Builder(context)
+                            .setTitle(promptRequest.title.takeIf { it.isNotBlank() })
+                            .setMessage(promptRequest.message)
+                            .setPositiveButton(
+                                promptRequest.positiveButtonTitle.ifBlank { context.getString(android.R.string.ok) }
+                            ) { _, _ -> promptRequest.onConfirmPositiveButton(false) }
+                            .setNegativeButton(
+                                promptRequest.negativeButtonTitle.ifBlank { context.getString(android.R.string.cancel) }
+                            ) { _, _ -> promptRequest.onConfirmNegativeButton(false) }
+                            .setOnCancelListener { promptRequest.onDismiss() }
+                            .show()
+                    }
+
+                    is PromptRequest.TextPrompt -> {
+                        val input = EditText(context).apply {
+                            inputType = InputType.TYPE_CLASS_TEXT
+                            setText(promptRequest.inputValue)
                         }
-
-                        // Forward to original delegate
-                        if (existingPermission != null) {
-                            try {
-                                if (args != null) method.invoke(existingPermission, *args)
-                                else method.invoke(existingPermission)
-                            } catch (e: java.lang.reflect.InvocationTargetException) {
-                                throw e.targetException
+                        AlertDialog.Builder(context)
+                            .setTitle(promptRequest.title.takeIf { it.isNotBlank() })
+                            .setMessage(promptRequest.inputLabel.takeIf { it.isNotBlank() })
+                            .setView(input)
+                            .setPositiveButton(android.R.string.ok) { _, _ ->
+                                promptRequest.onConfirm(false, input.text.toString())
                             }
-                        } else {
-                            if (method.name == "onContentPermissionRequest") {
-                                GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
-                            } else {
-                                null
-                            }
-                        }
-                    } as GeckoSession.PermissionDelegate
+                            .setNegativeButton(android.R.string.cancel) { _, _ -> promptRequest.onDismiss() }
+                            .setOnCancelListener { promptRequest.onDismiss() }
+                            .show()
+                    }
 
-                    // ProgressDelegate for Security/SSL status and preserving engine session state updates
-                    val existingProgress = gs.progressDelegate
-                    originalProgressDelegate = existingProgress
-                    gs.progressDelegate = java.lang.reflect.Proxy.newProxyInstance(
-                        GeckoSession.ProgressDelegate::class.java.classLoader,
-                        arrayOf(GeckoSession.ProgressDelegate::class.java)
-                    ) { _, method, args ->
-                        // Execute our custom logic for specific callbacks
-                        if (args != null) {
-                            when (method.name) {
-                                "onPageStart" -> {
-                                    isLoading.value = true
-                                    // Reset detected videos on every top-level page
-                                    // load start — including reloads of the same URL,
-                                    // which the old baseUrl-diff check missed. The
-                                    // sheet count starts at 0 and repopulates as the
-                                    // page loads. onPageStart does not fire for
-                                    // same-document (hash/pushState) navigations, so
-                                    // SPA route changes keep their detected videos.
-                                    selectedTabState.value?.id?.let { tabId ->
-                                        VideoDetector.clearTab(tabId)
-                                    }
-                                }
-                                "onPageStop" -> {
-                                    isLoading.value = false
-                                }
-                                "onSecurityChange" -> {
-                                    val securityInfo = args[1] as? GeckoSession.ProgressDelegate.SecurityInformation
-                                    if (securityInfo != null) {
-                                        isSecureConnection.value = securityInfo.isSecure
-                                        val cert = securityInfo.certificate
-                                        val certIssuer = cert?.issuerX500Principal?.name?.let { parseCN(it) }
-                                        val certValidUntil = cert?.notAfter?.let {
-                                            java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(it)
-                                        }
-                                        siteSecurityInfo.value = SiteSecurityInfo(
-                                            isSecure = securityInfo.isSecure,
-                                            host = securityInfo.host ?: "",
-                                            certIssuer = certIssuer,
-                                            certValidUntil = certValidUntil
-                                        )
-                                        Log.d(TAG, "Security changed: isSecure=${securityInfo.isSecure}, host=${securityInfo.host}, issuer=$certIssuer")
-                                    }
-                                }
-                            }
-                        }
+                    is PromptRequest.BeforeUnload -> {
+                        AlertDialog.Builder(context)
+                            .setTitle(promptRequest.title.takeIf { it.isNotBlank() } ?: "Leave site?")
+                            .setMessage("Changes you made may not be saved.")
+                            .setPositiveButton("Leave") { _, _ -> promptRequest.onLeave() }
+                            .setNegativeButton("Stay") { _, _ -> promptRequest.onStay() }
+                            .setOnCancelListener { promptRequest.onDismiss() }
+                            .show()
+                    }
 
-                        // Forward call to the original delegate so GeckoEngineSession can track state/navigation updates
-                        if (existingProgress != null) {
-                            try {
-                                if (args != null) method.invoke(existingProgress, *args)
-                                else method.invoke(existingProgress)
-                            } catch (e: java.lang.reflect.InvocationTargetException) {
-                                throw e.targetException
-                            }
-                        } else {
-                            null
-                        }
-                    } as GeckoSession.ProgressDelegate
-
-                    // PromptDelegate — required for HTML <select> dropdowns, alert(), confirm(), prompt().
-                    // Without this, GeckoView silently drops all prompts and dropdowns never open.
-                    originalPromptDelegate = gs.promptDelegate
-                    gs.promptDelegate = object : GeckoSession.PromptDelegate {
-
-                        /**
-                         * Flattens a Choice array, recursing into optgroup sub-items.
-                         * Separator entries (optgroup headers) are skipped — they have no
-                         * selectable value and would produce a wrong confirm() call.
-                         */
-                        private fun flattenChoices(
-                            choices: Array<GeckoSession.PromptDelegate.ChoicePrompt.Choice>
-                        ): List<GeckoSession.PromptDelegate.ChoicePrompt.Choice> {
-                            val flat = mutableListOf<GeckoSession.PromptDelegate.ChoicePrompt.Choice>()
-                            for (c in choices) {
-                                if (!c.separator) flat.add(c)
-                                c.items?.let { flat.addAll(flattenChoices(it)) }
-                            }
-                            return flat
-                        }
-
-                        override fun onChoicePrompt(
-                            session: GeckoSession,
-                            prompt: GeckoSession.PromptDelegate.ChoicePrompt
-                        ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse>? {
-                            val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
-                            val flat = flattenChoices(prompt.choices)
-                            val labels = flat.map { it.label ?: "" }.toTypedArray()
-
-                            Handler(Looper.getMainLooper()).post {
-                                val builder = AlertDialog.Builder(context)
-                                    .setTitle(prompt.title?.takeIf { it.isNotBlank() })
-                                    .setOnCancelListener { result.complete(prompt.dismiss()) }
-
-                                when (prompt.type) {
-                                    GeckoSession.PromptDelegate.ChoicePrompt.Type.SINGLE,
-                                    GeckoSession.PromptDelegate.ChoicePrompt.Type.MENU -> {
-                                        val preSelected = flat.indexOfFirst { it.selected }.coerceAtLeast(0)
-                                        builder.setSingleChoiceItems(labels, preSelected) { dialog, which ->
-                                            result.complete(prompt.confirm(flat[which]))
-                                            dialog.dismiss()
-                                        }
-                                    }
-                                    GeckoSession.PromptDelegate.ChoicePrompt.Type.MULTIPLE -> {
-                                        val checked = flat.map { it.selected }.toBooleanArray()
-                                        builder.setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                                            checked[which] = isChecked
-                                        }
-                                        builder.setPositiveButton(android.R.string.ok) { _, _ ->
-                                            val selected = flat.filterIndexed { i, _ -> checked[i] }.toTypedArray()
-                                            result.complete(prompt.confirm(selected))
-                                        }
-                                        builder.setNegativeButton(android.R.string.cancel) { _, _ ->
-                                            result.complete(prompt.dismiss())
-                                        }
-                                    }
-                                    else -> {
-                                        result.complete(prompt.dismiss())
-                                        return@post
-                                    }
-                                }
-                                builder.show()
-                            }
-                            return result
-                        }
-
-                        override fun onAlertPrompt(
-                            session: GeckoSession,
-                            prompt: GeckoSession.PromptDelegate.AlertPrompt
-                        ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
-                            val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
-                            Handler(Looper.getMainLooper()).post {
-                                AlertDialog.Builder(context)
-                                    .setTitle(prompt.title?.takeIf { it.isNotBlank() })
-                                    .setMessage(prompt.message)
-                                    .setPositiveButton(android.R.string.ok) { _, _ -> result.complete(prompt.dismiss()) }
-                                    .setOnCancelListener { result.complete(prompt.dismiss()) }
-                                    .show()
-                            }
-                            return result
-                        }
-
-                        override fun onButtonPrompt(
-                            session: GeckoSession,
-                            prompt: GeckoSession.PromptDelegate.ButtonPrompt
-                        ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
-                            val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
-                            Handler(Looper.getMainLooper()).post {
-                                AlertDialog.Builder(context)
-                                    .setTitle(prompt.title?.takeIf { it.isNotBlank() })
-                                    .setMessage(prompt.message)
-                                    .setPositiveButton(android.R.string.ok) { _, _ ->
-                                        result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.POSITIVE))
-                                    }
-                                    .setNegativeButton(android.R.string.cancel) { _, _ ->
-                                        result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE))
-                                    }
-                                    .setOnCancelListener {
-                                        result.complete(prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE))
-                                    }
-                                    .show()
-                            }
-                            return result
-                        }
-
-                        override fun onTextPrompt(
-                            session: GeckoSession,
-                            prompt: GeckoSession.PromptDelegate.TextPrompt
-                        ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
-                            val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
-                            Handler(Looper.getMainLooper()).post {
-                                val input = EditText(context).apply {
-                                    inputType = InputType.TYPE_CLASS_TEXT
-                                    setText(prompt.defaultValue ?: "")
-                                }
-                                AlertDialog.Builder(context)
-                                    .setTitle(prompt.title?.takeIf { it.isNotBlank() })
-                                    .setMessage(prompt.message)
-                                    .setView(input)
-                                    .setPositiveButton(android.R.string.ok) { _, _ ->
-                                        result.complete(prompt.confirm(input.text.toString()))
-                                    }
-                                    .setNegativeButton(android.R.string.cancel) { _, _ ->
-                                        result.complete(prompt.dismiss())
-                                    }
-                                    .setOnCancelListener { result.complete(prompt.dismiss()) }
-                                    .show()
-                            }
-                            return result
-                        }
+                    else -> {
+                        // Unhandled prompt types (file pickers, auth, color, date,
+                        // logins, …) — dismiss so the page doesn't hang waiting.
+                        (promptRequest as? PromptRequest.Dismissible)?.onDismiss?.invoke()
                     }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to setup GeckoSession delegates", e)
+            }
+
+            private fun showSingleChoice(
+                choices: Array<Choice>,
+                onConfirm: (Choice) -> Unit,
+                onDismiss: () -> Unit
+            ) {
+                val flat = flattenChoices(choices)
+                val labels = flat.map { it.label }.toTypedArray()
+                val preSelected = flat.indexOfFirst { it.selected }.coerceAtLeast(0)
+                AlertDialog.Builder(context)
+                    .setSingleChoiceItems(labels, preSelected) { dialog, which ->
+                        onConfirm(flat[which])
+                        dialog.dismiss()
+                    }
+                    .setOnCancelListener { onDismiss() }
+                    .show()
+            }
+
+            /**
+             * Flattens a Choice array, recursing into optgroup children.
+             * Separator/group-header entries are skipped — they have no
+             * selectable value.
+             */
+            private fun flattenChoices(choices: Array<Choice>): List<Choice> {
+                val flat = mutableListOf<Choice>()
+                for (c in choices) {
+                    if (!c.isASeparator && !c.isGroupType) flat.add(c)
+                    c.children?.let { flat.addAll(flattenChoices(it)) }
+                }
+                return flat
             }
         }
 
-        onDispose {
-            session.unregister(observer)
-            // Restore original delegates
-            geckoSessionInstance?.let { gs ->
-                if (originalNavDelegate != null) gs.navigationDelegate = originalNavDelegate
-                if (originalContentDelegate != null) gs.contentDelegate = originalContentDelegate
-                if (originalPermissionDelegate != null) gs.permissionDelegate = originalPermissionDelegate
-                if (originalProgressDelegate != null) gs.progressDelegate = originalProgressDelegate
-                gs.promptDelegate = originalPromptDelegate
-                gs.mediaSessionDelegate = originalMediaDelegate
-            }
-        }
+        session.register(observer)
+        onDispose { session.unregister(observer) }
     }
 }
 

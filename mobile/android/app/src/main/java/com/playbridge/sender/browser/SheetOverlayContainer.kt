@@ -141,7 +141,9 @@ fun SheetOverlayContainer(
                 subtitleService = subtitleService,
                 contentPayload = pendingContentPayload,
                 onContentClick = onContentClick,
-                onQueueContent = onQueueContent
+                onQueueContent = onQueueContent,
+                detectionEnabled = detectVideosEnabled,
+                onEnableDetection = if (!detectVideosEnabled) onToggleVideoDetect else null
             )
         }
 

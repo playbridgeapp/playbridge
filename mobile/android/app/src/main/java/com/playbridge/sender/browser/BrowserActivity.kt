@@ -201,7 +201,12 @@ class BrowserActivity : ComponentActivity() {
     private val connectionCoordinator: ConnectionCoordinator by inject()
     private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
-    private val tabManager = TabManager()
+
+    /**
+     * Process-wide singleton — live EngineSessions survive Activity recreation
+     * (theme change, system-initiated recreation). See [Components.tabManager].
+     */
+    private val tabManager: TabManager get() = Components.tabManager
 
     override fun onResume() {
         super.onResume()
@@ -249,9 +254,6 @@ class BrowserActivity : ComponentActivity() {
                 requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
             }
         }
-
-        // Set tabManager reference for resolving Kotlin tab IDs from extension messages
-        Components.tabManager = tabManager
 
         // Install the bundled video detector extension
         Components.installBundledExtension()
@@ -1796,22 +1798,16 @@ class BrowserActivity : ComponentActivity() {
                     fun openPopupTab() {
                         scope.launch(Dispatchers.Main) {
                             val tabId = tabManager.createTab(url = popup.popupUrl, store = store, parentId = selectedTab?.id, select = true)
-                            tabManager.sessions[tabId] = popup.engineSession
-
-                            // Register standard observer for popup tab
-                            popup.engineSession.register(object : EngineSession.Observer {
-                                override fun onStateUpdated(state: mozilla.components.concept.engine.EngineSessionState) {
-                                    tabManager.engineStates[tabId] = state
-                                    tabManager.onAnyStateUpdated?.invoke(tabId)
-                                }
-                                override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
-                                    val current = tabManager.navigationStates[tabId] ?: TabNavigationState()
-                                    tabManager.navigationStates[tabId] = current.copy(
-                                        canGoBack = canGoBack ?: current.canGoBack,
-                                        canGoForward = canGoForward ?: current.canGoForward
-                                    )
-                                }
-                            })
+                            // Link the popup's engine session in the store —
+                            // EngineMiddleware's EngineObserver takes over
+                            // URL/title/nav/state sync and crash handling.
+                            store.dispatch(
+                                mozilla.components.browser.state.action.EngineAction.LinkEngineSessionAction(
+                                    tabId,
+                                    popup.engineSession,
+                                    skipLoading = true
+                                )
+                            )
                         }
                     }
                     Box(modifier = Modifier.fillMaxSize().padding(bottom = innerPadding.calculateBottomPadding()), contentAlignment = androidx.compose.ui.Alignment.BottomCenter) {
@@ -1824,7 +1820,11 @@ class BrowserActivity : ComponentActivity() {
                                  pendingPopup = null
                                  pendingPopupState.value = null
                              },
-                            onDismiss = { popup.rawGeckoSession.close(); pendingPopup = null; pendingPopupState.value = null }
+                            onDismiss = {
+                                try { popup.engineSession.close() } catch (_: Exception) {}
+                                pendingPopup = null
+                                pendingPopupState.value = null
+                            }
                         )
                     }
                 }
@@ -1914,19 +1914,48 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onDestroy() {
         Log.d("PB_STARTUP", "onDestroy: isFinishing=$isFinishing, sessions=${tabManager.sessions.size}")
-        tabManager.sessions.values.forEach { it.close() }
+        // Only tear sessions down when the Activity is actually finishing.
+        // On configuration-change recreation (theme, split screen, etc.) the
+        // singleton TabManager keeps the live sessions and the new Activity
+        // re-renders them — closing them here caused blank tabs + lost history.
+        if (isFinishing) {
+            tabManager.closeAllSessions()
+        }
         super.onDestroy()
     }
 
     @Composable
     fun BrowserView(session: EngineSession, onLongPressLink: (String) -> Unit) {
-        key(session) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { context -> GeckoEngineView(context).apply { render(session) } },
-                update = { view -> view.render(session) }
-            )
-        }
+        // ONE persistent GeckoEngineView for all tabs (Fenix-style):
+        // SessionFeature/EngineViewPresenter observes the store and renders
+        // whatever tab is selected — creating engine sessions on demand,
+        // releasing the view for crashed tabs, and re-rendering on session
+        // changes. No more per-tab view recreation (the old `key(session)`
+        // AndroidView), which caused surface churn on every tab switch.
+        // `session` is unused for rendering but kept for callsite compatibility.
+        val featureHolder = remember { arrayOfNulls<mozilla.components.feature.session.SessionFeature>(1) }
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { context ->
+                GeckoEngineView(context).also { view ->
+                    featureHolder[0] = mozilla.components.feature.session.SessionFeature(
+                        Components.store,
+                        Components.sessionUseCases.goBack,
+                        Components.sessionUseCases.goForward,
+                        view
+                    ).also { it.start() }
+                }
+            },
+            onRelease = {
+                // release() stops the presenter and releases the engine view.
+                try {
+                    featureHolder[0]?.release()
+                } catch (e: Exception) {
+                    Log.e(TAG, "BrowserView: error releasing session feature", e)
+                }
+                featureHolder[0] = null
+            }
+        )
     }
 
     @Composable

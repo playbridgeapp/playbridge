@@ -249,8 +249,8 @@ fun AppNavHost(
                     if (isFullscreen) {
                         BackHandler {
                             onIsFullscreenChange(false)
-                            val gs = tabManager.getGeckoSession(session)
-                            gs?.exitFullScreen()
+                            // Public AC API instead of reflection into GeckoSession.
+                            session?.exitFullScreenMode()
                         }
                     }
                     BackHandler(enabled = !isFullscreen && !isEditing) {
