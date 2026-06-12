@@ -391,7 +391,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.sender
           releaseFiles: output/phone-release-aab/*.aab
-          track: alpha
+          tracks: alpha
           status: completed
 
       - name: Publish TV Player to Play Store (alpha)
@@ -401,7 +401,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.player
           releaseFiles: output/tv-player-release-aab/*.aab
-          track: alpha
+          tracks: alpha
           status: completed
 
       - name: Publish TV Browser to Play Store (alpha)
@@ -411,7 +411,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.browser
           releaseFiles: output/tv-browser-release-aab/*.aab
-          track: alpha
+          tracks: alpha
           status: completed
 
       - name: Clean up R2 after release
