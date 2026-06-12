@@ -133,7 +133,7 @@ jobs:
 
             Install by dragging the `.xpi` file into Firefox, or via `about:addons` → Install Add-on From File.
           files: output/*.xpi
-          generate_release_notes: true
+          generate_release_notes: false
 
       - name: Clean up R2 after release
         if: always()

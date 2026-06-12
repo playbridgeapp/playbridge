@@ -65,7 +65,9 @@ jobs:
       run: |
         $vsPath = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
         $latest = Get-ChildItem "$vsPath\VC\Redist\MSVC" | Where-Object { $_.Name -match '^\d' } | Sort-Object Name -Descending | Select-Object -First 1
-        $x64 = Join-Path $latest.FullName "x64\Microsoft.VC143.CRT"
+        # Don't hard-code the toolset version (VC143/VC144/...) — pick the newest CRT folder present
+        $x64 = Get-ChildItem (Join-Path $latest.FullName "x64") -Filter "Microsoft.VC1*.CRT" | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
+        if (-not $x64) { throw "No MSVC CRT redist folder found under $($latest.FullName)\x64" }
         Copy-Item "$x64\vcruntime140.dll"   "build\windows\x64\runner\Release\"
         Copy-Item "$x64\vcruntime140_1.dll" "build\windows\x64\runner\Release\"
         Copy-Item "$x64\msvcp140.dll"       "build\windows\x64\runner\Release\"
@@ -285,7 +287,7 @@ jobs:
 
           **macOS:** unsigned build — Gatekeeper will warn on first launch. Right-click → Open to bypass, or run `xattr -dr com.apple.quarantine PlayBridge\ Desktop.app`.
         files: output/*
-        generate_release_notes: true
+        generate_release_notes: false
 
     - name: Clean up R2 after release
       if: always()
