@@ -344,7 +344,9 @@ jobs:
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/phone-v${{ steps.versions.outputs.phone }}/mobile/android/CHANGELOG.md)
 
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
-          files: output/phone-release-*/*.apk
+          files: |
+            output/phone-release-*/*.apk
+            output/phone-release-aab/*.aab
           generate_release_notes: false
           draft: false
 
@@ -363,7 +365,9 @@ jobs:
             > 💡 **Easy Install on TV**: Open the **Downloader** app on your Android TV / Fire TV and enter code **`9557748`** to download and install this release directly.
 
             Or download the `.apk` below (universal APK is recommended) and sideload it manually.
-          files: output/tv-player-release-*/*.apk
+          files: |
+            output/tv-player-release-*/*.apk
+            output/tv-player-release-aab/*.aab
           generate_release_notes: false
           draft: false
 
@@ -380,7 +384,9 @@ jobs:
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/tv-browser-v${{ steps.versions.outputs.browser }}/tv/android/CHANGELOG.md)
 
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
-          files: output/tv-browser-release-*/*.apk
+          files: |
+            output/tv-browser-release-*/*.apk
+            output/tv-browser-release-aab/*.aab
           generate_release_notes: false
           draft: false
 
