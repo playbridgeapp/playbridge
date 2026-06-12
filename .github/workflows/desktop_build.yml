@@ -273,6 +273,8 @@ jobs:
           <!-- tag: pb-desktop-receiver -->
           **Desktop Receiver:** v${{ steps.version.outputs.version }}
 
+          📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/desktop-v${{ steps.version.outputs.version }}/desktop/CHANGELOG.md)
+
           | Platform | File |
           |----------|------|
           | Windows 10+ | `playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip` — extract and run `playbridge_desktop.exe` |
