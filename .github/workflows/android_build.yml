@@ -345,7 +345,7 @@ jobs:
 
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
           files: output/phone-release-*/*.apk
-          generate_release_notes: true
+          generate_release_notes: false
           draft: false
 
       - name: Create TV Player release
@@ -364,7 +364,7 @@ jobs:
 
             Or download the `.apk` below (universal APK is recommended) and sideload it manually.
           files: output/tv-player-release-*/*.apk
-          generate_release_notes: true
+          generate_release_notes: false
           draft: false
 
       - name: Create TV Browser release
@@ -381,7 +381,7 @@ jobs:
 
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
           files: output/tv-browser-release-*/*.apk
-          generate_release_notes: true
+          generate_release_notes: false
           draft: false
 
       - name: Publish Phone to Play Store (alpha)
