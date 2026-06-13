@@ -27,17 +27,11 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Update Phone uBlock
+      - name: Update uBlock in Shared Assets
         working-directory: ./mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew :app:updateUblock
-
-      - name: Update TV Plugin uBlock
-        working-directory: ./tv/android/geckoview-plugin
-        run: |
-          chmod +x gradlew
-          ./gradlew :geckoview-plugin:app:updateUblock
+          ./gradlew :shared:updateUblock
 
       - name: Check for Changes
         id: git-check
