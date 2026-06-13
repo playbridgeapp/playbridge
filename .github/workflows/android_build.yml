@@ -199,11 +199,11 @@ jobs:
           s3://${{ secrets.R2_BUCKET }}/tv-player-release-aab/ \
           --recursive --exclude "*" --include "*.aab"
 
-  build-tv-browser:
+  build-tv-geckoview-plugin:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./tv/android/browser
+        working-directory: ./tv/android/geckoview-plugin
     outputs:
       version: ${{ steps.version.outputs.version }}
       skipped: ${{ steps.check_tag.outputs.skipped }}
@@ -223,9 +223,9 @@ jobs:
     - name: Check tag
       id: check_tag
       run: |
-        if git rev-parse "tv-browser-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+        if git rev-parse "tv-geckoview-plugin-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
           echo "skipped=true" >> $GITHUB_OUTPUT
-          echo "⏭️ tv-browser-v${{ steps.version.outputs.version }} already exists, skipping."
+          echo "⏭️ tv-geckoview-plugin-v${{ steps.version.outputs.version }} already exists, skipping."
         else
           echo "skipped=false" >> $GITHUB_OUTPUT
         fi
@@ -258,18 +258,18 @@ jobs:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew :browser:app:assembleRelease :browser:app:bundleRelease
+      run: ./gradlew :geckoview-plugin:app:assembleRelease :geckoview-plugin:app:bundleRelease
 
     - name: Rename outputs
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
         # Rename APKs
         find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
-          mv "$f" "$(dirname "$f")/playbridge-tv-browser-${{ steps.version.outputs.version }}-$(basename "$f")"
+          mv "$f" "$(dirname "$f")/playbridge-tv-geckoview-plugin-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
         # Rename Bundles (AABs) - using find to be safer
         find app/build/outputs/bundle/release -name "*.aab" -type f | while read f; do
-          mv "$f" "$(dirname "$f")/playbridge-tv-browser-${{ steps.version.outputs.version }}.aab"
+          mv "$f" "$(dirname "$f")/playbridge-tv-geckoview-plugin-${{ steps.version.outputs.version }}.aab"
         done
 
     - name: List outputs (Debug)
@@ -288,22 +288,22 @@ jobs:
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
         aws s3 cp app/build/outputs/apk/release/ \
-          s3://${{ secrets.R2_BUCKET }}/tv-browser-release-apk/ \
+          s3://${{ secrets.R2_BUCKET }}/tv-geckoview-plugin-release-apk/ \
           --recursive --exclude "*" --include "*.apk"
         aws s3 cp app/build/outputs/bundle/release/ \
-          s3://${{ secrets.R2_BUCKET }}/tv-browser-release-aab/ \
+          s3://${{ secrets.R2_BUCKET }}/tv-geckoview-plugin-release-aab/ \
           --recursive --exclude "*" --include "*.aab"
 
   release:
-    needs: [build-phone, build-tv-player, build-tv-browser]
+    needs: [build-phone, build-tv-player, build-tv-geckoview-plugin]
     if: |
       (success() || always()) &&
       (needs.build-phone.outputs.skipped == 'false' || 
        needs.build-tv-player.outputs.skipped == 'false' || 
-       needs.build-tv-browser.outputs.skipped == 'false') &&
+       needs.build-tv-geckoview-plugin.outputs.skipped == 'false') &&
       (needs.build-phone.result != 'failure' && 
        needs.build-tv-player.result != 'failure' && 
-       needs.build-tv-browser.result != 'failure')
+       needs.build-tv-geckoview-plugin.result != 'failure')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -326,7 +326,7 @@ jobs:
         run: |
           PHONE=$(grep 'versionName =' mobile/android/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
           PLAYER=$(grep 'versionName =' tv/android/player/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
-          BROWSER=$(grep 'versionName =' tv/android/browser/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
+          BROWSER=$(grep 'versionName =' tv/android/geckoview-plugin/app/build.gradle.kts | grep -o '"[^"]*"' | tr -d '"')
           echo "phone=$PHONE" >> $GITHUB_OUTPUT
           echo "player=$PLAYER" >> $GITHUB_OUTPUT
           echo "browser=$BROWSER" >> $GITHUB_OUTPUT
@@ -371,22 +371,22 @@ jobs:
           generate_release_notes: false
           draft: false
 
-      - name: Create TV Browser release
-        if: needs.build-tv-browser.outputs.skipped == 'false'
+      - name: Create TV GeckoView Plugin release
+        if: needs.build-tv-geckoview-plugin.outputs.skipped == 'false'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: tv-browser-v${{ steps.versions.outputs.browser }}
-          name: PlayBridge TV Browser v${{ steps.versions.outputs.browser }}
+          tag_name: tv-geckoview-plugin-v${{ steps.versions.outputs.browser }}
+          name: PlayBridge TV GeckoView Plugin v${{ steps.versions.outputs.browser }}
           body: |
             <!-- tag: pb-tv-browser -->
-            **TV Browser:** v${{ steps.versions.outputs.browser }}
+            **TV GeckoView Plugin:** v${{ steps.versions.outputs.browser }}
 
-            📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/tv-browser-v${{ steps.versions.outputs.browser }}/tv/android/CHANGELOG.md)
+            📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/tv-geckoview-plugin-v${{ steps.versions.outputs.browser }}/tv/android/CHANGELOG.md)
 
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
           files: |
-            output/tv-browser-release-*/*.apk
-            output/tv-browser-release-aab/*.aab
+            output/tv-geckoview-plugin-release-*/*.apk
+            output/tv-geckoview-plugin-release-aab/*.aab
           generate_release_notes: false
           draft: false
 
@@ -416,25 +416,12 @@ jobs:
           tracks: alpha
           status: completed
 
-      - name: Publish TV Browser to Play Store (alpha)
-        id: play_tv_browser
-        if: needs.build-tv-browser.outputs.skipped == 'false'
-        continue-on-error: true
-        uses: r0adkll/upload-google-play@v1.1.5
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
-          packageName: com.playbridge.browser
-          releaseFiles: output/tv-browser-release-aab/*.aab
-          tracks: alpha
-          status: completed
-
       - name: Check Play Store publish results
         if: always()
         run: |
           failed=""
           [ "${{ steps.play_phone.outcome }}" = "failure" ]      && failed="$failed phone"
           [ "${{ steps.play_tv_player.outcome }}" = "failure" ]  && failed="$failed tv-player"
-          [ "${{ steps.play_tv_browser.outcome }}" = "failure" ] && failed="$failed tv-browser"
           if [ -n "$failed" ]; then
             echo "### ❌ Play Store publish failed for:$failed" >> "$GITHUB_STEP_SUMMARY"
             echo "GitHub releases were still created; re-publish to Play manually or re-run after fixing." >> "$GITHUB_STEP_SUMMARY"

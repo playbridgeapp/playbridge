@@ -2,6 +2,8 @@ package com.playbridge.player
 
 import android.Manifest
 import android.content.Intent
+import com.playbridge.player.ui.components.DeviceGuard
+import com.playbridge.player.ui.components.WrongDeviceDialog
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -92,6 +94,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val appTheme = remember { mutableStateOf(AppTheme.fromPrefs(this)) }
+            var showPhoneWarning by remember { mutableStateOf(DeviceGuard.shouldWarn(this)) }
+            if (showPhoneWarning) {
+                WrongDeviceDialog(onDismiss = {
+                    DeviceGuard.dismiss(this)
+                    showPhoneWarning = false
+                })
+            }
             PlayBridgeTVTheme(theme = appTheme.value) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),

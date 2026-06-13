@@ -1,8 +1,8 @@
-package com.playbridge.browser
+package com.playbridge.geckoview.plugin
 
 import android.app.Application
 import android.util.Log
-import com.playbridge.browser.logging.FileLogger
+import com.playbridge.geckoview.plugin.logging.FileLogger
 import org.mozilla.geckoview.GeckoRuntime
 
 class PlayBridgeBrowserApplication : Application() {

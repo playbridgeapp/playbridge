@@ -70,6 +70,8 @@ function sendToNative(message) {
     }
 }
 
+const tabLastUrl = new Map();         // geckoTabId → lastUrl
+
 // Helper: get or create per-tab structures
 function getTabVideos(tabId) {
     if (!tabVideos.has(tabId)) tabVideos.set(tabId, []);
@@ -89,6 +91,7 @@ function cleanupTab(tabId) {
     tabVideos.delete(tabId);
     tabSeenUrls.delete(tabId);
     tabHeadersCaptured.delete(tabId);
+    tabLastUrl.delete(tabId);
     if (DEBUG) console.log(`[VideoDetector BG] Cleaned up tab ${tabId}`);
 }
 
@@ -98,27 +101,73 @@ browser.tabs.onRemoved.addListener((tabId) => {
 });
 
 // ── Navigation reset ──────────────────────────────────────────────────────────
-// On every committed top-level navigation (including reloads and back/forward),
-// clear this tab's detection state so previously-seen URLs are re-reported, and
-// tell the native side to reset its list for the tab. Without this, the
-// seenUrls/headersCaptured sets suppressed re-detection after a reload or when
-// returning to a previously visited page. onCommitted does not fire for
-// same-document navigations (hash changes / pushState), so SPA route changes
-// keep their detected videos.
-browser.webNavigation.onCommitted.addListener((details) => {
-    if (details.frameId !== 0) return;
-    cleanupTab(details.tabId);
+// Detect significant navigations (including reloads, link clicks, history state
+// updates via pushState/replaceState, and fragment/hash updates).
+// This clears the per-tab detection state so previously-seen URLs are re-reported,
+// and tells the native side to reset its list for the tab.
+
+function isSignificantNavigation(url1, url2) {
+    if (!url1 || !url2) return true;
+    if (url1 === url2) return false;
+
+    // Get URL without hash/fragment
+    const noFrag1 = url1.split('#')[0];
+    const noFrag2 = url2.split('#')[0];
+
+    // If pathname or search query changed, it's a significant navigation
+    if (noFrag1 !== noFrag2) return true;
+
+    // Base URL is the same. Check if the fragment changed and looks like an SPA route path
+    const frag1 = url1.split('#')[1] || '';
+    const frag2 = url2.split('#')[1] || '';
+
+    if (frag1 !== frag2) {
+        // If either fragment contains a slash (common for hash routing like #/watch/123), it's a route change
+        if (frag1.includes('/') || frag2.includes('/')) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function handleNavigation(tabId, url, transitionType = '', force = false) {
+    const lastUrl = tabLastUrl.get(tabId);
+    if (!force && !isSignificantNavigation(lastUrl, url)) {
+        if (DEBUG) console.log(`[VideoDetector BG] Same-document route change ignored (insignificant): ${url.substring(0, 80)}`);
+        tabLastUrl.set(tabId, url);
+        return;
+    }
+
+    tabLastUrl.set(tabId, url);
+    cleanupTab(tabId);
     sendToNative({
         type: 'navigation',
-        tabId: details.tabId,
-        url: details.url,
-        // originUrl lets the native side resolve the Kotlin tab ID with the
-        // same logic used for video messages.
-        originUrl: details.url,
-        transitionType: details.transitionType || '',
+        tabId: tabId,
+        url: url,
+        originUrl: url,
+        transitionType: transitionType,
         timestamp: Date.now()
     });
-    if (DEBUG) console.log(`[VideoDetector BG] Navigation committed tab=${details.tabId} (${details.transitionType}): ${details.url.substring(0, 80)}`);
+    console.log(`[VideoDetector BG] Navigation reset triggered tab=${tabId} (${transitionType}): ${url.substring(0, 80)}`);
+}
+
+// 1. Committed top-level document navigations (e.g. link clicks, reloads)
+browser.webNavigation.onCommitted.addListener((details) => {
+    if (details.frameId !== 0) return;
+    handleNavigation(details.tabId, details.url, details.transitionType || 'committed', true);
+});
+
+// 2. History API state updates (e.g. pushState / replaceState route updates in SPA)
+browser.webNavigation.onHistoryStateUpdated.addListener((details) => {
+    if (details.frameId !== 0) return;
+    handleNavigation(details.tabId, details.url, 'history_state_updated', false);
+});
+
+// 3. Fragment/hash updates (e.g. hash routing SPA route updates)
+browser.webNavigation.onReferenceFragmentUpdated.addListener((details) => {
+    if (details.frameId !== 0) return;
+    handleNavigation(details.tabId, details.url, 'reference_fragment_updated', false);
 });
 
 // ── Reporting ─────────────────────────────────────────────────────────────────

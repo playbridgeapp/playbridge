@@ -1,6 +1,6 @@
 # Changelog — PlayBridge TV (Android TV)
 
-Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **browser** (`com.playbridge.browser`).
+Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Player [0.2.6] — 2026-06-12 (versionCode 206)
@@ -16,7 +16,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Removed
 - Unused Bluetooth server and its permissions.
 
-## Browser [0.2.5] — 2026-06-12 (versionCode 205)
+## GeckoView Plugin [0.2.5] — 2026-06-12 (versionCode 205)
 
 ### Changed
 - Maintenance release: version alignment with the player; Android Lint now blocking in CI via baselines. No functional changes.

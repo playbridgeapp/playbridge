@@ -1,4 +1,4 @@
-package com.playbridge.browser.logging
+package com.playbridge.geckoview.plugin.logging
 
 import android.content.Context
 import android.os.Handler

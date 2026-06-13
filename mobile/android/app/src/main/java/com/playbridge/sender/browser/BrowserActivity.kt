@@ -1,6 +1,8 @@
 package com.playbridge.sender.browser
 import com.playbridge.sender.library.*
 import com.playbridge.sender.cast.*
+import com.playbridge.sender.ui.TvDeviceGuard
+import com.playbridge.sender.ui.WrongDeviceDialog
 
 import android.os.Bundle
 import android.util.Log
@@ -319,6 +321,13 @@ class BrowserActivity : ComponentActivity() {
             val keyboardController = LocalSoftwareKeyboardController.current
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
             val context = LocalContext.current
+            var showTvWarning by remember { mutableStateOf(TvDeviceGuard.shouldWarn(context)) }
+            if (showTvWarning) {
+                WrongDeviceDialog(onDismiss = {
+                    TvDeviceGuard.dismiss(context)
+                    showTvWarning = false
+                })
+            }
             val connectionState by connectionViewModel.connectionState.collectAsState()
             val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
             val scope = rememberCoroutineScope()
