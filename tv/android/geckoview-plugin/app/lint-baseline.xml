@@ -25,33 +25,33 @@
 
     <issue
         id="RestrictedApi"
-        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`PlayBridgeTV.browser`)"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`PlayBridgeTV.geckoview-plugin`)"
         errorLine1="    override fun dispatchKeyEvent(event: KeyEvent): Boolean {"
         errorLine2="                 ~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/playbridge/browser/BrowserActivity.kt"
+            file="src/main/java/com/playbridge/geckoview/plugin/BrowserActivity.kt"
             line="515"
             column="18"/>
     </issue>
 
     <issue
         id="RestrictedApi"
-        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`PlayBridgeTV.browser`)"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`PlayBridgeTV.geckoview-plugin`)"
         errorLine1="        return super.dispatchKeyEvent(event)"
         errorLine2="                     ~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/playbridge/browser/BrowserActivity.kt"
+            file="src/main/java/com/playbridge/geckoview/plugin/BrowserActivity.kt"
             line="532"
             column="22"/>
     </issue>
 
     <issue
         id="RestrictedApi"
-        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`PlayBridgeTV.browser`)"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`PlayBridgeTV.geckoview-plugin`)"
         errorLine1="        return super.dispatchKeyEvent(event)"
         errorLine2="                                      ~~~~~">
         <location
-            file="src/main/java/com/playbridge/browser/BrowserActivity.kt"
+            file="src/main/java/com/playbridge/geckoview/plugin/BrowserActivity.kt"
             line="532"
             column="39"/>
     </issue>
@@ -98,7 +98,7 @@
         errorLine1="                    val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))"
         errorLine2="                                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/playbridge/browser/GeckoViewEngine.kt"
+            file="src/main/java/com/playbridge/geckoview/plugin/GeckoViewEngine.kt"
             line="126"
             column="71"/>
     </issue>
@@ -109,7 +109,7 @@
         errorLine1="                    val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))"
         errorLine2="                                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/playbridge/browser/GeckoViewEngine.kt"
+            file="src/main/java/com/playbridge/geckoview/plugin/GeckoViewEngine.kt"
             line="126"
             column="71"/>
     </issue>

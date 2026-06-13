@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "com.playbridge.browser"
+    namespace = "com.playbridge.geckoview.plugin"
     compileSdk {
         version = release(36)
     }
@@ -19,7 +19,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.playbridge.browser"
+        applicationId = "com.playbridge.geckoview.plugin"
         minSdk = 26
         targetSdk = 36
         versionCode = 205

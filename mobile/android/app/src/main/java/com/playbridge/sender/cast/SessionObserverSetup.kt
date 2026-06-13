@@ -405,17 +405,24 @@ fun SessionObserverSetup(
                     }
 
                     is PromptRequest.Confirm -> {
-                        AlertDialog.Builder(context)
+                        val builder = AlertDialog.Builder(context)
                             .setTitle(promptRequest.title.takeIf { it.isNotBlank() })
                             .setMessage(promptRequest.message)
-                            .setPositiveButton(
-                                promptRequest.positiveButtonTitle.ifBlank { context.getString(android.R.string.ok) }
-                            ) { _, _ -> promptRequest.onConfirmPositiveButton(false) }
-                            .setNegativeButton(
-                                promptRequest.negativeButtonTitle.ifBlank { context.getString(android.R.string.cancel) }
-                            ) { _, _ -> promptRequest.onConfirmNegativeButton(false) }
                             .setOnCancelListener { promptRequest.onDismiss() }
-                            .show()
+
+                        if (promptRequest.positiveButtonTitle.isNotBlank()) {
+                            builder.setPositiveButton(promptRequest.positiveButtonTitle) { _, _ -> promptRequest.onConfirmPositiveButton(false) }
+                        } else {
+                            builder.setPositiveButton(android.R.string.ok) { _, _ -> promptRequest.onConfirmPositiveButton(false) }
+                        }
+
+                        if (promptRequest.negativeButtonTitle.isNotBlank()) {
+                            builder.setNegativeButton(promptRequest.negativeButtonTitle) { _, _ -> promptRequest.onConfirmNegativeButton(false) }
+                        } else {
+                            builder.setNegativeButton(android.R.string.cancel) { _, _ -> promptRequest.onConfirmNegativeButton(false) }
+                        }
+
+                        builder.show()
                     }
 
                     is PromptRequest.TextPrompt -> {

@@ -349,7 +349,7 @@ class ServerService : Service() {
                         activeContext = "browser_external"
                         broadcastContext()
                         val browserIntent = Intent("com.playbridge.player.ACTION_BROWSER").apply {
-                            setPackage("com.playbridge.browser")
+                            setPackage("com.playbridge.geckoview.plugin")
                             putExtra("extra_url", url)
                             putExtra("extra_browser_mode", browserMode)
                             putExtra("extra_desktop_mode", desktopMode)
@@ -421,7 +421,7 @@ class ServerService : Service() {
                 } else if (activeContext == "browser_external") {
                     val browserIntent = Intent(ACTION_REMOTE).apply {
                         putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
-                        setPackage("com.playbridge.browser")
+                        setPackage("com.playbridge.geckoview.plugin")
                     }
                     sendBroadcast(browserIntent)
                 } else {
@@ -441,7 +441,7 @@ class ServerService : Service() {
 
                 when (activeContext) {
                     "browser_external" -> {
-                        intent.setPackage("com.playbridge.browser")
+                        intent.setPackage("com.playbridge.geckoview.plugin")
                         sendBroadcast(intent)
                     }
                     "browser", "player" -> {
@@ -457,7 +457,7 @@ class ServerService : Service() {
                 if (activeContext == "browser_external") {
                     val browserIntent = Intent(ACTION_BROWSER_CONTROL).apply {
                         putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
-                        setPackage("com.playbridge.browser")
+                        setPackage("com.playbridge.geckoview.plugin")
                     }
                     sendBroadcast(browserIntent)
                 } else {
@@ -744,7 +744,7 @@ class ServerService : Service() {
 
     private fun isGeckoApkInstalled(): Boolean {
         return try {
-            packageManager.getPackageInfo("com.playbridge.browser", 0)
+            packageManager.getPackageInfo("com.playbridge.geckoview.plugin", 0)
             true
         } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
             false
