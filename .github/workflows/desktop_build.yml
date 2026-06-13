@@ -272,7 +272,7 @@ jobs:
         tag_name: desktop-v${{ steps.version.outputs.version }}
         name: PlayBridge Desktop v${{ steps.version.outputs.version }}
         body: |
-          <!-- tag: pb-desktop-receiver -->
+          <!-- tag: 1a4b6c -->
           **Desktop Receiver:** v${{ steps.version.outputs.version }}
 
           📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/desktop-v${{ steps.version.outputs.version }}/desktop/CHANGELOG.md)
