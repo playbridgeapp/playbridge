@@ -3,12 +3,6 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.2.6] — 2026-06-13 (versionCode 206)
-
-### Added
-- Seed default Cinemeta addon if library is empty to improve initial onboarding. (#27)
-- uBlock Origin is now bundled as a shared asset in the KMP module. (#26)
-
 ## [0.2.5] — 2026-06-12 (versionCode 205)
 
 ### Added
