@@ -153,7 +153,7 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
       ['Open', 'Extract and right-click → Open (unsigned build).'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true',
     downloadUrl: '/download/macos',
     meta: [
       ['sha256', '—'],
@@ -171,7 +171,7 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
       ['Extract & run', 'Run playbridge_desktop.exe — no installer needed.'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true',
     downloadUrl: '/download/windows',
     meta: [
       ['sha256', '—'],
@@ -189,7 +189,7 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
       ['Extract & run', 'Run bundle/playbridge_desktop from the extracted folder.'],
       ['Approve devices', 'Allow the first sender that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-desktop-receiver&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true',
     downloadUrl: '/download/linux',
     meta: [
       ['sha256', '—'],
@@ -211,7 +211,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Allow install', 'Permit installs from unknown sources.'],
       ['Open & connect', 'Send to a player on your network.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-phone-app&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=5c9b2f&expanded=true',
     downloadUrl: '/download/android',
     meta: [
       ['sha256', 'a4f1…c2b9'],
@@ -230,7 +230,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Install', 'Sideload via adb install or follow Downloader prompts.'],
       ['Approve devices', 'Allow the first phone that connects.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-tv-player&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=8d2a1c&expanded=true',
     downloadUrl: '/download/tv-player',
     meta: [
       ['sha256', '—'],
@@ -251,7 +251,7 @@ export const INSTALL_TABS: InstallTab[] = [
       ['Sideload', 'adb install or Downloader app — installs alongside the player.'],
       ['Browse ad-free', 'EasyList + cosmetic filtering on by default.']
     ],
-    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-tv-browser&expanded=true',
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=3e7f9a&expanded=true',
     downloadUrl: '/download/tv-browser',
     meta: [
       ['sha256', '—'],
@@ -299,7 +299,7 @@ export const INSTALL_TABS: InstallTab[] = [
   //     ['Install', 'Drag the .xpi onto Firefox.'],
   //     ['Right-click links', 'Send any link to a player.']
   //   ],
-  //   cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=pb-firefox-extension&expanded=true',
+  //   cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=9f2d8e&expanded=true',
   //   downloadUrl: '/download/firefox',
   //   meta: [
   //     ['sha256', '77fa…d3e2'],

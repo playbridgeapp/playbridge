@@ -128,7 +128,7 @@ jobs:
           tag_name: extension-v${{ steps.version.outputs.version }}
           name: PlayBridge Extension v${{ steps.version.outputs.version }}
           body: |
-            <!-- tag: pb-firefox-extension -->
+            <!-- tag: 9f2d8e -->
             **Firefox Extension:** v${{ steps.version.outputs.version }}
 
             Install by dragging the `.xpi` file into Firefox, or via `about:addons` → Install Add-on From File.
