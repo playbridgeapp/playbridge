@@ -404,6 +404,22 @@ object Components {
                 }
                 GeckoResult.fromValue(null)
             }
+
+            // Also install uBlock Origin
+            runtime.webExtensionController.ensureBuiltIn(
+                "resource://android/assets/extensions/ublock_origin/",
+                "uBlock0@raymondhill.net"
+            ).then { extension ->
+                if (extension != null) {
+                    Log.i(TAG, "uBlock Origin loaded successfully: ${extension.id}")
+                } else {
+                    Log.e(TAG, "uBlock Origin ensureBuiltIn returned null extension")
+                }
+                GeckoResult.fromValue(extension)
+            }.exceptionally { throwable ->
+                Log.e(TAG, "uBlock Origin ensureBuiltIn FAILED", throwable)
+                GeckoResult.fromValue(null)
+            }
         }
     }
     

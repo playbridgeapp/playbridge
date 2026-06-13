@@ -1,0 +1,130 @@
+{
+  "author": "Raymond Hill & contributors",
+  "background": {
+    "page": "background.html"
+  },
+  "browser_action": {
+    "browser_style": false,
+    "default_area": "navbar",
+    "default_icon": {
+      "16": "img/icon_16.png",
+      "32": "img/icon_32.png",
+      "64": "img/icon_64.png"
+    },
+    "default_popup": "popup-fenix.html",
+    "default_title": "uBlock Origin"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      },
+      "id": "uBlock0@raymondhill.net",
+      "strict_min_version": "115.0"
+    },
+    "gecko_android": {
+      "strict_min_version": "115.0"
+    }
+  },
+  "commands": {
+    "_execute_browser_action": {},
+    "launch-element-picker": {
+      "description": "uBlock action"
+    },
+    "launch-element-zapper": {
+      "description": "uBlock action"
+    },
+    "launch-logger": {
+      "description": "uBlock action"
+    },
+    "open-dashboard": {
+      "description": "uBlock action"
+    },
+    "relax-blocking-mode": {
+      "description": "uBlock action"
+    },
+    "toggle-cosmetic-filtering": {
+      "description": "uBlock action"
+    },
+    "toggle-javascript": {
+      "description": "uBlock action"
+    }
+  },
+  "content_scripts": [
+    {
+      "all_frames": true,
+      "js": [
+        "/js/vapi.js",
+        "/js/vapi-client.js",
+        "/js/contentscript.js"
+      ],
+      "match_about_blank": true,
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file://*/*"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "all_frames": false,
+      "js": [
+        "/js/scriptlets/subscriber.js"
+      ],
+      "matches": [
+        "https://easylist.to/*",
+        "https://*.fanboy.co.nz/*",
+        "https://filterlists.com/*",
+        "https://forums.lanik.us/*",
+        "https://github.com/*",
+        "https://*.github.io/*"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "all_frames": false,
+      "js": [
+        "/js/scriptlets/updater.js"
+      ],
+      "matches": [
+        "https://github.com/uBlockOrigin/*",
+        "https://ublockorigin.github.io/*",
+        "https://*.reddit.com/r/uBlockOrigin/*"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "description": "uBlock action",
+  "icons": {
+    "128": "img/ublock.svg",
+    "16": "img/ublock.svg",
+    "32": "img/ublock.svg",
+    "48": "img/ublock.svg",
+    "64": "img/ublock.svg",
+    "96": "img/ublock.svg"
+  },
+  "manifest_version": 2,
+  "name": "uBlock Origin",
+  "options_ui": {
+    "open_in_tab": true,
+    "page": "dashboard.html"
+  },
+  "permissions": [
+    "alarms",
+    "dns",
+    "storage",
+    "tabs",
+    "unlimitedStorage",
+    "webNavigation",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
+  ],
+  "short_name": "uBlock\u2080",
+  "version": "1.71.0",
+  "web_accessible_resources": [
+    "/web_accessible_resources/*"
+  ]
+}
