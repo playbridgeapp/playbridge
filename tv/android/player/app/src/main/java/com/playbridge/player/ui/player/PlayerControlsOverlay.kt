@@ -15,7 +15,6 @@ import androidx.tv.material3.Text
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.RoundedCornerShape
-import com.playbridge.player.player.VideoFilterDialog
 import com.playbridge.player.player.PlaylistPickerDialog
 import com.playbridge.player.player.SwitchPlayerDialog
 
@@ -28,7 +27,6 @@ fun PlayerControlsOverlay(
     onPlaylist: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onFilter: () -> Unit,
     onLoop: () -> Unit,
     onSwitchPlayer: () -> Unit,
     onSeek: (Long) -> Unit,
@@ -40,8 +38,6 @@ fun PlayerControlsOverlay(
     onScalingSelected: (String) -> Unit = {},
     onSettingsDismiss: () -> Unit = {},
     onOverlayDismiss: () -> Unit = {},
-    onFilterSelected: (com.playbridge.shared.player.VideoFilter) -> Unit = {},
-    onCustomFilterChanged: (brightness: Float, contrast: Float, saturation: Float) -> Unit = {_,_,_ ->},
     onPlaylistItemPicked: (Int) -> Unit = {},
     onPlayerSwitched: (String) -> Unit = {},
     onToggleAudioBoost: () -> Unit = {},
@@ -80,25 +76,6 @@ fun PlayerControlsOverlay(
                     )
                 }
 
-
-                // Video Filter Overlay
-                AnimatedVisibility(
-                    visible = state.activeOverlay == ActiveOverlay.VIDEO_FILTER,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    VideoFilterDialog(
-                        currentFilter = state.currentFilter,
-                        customBrightness = state.customBrightness,
-                        customContrast = state.customContrast,
-                        customSaturation = state.customSaturation,
-                        previewFrame = state.previewFrame,
-                        onFilterSelected = onFilterSelected,
-                        onCustomChanged = onCustomFilterChanged,
-                        onDismiss = onOverlayDismiss
-                    )
-                }
 
                 // Playlist Picker Overlay
                 AnimatedVisibility(
@@ -199,7 +176,6 @@ fun PlayerControlsOverlay(
                                 onStreams = {},
                                 onPrev = onPrev,
                                 onNext = onNext,
-                                onFilter = onFilter,
                                 onLoop = onLoop,
                                 onSwitchPlayer = onSwitchPlayer,
                                 isVisible = state.isVisible

@@ -222,41 +222,22 @@ fun MainContent(
     }
 
     val onPlayItem: (PlaybackHistoryItem) -> Unit = { item ->
-        val prefs = currentContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-        val intent = android.content.Intent(currentContext, com.playbridge.player.player.ExoPlayerActivity::class.java).apply {
-            putExtra(ServerService.EXTRA_URL, item.url)
-            putExtra(ServerService.EXTRA_TITLE, item.title)
-            putExtra(ServerService.EXTRA_CONTENT_TYPE, item.contentType)
-            if (item.headers != null) {
-                putExtra(ServerService.EXTRA_HEADERS, java.util.HashMap(item.headers))
-            }
-            // Restore playlist context if this item was part of a playlist
-            if (item.playlistJson != null) {
-                try {
-                    com.playbridge.player.player.PlaylistStore.currentPlaylist =
-                        com.playbridge.shared.protocol.decodePlayPayloadListJson(item.playlistJson)
-                    putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
-                    putExtra(ServerService.EXTRA_PLAYLIST_INDEX, item.playlistIndex)
-                } catch (e: Exception) {
-                    com.playbridge.player.player.PlaylistStore.currentPlaylist = null
-                }
-            } else {
-                com.playbridge.player.player.PlaylistStore.currentPlaylist = null
-            }
-            // Restore saved selections
-            item.preferredAudioLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG, it) }
-            item.preferredSubtitleLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG, it) }
-            item.externalSubtitleUrl?.let { putExtra(ServerService.EXTRA_EXTERNAL_SUBTITLE_URL, it) }
-            item.videoFilter?.let { putExtra(ServerService.EXTRA_VIDEO_FILTER, it) }
-            item.customFilterValues?.let { vals ->
-                putExtra(ServerService.EXTRA_CUSTOM_FILTER_VALUES, floatArrayOf(vals[0], vals[1], vals[2]))
-            }
-            // Resume from last position
-            if (item.position > 0) {
-                putExtra(ServerService.EXTRA_START_POSITION, item.position)
-            }
+        // Replay = re-run the stored payload through the *same* launch path a live cast
+        // uses, resuming at the TV's saved position. Subtitles, audio language, headers and
+        // visual metadata all come back because they ride inside the payload.
+        val payload = com.playbridge.shared.protocol.decodePlaylistPayloadJson(item.payloadJson)
+        if (payload != null) {
+            val tvPref = currentContext
+                .getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                .getString("player_mode", "phone") ?: "phone"
+            val intent = com.playbridge.player.player.PlayerLauncher.buildPlayerIntent(
+                context = currentContext,
+                payload = payload,
+                tvPlayerMode = tvPref,
+                overrideStartPositionMs = item.position.takeIf { it > 0 },
+            )
+            currentContext.startActivity(intent)
         }
-        currentContext.startActivity(intent)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

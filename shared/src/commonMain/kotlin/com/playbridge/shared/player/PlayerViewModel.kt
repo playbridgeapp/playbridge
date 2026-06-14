@@ -218,10 +218,6 @@ class PlayerViewModel(
         }
     }
 
-    fun setVideoFilter(filter: VideoFilter, customParams: List<Float>? = null) {
-        engine.setFilter(filter, customParams)
-    }
-
     fun setLooping(enabled: Boolean) {
         isLooping = enabled
     }

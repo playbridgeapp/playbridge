@@ -719,9 +719,6 @@ fun AppNavHost(
                         onAdjustSubtitleOffset = { delta ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("sub_offset:$delta"))
                         },
-                        onSetFilter = { name ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("filter:$name"))
-                        },
                         onSwitchEngine = { engineId ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("switch_player:$engineId"))
                         },

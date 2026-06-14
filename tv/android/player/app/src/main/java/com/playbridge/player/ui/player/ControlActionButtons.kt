@@ -25,7 +25,6 @@ fun ControlActionButtons(
     onStreams: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onFilter: () -> Unit,
     onLoop: () -> Unit,
     onSwitchPlayer: () -> Unit,
     isVisible: Boolean = false,
@@ -105,12 +104,6 @@ fun ControlActionButtons(
                 onClick = onStreams
             )
         }
-
-        PlayerIconButton(
-            iconRes = R.drawable.ic_filter,
-            contentDescription = "Filters",
-            onClick = onFilter
-        )
 
         PlayerIconButton(
             iconRes = R.drawable.ic_loop,

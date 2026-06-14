@@ -112,7 +112,6 @@ class ConnectionCoordinator(
                                 scaling = json.optString("scaling", "Fit"),
                                 audioBoost = json.optBoolean("audioBoost", false),
                                 subtitleOffsetMs = json.optLong("subtitleOffsetMs", 0L),
-                                filter = json.optString("filter", "NONE"),
                                 engine = json.optString("engine", "")
                             )
                             Log.d(TAG, "TV Player settings updated")

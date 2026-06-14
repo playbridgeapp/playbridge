@@ -7,7 +7,7 @@ enum class SettingsTab {
 }
 
 enum class ActiveOverlay {
-    NONE, SETTINGS, VIDEO_FILTER, PLAYLIST_PICKER, SWITCH_PLAYER
+    NONE, SETTINGS, PLAYLIST_PICKER, SWITCH_PLAYER
 }
 
 @Immutable
@@ -55,13 +55,6 @@ data class PlayerControlsState(
     // Playlist Data
     val playlistItems: List<playbridge.PlayPayload> = emptyList(),
     val playlistIndex: Int = 0,
-
-    // Video Filter Data
-    val currentFilter: com.playbridge.shared.player.VideoFilter = com.playbridge.shared.player.VideoFilter.NONE,
-    val customBrightness: Float = 0f,
-    val customContrast: Float = 1f,
-    val customSaturation: Float = 1f,
-    val previewFrame: android.graphics.Bitmap? = null,
 
     // High Performance Features
     val subtitleDelayMs: Long = 0,

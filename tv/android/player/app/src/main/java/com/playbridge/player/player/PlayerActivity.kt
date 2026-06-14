@@ -73,11 +73,15 @@ abstract class PlayerActivity : ComponentActivity() {
     protected fun startNowPlayingBroadcasts(controls: PlayerControlsViewModel) {
         if (nowPlayingJob != null) return
         nowPlayingJob = lifecycleScope.launch {
-            // Periodic playback status (covers live position).
+            // Periodic playback status (covers live position). Every 5th tick we also
+            // persist the position to history so the resume point survives a force-kill /
+            // swipe-away (which skip onPause/onStop, the only other save points).
             launch {
                 repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    var tick = 0
                     while (true) {
                         broadcastNowPlayingStatus(controls.controlsState.value)
+                        if (++tick % 5 == 0) getPlayerProgressManager()?.saveProgress()
                         delay(1000)
                     }
                 }
@@ -100,11 +104,11 @@ abstract class PlayerActivity : ComponentActivity() {
                         .collect { (audio, subs) -> broadcastTracks(audio, subs) }
                 }
             }
-            // Player settings (speed/scaling/audio-boost/subtitle-offset/filter) — on change.
+            // Player settings (speed/scaling/audio-boost/subtitle-offset) — on change.
             launch {
                 repeatOnLifecycle(Lifecycle.State.STARTED) {
                     controls.controlsState
-                        .map { PlayerSettingsKey(it.playbackSpeed, it.videoScalingMode, it.isAudioBoostEnabled, it.subtitleDelayMs, it.currentFilter, it.engineType) }
+                        .map { PlayerSettingsKey(it.playbackSpeed, it.videoScalingMode, it.isAudioBoostEnabled, it.subtitleDelayMs, it.engineType) }
                         .distinctUntilChanged()
                         .collect { broadcastPlayerSettings(controls.controlsState.value) }
                 }
@@ -117,7 +121,6 @@ abstract class PlayerActivity : ComponentActivity() {
         val scaling: String,
         val audioBoost: Boolean,
         val subtitleOffsetMs: Long,
-        val filter: com.playbridge.shared.player.VideoFilter,
         val engine: String
     )
 
@@ -129,7 +132,6 @@ abstract class PlayerActivity : ComponentActivity() {
                 put("scaling", s.videoScalingMode)
                 put("audioBoost", s.isAudioBoostEnabled)
                 put("subtitleOffsetMs", s.subtitleDelayMs)
-                put("filter", s.currentFilter.name)
                 put("engine", s.engineType)
             }.toString()
             ServerService.broadcastStatus(json)
@@ -237,7 +239,6 @@ abstract class PlayerActivity : ComponentActivity() {
     /** Stop current playback and clear the video surface (make it black) for a smooth transition. */
     abstract fun stopPlayback()
     protected open fun getPlayerProgressManager(): ProgressManager? = null
-    protected open fun showVideoFilterDialog() {}
 
     // Shared playback configuration
     var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p"
