@@ -167,7 +167,7 @@ class TvQueueCoordinator(
             val url = resolveBest(p, idx)
             if (url != null) {
                 val tmpl = p.items[idx].template
-                val subs = fetchSubtitlesFor(tmpl)
+                val subs = fetchSubtitlesFor(tmpl, url)
                 val payload = tmpl.copy(url = url, subtitles = (tmpl.subtitles + subs).distinct())
                 if (!webSocketClient.send(createQueueAddCommandJson(payload))) {
                     // Send failed (socket dropped) — leave nextToResolve so we retry on the next tick.
@@ -184,10 +184,13 @@ class TvQueueCoordinator(
     }
 
     /** Preferred-language addon subtitles for an episode (from its template's visual_metadata). */
-    private suspend fun fetchSubtitlesFor(tmpl: playbridge.PlayPayload): List<String> {
+    private suspend fun fetchSubtitlesFor(tmpl: playbridge.PlayPayload, resolvedUrl: String?): List<String> {
         val pref = runCatching { settingsRepository.preferredSubtitleLang.first() }.getOrDefault("")
         val vm = tmpl.visual_metadata
-        return subtitleService.getAllSubtitleUrls(vm?.imdb_id, vm?.season, vm?.episode, pref)
+        return subtitleService.getAllSubtitleUrls(
+            vm?.imdb_id, vm?.season, vm?.episode, pref,
+            videoRelease = subtitleService.filenameFromUrl(resolvedUrl)
+        )
     }
 
     private suspend fun resolveBest(p: TvEpisodeQueuePlan, index: Int): String? =

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import android.util.Log
 import com.playbridge.player.player.SubtitleManager
+import com.playbridge.player.player.SubtitleCueLoader
 
 class PlayerControlsViewModel : ViewModel() {
     private val _controlsState = MutableStateFlow(PlayerControlsState())
@@ -20,6 +21,24 @@ class PlayerControlsViewModel : ViewModel() {
     private var progressUpdateJob: Job? = null
     private var engine: PlayerEngineAdapter? = null
     private var subtitleManager: SubtitleManager? = null
+
+    /** Request headers for fetching subtitle files (set by the activity when media loads). */
+    var subtitleRequestHeaders: Map<String, String>? = null
+
+    /**
+     * Lazily download + parse the given subtitle URLs (for the live preview in the overlay).
+     * Cached in [SubtitleCueLoader], so this no-ops for already-loaded ones. Bumps a version
+     * flag on completion so the overlay re-reads the cache.
+     */
+    fun preloadSubtitleCues(urls: List<String>) {
+        urls.forEach { url ->
+            if (SubtitleCueLoader.cached(url) != null || SubtitleCueLoader.isLoading(url)) return@forEach
+            viewModelScope.launch {
+                SubtitleCueLoader.load(url, subtitleRequestHeaders)
+                _controlsState.update { it.copy(subtitleCuesVersion = it.subtitleCuesVersion + 1) }
+            }
+        }
+    }
 
     fun setEngine(playerEngine: PlayerEngineAdapter, engineType: String) {
         this.engine = playerEngine
@@ -220,6 +239,11 @@ class PlayerControlsViewModel : ViewModel() {
 
     fun hideSettings() {
         hideOverlay()
+    }
+
+    /** Open the dedicated subtitle overlay (Language → Options → Sync). */
+    fun showSubtitles() {
+        showOverlay(ActiveOverlay.SUBTITLES)
     }
 
 

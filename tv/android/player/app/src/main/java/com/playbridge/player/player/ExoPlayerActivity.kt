@@ -280,9 +280,13 @@ class ExoPlayerActivity : PlayerActivity() {
                     PlayerControlsOverlay(
                         state = state,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
-                        onTrackSelection = { 
+                        onTrackSelection = {
                             updateUnifiedTracks()
-                            controlsViewModel.showSettings(SettingsTab.AUDIO) 
+                            controlsViewModel.showSettings(SettingsTab.AUDIO)
+                        },
+                        onSubtitles = {
+                            updateUnifiedTracks()
+                            controlsViewModel.showSubtitles()
                         },
                         onPlaylist = { showPlaylistOverlay() },
                         onPrev = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.previous() } },
@@ -331,7 +335,8 @@ class ExoPlayerActivity : PlayerActivity() {
                             switchPlayer(playerId)
                         },
                         onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
-                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) }
+                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) },
+                        onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) }
                     )
                 }
             }
@@ -734,6 +739,8 @@ class ExoPlayerActivity : PlayerActivity() {
             // Handle manual subtitles (Nuvio-style Compose rendering)
             this@ExoPlayerActivity.subtitleUrls = subtitles ?: emptyList()
             this@ExoPlayerActivity.subtitleHeaders = intentHeaders
+            controlsViewModel.subtitleRequestHeaders = intentHeaders
+            SubtitleCueLoader.clear()
             if (subtitleUrls.isNotEmpty()) {
                 val subUrl = subtitleUrls[0]
                 currentSubtitleUrl = subUrl

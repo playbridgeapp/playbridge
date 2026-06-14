@@ -881,7 +881,8 @@ fun AppNavHost(
                                         payload.visual_metadata?.imdb_id,
                                         payload.visual_metadata?.season,
                                         payload.visual_metadata?.episode,
-                                        preferredSubLang
+                                        preferredSubLang,
+                                        videoRelease = subtitleService.filenameFromUrl(payload.url)
                                     )
                                 }
 
@@ -949,7 +950,8 @@ fun AppNavHost(
                                         current.visual_metadata?.imdb_id,
                                         current.visual_metadata?.season,
                                         current.visual_metadata?.episode,
-                                        preferredSubLang
+                                        preferredSubLang,
+                                        videoRelease = subtitleService.filenameFromUrl(current.url)
                                     )
                                 }
                                 // Ensure connected before sending
@@ -1104,10 +1106,12 @@ fun AppNavHost(
                             }
                             scope.launch {
                                 // Fetch the start episode's subtitles in parallel with connecting.
-                                val startVm = playlist.items.getOrNull(playlist.start_index)?.visual_metadata
+                                val startItem = playlist.items.getOrNull(playlist.start_index)
+                                val startVm = startItem?.visual_metadata
                                 val startSubsDeferred = async {
                                     subtitleService.getAllSubtitleUrls(
-                                        startVm?.imdb_id, startVm?.season, startVm?.episode, preferredSubLang
+                                        startVm?.imdb_id, startVm?.season, startVm?.episode, preferredSubLang,
+                                        videoRelease = subtitleService.filenameFromUrl(startItem?.url)
                                     )
                                 }
                                 // Ensure connected before sending
