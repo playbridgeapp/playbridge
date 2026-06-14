@@ -265,9 +265,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     PlayerControlsOverlay(
                         state = state,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
-                        onTrackSelection = { 
+                        onTrackSelection = {
                             updateUnifiedTracks()
-                            controlsViewModel.showSettings(SettingsTab.AUDIO) 
+                            controlsViewModel.showSettings(SettingsTab.AUDIO)
+                        },
+                        onSubtitles = {
+                            updateUnifiedTracks()
+                            controlsViewModel.showSubtitles()
                         },
                         onPlaylist = { showPlaylistOverlay() },
                         onPrev = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.previous() } },
@@ -308,7 +312,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                             switchPlayer(playerId)
                         },
                         onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
-                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) }
+                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) },
+                        onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) }
                     )
                 }
             }
@@ -789,6 +794,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             currentSubtitleUrl = subtitles.firstOrNull()
         }
         this.currentHeaders = headers
+        controlsViewModel.subtitleRequestHeaders = headers
+        SubtitleCueLoader.clear()
         playVideo(url, headers, subtitles = subtitles)
     }
 

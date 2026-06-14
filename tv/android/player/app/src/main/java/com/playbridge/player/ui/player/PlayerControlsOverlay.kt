@@ -24,6 +24,7 @@ fun PlayerControlsOverlay(
     state: PlayerControlsState,
     onTogglePlay: () -> Unit,
     onTrackSelection: () -> Unit,
+    onSubtitles: () -> Unit,
     onPlaylist: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -42,6 +43,7 @@ fun PlayerControlsOverlay(
     onPlayerSwitched: (String) -> Unit = {},
     onToggleAudioBoost: () -> Unit = {},
     onAdjustSubtitleDelay: (Long) -> Unit = {},
+    onPreloadSubtitles: (List<String>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -71,11 +73,28 @@ fun PlayerControlsOverlay(
                         onSpeedSelected = onSpeedSelected,
                         onScalingSelected = onScalingSelected,
                         onToggleAudioBoost = onToggleAudioBoost,
-                        onAdjustSubtitleDelay = onAdjustSubtitleDelay,
                         onDismiss = onSettingsDismiss
                     )
                 }
 
+                // Subtitle Overlay (Language → Options → Sync)
+                AnimatedVisibility(
+                    visible = state.activeOverlay == ActiveOverlay.SUBTITLES,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    SubtitleSelectionOverlay(
+                        subtitleTracks = state.subtitleTracks,
+                        subtitleDelayMs = state.subtitleDelayMs,
+                        previewPositionMs = state.currentPosition,
+                        cuesVersion = state.subtitleCuesVersion,
+                        onPreloadLanguage = onPreloadSubtitles,
+                        onTrackSelected = onTrackSelected,
+                        onAdjustDelay = onAdjustSubtitleDelay,
+                        onDismiss = onOverlayDismiss
+                    )
+                }
 
                 // Playlist Picker Overlay
                 AnimatedVisibility(
@@ -172,6 +191,7 @@ fun PlayerControlsOverlay(
                                 hasMultipleStreams = false,
                                 onTogglePlay = onTogglePlay,
                                 onTrackSelection = onTrackSelection,
+                                onSubtitles = onSubtitles,
                                 onPlaylist = onPlaylist,
                                 onStreams = {},
                                 onPrev = onPrev,

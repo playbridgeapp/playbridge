@@ -21,6 +21,7 @@ fun ControlActionButtons(
     hasMultipleStreams: Boolean,
     onTogglePlay: () -> Unit,
     onTrackSelection: () -> Unit,
+    onSubtitles: () -> Unit,
     onPlaylist: () -> Unit,
     onStreams: () -> Unit,
     onPrev: () -> Unit,
@@ -104,6 +105,12 @@ fun ControlActionButtons(
                 onClick = onStreams
             )
         }
+
+        PlayerIconButton(
+            iconRes = R.drawable.ic_subtitles,
+            contentDescription = "Subtitles",
+            onClick = onSubtitles
+        )
 
         PlayerIconButton(
             iconRes = R.drawable.ic_loop,

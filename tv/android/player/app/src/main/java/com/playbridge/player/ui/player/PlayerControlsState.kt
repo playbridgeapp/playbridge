@@ -3,11 +3,11 @@ package com.playbridge.player.ui.player
 import androidx.compose.runtime.Immutable
 
 enum class SettingsTab {
-    VIDEO, AUDIO, SUBTITLES, SPEED, SCALING
+    VIDEO, AUDIO, SPEED, SCALING
 }
 
 enum class ActiveOverlay {
-    NONE, SETTINGS, PLAYLIST_PICKER, SWITCH_PLAYER
+    NONE, SETTINGS, SUBTITLES, PLAYLIST_PICKER, SWITCH_PLAYER
 }
 
 @Immutable
@@ -59,5 +59,8 @@ data class PlayerControlsState(
     // High Performance Features
     val subtitleDelayMs: Long = 0,
     val isAudioBoostEnabled: Boolean = false,
-    val currentSubtitleText: String? = null
+    val currentSubtitleText: String? = null,
+    // Bumped whenever a subtitle preview finishes loading, so the overlay re-reads the
+    // SubtitleCueLoader cache. The cues themselves live in the loader, not in state.
+    val subtitleCuesVersion: Int = 0
 )

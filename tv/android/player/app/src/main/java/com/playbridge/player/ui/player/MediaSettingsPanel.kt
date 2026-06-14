@@ -31,7 +31,6 @@ fun MediaSettingsPanel(
     onSpeedSelected: (Float) -> Unit,
     onScalingSelected: (String) -> Unit,
     onToggleAudioBoost: () -> Unit,
-    onAdjustSubtitleDelay: (Long) -> Unit,
     onDismiss: () -> Unit
 ) {
     val activeTab = state.activeSettingsTab
@@ -79,7 +78,6 @@ fun MediaSettingsPanel(
                 val tabs = listOf(
                     SettingsTab.VIDEO to "Video",
                     SettingsTab.AUDIO to "Audio",
-                    SettingsTab.SUBTITLES to "Subtitles",
                     SettingsTab.SPEED to "Speed",
                     SettingsTab.SCALING to "Scaling"
                 )
@@ -110,12 +108,6 @@ fun MediaSettingsPanel(
                         AudioBoostItem(isEnabled = state.isAudioBoostEnabled, onClick = onToggleAudioBoost)
                         Box(modifier = Modifier.weight(1f)) {
                             UnifiedTrackList(state.audioTracks, onTrackSelected)
-                        }
-                    }
-                    SettingsTab.SUBTITLES -> Column {
-                        SubtitleDelayControl(delayMs = state.subtitleDelayMs, onAdjust = onAdjustSubtitleDelay)
-                        Box(modifier = Modifier.weight(1f)) {
-                            UnifiedTrackList(state.subtitleTracks, onTrackSelected)
                         }
                     }
                     SettingsTab.SPEED -> SpeedSettingsList(state.playbackSpeed, onSpeedSelected)
@@ -381,78 +373,3 @@ private fun AudioBoostItem(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun SubtitleDelayControl(
-    delayMs: Long,
-    onAdjust: (Long) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 8.dp, bottom = 12.dp)
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-            .padding(12.dp)
-    ) {
-        Text(
-            text = "Subtitle Sync",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            fontWeight = FontWeight.Bold
-        )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Button(
-                onClick = { onAdjust(-50L) },
-                contentPadding = PaddingValues(horizontal = 12.dp),
-                shape = ButtonDefaults.shape(RoundedCornerShape(4.dp)),
-                colors = ButtonDefaults.colors(
-                    containerColor = Color.White.copy(alpha = 0.1f),
-                    contentColor = Color.White
-                )
-            ) {
-                Text("-50ms", style = MaterialTheme.typography.labelSmall)
-            }
-
-            Text(
-                text = if (delayMs == 0L) "Synced" else "${delayMs}ms",
-                style = MaterialTheme.typography.labelLarge,
-                color = if (delayMs != 0L) Color(0xFF00D9FF) else Color.White,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-
-            Button(
-                onClick = { onAdjust(50L) },
-                contentPadding = PaddingValues(horizontal = 12.dp),
-                shape = ButtonDefaults.shape(RoundedCornerShape(4.dp)),
-                colors = ButtonDefaults.colors(
-                    containerColor = Color.White.copy(alpha = 0.1f),
-                    contentColor = Color.White
-                )
-            ) {
-                Text("+50ms", style = MaterialTheme.typography.labelSmall)
-            }
-        }
-        
-        if (delayMs != 0L) {
-            Button(
-                onClick = { onAdjust(-delayMs) },
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-                scale = ButtonDefaults.scale(focusedScale = 1.05f),
-                colors = ButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.Gray
-                )
-            ) {
-                Text("Reset to 0", style = MaterialTheme.typography.labelSmall)
-            }
-        }
-    }
-}
