@@ -49,7 +49,6 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
     private var player: ExoPlayer? = null
     private var trackSelector: DefaultTrackSelector? = null
-    private val videoFilterManager = VideoFilterManager()
 
     private val _state = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = _state.asStateFlow()
@@ -365,7 +364,6 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             .also { exoPlayer ->
                 logger.i(TAG, "ExoPlayer instance created")
                 exoPlayer.addListener(playerListener)
-                videoFilterManager.setPlayer(exoPlayer)
 
                 exoPlayer.setMediaSource(perItem.createMediaSource())
                 exoPlayer.prepare()
@@ -492,19 +490,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         // Implementation for external subtitles
     }
 
-    override fun setFilter(filter: VideoFilter, customParams: List<Float>?) {
-        logger.i(TAG, "setFilter($filter, customParams=$customParams)")
-        if (filter == VideoFilter.CUSTOM && customParams != null && customParams.size >= 3) {
-            videoFilterManager.applyCustom(customParams[0], customParams[1], customParams[2])
-        } else {
-            videoFilterManager.applyFilter(filter)
-        }
-    }
-
     override fun release() {
         logger.i(TAG, "release()")
         progressJob?.cancel()
-        videoFilterManager.setPlayer(null)
         player?.release()
         player = null
     }

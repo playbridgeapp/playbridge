@@ -223,25 +223,6 @@ class PlayerControlsViewModel : ViewModel() {
     }
 
 
-    fun showVideoFilter(
-        filter: com.playbridge.shared.player.VideoFilter,
-        brightness: Float,
-        contrast: Float,
-        saturation: Float,
-        preview: android.graphics.Bitmap?
-    ) {
-        _controlsState.update {
-            it.copy(
-                currentFilter = filter,
-                customBrightness = brightness,
-                customContrast = contrast,
-                customSaturation = saturation,
-                previewFrame = preview
-            )
-        }
-        showOverlay(ActiveOverlay.VIDEO_FILTER)
-    }
-
     /** Refresh the playlist data (picker contents + current index) WITHOUT opening the picker. */
     fun updatePlaylistData(items: List<playbridge.PlayPayload>, index: Int) {
         _controlsState.update {
@@ -295,23 +276,6 @@ class PlayerControlsViewModel : ViewModel() {
     
     fun setVideoScaling(mode: String) {
         _controlsState.update { it.copy(videoScalingMode = mode) }
-    }
-
-    /** Update the current filter state without opening the filter overlay (used for phone-driven changes). */
-    fun setVideoFilterState(
-        filter: com.playbridge.shared.player.VideoFilter,
-        brightness: Float,
-        contrast: Float,
-        saturation: Float
-    ) {
-        _controlsState.update {
-            it.copy(
-                currentFilter = filter,
-                customBrightness = brightness,
-                customContrast = contrast,
-                customSaturation = saturation
-            )
-        }
     }
 
     fun loadExternalSubtitle(url: String, headers: Map<String, String>? = null) {

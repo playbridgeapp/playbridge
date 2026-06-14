@@ -69,7 +69,6 @@ data class TvPlayerSettings(
     val scaling: String = "Fit",
     val audioBoost: Boolean = false,
     val subtitleOffsetMs: Long = 0L,
-    val filter: String = "NONE",
     val engine: String = ""
 )
 
@@ -130,7 +129,6 @@ fun RemoteControlScreen(
     onSetScaling: (String) -> Unit = {},
     onToggleAudioBoost: () -> Unit = {},
     onAdjustSubtitleOffset: (Long) -> Unit = {},
-    onSetFilter: (String) -> Unit = {},
     onSwitchEngine: (String) -> Unit = {},
     onAddSubtitleUrl: (String) -> Unit = {},
     onSearchSubtitles: (suspend () -> List<SubtitleOption>)? = null,
@@ -294,7 +292,6 @@ fun RemoteControlScreen(
             onSetScaling = onSetScaling,
             onToggleAudioBoost = onToggleAudioBoost,
             onAdjustSubtitleOffset = onAdjustSubtitleOffset,
-            onSetFilter = onSetFilter,
             onSwitchEngine = onSwitchEngine,
             onAddSubtitle = { showAddSubtitle = true },
             onDismiss = { showSettingsSheet = false }
@@ -1245,7 +1242,6 @@ private fun PlayerSettingsSheet(
     onSetScaling: (String) -> Unit,
     onToggleAudioBoost: () -> Unit,
     onAdjustSubtitleOffset: (Long) -> Unit,
-    onSetFilter: (String) -> Unit,
     onSwitchEngine: (String) -> Unit,
     onAddSubtitle: () -> Unit,
     onDismiss: () -> Unit
@@ -1296,18 +1292,6 @@ private fun PlayerSettingsSheet(
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Audio boost", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                 Switch(checked = settings.audioBoost, onCheckedChange = { onToggleAudioBoost() })
-            }
-
-            SettingRow("Video filter (ExoPlayer)") {
-                ChipGroup(
-                    options = listOf(
-                        "None" to "NONE", "HDR" to "HDR", "Night" to "NIGHT", "Movie" to "MOVIE",
-                        "Cinema" to "CINEMA", "Action" to "ACTION", "Deep Black" to "DEEP_BLACK",
-                        "Grayscale" to "GRAYSCALE", "Vivid" to "VIVID"
-                    ),
-                    selectedKey = settings.filter,
-                    onSelect = onSetFilter
-                )
             }
 
             SettingRow("Player engine") {

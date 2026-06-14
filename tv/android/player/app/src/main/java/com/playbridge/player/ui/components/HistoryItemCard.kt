@@ -17,7 +17,6 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.playbridge.player.data.PlaybackHistoryItem
-import java.io.File
 
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -48,10 +47,10 @@ fun HistoryItemCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.BottomCenter
             ) {
-                if (item.thumbnailPath != null) {
+                if (item.thumbnailUrl != null) {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
-                            .data(File(item.thumbnailPath))
+                            .data(item.thumbnailUrl)
                             .crossfade(true)
                             .build(),
                         contentDescription = null,

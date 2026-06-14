@@ -20,17 +20,19 @@ class HistoryResumeStore(private val historyStore: HistoryStore) : ResumeStore {
     }
 
     override suspend fun savePosition(url: String, positionMs: Long) {
-        // HistoryStore.saveProgress requires title/duration which we don't have here.
-        // For the resume-store interface we only need position; we store a minimal
-        // entry with empty title and zero duration so that the next full save
-        // from the Activity (with thumbnail, title, etc.) overwrites it cleanly.
+        // The resume-store interface only carries a position. Store a minimal one-item
+        // payload keyed on the URL so the next full save from the Activity (with the real
+        // payload, thumbnail, title, etc.) overwrites it cleanly.
+        val payloadJson = com.playbridge.shared.protocol.encodePlaylistPayloadJson(
+            playbridge.PlaylistPayload(items = listOf(playbridge.PlayPayload(url = url)))
+        )
         historyStore.saveProgress(
+            id = url,
+            payloadJson = payloadJson,
             url = url,
             title = null,
             position = positionMs,
             duration = 0L,
-            contentType = null,
-            headers = null,
         )
     }
 }
