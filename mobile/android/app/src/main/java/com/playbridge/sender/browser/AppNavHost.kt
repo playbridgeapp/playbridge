@@ -79,6 +79,11 @@ fun AppNavHost(
     onScreenChange: (Screen) -> Unit,
     lastMainScreen: Screen,
     onLastMainScreenChange: (Screen) -> Unit,
+    // Where the Remote screen's Back should return (the screen it was opened from);
+    // defaults to lastMainScreen at the call site when no origin was recorded.
+    remoteReturnScreen: Screen = lastMainScreen,
+    // Where the Dashboard's close (X) should return — the screen it was opened from.
+    dashboardReturnScreen: Screen = lastMainScreen,
     innerPadding: PaddingValues,
 
     // Session & Tab Management
@@ -94,6 +99,8 @@ fun AppNavHost(
     backPressedTime: Long,
     onBackPressedTimeChange: (Long) -> Unit,
     onFinishActivity: () -> Unit,
+    // Full app exit (Dashboard "Exit" button): tears down the cast session/service before finishing.
+    onFullExit: () -> Unit = onFinishActivity,
 
     // Global dialog / Sheet triggers (stateless state bindings)
     showVideoSheet: Boolean,
@@ -206,6 +213,24 @@ fun AppNavHost(
     // Poster dominant color reported by the library detail screen — themes the
     // NowPlayingBar to match while that screen is up.
     var libraryDetailAccent by remember { mutableStateOf<androidx.compose.ui.graphics.Color?>(null) }
+
+    // Phone Files UI state, hoisted here so the user's tab/search/sort/folder/scroll survive
+    // leaving and returning to the screen (AnimatedContent disposes the screen content).
+    val phoneFilesUiState = remember { PhoneFilesUiState() }
+
+    // Device picker opened from the idle cast bar (rendered once at the host level so
+    // it survives screen transitions in the AnimatedContent below).
+    var showDevicePicker by remember { mutableStateOf(false) }
+    if (showDevicePicker) {
+        DeviceConnectionSheet(
+            onDismiss = { showDevicePicker = false },
+            onOpenAllDevices = {
+                showDevicePicker = false
+                onScreenChange(Screen.Connection)
+            },
+            showThisDevice = true,
+        )
+    }
 
     AnimatedContent(
         targetState = currentScreen,
@@ -496,7 +521,7 @@ fun AppNavHost(
                     )
                 }
                 Screen.CastHistory -> {
-                    BackHandler { onScreenChange(lastMainScreen) }
+                    BackHandler { onScreenChange(Screen.Dashboard) }
                     val db = com.playbridge.sender.data.history.DatabaseProvider.getDatabase(context)
                     val commandHistoryFlow = remember { db.commandHistoryDao().getAll() }
                     val commandHistory by commandHistoryFlow.collectAsState(initial = emptyList())
@@ -589,7 +614,7 @@ fun AppNavHost(
                     }
                 }
                 Screen.Connection -> {
-                    BackHandler { onScreenChange(lastMainScreen) }
+                    BackHandler { onScreenChange(Screen.Dashboard) }
                     ConnectionScreen(
                         viewModel = connectionViewModel,
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
@@ -644,7 +669,7 @@ fun AppNavHost(
                 }
                 Screen.Remote -> {
                     BackHandler {
-                        onScreenChange(lastMainScreen)
+                        onScreenChange(remoteReturnScreen)
                     }
                     val dlna = activeDlnaTarget
                     if (dlna != null) {
@@ -652,7 +677,7 @@ fun AppNavHost(
                         // with dlnaMode hiding native-only controls (tracks/volume/loop).
                         RemoteControlScreen(
                             activeContext = "player",
-                            onBack = { onScreenChange(lastMainScreen) },
+                            onBack = { onScreenChange(remoteReturnScreen) },
                             onRemoteKey = {},
                             onMouseMove = { _, _ -> },
                             onMouseClick = {},
@@ -745,7 +770,7 @@ fun AppNavHost(
                             suspendLambda
                         },
                         onBack = {
-                            onScreenChange(lastMainScreen)
+                            onScreenChange(remoteReturnScreen)
                         },
                         onRemoteKey = { key ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createRemoteCommandJson(key))
@@ -796,7 +821,7 @@ fun AppNavHost(
                         if (selectedTabVal != 0) {
                             libraryViewModel.setSelectedTab(0)
                         } else {
-                            onFinishActivity()
+                            onScreenChange(Screen.Dashboard)
                         }
                     }
                     LibraryScreen(
@@ -1214,7 +1239,17 @@ fun AppNavHost(
                     )
                 }
                 Screen.Dashboard -> {
-                    BackHandler { onScreenChange(lastMainScreen) }
+                    // The Dashboard is "home" — Back here double-taps to exit (soft finish;
+                    // an active cast keeps running in the background).
+                    BackHandler {
+                        val now = System.currentTimeMillis()
+                        if (now - backPressedTime > 2000) {
+                            onBackPressedTimeChange(now)
+                            Toast.makeText(context, "Press back again to exit", Toast.LENGTH_SHORT).show()
+                        } else {
+                            onFinishActivity()
+                        }
+                    }
                     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
                     DashboardScreen(
                         currentScreen = lastMainScreen,
@@ -1223,19 +1258,22 @@ fun AppNavHost(
                         connectedDeviceName = tvDevice?.name,
                         onNavigate = { screen ->
                             onScreenChange(screen)
-                        }
+                        },
+                        onExit = onFullExit,
+                        onClose = { onScreenChange(dashboardReturnScreen) },
                     )
                 }
                 Screen.PhoneFiles -> {
                     BackHandler { onScreenChange(Screen.Dashboard) }
                     PhoneFilesScreen(
                         viewModel = connectionViewModel,
+                        uiState = phoneFilesUiState,
                         onBack = { onScreenChange(Screen.Dashboard) },
                         onOpenAllDevices = { onScreenChange(Screen.Connection) },
                     )
                 }
                 Screen.DebridLibrary -> {
-                    BackHandler { onFinishActivity() }
+                    BackHandler { onScreenChange(Screen.Dashboard) }
                     DebridLibraryScreen(
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
                         onCopyUrl = { linkUrl ->
@@ -1250,67 +1288,106 @@ fun AppNavHost(
                 }
             }
 
-            // ── Now-playing mini-bar ─────────────────────────────────────────────
-            // Persistent across the main (non-browser) screens while a cast session is
-            // active; tap → Remote. Hidden on Browser (bottom toolbar), Remote
-            // (redundant), and the other full-bleed screens.
-            val showNowPlayingBar = targetScreen == Screen.Dashboard ||
-                targetScreen == Screen.Library ||
-                targetScreen == Screen.Connection ||
+            // ── Cast mini-bar ────────────────────────────────────────────────────
+            // Permanent across the main (non-browser) screens. Two modes:
+            //  • Playing (a cast session has media loaded): title + "on <device>" +
+            //    play/pause; tap → Remote.
+            //  • Idle (nothing playing): shows the current destination (connected TV /
+            //    renderer, or "This Device" when nothing is connected); tap → device picker.
+            // Hidden on Browser (bottom toolbar), Remote (redundant), and full-bleed screens.
+            // Note: excluded on Dashboard (overlays the "Exit" button) and on Connection
+            // (the device picker lives there already).
+            val showNowPlayingBar = targetScreen == Screen.Library ||
                 targetScreen == Screen.PhoneFiles ||
                 targetScreen == Screen.DebridLibrary ||
                 targetScreen is Screen.LibraryDetail
             if (showNowPlayingBar) {
                 val dlnaActive = activeDlnaTarget != null
-                val dlnaHasMedia = dlnaActive && (dlnaMediaTitle != null || dlnaStatus != null)
-                val nativePlaying = tvActiveContext == "player" &&
-                    connectionState is WebSocketClient.ConnectionState.Connected
-                if (dlnaHasMedia || nativePlaying) {
-                    NowPlayingBar(
-                        deviceName = activeDlnaTarget?.name ?: tvDevice?.name ?: "TV",
-                        title = if (dlnaActive) dlnaMediaTitle else tvPlayback?.title,
-                        isPlaying = if (dlnaActive) {
-                            dlnaStatus?.state == PlaybackState.PLAYING
-                        } else {
-                            tvPlayback?.state == "playing"
-                        },
-                        isDlna = dlnaActive,
-                        onPlayPause = {
-                            if (dlnaActive) {
-                                if (dlnaStatus?.state == PlaybackState.PLAYING) {
-                                    connectionViewModel.dlnaPause()
-                                } else {
-                                    connectionViewModel.dlnaPlay()
-                                }
+                // A stopped/ended/errored renderer (incl. after Stop) is not "playing", even
+                // though the status poll keeps reporting a (STOPPED) status.
+                val dlnaState = dlnaStatus?.state
+                val dlnaStopped = dlnaState == PlaybackState.STOPPED ||
+                    dlnaState == PlaybackState.IDLE ||
+                    dlnaState == PlaybackState.ERROR
+                val dlnaHasMedia = dlnaActive && dlnaMediaTitle != null && !dlnaStopped
+                val wsConnected = connectionState is WebSocketClient.ConnectionState.Connected
+                val nativePlaying = tvActiveContext == "player" && wsConnected
+                val playing = dlnaHasMedia || nativePlaying
+
+                val deviceName = activeDlnaTarget?.name ?: tvDevice?.name
+                val leadingIcon = when {
+                    dlnaActive -> Icons.Default.Cast
+                    wsConnected -> Icons.Default.Tv
+                    else -> Icons.Default.Smartphone
+                }
+
+                val primaryText: String
+                val secondaryText: String?
+                when {
+                    playing -> {
+                        primaryText = (if (dlnaActive) dlnaMediaTitle else tvPlayback?.title) ?: "Now playing"
+                        secondaryText = "on ${deviceName ?: "TV"}"
+                    }
+                    dlnaActive || wsConnected -> {
+                        primaryText = deviceName ?: "TV"
+                        secondaryText = "Ready to cast"
+                    }
+                    else -> {
+                        primaryText = "This Device"
+                        secondaryText = "Tap to cast to a device"
+                    }
+                }
+
+                NowPlayingBar(
+                    primaryText = primaryText,
+                    secondaryText = secondaryText,
+                    leadingIcon = leadingIcon,
+                    showPlayPause = playing,
+                    isPlaying = if (dlnaActive) {
+                        dlnaStatus?.state == PlaybackState.PLAYING
+                    } else {
+                        tvPlayback?.state == "playing"
+                    },
+                    onPlayPause = {
+                        if (dlnaActive) {
+                            if (dlnaStatus?.state == PlaybackState.PLAYING) {
+                                connectionViewModel.dlnaPause()
                             } else {
-                                val cmd = if (tvPlayback?.state == "playing") "pause" else "play"
-                                connectionViewModel.webSocketClient.send(
-                                    com.playbridge.shared.protocol.createControlCommandJson(cmd)
-                                )
+                                connectionViewModel.dlnaPlay()
                             }
-                        },
-                        onClick = {
+                        } else {
+                            val cmd = if (tvPlayback?.state == "playing") "pause" else "play"
+                            connectionViewModel.webSocketClient.send(
+                                com.playbridge.shared.protocol.createControlCommandJson(cmd)
+                            )
+                        }
+                    },
+                    onClick = {
+                        if (playing) {
                             if (!dlnaActive) {
                                 connectionViewModel.webSocketClient.send(
                                     com.playbridge.shared.protocol.createContextQueryJson()
                                 )
                             }
                             onScreenChange(Screen.Remote)
-                        },
-                        // Poster-matched accent on the library detail screen (the old FAB's
-                        // dynamic styling); FAB-like primaryContainer elsewhere.
-                        accentColor = if (targetScreen is Screen.LibraryDetail) libraryDetailAccent else null,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            // Clear the system navigation bar, plus the Library's bottom
-                            // NavigationBar (80dp content height) on the Library screen.
-                            .padding(
-                                bottom = WindowInsets.navigationBars.asPaddingValues()
-                                    .calculateBottomPadding() +
-                                    if (targetScreen == Screen.Library) 80.dp else 0.dp
-                            )
-                    )
-                }
+                        } else {
+                            // Idle → choose / switch the cast destination.
+                            showDevicePicker = true
+                        }
+                    },
+                    // Poster-matched accent on the library detail screen (the old FAB's
+                    // dynamic styling); FAB-like primaryContainer elsewhere.
+                    accentColor = if (targetScreen is Screen.LibraryDetail) libraryDetailAccent else null,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        // Clear the system navigation bar, plus the Library's bottom
+                        // NavigationBar (80dp content height) on the Library screen.
+                        .padding(
+                            bottom = WindowInsets.navigationBars.asPaddingValues()
+                                .calculateBottomPadding() +
+                                if (targetScreen == Screen.Library) 80.dp else 0.dp
+                        )
+                )
             }
         }
     }

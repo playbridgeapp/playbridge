@@ -9,10 +9,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,25 +21,34 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
- * Persistent "now casting" mini-bar shown across the main screens while a cast session
- * is active (native receiver in player context, or a DLNA renderer with media loaded).
- * Tap → the Remote / now-playing screen; the trailing button toggles play/pause.
+ * Persistent cast mini-bar shown across the main screens. It has two visual modes:
  *
- * Styling follows the old remote FAB it replaces: [accentColor] (e.g. the library
- * detail poster's dominant color) fills the bar with a luminance-picked content color;
- * without an accent it uses the FAB's primaryContainer look.
+ *  - **Playing** ([showPlayPause] = true): a cast session is active with media loaded —
+ *    shows the title + "on <device>" and a play/pause button; tapping opens the Remote.
+ *  - **Idle** ([showPlayPause] = false): no media is playing — shows the current cast
+ *    destination (a connected TV/renderer, or "This Device" when nothing is connected) and
+ *    tapping opens the device picker. No play/pause button.
+ *
+ * The bar is intentionally "dumb": the host computes [primaryText]/[secondaryText]/[leadingIcon]
+ * and the mode flags from the live connection state.
+ *
+ * Styling follows the old remote FAB it replaced: [accentColor] (e.g. the library detail
+ * poster's dominant color) fills the bar with a luminance-picked content color; without an
+ * accent it uses the FAB's primaryContainer look.
  */
 @Composable
 fun NowPlayingBar(
-    deviceName: String,
-    title: String?,
+    primaryText: String,
+    secondaryText: String?,
+    leadingIcon: ImageVector,
+    showPlayPause: Boolean,
     isPlaying: Boolean,
-    isDlna: Boolean,
     onPlayPause: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -69,34 +76,38 @@ fun NowPlayingBar(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Icon(
-                imageVector = if (isDlna) Icons.Default.Cast else Icons.Default.Tv,
+                imageVector = leadingIcon,
                 contentDescription = null,
                 tint = content,
                 modifier = Modifier.size(20.dp),
             )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = title ?: "Now playing",
+                    text = primaryText,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = content,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = "on $deviceName",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = content.copy(alpha = 0.75f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (secondaryText != null) {
+                    Text(
+                        text = secondaryText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = content.copy(alpha = 0.75f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-            IconButton(onClick = onPlayPause) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = content,
-                )
+            if (showPlayPause) {
+                IconButton(onClick = onPlayPause) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = content,
+                    )
+                }
             }
         }
     }
