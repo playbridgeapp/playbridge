@@ -17,6 +17,38 @@ extension PlayPayloadX on PlayPayload {
       headers.isEmpty ? null : Map.unmodifiable(headers);
   List<String>? get subtitlesOrNull =>
       subtitles.isEmpty ? null : List.unmodifiable(subtitles);
+  int? get startPositionMsOrNull =>
+      hasStartPositionMs() ? startPositionMs.toInt() : null;
+  String? get bingeGroupOrNull => hasBingeGroup() ? bingeGroup : null;
+  int? get seasonOrNull => hasVisualMetadata() && visualMetadata.hasSeason()
+      ? visualMetadata.season
+      : null;
+  int? get episodeOrNull => hasVisualMetadata() && visualMetadata.hasEpisode()
+      ? visualMetadata.episode
+      : null;
+  String? get imdbIdOrNull => hasVisualMetadata() && visualMetadata.hasImdbId()
+      ? visualMetadata.imdbId
+      : null;
+
+  String? _vm(
+      bool Function(VisualMetadata) has, String Function(VisualMetadata) get) {
+    if (!hasVisualMetadata()) return null;
+    if (!has(visualMetadata)) return null;
+    final v = get(visualMetadata);
+    return v.isEmpty ? null : v;
+  }
+
+  String? get backdropUrlOrNull =>
+      _vm((m) => m.hasBackdropUrl(), (m) => m.backdropUrl);
+  String? get posterUrlOrNull =>
+      _vm((m) => m.hasPosterUrl(), (m) => m.posterUrl);
+  String? get logoUrlOrNull => _vm((m) => m.hasLogoUrl(), (m) => m.logoUrl);
+  String? get overviewOrNull => _vm((m) => m.hasOverview(), (m) => m.overview);
+  String? get yearOrNull => _vm((m) => m.hasYear(), (m) => m.year);
+  String? get ratingOrNull => _vm((m) => m.hasRating(), (m) => m.rating);
+  String? get runtimeOrNull => _vm((m) => m.hasRuntime(), (m) => m.runtime);
+  String? get episodeTitleOrNull =>
+      _vm((m) => m.hasEpisodeTitle(), (m) => m.episodeTitle);
 }
 
 // ==================== Command sealed class ====================
@@ -198,13 +230,52 @@ String statusJson({
       if (title != null) 'title': title,
     });
 
+/// Outgoing `tracks` message: the phone remote renders these as the
+/// audio/subtitle chips and replies with `audio_track:<id>`/`sub_track:<id>`.
+String tracksJson({
+  required List<({String id, String name, bool selected})> audio,
+  required List<({String id, String name, bool selected})> subtitle,
+}) =>
+    jsonEncode({
+      'type': 'tracks',
+      'audio': [
+        for (final t in audio)
+          {'id': t.id, 'name': t.name, 'selected': t.selected},
+      ],
+      'subtitle': [
+        for (final t in subtitle)
+          {'id': t.id, 'name': t.name, 'selected': t.selected},
+      ],
+    });
+
+/// One entry of an outgoing `playlist_status`. The optional metadata mirrors
+/// the Android receiver's echo (season/episode/imdbId/bingeGroup) so the phone
+/// can re-attach its lazy episode queue and match watch progress.
+typedef PlaylistStatusItem = ({
+  int index,
+  String title,
+  int? season,
+  int? episode,
+  String? imdbId,
+  String? bingeGroup,
+});
+
 String playlistStatusJson({
-  required List<({int index, String title})> items,
+  required List<PlaylistStatusItem> items,
   required int currentIndex,
 }) =>
     jsonEncode({
       'type': 'playlist_status',
-      'items': items.map((e) => {'index': e.index, 'title': e.title}).toList(),
+      'items': items
+          .map((e) => {
+                'index': e.index,
+                'title': e.title,
+                if (e.season != null) 'season': e.season,
+                if (e.episode != null) 'episode': e.episode,
+                if (e.imdbId != null) 'imdbId': e.imdbId,
+                if (e.bingeGroup != null) 'bingeGroup': e.bingeGroup,
+              })
+          .toList(),
       'currentIndex': currentIndex,
       'totalCount': items.length,
     });

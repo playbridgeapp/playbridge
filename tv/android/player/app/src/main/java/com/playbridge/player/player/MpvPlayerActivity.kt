@@ -3,7 +3,6 @@ package com.playbridge.player.player
 import com.playbridge.shared.player.PlaybackEngine
 import com.playbridge.shared.player.PlaybackState
 import com.playbridge.shared.player.MpvPlayerEngine
-import com.playbridge.shared.player.VideoFilter
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -184,10 +183,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
     })
 
+    /** Live queue (incl. queue_add-appended episodes) for engine switches. */
+    override fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
+        coordinator.playlist to coordinator.index
+
     private var playJob: kotlinx.coroutines.Job? = null
     private lateinit var composeView: androidx.compose.ui.platform.ComposeView
     private var navigationJob: kotlinx.coroutines.Job? = null
-    private val videoFilterManager = com.playbridge.shared.player.VideoFilterManager()
     private val contentSniffer = ContentSniffer()
     private var surfaceReadyDeferred = kotlinx.coroutines.CompletableDeferred<Unit>()
 
@@ -228,41 +230,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun getPlayerProgressManager(): ProgressManager? = if (::progressManager.isInitialized) progressManager else null
 
-    override fun showVideoFilterDialog() {
-        showVideoFilterOverlay()
-    }
-
-    private fun showVideoFilterOverlay() {
-        val wasPlaying = isPlaying()
-        if (wasPlaying) pause()
-        
-        val currentFilter = videoFilterManager.currentFilter
-        val customVals = floatArrayOf(videoFilterManager.customBrightness, videoFilterManager.customContrast, videoFilterManager.customSaturation)
-
-        // Capture snapshot for preview
-        val surfaceView = findViewById<android.view.SurfaceView>(com.playbridge.player.R.id.surface_view)
-        surfaceView?.let { sv ->
-            try {
-                val bitmap = android.graphics.Bitmap.createBitmap(sv.width, sv.height, android.graphics.Bitmap.Config.ARGB_8888)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                    android.view.PixelCopy.request(sv, bitmap, { result ->
-                        if (result == android.view.PixelCopy.SUCCESS) {
-                            controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], bitmap)
-                        } else {
-                            controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], null)
-                        }
-                    }, android.os.Handler(android.os.Looper.getMainLooper()))
-                } else {
-                    controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], null)
-                }
-            } catch (e: Exception) {
-                controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], null)
-            }
-        } ?: run {
-            controlsViewModel.showVideoFilter(currentFilter, customVals[0], customVals[1], customVals[2], null)
-        }
-    }
-
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -298,14 +265,17 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     PlayerControlsOverlay(
                         state = state,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
-                        onTrackSelection = { 
+                        onTrackSelection = {
                             updateUnifiedTracks()
-                            controlsViewModel.showSettings(SettingsTab.AUDIO) 
+                            controlsViewModel.showSettings(SettingsTab.AUDIO)
+                        },
+                        onSubtitles = {
+                            updateUnifiedTracks()
+                            controlsViewModel.showSubtitles()
                         },
                         onPlaylist = { showPlaylistOverlay() },
                         onPrev = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.previous() } },
                         onNext = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.next() } },
-                        onFilter = { showVideoFilterOverlay() },
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
                         onSeek = { controlsViewModel.handleScrubbing(it) },
@@ -342,7 +312,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                             switchPlayer(playerId)
                         },
                         onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
-                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) }
+                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) },
+                        onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) }
                     )
                 }
             }
@@ -823,6 +794,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             currentSubtitleUrl = subtitles.firstOrNull()
         }
         this.currentHeaders = headers
+        controlsViewModel.subtitleRequestHeaders = headers
+        SubtitleCueLoader.clear()
         playVideo(url, headers, subtitles = subtitles)
     }
 
@@ -873,40 +846,38 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         // seekTo() will intercept this call while durationMs == 0 (file not yet loaded)
         // and stash the position in pendingResumePositionMs; it is applied on FILE_LOADED.
-        val historyItem = progressManager.restoreProgress(url)
-        if (historyItem != null) {
-            // Apply playback speed
-            if (historyItem.playbackSpeed != null) {
-                currentPlaybackSpeed = historyItem.playbackSpeed
-                engine?.setRate(currentPlaybackSpeed)
-            }
-            // Apply saved external subtitle URL; takes priority over any session-carried sub
-            if (historyItem.externalSubtitleUrl != null) {
-                currentSubtitleUrl = historyItem.externalSubtitleUrl
-            } else if (!subtitles.isNullOrEmpty()) {
-                currentSubtitleUrl = subtitles[0]
-            } else {
-                currentSubtitleUrl = null
-            }
-        } else {
-            if (!subtitles.isNullOrEmpty()) {
-                currentSubtitleUrl = subtitles[0]
-            } else {
-                currentSubtitleUrl = null
-            }
-        }
+        // History only carries the position now — the subtitle comes from the payload.
+        progressManager.restoreProgress(url)
+        currentSubtitleUrl = subtitles?.firstOrNull()
+
+        // History persistence: raw PlaylistPayload (items carry subtitles/headers) + a
+        // stable, index-independent key. Prefer the live coordinator queue; fall back to a
+        // one-item payload when there is no queue.
+        val historyItems = if (!coordinator.isEmpty) coordinator.playlist else listOf(
+            playbridge.PlayPayload(
+                url = url,
+                title = controlsViewModel.getTitle(),
+                headers = headers ?: emptyMap(),
+                subtitles = subtitles ?: emptyList(),
+            )
+        )
+        val historyIndex = if (!coordinator.isEmpty) coordinator.index else 0
+        val historyPayloadJson = try {
+            PlayerLauncher.historyPayloadJson(historyItems, historyIndex)
+        } catch (e: Exception) { "" }
+        val historyId = PlayerLauncher.historyId(historyItems)
+        val historyVm = historyItems.getOrNull(historyIndex)?.visual_metadata
+        // History card is a 16:9 box, so prefer the landscape backdrop; fall back to poster.
+        val historyThumbnailUrl = historyVm?.backdrop_url ?: historyVm?.poster_url
 
         progressManager.setCurrentMedia(
             url = url,
             title = controlsViewModel.getTitle(),
             contentType = null,
             headers = headers,
-            playlistJson = if (!coordinator.isEmpty) {
-                try {
-                    com.playbridge.shared.protocol.encodePlayPayloadListJson(coordinator.playlist)
-                } catch (e: Exception) { null }
-            } else null,
-            playlistIndex = coordinator.index,
+            payloadJson = historyPayloadJson,
+            historyId = historyId,
+            thumbnailUrl = historyThumbnailUrl,
             externalSubtitleUrl = currentSubtitleUrl,
             playbackSpeed = currentPlaybackSpeed
         )
@@ -915,6 +886,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         if (startPos > 0L) {
             pendingResumePositionMs = startPos
         }
+        // Write the entry immediately so it survives a force-kill before the first save.
+        progressManager.recordLanded(startPos.coerceAtLeast(0L))
 
         // Only stop/reset the engine if it's currently doing something, to avoid redundant
         // END_FILE events during rapid transitions.

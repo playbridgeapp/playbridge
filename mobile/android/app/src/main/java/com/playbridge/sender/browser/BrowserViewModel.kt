@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mozilla.components.browser.state.state.ContentState
+import mozilla.components.browser.state.state.EngineState
 import mozilla.components.browser.state.state.TabSessionState
 import mozilla.components.browser.state.store.BrowserStore
 
@@ -125,18 +126,19 @@ class BrowserViewModel(
                             TabSessionState(
                                 id = entity.id,
                                 content = ContentState(url = entity.url, title = entity.title ?: ""),
-                                parentId = entity.parentId
+                                parentId = entity.parentId,
+                                // EngineMiddleware restores history/state from this when
+                                // the tab needs an engine session (handles both the AC
+                                // format and legacy raw-gecko-JSON DB rows).
+                                engineState = EngineState(
+                                    engineSessionState = TabManager.bytesToEngineState(entity.sessionState)
+                                )
                             )
                         }
                         val selectedId = savedTabs.find { it.isSelected }?.id
-                        
+
                         withContext(Dispatchers.Main) {
-                            Log.d("PB_STARTUP", "Populating savedStates and calling restoreTabs on Main thread")
-                            savedTabs.forEach { entity ->
-                                entity.sessionState?.let { bytes ->
-                                    tabManager.savedStates[entity.id] = bytes
-                                }
-                            }
+                            Log.d("PB_STARTUP", "Calling restoreTabs on Main thread")
                             tabManager.restoreTabs(sessionTabs, selectedId, store)
                             Log.d("PB_STARTUP", "restoreTabs done — store now has ${store.state.tabs.size} tabs")
                         }

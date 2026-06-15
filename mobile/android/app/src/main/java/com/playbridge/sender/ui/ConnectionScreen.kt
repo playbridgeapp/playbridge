@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
@@ -60,46 +61,9 @@ fun ConnectionScreen(
     // the old split Discovered/Known sections, whose dedup left "Discovered" stuck
     // on an endless "Searching…" spinner once every TV on the network was saved.
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
-    val isConnecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
-        connectionState is WebSocketClient.ConnectionState.WaitingForApproval
-    val isScanning = !isConnected && !isConnecting
+    val isScanning by viewModel.isScanning.collectAsState()
 
-    fun liveMatch(device: TvDevice): TvDevice? =
-        if (device.uuid.isNotEmpty()) discoveredDevices.find { it.uuid == device.uuid }
-        else discoveredDevices.find { it.ip == device.ip && it.port == device.port }
-
-    val knownUuids = history.mapNotNull { it.uuid.takeIf(String::isNotEmpty) }.toSet()
-    val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
-
-    val knownDevices = history.map { saved ->
-        val live = liveMatch(saved)
-        UnifiedDevice(
-            // A saved entry's IP/port can go stale; prefer the live mDNS values when online.
-            connectDevice = if (live != null)
-                saved.copy(ip = live.ip, port = live.port, wssPort = live.wssPort ?: saved.wssPort)
-            else saved,
-            historyEntry = saved,
-            isOnline = live != null,
-            lastConnected = saved.lastConnected
-        )
-    }
-    val newDevices = discoveredDevices
-        .filter { d -> if (d.uuid.isNotEmpty()) d.uuid !in knownUuids else "${d.ip}:${d.port}" !in knownIpPorts }
-        .map { UnifiedDevice(connectDevice = it, historyEntry = null, isOnline = true, lastConnected = null) }
-
-    val unifiedDevices = (newDevices + knownDevices)
-        // The currently-connected TV has its own card above; don't list it twice.
-        .filterNot { u ->
-            isConnected && tvDevice?.let { c ->
-                (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
-                    (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
-            } == true
-        }
-        .sortedWith(
-            compareByDescending<UnifiedDevice> { it.isOnline }
-                // Newly-discovered (no lastConnected) sort to the top of the online group.
-                .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
-        )
+    val unifiedDevices = buildUnifiedDevices(discoveredDevices, history, tvDevice, isConnected)
     
     // Start discovery when screen is visible
     DisposableEffect(Unit) {
@@ -134,22 +98,9 @@ fun ConnectionScreen(
         }
     }
 
-    // When a device is selected, check history for a saved token.
-    fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") {
-        val existing = if (uuid.isNotEmpty()) {
-            history.find { it.uuid == uuid } ?: history.find { it.ip == ip && it.port == port }
-        } else {
-            history.find { it.ip == ip && it.port == port }
-        }
-
-        if (existing != null && existing.token.isNotEmpty()) {
-            // Saved token — reconnect directly (no pairing prompt).
-            viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
-        } else {
-            // No token — connect with empty token; WebSocketClient will send pairing_request.
-            viewModel.connect(TvDevice(ip = ip, port = port, token = "", name = name, uuid = uuid))
-        }
-    }
+    // When a device is selected, check history for a saved token (shared with the device-picker sheet).
+    fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") =
+        connectKnownOrPair(viewModel, history, ip, port, name, uuid)
 
     Scaffold(
         topBar = {
@@ -404,84 +355,92 @@ fun ConnectionScreen(
             }
 
             // Your TVs — unified list of saved + currently-discovered devices.
-            if (unifiedDevices.isNotEmpty() || isScanning) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Your TVs",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (isScanning) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                Text(
-                                    "Scanning…",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+            // Always shown so the Rescan affordance is available after a scan window
+            // elapses (discovery is time-boxed — see ConnectionViewModel.startDiscovery).
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Your TVs",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (isScanning) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Text(
+                                "Scanning…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = { viewModel.rescan() }) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Rescan for TVs",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                         }
                     }
                 }
+            }
 
-                if (unifiedDevices.isEmpty()) {
-                    // First run: nothing saved and nothing discovered on the network yet.
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                            )
+            if (unifiedDevices.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "Looking for TVs on your network…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Text(
+                                if (isScanning) "Looking for TVs on your network…"
+                                else "No TVs found. Tap the refresh icon to scan again.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
-                } else {
-                    items(unifiedDevices) { device ->
-                        TvDeviceRow(
-                            device = device,
-                            onClick = {
-                                if (device.connectDevice.isDlna) {
-                                    viewModel.selectDlnaTarget(device.connectDevice)
-                                    coroutineScope.launch {
-                                        snackbarHostState.showSnackbar(
-                                            "Selected ${device.connectDevice.name} — cast a video to play here"
-                                        )
-                                    }
-                                } else {
-                                    onDeviceSelected(
-                                        device.connectDevice.ip,
-                                        device.connectDevice.port,
-                                        device.connectDevice.name,
-                                        device.connectDevice.uuid
+                }
+            } else {
+                items(unifiedDevices) { device ->
+                    TvDeviceRow(
+                        device = device,
+                        onClick = {
+                            if (device.connectDevice.isDlna) {
+                                viewModel.selectDlnaTarget(device.connectDevice)
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "Selected ${device.connectDevice.name} — cast a video to play here"
                                     )
                                 }
-                            },
-                            onRemove = device.historyEntry?.let { entry ->
-                                { viewModel.removeDeviceFromHistory(entry) }
+                            } else {
+                                onDeviceSelected(
+                                    device.connectDevice.ip,
+                                    device.connectDevice.port,
+                                    device.connectDevice.name,
+                                    device.connectDevice.uuid
+                                )
                             }
-                        )
-                    }
+                        },
+                        onRemove = device.historyEntry?.let { entry ->
+                            { viewModel.removeDeviceFromHistory(entry) }
+                        }
+                    )
                 }
             }
         }
@@ -512,6 +471,79 @@ data class UnifiedDevice(
     val lastConnected: Long?
 ) {
     val isKnown: Boolean get() = historyEntry != null
+}
+
+/**
+ * Merge saved + freshly-discovered TVs into a single "Your TVs" list, annotated with live online
+ * status. Shared by [ConnectionScreen] and the device-picker sheet so both show identical results.
+ * Saved entries adopt live mDNS ip/port when online (a saved address can go stale); the
+ * currently-connected device is dropped (it has its own card above the list).
+ */
+fun buildUnifiedDevices(
+    discovered: List<TvDevice>,
+    history: List<TvDevice>,
+    connectedDevice: TvDevice?,
+    isConnected: Boolean
+): List<UnifiedDevice> {
+    fun liveMatch(device: TvDevice): TvDevice? =
+        if (device.uuid.isNotEmpty()) discovered.find { it.uuid == device.uuid }
+        else discovered.find { it.ip == device.ip && it.port == device.port }
+
+    val knownUuids = history.mapNotNull { it.uuid.takeIf(String::isNotEmpty) }.toSet()
+    val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
+
+    val knownDevices = history.map { saved ->
+        val live = liveMatch(saved)
+        UnifiedDevice(
+            connectDevice = if (live != null)
+                saved.copy(ip = live.ip, port = live.port, wssPort = live.wssPort ?: saved.wssPort)
+            else saved,
+            historyEntry = saved,
+            isOnline = live != null,
+            lastConnected = saved.lastConnected
+        )
+    }
+    val newDevices = discovered
+        .filter { d -> if (d.uuid.isNotEmpty()) d.uuid !in knownUuids else "${d.ip}:${d.port}" !in knownIpPorts }
+        .map { UnifiedDevice(connectDevice = it, historyEntry = null, isOnline = true, lastConnected = null) }
+
+    return (newDevices + knownDevices)
+        .filterNot { u ->
+            isConnected && connectedDevice?.let { c ->
+                (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
+                    (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
+            } == true
+        }
+        .sortedWith(
+            compareByDescending<UnifiedDevice> { it.isOnline }
+                // Newly-discovered (no lastConnected) sort to the top of the online group.
+                .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
+        )
+}
+
+/**
+ * Connect to a TV, reusing a saved pairing token when we have one (silent reconnect) and otherwise
+ * connecting with an empty token so [WebSocketClient] sends a pairing request. Shared by
+ * [ConnectionScreen] and the device-picker sheet.
+ */
+fun connectKnownOrPair(
+    viewModel: ConnectionViewModel,
+    history: List<TvDevice>,
+    ip: String,
+    port: Int,
+    name: String,
+    uuid: String = ""
+) {
+    val existing = if (uuid.isNotEmpty()) {
+        history.find { it.uuid == uuid } ?: history.find { it.ip == ip && it.port == port }
+    } else {
+        history.find { it.ip == ip && it.port == port }
+    }
+    if (existing != null && existing.token.isNotEmpty()) {
+        viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
+    } else {
+        viewModel.connect(TvDevice(ip = ip, port = port, token = "", name = name, uuid = uuid))
+    }
 }
 
 private fun formatLastSeen(millis: Long): String {

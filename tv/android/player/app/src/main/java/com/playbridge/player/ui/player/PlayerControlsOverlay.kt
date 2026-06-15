@@ -15,7 +15,6 @@ import androidx.tv.material3.Text
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.RoundedCornerShape
-import com.playbridge.player.player.VideoFilterDialog
 import com.playbridge.player.player.PlaylistPickerDialog
 import com.playbridge.player.player.SwitchPlayerDialog
 
@@ -25,10 +24,10 @@ fun PlayerControlsOverlay(
     state: PlayerControlsState,
     onTogglePlay: () -> Unit,
     onTrackSelection: () -> Unit,
+    onSubtitles: () -> Unit,
     onPlaylist: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onFilter: () -> Unit,
     onLoop: () -> Unit,
     onSwitchPlayer: () -> Unit,
     onSeek: (Long) -> Unit,
@@ -40,27 +39,15 @@ fun PlayerControlsOverlay(
     onScalingSelected: (String) -> Unit = {},
     onSettingsDismiss: () -> Unit = {},
     onOverlayDismiss: () -> Unit = {},
-    onFilterSelected: (com.playbridge.shared.player.VideoFilter) -> Unit = {},
-    onCustomFilterChanged: (brightness: Float, contrast: Float, saturation: Float) -> Unit = {_,_,_ ->},
     onPlaylistItemPicked: (Int) -> Unit = {},
     onPlayerSwitched: (String) -> Unit = {},
     onToggleAudioBoost: () -> Unit = {},
     onAdjustSubtitleDelay: (Long) -> Unit = {},
+    onPreloadSubtitles: (List<String>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
-        // PrePlay Overlay (Bottom layer)
-        state.prePlayMetadata?.let { metadata ->
-            com.playbridge.player.preplay.PrePlayScreen(
-                metadata = metadata,
-                isLaunching = state.isPrePlayLaunching,
-                launchCountdown = state.prePlayCountdown,
-                onStartNow = onPrePlayStartNow,
-                onBack = onPrePlayBack
-            )
-        }
-
-        // Main Controls Overlay (Top layer)
+        // Main Controls Overlay
         AnimatedVisibility(
             visible = state.isVisible,
             enter = fadeIn(),
@@ -86,27 +73,25 @@ fun PlayerControlsOverlay(
                         onSpeedSelected = onSpeedSelected,
                         onScalingSelected = onScalingSelected,
                         onToggleAudioBoost = onToggleAudioBoost,
-                        onAdjustSubtitleDelay = onAdjustSubtitleDelay,
                         onDismiss = onSettingsDismiss
                     )
                 }
 
-
-                // Video Filter Overlay
+                // Subtitle Overlay (Language → Options → Sync)
                 AnimatedVisibility(
-                    visible = state.activeOverlay == ActiveOverlay.VIDEO_FILTER,
+                    visible = state.activeOverlay == ActiveOverlay.SUBTITLES,
                     enter = fadeIn(),
                     exit = fadeOut(),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    VideoFilterDialog(
-                        currentFilter = state.currentFilter,
-                        customBrightness = state.customBrightness,
-                        customContrast = state.customContrast,
-                        customSaturation = state.customSaturation,
-                        previewFrame = state.previewFrame,
-                        onFilterSelected = onFilterSelected,
-                        onCustomChanged = onCustomFilterChanged,
+                    SubtitleSelectionOverlay(
+                        subtitleTracks = state.subtitleTracks,
+                        subtitleDelayMs = state.subtitleDelayMs,
+                        previewPositionMs = state.currentPosition,
+                        cuesVersion = state.subtitleCuesVersion,
+                        onPreloadLanguage = onPreloadSubtitles,
+                        onTrackSelected = onTrackSelected,
+                        onAdjustDelay = onAdjustSubtitleDelay,
                         onDismiss = onOverlayDismiss
                     )
                 }
@@ -206,11 +191,11 @@ fun PlayerControlsOverlay(
                                 hasMultipleStreams = false,
                                 onTogglePlay = onTogglePlay,
                                 onTrackSelection = onTrackSelection,
+                                onSubtitles = onSubtitles,
                                 onPlaylist = onPlaylist,
                                 onStreams = {},
                                 onPrev = onPrev,
                                 onNext = onNext,
-                                onFilter = onFilter,
                                 onLoop = onLoop,
                                 onSwitchPlayer = onSwitchPlayer,
                                 isVisible = state.isVisible
@@ -237,6 +222,19 @@ fun PlayerControlsOverlay(
             SubtitleOverlay(
                 text = state.currentSubtitleText,
                 modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+
+        // PrePlay Overlay — TOP layer, deliberately last: it must cover the
+        // buffering spinner and the subtitle overlay (which otherwise bleed
+        // through while the player pre-buffers a resume position underneath).
+        state.prePlayMetadata?.let { metadata ->
+            com.playbridge.player.preplay.PrePlayScreen(
+                metadata = metadata,
+                isLaunching = state.isPrePlayLaunching,
+                launchCountdown = state.prePlayCountdown,
+                onStartNow = onPrePlayStartNow,
+                onBack = onPrePlayBack
             )
         }
     }

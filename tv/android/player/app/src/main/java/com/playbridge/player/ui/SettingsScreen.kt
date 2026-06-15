@@ -71,7 +71,7 @@ fun SettingsScreen(
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                 isGeckoInstalled = try {
-                    context.packageManager.getPackageInfo("com.playbridge.browser", 0)
+                    context.packageManager.getPackageInfo("com.playbridge.geckoview.plugin", 0)
                     true
                 } catch (e: Exception) {
                     false

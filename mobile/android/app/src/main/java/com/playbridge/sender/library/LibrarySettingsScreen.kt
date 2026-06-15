@@ -21,6 +21,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,6 +43,12 @@ fun LibrarySettingsScreen(
     var seriesSourceExpanded by remember { mutableStateOf(false) }
 
     var showCardTextOverlay by remember { mutableStateOf(tmdbPrefs.getBoolean("show_card_text_overlay", false)) }
+
+    val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository =
+        org.koin.compose.koinInject()
+    val scope = rememberCoroutineScope()
+    val trackProgress by settingsRepository.trackWatchProgress.collectAsState(initial = true)
+    val autoAddWatching by settingsRepository.autoAddToWatching.collectAsState(initial = true)
 
     Scaffold(
         topBar = {
@@ -198,6 +205,51 @@ fun LibrarySettingsScreen(
                     onCheckedChange = { isChecked ->
                         showCardTextOverlay = isChecked
                         tmdbPrefs.edit().putBoolean("show_card_text_overlay", isChecked).apply()
+                    }
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+            Text("Progress Tracking", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Track watch progress automatically", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Mark episodes watched and update your place in a series from TV playback (90% watched, or when the next episode starts)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = trackProgress,
+                    onCheckedChange = { isChecked ->
+                        scope.launch { settingsRepository.setTrackWatchProgress(isChecked) }
+                    }
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto-add to Watching", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "When tracking, add shows and movies you play to the watchlist automatically",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    enabled = trackProgress,
+                    checked = autoAddWatching,
+                    onCheckedChange = { isChecked ->
+                        scope.launch { settingsRepository.setAutoAddToWatching(isChecked) }
                     }
                 )
             }

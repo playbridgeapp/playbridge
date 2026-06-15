@@ -39,8 +39,12 @@
       : (INSTALL_TABS.find((t) => t.id === active) ?? INSTALL_TABS[0])
   );
 
-  const senderTabs = INSTALL_TABS.filter((t) => t.role === 'sender');
-  const playerTabs = INSTALL_TABS.filter((t) => t.role === 'player');
+  const senderTabs = INSTALL_TABS.filter((t) => t.role === 'sender' && !t.hidden);
+  const playerTabs = INSTALL_TABS.filter((t) => t.role === 'player' && !t.hidden);
+
+  // The ad-blocked TV browser is presented as a GeckoView plugin of the Android TV
+  // player rather than a standalone player tab.
+  const browserPlugin = INSTALL_TABS.find((t) => t.id === 'tvbrowser');
 </script>
 
 <section class="section wrap" id="install">
@@ -154,10 +158,33 @@
             </a>
           {/if}
         </div>
-        {#if tab.downloadUrl && (tab.id === 'android' || tab.id === 'tvplayer' || tab.id === 'tvbrowser')}
+        {#if tab.downloadUrl && (tab.id === 'android' || tab.id === 'androidtv')}
           <div class="arch-select">
             <span>Universal APK (all CPUs) downloaded by default.</span>
             <span>Or download: <a href="{tab.downloadUrl}-v8a" target="_blank" rel="noopener">64-bit (v8a)</a> • <a href="{tab.downloadUrl}-v7a" target="_blank" rel="noopener">32-bit (v7a)</a></span>
+          </div>
+        {/if}
+
+        {#if active === 'androidtv' && browserPlugin}
+          <div class="plugin-box">
+            <span class="plugin-badge">Plugin</span>
+            <div class="plugin-body">
+              <strong>GeckoView + uBlock Origin</strong>
+              <p>
+                The Android TV player already comes with the built-in System WebView. This optional plugin adds Mozilla's
+                GeckoView engine with uBlock Origin.
+              </p>
+              {#if browserPlugin.downloadUrl}
+                <a
+                  href={browserPlugin.downloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="plugin-link"
+                >
+                  <Icon name="download" size={12} stroke={2.0} /> Download GeckoView plugin
+                </a>
+              {/if}
+            </div>
           </div>
         {/if}
       </div>
@@ -272,5 +299,53 @@
     line-height: 1.45;
     color: var(--text-dim);
     margin: 0;
+  }
+
+  /* GeckoView browser plugin callout (Android TV tab) */
+  .plugin-box {
+    margin-top: 24px;
+    padding: 16px;
+    border-radius: 10px;
+    background: rgba(74, 144, 226, 0.04);
+    border: 1px solid rgba(74, 144, 226, 0.15);
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+  }
+  .plugin-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #4a90e2;
+    background: rgba(74, 144, 226, 0.15);
+    padding: 3px 8px;
+    border-radius: 99px;
+    font-weight: 600;
+    flex: 0 0 auto;
+    margin-top: 2px;
+  }
+  .plugin-body { display: flex; flex-direction: column; gap: 6px; }
+  .plugin-body strong { color: var(--text); font-weight: 500; font-size: 14px; }
+  .plugin-body p {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-dim);
+    margin: 0;
+  }
+  .plugin-link {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    width: fit-content;
+  }
+  .plugin-link:hover { text-decoration: underline; }
+
+  @media (max-width: 600px) {
+    .plugin-box { flex-direction: column; gap: 10px; }
   }
 </style>

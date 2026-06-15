@@ -64,6 +64,20 @@ class AddonRepository(
 
     init {
         loadCacheFromDisk()
+        seedDefaultAddons()
+    }
+
+    private fun seedDefaultAddons() {
+        ioScope.launch {
+            try {
+                if (addonDao.count() == 0) {
+                    Log.i(TAG, "No addons installed. Seeding default Cinemeta addon...")
+                    installAddon("https://v3-cinemeta.strem.io/manifest.json")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to seed default addons", e)
+            }
+        }
     }
 
     private fun loadCacheFromDisk() {

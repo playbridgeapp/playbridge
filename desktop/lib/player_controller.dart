@@ -82,6 +82,10 @@ class PlayerController extends ChangeNotifier {
   /// auto-advance). The server listens to this to broadcast playlist_status.
   final ValueNotifier<int> indexChanges = ValueNotifier<int>(-1);
 
+  /// Bumped whenever the queue *contents* change without the index moving
+  /// (queue_add, stop). The server also listens to this for playlist_status.
+  final ValueNotifier<int> queueChanges = ValueNotifier<int>(0);
+
   final List<QueueItem> _queue = [];
   int _currentIndex = -1;
 
@@ -110,6 +114,15 @@ class PlayerController extends ChangeNotifier {
   Future<void> setAudioTrack(dynamic t) => _engine.setAudioTrack(t);
   Future<void> setSubtitleTrack(dynamic t) => _engine.setSubtitleTrack(t);
 
+  // Engine-agnostic track surface for the phone remote (`tracks` message +
+  // `audio_track:`/`sub_track:` control commands).
+  List<TrackInfo> get audioTrackInfos => _engine.audioTrackInfos;
+  List<TrackInfo> get subtitleTrackInfos => _engine.subtitleTrackInfos;
+  Future<void> selectAudioTrackById(String id) =>
+      _engine.selectAudioTrackById(id);
+  Future<void> selectSubtitleTrackById(String id) =>
+      _engine.selectSubtitleTrackById(id);
+
   Future<void> playUrl(
     String url, {
     String? title,
@@ -117,20 +130,23 @@ class PlayerController extends ChangeNotifier {
     List<String>? subtitles,
     bool isRemote = false,
   }) async {
-    _queue
-      ..clear()
-      ..add((
-        url: url,
-        title: title ?? url,
-        headers: headers,
-        subtitles: subtitles,
-      ));
-    _setIndex(0);
-    if (isRemote) {
-      playRequests.value++;
-    }
-    await _engine.openPlaylist(_queue, _currentIndex);
+    await playPlaylist(
+      [
+        QueueItem(
+          url: url,
+          title: title ?? url,
+          headers: headers,
+          subtitles: subtitles,
+        ),
+      ],
+      0,
+      isRemote: isRemote,
+    );
   }
+
+  /// Play a single [QueueItem] as a one-item playlist (replaces the queue).
+  Future<void> playItem(QueueItem item, {bool isRemote = false}) =>
+      playPlaylist([item], 0, isRemote: isRemote);
 
   Future<void> playPlaylist(
     List<QueueItem> items,
@@ -146,12 +162,27 @@ class PlayerController extends ChangeNotifier {
       playRequests.value++;
     }
     await _engine.openPlaylist(_queue, _currentIndex);
+    unawaited(_applyStartPosition());
+  }
+
+  /// Append an item to the live queue (`queue_add`). If nothing is playing,
+  /// starts the item directly (preserves the previous desktop behavior;
+  /// Android instead buffers idle queue_adds until the next session).
+  Future<void> queueAdd(QueueItem item, {bool isRemote = false}) async {
+    if (_currentIndex < 0 || _queue.isEmpty) {
+      await playPlaylist([item], 0, isRemote: isRemote);
+      return;
+    }
+    _queue.add(item);
+    queueChanges.value++;
+    notifyListeners();
   }
 
   Future<void> jumpTo(int index) async {
     if (index < 0 || index >= _queue.length) return;
     _setIndex(index);
     await _engine.openPlaylist(_queue, _currentIndex);
+    unawaited(_applyStartPosition());
   }
 
   Future<void> next() async {
@@ -170,6 +201,35 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
+  /// Honour the current item's `start_position_ms` (phone resume store).
+  /// Consumes the value so replaying the same item starts from zero. Waits for
+  /// the engine to report a duration first — mpv can't seek before that — and
+  /// skips the seek when the resume point is past the end (stale store entry).
+  Future<void> _applyStartPosition() async {
+    final item = _currentIndex >= 0 && _currentIndex < _queue.length
+        ? _queue[_currentIndex]
+        : null;
+    final startMs = item?.startPositionMs;
+    if (item == null || startMs == null || startMs <= 0) return;
+    item.startPositionMs = null; // consume
+
+    var retries = 0;
+    while (_engine.durationMs <= 0 && retries < 20) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      retries++;
+    }
+    // Only resume if the item is still the active one and the position is sane.
+    if (_currentIndex < 0 ||
+        _currentIndex >= _queue.length ||
+        !identical(_queue[_currentIndex], item)) {
+      return;
+    }
+    final durMs = _engine.durationMs;
+    if (durMs > 0 && startMs >= durMs) return;
+    debugPrint('[player] resuming at ${startMs}ms');
+    await _engine.seek(Duration(milliseconds: startMs));
+  }
+
   void _setIndex(int i) {
     _currentIndex = i;
     indexChanges.value = i;
@@ -183,12 +243,14 @@ class PlayerController extends ChangeNotifier {
     await _engine.stop();
     _queue.clear();
     _setIndex(-1);
+    queueChanges.value++;
     notifyListeners();
   }
 
   @override
   Future<void> dispose() async {
     indexChanges.dispose();
+    queueChanges.dispose();
     playRequests.dispose();
     await _engine.dispose();
     super.dispose();

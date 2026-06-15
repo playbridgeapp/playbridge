@@ -61,9 +61,6 @@ class WebSocketClient {
     private val _tvCapabilities = MutableSharedFlow<TvCapabilities>(replay = 0)
     val tvCapabilities = _tvCapabilities.asSharedFlow()
 
-    private var retryCount = 0
-    private val MAX_RETRIES = com.playbridge.shared.protocol.Config.MAX_RETRIES // 5 minutes
-    private val RETRY_DELAY_MS = com.playbridge.shared.protocol.Config.RETRY_DELAY_MS
     private var targetConnection: TvConnectionInfo? = null
     private var isUserDisconnect = false
     
@@ -109,6 +106,8 @@ class WebSocketClient {
         data class WaitingForApproval(val serverName: String) : ConnectionState()
         // TV user tapped Deny, or the 30s timeout elapsed.
         data class PairingDenied(val serverName: String) : ConnectionState()
+        // Kept for UI exhaustiveness, but no longer emitted — automatic retries were
+        // removed (failures go straight to Error; reconnects are on-demand).
         data class Retrying(val attempt: Int, val maxAttempts: Int, val nextRetrySeconds: Int) : ConnectionState()
         data class Error(val message: String) : ConnectionState()
         // Stale token rejected by TV (e.g. after TV reinstall). Distinct from Error so the
@@ -129,8 +128,7 @@ class WebSocketClient {
         wssPort: Int? = null,
         certFingerprint: String? = null,
     ) {
-        retryCount = 0
-        isUserDisconnect = false  // Reset so retries are allowed for genuine connectivity failures
+        isUserDisconnect = false
         targetConnection = TvConnectionInfo(ip, port, token, serverName, deviceName, deviceUUID, wssPort, certFingerprint)
         attemptConnection(ip, port, serverName)
     }
@@ -153,7 +151,7 @@ class WebSocketClient {
         isSecure = useTls
         val url = if (useTls) "wss://$ip:$wssPort/" else "ws://$ip:$port/"
         val httpClient = if (useTls) buildPinningClient(conn?.pin) else client
-        if (retryCount == 0) Log.i(TAG, "Connecting to $url") else Log.d(TAG, "Retrying $url (attempt $retryCount)")
+        Log.i(TAG, "Connecting to $url")
 
         val request = Request.Builder()
             .url(url)
@@ -166,7 +164,6 @@ class WebSocketClient {
                     return
                 }
                 Log.i(TAG, "Socket opened to $serverName")
-                retryCount = 0
 
                 scope.launch {
                     try {
@@ -311,11 +308,7 @@ class WebSocketClient {
             }
             
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (retryCount == 0) {
-                    Log.e(TAG, "Connection failed: ${t.message}", t)
-                } else {
-                    Log.d(TAG, "Connection attempt $retryCount failed: ${t.message}")
-                }
+                Log.e(TAG, "Connection failed: ${t.message}", t)
 
                 if (webSocket === this@WebSocketClient.webSocket) {
                     this@WebSocketClient.webSocket = null
@@ -327,26 +320,11 @@ class WebSocketClient {
                         return
                     }
 
-                    if (!isUserDisconnect && retryCount < MAX_RETRIES) {
-                        retryCount++
-                        Log.d(TAG, "Retrying ($retryCount/$MAX_RETRIES) in ${RETRY_DELAY_MS}ms")
-                        _connectionState.value = ConnectionState.Retrying(retryCount, MAX_RETRIES, (RETRY_DELAY_MS/1000).toInt())
-                        
-                        scope.launch {
-                            try {
-                                delay(RETRY_DELAY_MS)
-                                targetConnection?.let {
-                                    if (!isUserDisconnect) {
-                                        attemptConnection(it.ip, it.port, it.serverName)
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error during retry attempt", e)
-                            }
-                        }
-                    } else {
-                        _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
-                    }
+                    // No automatic retries — a failed/dropped connection goes straight to
+                    // Error. Reconnects happen on demand: the "ensure connected before
+                    // sending" paths and the startup auto-connect cover recovery, without
+                    // a background retry loop flapping the connection UI.
+                    _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
                 } else {
                     Log.d(TAG, "Ignoring onFailure for stale socket")
                 }

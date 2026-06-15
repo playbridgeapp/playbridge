@@ -44,6 +44,7 @@ val appModule = module {
     single { get<HistoryDatabase>().addonDao() }
     single { get<HistoryDatabase>().watchlistDao() }
     single { get<HistoryDatabase>().searchHistoryDao() }
+    single { get<HistoryDatabase>().playbackResumeDao() }
     single { get<HistoryDatabase>().commandHistoryDao() }
     single { get<HistoryDatabase>().tabDao() }
 
@@ -87,6 +88,17 @@ val appModule = module {
         )
     }
 
+    // 5a. CastSessionManager — process-wide owner of the active cast target (native/DLNA)
+    //     and the CastSessionService foreground lifecycle.
+    single {
+        com.playbridge.sender.cast.CastSessionManager(
+            context = androidContext(),
+            webSocketClient = get(),
+            connectionCoordinator = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        )
+    }
+
     // 5b. TvQueueCoordinator — lazy episode queueing for series without a play-endpoint addon
     single {
         com.playbridge.sender.connection.TvQueueCoordinator(
@@ -100,6 +112,30 @@ val appModule = module {
         )
     }
 
+    // 5c. DlnaQueueCoordinator — phone-driven episode auto-advance on DLNA renderers
+    single {
+        com.playbridge.sender.connection.DlnaQueueCoordinator(
+            context = androidContext(),
+            addonRepository = get(),
+            castSessionManager = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        )
+    }
+
+    // 5d. PlaybackProgressTracker — auto-updates watchlist progress from TV playback.
+    //     createdAtStart: it has no injectors; it must exist to observe.
+    single(createdAtStart = true) {
+        com.playbridge.sender.connection.PlaybackProgressTracker(
+            watchlistDao = get(),
+            resumeDao = get(),
+            tmdb = get(),
+            settingsRepository = get(),
+            connectionCoordinator = get(),
+            castSessionManager = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        )
+    }
+
     // 6. ViewModels
     viewModel {
         ConnectionViewModel(
@@ -107,7 +143,8 @@ val appModule = module {
             webSocketClient = get(),
             connectionStore = get(),
             nsdHelper = get(),
-            commandHistoryDb = get()
+            commandHistoryDb = get(),
+            castSessionManager = get()
         )
     }
 

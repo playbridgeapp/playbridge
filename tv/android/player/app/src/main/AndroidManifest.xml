@@ -62,7 +62,7 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="rtsp" />
         </intent>
-        <package android:name="com.playbridge.browser" />
+        <package android:name="com.playbridge.geckoview.plugin" />
     </queries>
 
     <application

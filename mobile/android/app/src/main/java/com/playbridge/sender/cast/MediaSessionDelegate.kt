@@ -4,48 +4,55 @@ import com.playbridge.sender.browser.*
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.*
-import org.mozilla.geckoview.GeckoSession
-import org.mozilla.geckoview.MediaSession
+import mozilla.components.concept.engine.EngineSession
+import mozilla.components.concept.engine.mediasession.MediaSession
 
 /**
- * Bridges GeckoView MediaSession events to our MediaPlaybackService.
+ * Bridges media session events from an [EngineSession] to MediaPlaybackService
+ * and TabManager's playing-tab state.
+ *
+ * Registered once per engine session by TabManager's store mirror — so it
+ * covers EVERY tab, including background ones (the old GeckoView
+ * `MediaSession.Delegate`, set via reflection, only covered the selected tab
+ * and was detached on tab switch).
  */
-class MediaSessionDelegate(
+class MediaSessionObserver(
     private val context: Context,
     private val tabId: String,
-    private val tabManager: TabManager
-) : MediaSession.Delegate {
+    private val tabManager: TabManager,
+    private val engineSession: EngineSession,
+) : EngineSession.Observer {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var controlJob: Job? = null
     private var isActive = false
 
-    override fun onActivated(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onActivated (tabId=$tabId)")
+    override fun onMediaActivated(mediaSessionController: MediaSession.Controller) {
+        Log.d(TAG, "onMediaActivated (tabId=$tabId)")
         isActive = true
         tabManager.markTabAsPlaying(tabId)
         MediaPlaybackService.start(context)
-        
+
         controlJob?.cancel()
         controlJob = scope.launch {
             MediaControlChannel.actions.collect { action ->
                 if (!isActive) return@collect
                 Log.d(TAG, "Received action from channel: $action")
                 when (action) {
-                    MediaControlChannel.Action.PLAY -> mediaSession.play()
+                    MediaControlChannel.Action.PLAY -> mediaSessionController.play()
                     MediaControlChannel.Action.PAUSE -> {
-                        mediaSession.pause()
+                        mediaSessionController.pause()
                         // Fallback: pause all media elements via JS injection
-                        session.loadUri("javascript:document.querySelectorAll('video,audio').forEach(function(m){try{m.pause();}catch(e){}});void 0;")
+                        tabManager.pauseMedia(engineSession)
                     }
-                    MediaControlChannel.Action.STOP -> mediaSession.stop()
+                    MediaControlChannel.Action.STOP -> mediaSessionController.stop()
                 }
             }
         }
     }
 
-    override fun onDeactivated(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onDeactivated (tabId=$tabId)")
+    override fun onMediaDeactivated() {
+        Log.d(TAG, "onMediaDeactivated (tabId=$tabId)")
         isActive = false
         tabManager.playingTabIds.remove(tabId)
         controlJob?.cancel()
@@ -53,9 +60,8 @@ class MediaSessionDelegate(
         MediaPlaybackService.stop(context)
     }
 
-    override fun onMetadata(session: GeckoSession, mediaSession: MediaSession, metadata: MediaSession.Metadata) {
+    override fun onMediaMetadataChanged(metadata: MediaSession.Metadata) {
         Log.d(TAG, "Media metadata changed: ${metadata.title} - ${metadata.artist}")
-        
         MediaPlaybackService.sendMetadataUpdate(
             context,
             title = metadata.title,
@@ -63,40 +69,23 @@ class MediaSessionDelegate(
         )
     }
 
-    override fun onPlay(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onPlay (tabId=$tabId)")
-        tabManager.markTabAsPlaying(tabId)
-        MediaPlaybackService.sendStateUpdate(context, true)
-    }
-
-    override fun onPause(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onPause (tabId=$tabId)")
-        tabManager.playingTabIds.remove(tabId)
-        MediaPlaybackService.sendStateUpdate(context, false)
-    }
-
-    override fun onStop(session: GeckoSession, mediaSession: MediaSession) {
-        Log.d(TAG, "onStop (tabId=$tabId)")
-        tabManager.playingTabIds.remove(tabId)
-        MediaPlaybackService.sendStateUpdate(context, false)
-    }
-
-    override fun onFeatures(session: GeckoSession, mediaSession: MediaSession, features: Long) {
-        // e.g. can seek, can play/pause
-    }
-
-    override fun onPositionState(session: GeckoSession, mediaSession: MediaSession, positionState: MediaSession.PositionState) {
-        Log.d(TAG, "onPositionState: playbackRate=${positionState.playbackRate}")
-        if (positionState.playbackRate == 0.0) {
-            tabManager.playingTabIds.remove(tabId)
-            MediaPlaybackService.sendStateUpdate(context, false)
-        } else {
-            tabManager.markTabAsPlaying(tabId)
-            MediaPlaybackService.sendStateUpdate(context, true)
+    override fun onMediaPlaybackStateChanged(playbackState: MediaSession.PlaybackState) {
+        Log.d(TAG, "onMediaPlaybackStateChanged (tabId=$tabId): $playbackState")
+        when (playbackState) {
+            MediaSession.PlaybackState.PLAYING -> {
+                tabManager.markTabAsPlaying(tabId)
+                MediaPlaybackService.sendStateUpdate(context, true)
+            }
+            MediaSession.PlaybackState.PAUSED,
+            MediaSession.PlaybackState.STOPPED -> {
+                tabManager.playingTabIds.remove(tabId)
+                MediaPlaybackService.sendStateUpdate(context, false)
+            }
+            else -> Unit
         }
     }
 
     companion object {
-        private const val TAG = "MediaSessionDelegate"
+        private const val TAG = "MediaSessionObserver"
     }
 }

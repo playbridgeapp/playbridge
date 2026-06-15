@@ -482,7 +482,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                             parentId = tab.parentId
                         )
                     }
-                    Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                    Components.tabManager.restoreTabs(sessionTabs, null, Components.store)
                     importedTabsToRestore = null
                 }) { Text("Import All") }
             },
@@ -499,7 +499,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                                 parentId = tab.parentId
                             )
                         }
-                        Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                        Components.tabManager.restoreTabs(sessionTabs, null, Components.store)
                         Toast.makeText(context, "Imported ${newTabs.size} new tabs", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(context, "No new tabs to import", Toast.LENGTH_SHORT).show()

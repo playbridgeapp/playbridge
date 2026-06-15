@@ -3,9 +3,6 @@ package com.playbridge.player.player
 import com.playbridge.shared.player.PlaybackEngine
 import com.playbridge.shared.player.PlaybackState
 import com.playbridge.shared.player.ExoPlayerEngine
-import com.playbridge.shared.player.VideoFilter
-import com.playbridge.shared.player.VideoFilterAndroid
-import com.playbridge.shared.player.VideoFilterManager
 import com.playbridge.shared.player.M3uParser
 
 import android.content.BroadcastReceiver
@@ -125,7 +122,6 @@ class ExoPlayerActivity : PlayerActivity() {
     // Managers
     private val contentSniffer = ContentSniffer()
     private val controlsViewModel = PlayerControlsViewModel()
-    private lateinit var videoFilterManager: VideoFilterManager
     private lateinit var engineAdapter: PlayerEngineAdapter
     private lateinit var progressManager: ProgressManager
     private lateinit var inputHandler: InputHandler
@@ -147,7 +143,6 @@ class ExoPlayerActivity : PlayerActivity() {
                 intentHeaders = item.headers.takeIf { it.isNotEmpty() },
                 subtitles = item.subtitles.takeIf { it.isNotEmpty() }?.let { ArrayList(it) },
             )
-            videoFilterManager.reapplyFilter()
             controlsViewModel.hideControls()
         }
 
@@ -157,11 +152,8 @@ class ExoPlayerActivity : PlayerActivity() {
             val hasPlayed = state == Player.STATE_READY || state == Player.STATE_ENDED || (player?.currentPosition ?: 0L) > 0L
             if (!hasPlayed || player?.playerError != null) return
             try {
-                if (captureThumbnail) {
+                if (::progressManager.isInitialized) {
                     syncSelectionsToProgressManager()
-                    val bitmap = progressManager.captureBitmapSuspend()
-                    progressManager.saveProgress(bitmap)
-                } else if (::progressManager.isInitialized) {
                     progressManager.saveProgress()
                 }
             } catch (e: Exception) {
@@ -183,6 +175,10 @@ class ExoPlayerActivity : PlayerActivity() {
             finish()
         }
     })
+
+    /** Live queue (incl. queue_add-appended episodes) for engine switches. */
+    override fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
+        coordinator.playlist to coordinator.index
     private var lastVolume: Float = 1.0f
     private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
 
@@ -200,10 +196,6 @@ class ExoPlayerActivity : PlayerActivity() {
                             applyUnifiedTrackSelection("sub", command.removePrefix("sub_track:"))
                         command?.startsWith("scaling:") == true ->
                             applyExoScaling(command.removePrefix("scaling:"))
-                        command?.startsWith("filter:") == true ->
-                            applyExoFilter(command.removePrefix("filter:"))
-                        command?.startsWith("filter_custom:") == true ->
-                            applyExoCustomFilter(command.removePrefix("filter_custom:"))
                         command?.startsWith("switch_player:") == true ->
                             switchPlayer(command.removePrefix("switch_player:"))
                         else -> inputHandler.handleControlCommand(command)
@@ -288,14 +280,17 @@ class ExoPlayerActivity : PlayerActivity() {
                     PlayerControlsOverlay(
                         state = state,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
-                        onTrackSelection = { 
+                        onTrackSelection = {
                             updateUnifiedTracks()
-                            controlsViewModel.showSettings(SettingsTab.AUDIO) 
+                            controlsViewModel.showSettings(SettingsTab.AUDIO)
+                        },
+                        onSubtitles = {
+                            updateUnifiedTracks()
+                            controlsViewModel.showSubtitles()
                         },
                         onPlaylist = { showPlaylistOverlay() },
                         onPrev = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.previous() } },
                         onNext = { navigationJob?.cancel(); navigationJob = lifecycleScope.launch { coordinator.next() } },
-                        onFilter = { showVideoFilterOverlay() },
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
                         onSeek = { controlsViewModel.handleScrubbing(it) },
@@ -340,7 +335,8 @@ class ExoPlayerActivity : PlayerActivity() {
                             switchPlayer(playerId)
                         },
                         onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
-                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) }
+                        onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) },
+                        onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) }
                     )
                 }
             }
@@ -367,9 +363,6 @@ class ExoPlayerActivity : PlayerActivity() {
             )
         }
         val titleText = "" // temporary to avoid compile error if used later as String
-
-        // Initialize VideoFilterManager
-        videoFilterManager = VideoFilterManager()
 
         // Engine adapter for ExoPlayer
         engineAdapter = object : PlayerEngineAdapter {
@@ -533,21 +526,6 @@ class ExoPlayerActivity : PlayerActivity() {
             currentSubtitleUrl = it
             FileLogger.i(TAG, "Restored external subtitle URL: $it")
         }
-        intent?.getStringExtra(ServerService.EXTRA_VIDEO_FILTER)?.let { filterName ->
-            try {
-                val filter = VideoFilter.valueOf(filterName)
-                val customValues = intent.getFloatArrayExtra(ServerService.EXTRA_CUSTOM_FILTER_VALUES)
-                if (filter == VideoFilter.CUSTOM && customValues != null && customValues.size == 3) {
-                    videoFilterManager.applyCustom(customValues[0], customValues[1], customValues[2])
-                } else {
-                    videoFilterManager.applyFilter(filter)
-                }
-                FileLogger.i(TAG, "Restored video filter: $filterName")
-            } catch (e: IllegalArgumentException) {
-                FileLogger.w(TAG, "Unknown video filter: $filterName")
-            }
-        }
-
         if (url != null) {
             val baseTitle = title
 
@@ -589,6 +567,9 @@ class ExoPlayerActivity : PlayerActivity() {
     private var playJob: kotlinx.coroutines.Job? = null
     /** Serialises Stremio series navigation. Cancelled before each new nav request. */
     private var navigationJob: kotlinx.coroutines.Job? = null
+    /** The player instance the activity listener is attached to (attach-once guard
+     *  now that the player survives episode advances). */
+    private var listenerAttachedPlayer: androidx.media3.common.Player? = null
 
     private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
         
@@ -599,7 +580,13 @@ class ExoPlayerActivity : PlayerActivity() {
         FileLogger.i(TAG, "Content Type: $contentType")
         FileLogger.i(TAG, "===========================================")
 
-        releasePlayer()
+        // Do NOT releasePlayer() here: engine.load() swaps the media source on the
+        // live player (see ExoPlayerEngine.reloadOnLivePlayer), which kills the
+        // per-episode rebuild — black gap, surface re-attach, decoder warm-up.
+        // Full release stays reserved for teardown paths (onStop/onDestroy/engine
+        // switch). Only clear transient per-item callbacks.
+        stuckBufferHandler.removeCallbacksAndMessages(null)
+        cancelPlaybackWatchdog()
 
         playJob?.cancel()
         playJob = lifecycleScope.launch(Dispatchers.Main) {
@@ -673,17 +660,41 @@ class ExoPlayerActivity : PlayerActivity() {
         // the previous series.
         broadcastPlaylistStatus()
 
-        // Build playlist JSON for history persistence
-        val plistJson = if (!coordinator.isEmpty) {
-            try {
-                com.playbridge.shared.protocol.encodePlayPayloadListJson(coordinator.playlist)
-            } catch (e: Exception) { null }
-        } else null
+        // History persistence: store the raw PlaylistPayload (items carry their own
+        // subtitles/headers/langs) + a stable, index-independent key. Prefer the live
+        // coordinator queue (it has queue_add-appended episodes); fall back to a one-item
+        // payload reconstructed from this item when there is no queue.
+        val historyItems = if (!coordinator.isEmpty) coordinator.playlist else listOf(
+            playbridge.PlayPayload(
+                url = url,
+                title = title,
+                headers = intentHeaders ?: emptyMap(),
+                content_type = contentType,
+                detected_by = detectedBy,
+                subtitles = subtitles ?: emptyList(),
+                preferred_audio_language = preferredAudioLanguage,
+                preferred_subtitle_language = preferredSubtitleLanguage,
+            )
+        )
+        val historyIndex = if (!coordinator.isEmpty) coordinator.index else 0
+        val historyPayloadJson = try {
+            PlayerLauncher.historyPayloadJson(historyItems, historyIndex)
+        } catch (e: Exception) { "" }
+        val historyId = PlayerLauncher.historyId(historyItems)
+        val historyVm = historyItems.getOrNull(historyIndex)?.visual_metadata
+        // History card is a 16:9 box, so prefer the landscape backdrop; fall back to poster.
+        val historyThumbnailUrl = historyVm?.backdrop_url ?: historyVm?.poster_url
 
         applyPlaybackSpeed(currentPlaybackSpeed)
         applyVideoScalingMode(currentVideoScalingMode)
 
-        progressManager.setCurrentMedia(url, title, contentType, intentHeaders, plistJson, coordinator.index)
+        progressManager.setCurrentMedia(
+            url, title, contentType, intentHeaders, historyPayloadJson, historyId,
+            thumbnailUrl = historyThumbnailUrl,
+        )
+        // Write the entry immediately so it survives a force-kill before the first
+        // periodic save; the resume point seeds from the requested start position.
+        progressManager.recordLanded(intent.getLongExtra(ServerService.EXTRA_START_POSITION, 0L))
         controlsViewModel.setTitle(title ?: "")
 
         val payload = playbridge.PlayPayload(
@@ -700,18 +711,27 @@ class ExoPlayerActivity : PlayerActivity() {
         )
 
         lifecycleScope.launch {
-            // Restore playback position from history if no explicit start position was provided
+            engine?.load(payload)
+
+            // Restore playback position from history if no explicit start position was
+            // provided. This runs AFTER load(): the player is reused across items now,
+            // so a seek issued earlier would land on the *previous* episode still
+            // playing. After load() the player is preparing the new item and the seek
+            // (or the pendingResumePosition stash, if the player is idle) targets it.
             if (pendingResumePosition <= 0L) {
                 FileLogger.d(TAG, "No explicit start position, attempting to restore from history...")
                 progressManager.restoreProgress(url)
             }
 
-            engine?.load(payload)
-
             // Re-apply activity-specific player settings after engine creates the player
             engine?.getExoPlayer()?.let { exoPlayer ->
                 playerView.player = exoPlayer
-                exoPlayer.addListener(createPlayerListener())
+                // The player instance is reused across episodes now — attach the
+                // activity listener once per instance, not once per item.
+                if (listenerAttachedPlayer !== exoPlayer) {
+                    exoPlayer.addListener(createPlayerListener())
+                    listenerAttachedPlayer = exoPlayer
+                }
                 exoPlayer.prepare()
                 exoPlayer.playWhenReady = true
             }
@@ -719,6 +739,8 @@ class ExoPlayerActivity : PlayerActivity() {
             // Handle manual subtitles (Nuvio-style Compose rendering)
             this@ExoPlayerActivity.subtitleUrls = subtitles ?: emptyList()
             this@ExoPlayerActivity.subtitleHeaders = intentHeaders
+            controlsViewModel.subtitleRequestHeaders = intentHeaders
+            SubtitleCueLoader.clear()
             if (subtitleUrls.isNotEmpty()) {
                 val subUrl = subtitleUrls[0]
                 currentSubtitleUrl = subUrl
@@ -935,6 +957,8 @@ class ExoPlayerActivity : PlayerActivity() {
                         }
 
                         if (!coordinator.isEmpty) {
+                            // Refresh the store too — it misses queue_add-appended episodes.
+                            PlaylistStore.currentPlaylist = coordinator.playlist
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_IS_PLAYLIST, true)
                             putExtra(com.playbridge.player.server.ServerService.EXTRA_PLAYLIST_INDEX, coordinator.index)
                         }
@@ -1049,16 +1073,10 @@ class ExoPlayerActivity : PlayerActivity() {
         startNowPlayingBroadcasts(controlsViewModel)
     }
 
-    private var cachedBitmap: android.graphics.Bitmap? = null
-
     override fun onPause() {
         super.onPause()
         syncSelectionsToProgressManager()
-        // Capture thumbnail asynchronously and save progress
-        lifecycleScope.launch {
-            val bitmap = progressManager.captureBitmapSuspend()
-            progressManager.saveProgress(bitmap)
-        }
+        progressManager.saveProgress()
     }
 
     override fun onStop() {
@@ -1094,6 +1112,7 @@ class ExoPlayerActivity : PlayerActivity() {
             FileLogger.e(TAG, "Error releasing player: ${e.message}", e)
         }
         engine = null
+        listenerAttachedPlayer = null
     }
 
     /**
@@ -1178,6 +1197,12 @@ class ExoPlayerActivity : PlayerActivity() {
                         .setTrackTypeDisabled(trackType, id == "off")
                         .clearOverridesOfType(trackType)
                         .build()
+                    // Drop the carried language preference so the next episode's
+                    // player (rebuilt per item) doesn't resurrect the old pick.
+                    when (type) {
+                        "audio" -> preferredAudioLanguage = null
+                        "sub" -> preferredSubtitleLanguage = null
+                    }
                 } else {
                     // Composite ID: "groupIndex:trackIndex"
                     val parts = id.split(":")
@@ -1195,6 +1220,17 @@ class ExoPlayerActivity : PlayerActivity() {
                                 )
                             )
                             .build()
+                        // The override only binds to *this* item's track groups; the
+                        // player is released and rebuilt on episode advance, so carry
+                        // the pick forward as a language preference (re-applied at
+                        // player construction, like the phone's payload preference).
+                        val pickedLanguage = group.getTrackFormat(trackIdx).language
+                        if (!pickedLanguage.isNullOrBlank()) {
+                            when (type) {
+                                "audio" -> preferredAudioLanguage = pickedLanguage
+                                "sub" -> preferredSubtitleLanguage = pickedLanguage
+                            }
+                        }
                     }
                 }
             }
@@ -1222,29 +1258,6 @@ class ExoPlayerActivity : PlayerActivity() {
             else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
         }
         controlsViewModel.setVideoScaling(mode)
-    }
-
-    /** Apply a preset video filter by enum name (from a phone `filter:` command). */
-    private fun applyExoFilter(name: String) {
-        val filter = try { VideoFilter.valueOf(name) } catch (e: Exception) { return }
-        videoFilterManager.applyFilter(filter)
-        controlsViewModel.setVideoFilterState(
-            filter,
-            videoFilterManager.customBrightness,
-            videoFilterManager.customContrast,
-            videoFilterManager.customSaturation
-        )
-    }
-
-    /** Apply a custom video filter "brightness:contrast:saturation" (from a phone `filter_custom:` command). */
-    private fun applyExoCustomFilter(args: String) {
-        val parts = args.split(":")
-        if (parts.size != 3) return
-        val b = parts[0].toFloatOrNull() ?: return
-        val c = parts[1].toFloatOrNull() ?: return
-        val s = parts[2].toFloatOrNull() ?: return
-        videoFilterManager.applyCustom(b, c, s)
-        controlsViewModel.setVideoFilterState(VideoFilter.CUSTOM, b, c, s)
     }
 
     /**
@@ -1287,20 +1300,14 @@ class ExoPlayerActivity : PlayerActivity() {
     private var preferredSubtitleLanguage: String? = null
 
     /**
-     * Push current track/filter selections into ProgressManager so the next
-     * saveProgress() call persists them to history.
+     * Push current track selections into ProgressManager so the next saveProgress()
+     * call persists them as the live-session state for an engine switch.
      */
     private fun syncSelectionsToProgressManager() {
-        val customValues = if (videoFilterManager.currentFilter == VideoFilter.CUSTOM) {
-            listOf(videoFilterManager.customBrightness, videoFilterManager.customContrast, videoFilterManager.customSaturation)
-        } else null
-
         progressManager.updateSelections(
             preferredAudioLanguage = preferredAudioLanguage,
             preferredSubtitleLanguage = preferredSubtitleLanguage,
             externalSubtitleUrl = currentSubtitleUrl,
-            videoFilter = videoFilterManager.currentFilter.name,
-            customFilterValues = customValues,
             playbackSpeed = currentPlaybackSpeed,
             videoScalingMode = currentVideoScalingMode
         )
@@ -1314,42 +1321,6 @@ class ExoPlayerActivity : PlayerActivity() {
     private fun applyVideoScalingMode(mode: Int) {
         currentVideoScalingMode = mode
         playerView.resizeMode = mode
-    }
-
-    override fun showVideoFilterDialog() {
-        showVideoFilterOverlay()
-    }
-
-    private fun showVideoFilterOverlay() {
-        val wasPlaying = engine?.getExoPlayer()?.isPlaying == true
-        if (wasPlaying) engine?.getExoPlayer()?.pause()
-
-        val currentFilter = videoFilterManager.currentFilter
-        val brightness = videoFilterManager.customBrightness
-        val contrast = videoFilterManager.customContrast
-        val saturation = videoFilterManager.customSaturation
-
-        // Get a screenshot frame from the video for preview
-        getVideoSurfaceView()?.let { surfaceView ->
-            try {
-                val bitmap = android.graphics.Bitmap.createBitmap(surfaceView.width, surfaceView.height, android.graphics.Bitmap.Config.ARGB_8888)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    android.view.PixelCopy.request(surfaceView, bitmap, { result ->
-                        if (result == android.view.PixelCopy.SUCCESS) {
-                            controlsViewModel.showVideoFilter(currentFilter, brightness, contrast, saturation, bitmap)
-                        } else {
-                            controlsViewModel.showVideoFilter(currentFilter, brightness, contrast, saturation, null)
-                        }
-                    }, android.os.Handler(android.os.Looper.getMainLooper()))
-                } else {
-                    controlsViewModel.showVideoFilter(currentFilter, brightness, contrast, saturation, null)
-                }
-            } catch (e: Exception) {
-                controlsViewModel.showVideoFilter(currentFilter, brightness, contrast, saturation, null)
-            }
-        } ?: run {
-            controlsViewModel.showVideoFilter(currentFilter, brightness, contrast, saturation, null)
-        }
     }
 
     private fun showTrackSelectionDialog() {

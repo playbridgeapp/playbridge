@@ -349,7 +349,7 @@ class ServerService : Service() {
                         activeContext = "browser_external"
                         broadcastContext()
                         val browserIntent = Intent("com.playbridge.player.ACTION_BROWSER").apply {
-                            setPackage("com.playbridge.browser")
+                            setPackage("com.playbridge.geckoview.plugin")
                             putExtra("extra_url", url)
                             putExtra("extra_browser_mode", browserMode)
                             putExtra("extra_desktop_mode", desktopMode)
@@ -421,7 +421,7 @@ class ServerService : Service() {
                 } else if (activeContext == "browser_external") {
                     val browserIntent = Intent(ACTION_REMOTE).apply {
                         putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
-                        setPackage("com.playbridge.browser")
+                        setPackage("com.playbridge.geckoview.plugin")
                     }
                     sendBroadcast(browserIntent)
                 } else {
@@ -441,7 +441,7 @@ class ServerService : Service() {
 
                 when (activeContext) {
                     "browser_external" -> {
-                        intent.setPackage("com.playbridge.browser")
+                        intent.setPackage("com.playbridge.geckoview.plugin")
                         sendBroadcast(intent)
                     }
                     "browser", "player" -> {
@@ -457,7 +457,7 @@ class ServerService : Service() {
                 if (activeContext == "browser_external") {
                     val browserIntent = Intent(ACTION_BROWSER_CONTROL).apply {
                         putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
-                        setPackage("com.playbridge.browser")
+                        setPackage("com.playbridge.geckoview.plugin")
                     }
                     sendBroadcast(browserIntent)
                 } else {
@@ -482,64 +482,17 @@ class ServerService : Service() {
                 val payload = msg.payload
                 FileLogger.i(TAG, "=== PLAYLIST COMMAND === (${payload.items.size} items, startIndex: ${payload.start_index})")
 
-                com.playbridge.player.player.PlaylistStore.currentPlaylist = payload.items
-
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
-
-                val firstItem = payload.items.getOrNull(payload.start_index) ?: payload.items.firstOrNull()
-                // TV pref forces an engine; otherwise honour the phone's per-cast choice
-                // ("phone"/"tv"/unset → ExoPlayer default).
-                val playlistMode = when {
-                    tvPref == "mpv" || tvPref == "exo" -> tvPref
-                    firstItem?.player_mode == "mpv" -> "mpv"
-                    else -> "exo"
-                }
 
                 activeContext = "player"
                 broadcastContext()
 
-                val activityClass = when (playlistMode) {
-                    "mpv" -> com.playbridge.player.player.MpvPlayerActivity::class.java
-                    else  -> com.playbridge.player.player.ExoPlayerActivity::class.java
-                }
-
-                val playerIntent = Intent(this, activityClass).apply {
-                    if (firstItem != null) {
-                        putExtra(EXTRA_URL, firstItem.url)
-                        putExtra(EXTRA_TITLE, firstItem.title)
-                        putExtra(EXTRA_CONTENT_TYPE, firstItem.content_type)
-                        firstItem.detected_by?.let { putExtra(EXTRA_DETECTED_BY, it) }
-                        if (firstItem.subtitles.isNotEmpty()) {
-                            putStringArrayListExtra(EXTRA_SUBTITLES, ArrayList(firstItem.subtitles))
-                        }
-                        if (firstItem.headers.isNotEmpty()) {
-                            putExtra(EXTRA_HEADERS, HashMap(firstItem.headers))
-                        }
-                        firstItem.preferred_audio_language?.let {
-                            putExtra(EXTRA_PREFERRED_AUDIO_LANG, it)
-                        }
-                        firstItem.preferred_subtitle_language?.let {
-                            putExtra(EXTRA_PREFERRED_SUBTITLE_LANG, it)
-                        }
-                        firstItem.default_video_quality?.let {
-                            putExtra("default_video_quality", it)
-                        }
-                        firstItem.max_bitrate_cap_mbps?.let {
-                            putExtra(EXTRA_MAX_BITRATE_CAP_MBPS, it)
-                        }
-                    }
-                    putExtra(EXTRA_IS_PLAYLIST, true)
-                    putExtra(EXTRA_PLAYLIST_INDEX, payload.start_index)
-
-                    // Playlist-level metadata wins; fall back to the start item's (single videos
-                    // carry it on the item, not the playlist wrapper).
-                    (payload.visual_metadata ?: firstItem?.visual_metadata)?.let { visualMetadata ->
-                        putExtra(EXTRA_VISUAL_METADATA, visualMetadata.encode())
-                    }
-
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
+                // Single source of truth for the launch intent (sets PlaylistStore, picks the
+                // engine, maps every per-item extra). History replay builds the exact same
+                // intent from the stored payload — see PlayerLauncher.
+                val playerIntent = com.playbridge.player.player.PlayerLauncher
+                    .buildPlayerIntent(this, payload, tvPref)
                 pendingQueueItems.clear() // discard any stale items from a previous session
                 launchActivityFromBackground(playerIntent, "Playing playlist (${payload.items.size} items)")
             }
@@ -739,7 +692,7 @@ class ServerService : Service() {
 
     private fun isGeckoApkInstalled(): Boolean {
         return try {
-            packageManager.getPackageInfo("com.playbridge.browser", 0)
+            packageManager.getPackageInfo("com.playbridge.geckoview.plugin", 0)
             true
         } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
             false
@@ -792,8 +745,6 @@ class ServerService : Service() {
         const val EXTRA_PREFERRED_AUDIO_LANG = "preferred_audio_lang"
         const val EXTRA_PREFERRED_SUBTITLE_LANG = "preferred_subtitle_lang"
         const val EXTRA_EXTERNAL_SUBTITLE_URL = "external_subtitle_url"
-        const val EXTRA_VIDEO_FILTER = "video_filter"
-        const val EXTRA_CUSTOM_FILTER_VALUES = "custom_filter_values"
         const val EXTRA_MAX_BITRATE_CAP_MBPS = "max_bitrate_cap_mbps" // Double: max ABR bitrate cap for ExoPlayer
         const val EXTRA_SKIP_PREPLAY = "skip_preplay"
         const val ACTION_QUEUE_ADD = "com.playbridge.player.ACTION_QUEUE_ADD"

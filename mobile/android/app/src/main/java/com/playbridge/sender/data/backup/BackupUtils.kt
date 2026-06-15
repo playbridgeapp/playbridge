@@ -140,7 +140,7 @@ object BackupUtils {
                         )
                     }
                     withContext(Dispatchers.Main) {
-                        Components.tabManager?.restoreTabs(sessionTabs, null, Components.store)
+                        Components.tabManager.restoreTabs(sessionTabs, null, Components.store)
                     }
                     ImportResult.Success(null, hasDuplicates = false)
                 }

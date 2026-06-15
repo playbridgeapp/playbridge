@@ -451,7 +451,7 @@ fun TabsScreen(
                 }
             }
 
-            val playingTabIds = Components.tabManager?.playingTabIds ?: emptyMap<String, Boolean>()
+            val playingTabIds = Components.tabManager.playingTabIds
             val scope = rememberCoroutineScope()
 
             val showScrollToTop by remember {

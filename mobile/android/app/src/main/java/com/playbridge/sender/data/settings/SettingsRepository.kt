@@ -24,6 +24,8 @@ class SettingsRepository(
         val TV_PLAYER_MODE = stringPreferencesKey("tv_player_mode")
         val TV_PREFETCH_WINDOW = intPreferencesKey("tv_prefetch_window")
         val DETECT_VIDEOS = booleanPreferencesKey("detect_videos")
+        val TRACK_WATCH_PROGRESS = booleanPreferencesKey("track_watch_progress")
+        val AUTO_ADD_TO_WATCHING = booleanPreferencesKey("auto_add_to_watching")
         val BLOCK_POPUPS = booleanPreferencesKey("block_popups")
         val POPUP_WHITELIST = stringSetPreferencesKey("popup_whitelist")
         val POPUP_BLACKLIST = stringSetPreferencesKey("popup_blacklist")
@@ -40,6 +42,10 @@ class SettingsRepository(
     /** How many episodes to keep resolved & queued ahead on the TV for series without a play-endpoint addon. */
     val tvPrefetchWindow: Flow<Int> = dataStore.data.catch { handleException(it) }.map { (it[Keys.TV_PREFETCH_WINDOW] ?: 1).coerceIn(1, 10) }
     val detectVideos: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.DETECT_VIDEOS] ?: true }
+    /** Automatically update watchlist progress / watched state from TV playback. */
+    val trackWatchProgress: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.TRACK_WATCH_PROGRESS] ?: true }
+    /** When auto-tracking, add untracked shows/movies to the watchlist as Watching. */
+    val autoAddToWatching: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.AUTO_ADD_TO_WATCHING] ?: true }
     val blockPopups: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.BLOCK_POPUPS] ?: true }
     val popupWhitelist: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.POPUP_WHITELIST] ?: emptySet() }
     val popupBlacklist: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.POPUP_BLACKLIST] ?: emptySet() }
@@ -54,6 +60,8 @@ class SettingsRepository(
     suspend fun setTvPlayerMode(value: String) = write { it[Keys.TV_PLAYER_MODE] = value }
     suspend fun setTvPrefetchWindow(value: Int) = write { it[Keys.TV_PREFETCH_WINDOW] = value.coerceIn(1, 10) }
     suspend fun setDetectVideos(value: Boolean) = write { it[Keys.DETECT_VIDEOS] = value }
+    suspend fun setTrackWatchProgress(value: Boolean) = write { it[Keys.TRACK_WATCH_PROGRESS] = value }
+    suspend fun setAutoAddToWatching(value: Boolean) = write { it[Keys.AUTO_ADD_TO_WATCHING] = value }
     suspend fun setBlockPopups(value: Boolean) = write { it[Keys.BLOCK_POPUPS] = value }
     
     suspend fun addPopupWhitelist(host: String) = write { prefs ->

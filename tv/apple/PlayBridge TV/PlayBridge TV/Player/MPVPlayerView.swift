@@ -35,6 +35,24 @@ struct MPVPlayerView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: MPVViewController, context: Context) {
         uiViewController.isPreBuffering = isPreBuffering
+        // Keep callbacks current (they're cheap value assignments).
+        uiViewController.onDismiss = onDismiss
+        uiViewController.onExit = onExit
+        uiViewController.onSwitch = onSwitch
+        uiViewController.onBroadcast = onBroadcast
+        // Episode advance on the LIVE mpv core: the controller (and its initialised
+        // handle, render layer, caches) is reused — `loadfile replace` swaps the
+        // media. This is what makes back-to-back episodes start fast and gapless
+        // instead of paying a full mpv re-init per item.
+        if uiViewController.url != url {
+            uiViewController.loadNewItem(
+                url: url,
+                headers: headers,
+                subtitles: subtitles,
+                initialTime: initialTime,
+                title: title
+            )
+        }
     }
 
     /// Deterministic teardown. SwiftUI calls this when it removes the representable's
@@ -270,6 +288,29 @@ class MPVViewController: UIViewController {
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 
+    /// Swap in the next item on the live mpv core (episode advance). All per-item
+    /// state is reset; the handle, render context, and demuxer caches survive.
+    func loadNewItem(url: URL, headers: [String: String]?, subtitles: [String]?,
+                     initialTime: Double, title: String?) {
+        self.url = url
+        self.headers = headers
+        self.subtitles = subtitles
+        self.initialTime = initialTime
+        self.mediaTitle = title
+
+        // Per-item resets (mirrors what a fresh controller would start with).
+        didApplyTrackPreferences = false
+        ignoreTimeUpdatesUntil = .distantPast
+        playbackState.title = title ?? ""
+        playbackState.currentTime = 0
+        playbackState.duration = 0
+        playbackState.userPaused = false
+        playbackState.audioTracks = []
+        playbackState.subtitleTracks = []
+
+        loadFile(url)
+    }
+
     private func loadFile(_ url: URL) {
         guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
         pendingExternalSubtitles = subtitles ?? []
@@ -292,6 +333,10 @@ class MPVViewController: UIViewController {
 
             if self.initialTime > 0 {
                 mpv_set_property_string(handle, "start", String(format: "%.2f", self.initialTime))
+            } else {
+                // The handle persists across episodes now — clear a previous item's
+                // resume point or the next file would start there too.
+                mpv_set_property_string(handle, "start", "none")
             }
             let path = url.isFileURL ? url.path : url.absoluteString
             self.mpvCommand(handle, ["loadfile", path, "replace"])
@@ -320,6 +365,17 @@ class MPVViewController: UIViewController {
             onFileLoaded()
 
         case MPV_EVENT_END_FILE:
+            // The handle is reused across episodes: our own `loadfile replace`
+            // (advance/loop) also emits END_FILE, with reason STOP/REDIRECT.
+            // Only a natural EOF or a hard error may advance the playlist —
+            // otherwise the replace that *performs* an advance would immediately
+            // trigger another one and skip episodes.
+            if let efPtr = event.data?.assumingMemoryBound(to: mpv_event_end_file.self) {
+                let reason = efPtr.pointee.reason
+                guard reason == MPV_END_FILE_REASON_EOF || reason == MPV_END_FILE_REASON_ERROR else {
+                    break
+                }
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 if self.playbackState.isLooping {
@@ -451,6 +507,30 @@ class MPVViewController: UIViewController {
 
     // MARK: - Track Selection
 
+    /// One-shot guard so session track preferences are applied once per item; after that
+    /// the user's live changes win.
+    private var didApplyTrackPreferences = false
+
+    /// Remember an audio pick (by display name) so the next episode — a fresh mpv
+    /// instance — re-applies it. Call on main (reads playbackState).
+    private func recordAudioPreference(id: Int) {
+        if let t = playbackState.audioTracks.first(where: { $0.id == id }) {
+            TrackPreferences.shared.audioName = t.name
+        }
+    }
+
+    /// Remember a subtitle pick or an explicit "off" (see above).
+    private func recordSubtitlePreference(id: Int) {
+        let prefs = TrackPreferences.shared
+        if id < 0 {
+            prefs.subtitlesOff = true
+            prefs.subtitleName = nil
+        } else if let t = playbackState.subtitleTracks.first(where: { $0.id == id }) {
+            prefs.subtitlesOff = false
+            prefs.subtitleName = t.name
+        }
+    }
+
     /// Enumerate tracks. MUST be called on `mpvQueue` (never the main thread): this MPVKit
     /// build's vo=avfoundation does work on the main thread, so a synchronous mpv_* call from
     /// main can deadlock against the video output while it holds mpv's core lock.
@@ -500,6 +580,31 @@ class MPVViewController: UIViewController {
             self.playbackState.subtitleTracks = subtitleTracks
             self.playbackState.currentAudioIndex = Int(currentAid)
             self.playbackState.currentSubtitleIndex = Int(currentSid)
+
+            // Carry the session's track picks (made on a previous episode's instance)
+            // into this item, once, as soon as tracks are known.
+            if !self.didApplyTrackPreferences && !audioTracks.isEmpty {
+                self.didApplyTrackPreferences = true
+                let prefs = TrackPreferences.shared
+                if let name = prefs.audioName,
+                   let t = audioTracks.first(where: { $0.name == name }),
+                   t.id != Int(currentAid) {
+                    self.setPropertyAsync("aid", value: String(t.id))
+                    self.playbackState.currentAudioIndex = t.id
+                }
+                if prefs.subtitlesOff {
+                    if currentSid > 0 {
+                        self.setPropertyAsync("sid", value: "no")
+                        self.playbackState.currentSubtitleIndex = -1
+                    }
+                } else if let name = prefs.subtitleName,
+                          let t = subtitleTracks.first(where: { $0.name == name }),
+                          t.id != Int(currentSid) {
+                    self.setPropertyAsync("sid", value: String(t.id))
+                    self.playbackState.currentSubtitleIndex = t.id
+                }
+            }
+
             self.broadcastTracks()
         }
     }
@@ -579,11 +684,13 @@ class MPVViewController: UIViewController {
                 guard let self else { return }
                 self.setPropertyAsync("sid", value: trackId < 0 ? "no" : String(trackId))
                 self.playbackState.currentSubtitleIndex = trackId
+                self.recordSubtitlePreference(id: trackId)
             },
             onSelectAudio: { [weak self] trackId in
                 guard let self else { return }
                 self.setPropertyAsync("aid", value: String(trackId))
                 self.playbackState.currentAudioIndex = trackId
+                self.recordAudioPreference(id: trackId)
             },
             onTogglePlayPause: { [weak self] in self?.togglePlayPause() },
             onSwitchEngine: { [weak self] in
@@ -956,16 +1063,23 @@ class MPVViewController: UIViewController {
         case let c where c.hasPrefix("audio_track:"):
             let id = String(c.dropFirst("audio_track:".count))
             setPropertyAsync("aid", value: id)
-            if let i = Int(id) { playbackState.currentAudioIndex = i }
+            if let i = Int(id) {
+                playbackState.currentAudioIndex = i
+                recordAudioPreference(id: i)
+            }
             mpvQueue.async { [weak self] in self?.updateTracks() }
         case let c where c.hasPrefix("sub_track:"):
             let id = String(c.dropFirst("sub_track:".count))
             if id == "none" || id == "-1" {
                 setPropertyAsync("sid", value: "no")
                 playbackState.currentSubtitleIndex = -1
+                recordSubtitlePreference(id: -1)
             } else {
                 setPropertyAsync("sid", value: id)
-                if let i = Int(id) { playbackState.currentSubtitleIndex = i }
+                if let i = Int(id) {
+                    playbackState.currentSubtitleIndex = i
+                    recordSubtitlePreference(id: i)
+                }
             }
             mpvQueue.async { [weak self] in self?.updateTracks() }
         case let c where c.hasPrefix("add_subtitle:"):

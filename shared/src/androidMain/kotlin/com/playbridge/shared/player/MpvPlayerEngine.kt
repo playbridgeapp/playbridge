@@ -350,10 +350,6 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         MPVLib.command("sub-add", url, "select")
     }
 
-    override fun setFilter(filter: VideoFilter, customParams: List<Float>?) {
-        logger.i(TAG, "setFilter($filter, customParams=$customParams)")
-    }
-
     override fun release() {
         logger.i(TAG, "release()")
         if (!mpvInitialized) return

@@ -212,6 +212,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
                     await MainActor.run {
                         self.audioGroup = audio
                         self.subtitleGroup = sub
+                        self.applyPreferredTracks()
                         self.broadcastTracks()
                     }
                 }
@@ -291,12 +292,63 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private func selectTrack(_ characteristic: AVMediaCharacteristic, id: String) {
             guard let item = player?.currentItem else { return }
             guard let group = (characteristic == .audible) ? audioGroup : subtitleGroup else { return }
+            let prefs = TrackPreferences.shared
             if id == "none" || id == "-1" {
                 item.select(nil, in: group)  // deselect (e.g. subtitles off)
+                if characteristic == .legible {
+                    prefs.subtitlesOff = true
+                    prefs.subtitleLanguage = nil
+                    prefs.subtitleName = nil
+                }
             } else if let index = Int(id), group.options.indices.contains(index) {
-                item.select(group.options[index], in: group)
+                let option = group.options[index]
+                item.select(option, in: group)
+                // Remember the pick so the next episode's (new) player re-applies it.
+                let lang = option.locale?.identifier ?? option.extendedLanguageTag
+                if characteristic == .audible {
+                    prefs.audioLanguage = lang
+                    prefs.audioName = option.displayName
+                } else {
+                    prefs.subtitlesOff = false
+                    prefs.subtitleLanguage = lang
+                    prefs.subtitleName = option.displayName
+                }
             }
             broadcastTracks()
+        }
+
+        /// Re-apply the session's track preferences once the selection groups are loaded,
+        /// so picks carry across episodes (each item gets a fresh AVPlayer).
+        private func applyPreferredTracks() {
+            guard let item = player?.currentItem else { return }
+            let prefs = TrackPreferences.shared
+
+            func match(in group: AVMediaSelectionGroup?, language: String?, name: String?)
+                -> AVMediaSelectionOption?
+            {
+                guard let group else { return nil }
+                if let language,
+                   let m = group.options.first(where: {
+                       $0.locale?.identifier == language || $0.extendedLanguageTag == language
+                   }) { return m }
+                if let name, let m = group.options.first(where: { $0.displayName == name }) {
+                    return m
+                }
+                return nil
+            }
+
+            if let group = audioGroup,
+               let option = match(in: group, language: prefs.audioLanguage, name: prefs.audioName) {
+                item.select(option, in: group)
+            }
+            if let group = subtitleGroup {
+                if prefs.subtitlesOff {
+                    item.select(nil, in: group)
+                } else if let option = match(
+                    in: group, language: prefs.subtitleLanguage, name: prefs.subtitleName) {
+                    item.select(option, in: group)
+                }
+            }
         }
     }
 }

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>PlayBridge Cast Demo</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #4f8cff;
+    --ok: #3fb950;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 28px 0 8px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; font-size: .9rem; }
+  .banner {
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: .9rem;
+    border: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .banner.ok { border-color: var(--ok); color: var(--ok); }
+  .banner.warn { border-color: var(--warn); color: var(--warn); }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: .95rem; }
+  .card p { margin: 0 0 10px; color: var(--muted); font-size: .82rem; }
+  button {
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: .85rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-right: 8px;
+    margin-top: 2px;
+  }
+  button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button:active { opacity: .8; }
+  video { width: 100%; border-radius: 8px; background: #000; }
+  #log {
+    background: #010409;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .75rem;
+    min-height: 90px;
+    max-height: 240px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #log .t { color: var(--muted); }
+  #log .ok { color: var(--ok); }
+  code { background: #21262d; border-radius: 4px; padding: 1px 5px; font-size: .8em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PlayBridge Cast Demo</h1>
+  <p class="sub">
+    Test page for the <code>window.playbridge.cast()</code> page bridge and the browser's
+    video detection. Open it in the PlayBridge phone browser.
+  </p>
+
+  <div id="bridge-banner" class="banner warn">Checking for PlayBridge bridge…</div>
+
+  <h2>Page bridge — <code>window.playbridge.cast()</code></h2>
+
+  <div class="card">
+    <h3>Single video (object form)</h3>
+    <p>One MP4 with full <code>VisualMetadata</code> (title, year, overview, poster).</p>
+    <button onclick="castSingle()">Cast single</button>
+  </div>
+
+  <div class="card">
+    <h3>HLS stream</h3>
+    <p>Casts an HLS master playlist URL — exercises receiver-side manifest handling.</p>
+    <button onclick="castHls()">Cast HLS</button>
+  </div>
+
+  <div class="card">
+    <h3>Playlist with startIndex (items form)</h3>
+    <p>Three episodes with per-item season/episode metadata, starting at the second
+       (<code>startIndex: 1</code>) — exercises the queue.</p>
+    <button onclick="castPlaylist()">Cast playlist</button>
+  </div>
+
+  <div class="card">
+    <h3>Bare array form</h3>
+    <p>Payload is a plain array of items — the third accepted shape.</p>
+    <button onclick="castArray()">Cast array</button>
+  </div>
+
+  <h2>Video detection</h2>
+
+  <div class="card">
+    <h3>DOM <code>&lt;video&gt;</code> element</h3>
+    <p>The element below should appear in the cast sheet via <code>dom_video_element</code>
+       without pressing anything.</p>
+    <video controls preload="none"
+           src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4"
+           poster="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/ForBiggerEscapes.jpg"></video>
+  </div>
+
+  <div class="card">
+    <h3>Network-level HLS fetch</h3>
+    <p>Fetches an <code>.m3u8</code> manifest with XHR — should appear in the cast sheet via
+       <code>url_pattern_m3u8</code> / <code>content_type</code>. Reload the page and confirm
+       the sheet resets to 0, then re-detects after pressing this again.</p>
+    <button class="secondary" onclick="fetchHls()">Fetch HLS manifest</button>
+  </div>
+
+  <h2>Event log</h2>
+  <div id="log"></div>
+</main>
+
+<script>
+  var logEl = document.getElementById('log');
+  function log(msg, cls) {
+    var line = document.createElement('div');
+    var t = new Date().toTimeString().slice(0, 8);
+    line.innerHTML = '<span class="t">' + t + '</span> ' + msg;
+    if (cls) line.className = cls;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ── Bridge presence ─────────────────────────────────────────────────────
+  var banner = document.getElementById('bridge-banner');
+  var checks = 0;
+  (function checkBridge() {
+    if (window.playbridge && typeof window.playbridge.cast === 'function') {
+      banner.className = 'banner ok';
+      banner.textContent = '✓ PlayBridge bridge detected — cast buttons are live.';
+      log('Bridge detected (window.playbridge)', 'ok');
+    } else if (++checks < 20) {
+      setTimeout(checkBridge, 250);
+    } else {
+      banner.className = 'banner warn';
+      banner.textContent = '⚠ window.playbridge not found. Open this page in the PlayBridge phone browser. Buttons will log the payload only.';
+      log('Bridge NOT detected after 5s');
+    }
+  })();
+
+  function cast(payload, label) {
+    log('cast(' + label + '): ' + JSON.stringify(payload).slice(0, 140) + '…');
+    if (window.playbridge && window.playbridge.cast) {
+      window.playbridge.cast(payload);
+    } else {
+      log('— no bridge, payload logged only');
+    }
+  }
+
+  // Feedback round-trip from the native app (via background → content script)
+  window.addEventListener('PlayBridgeFeedback', function (e) {
+    var detail = e && e.detail;
+    log('PlayBridgeFeedback: ' + (detail ? JSON.stringify(detail) : '(no detail — Xray-filtered?)'), 'ok');
+  });
+
+  // ── Payloads ────────────────────────────────────────────────────────────
+  var GTV = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/';
+
+  function castSingle() {
+    cast({
+      url: GTV + 'BigBuckBunny.mp4',
+      title: 'Big Buck Bunny',
+      metadata: {
+        title: 'Big Buck Bunny',
+        year: '2008',
+        overview: 'A giant rabbit takes gentle revenge on three bullying rodents. Blender Foundation open movie.',
+        genres: ['Animation', 'Short'],
+        posterUrl: GTV + 'images/BigBuckBunny.jpg'
+      }
+    }, 'single');
+  }
+
+  function castHls() {
+    cast({
+      url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+      title: 'HLS Test Stream (mux.dev)',
+      metadata: { title: 'HLS Test Stream', overview: 'Multi-variant HLS VOD test stream.' }
+    }, 'hls');
+  }
+
+  function castPlaylist() {
+    cast({
+      startIndex: 1,
+      metadata: {
+        title: 'Blender Shorts',
+        overview: 'Demo playlist of Blender Foundation open movies.',
+        posterUrl: GTV + 'images/ElephantsDream.jpg'
+      },
+      items: [
+        { url: GTV + 'BigBuckBunny.mp4',   title: 'S1E1 · Big Buck Bunny',
+          metadata: { title: 'Blender Shorts', season: 1, episode: 1, episodeTitle: 'Big Buck Bunny' } },
+        { url: GTV + 'ElephantsDream.mp4', title: 'S1E2 · Elephants Dream',
+          metadata: { title: 'Blender Shorts', season: 1, episode: 2, episodeTitle: 'Elephants Dream' } },
+        { url: GTV + 'Sintel.mp4',         title: 'S1E3 · Sintel',
+          metadata: { title: 'Blender Shorts', season: 1, episode: 3, episodeTitle: 'Sintel' } }
+      ]
+    }, 'playlist');
+  }
+
+  function castArray() {
+    cast([
+      { url: GTV + 'ForBiggerBlazes.mp4', title: 'For Bigger Blazes' },
+      { url: GTV + 'ForBiggerFun.mp4',    title: 'For Bigger Fun' }
+    ], 'array');
+  }
+
+  function fetchHls() {
+    var url = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+    log('fetch: ' + url);
+    fetch(url, { mode: 'cors' })
+      .then(function (r) { return r.text(); })
+      .then(function (body) { log('manifest fetched (' + body.length + ' bytes) — check the cast sheet', 'ok'); })
+      .catch(function (e) { log('fetch failed: ' + e.message + ' (request still hit the network — detection may have fired anyway)'); });
+  }
+</script>
+</body>
+</html>

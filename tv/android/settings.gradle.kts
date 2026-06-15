@@ -27,6 +27,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "PlayBridgeTV"
 include(":player:app")
-include(":browser:app")
+include(":geckoview-plugin:app")
 include(":shared")
 project(":shared").projectDir = File("../../shared")

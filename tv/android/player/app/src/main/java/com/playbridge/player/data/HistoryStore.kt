@@ -12,28 +12,27 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 
-private val Context.historyDataStore: DataStore<Preferences> by preferencesDataStore(name = "history_store")
+// v2: history now stores the raw PlaylistPayload JSON the phone sent (source of truth for
+// replay) plus the TV-side progress and a little UI metadata — nothing flattened. The name
+// bump deliberately abandons the old v1 schema (no migration: old entries are simply never
+// read, i.e. history starts clean after upgrade).
+private val Context.historyDataStore: DataStore<Preferences> by preferencesDataStore(name = "history_store_v2")
 
 @Serializable
 data class PlaybackHistoryItem(
-    val id: String, // Generally the URL or a hash of it
-    val url: String,
-    val title: String?,
-    val position: Long,
-    val duration: Long,
+    val id: String, // Stable, index-independent key (PlayerLauncher.historyId)
+    // The exact PlaylistPayload (items + start_index + visual_metadata) the phone sent.
+    // Replay decodes this and feeds it back through the same launch path as a live cast,
+    // so subtitles / audio language / headers all come back unchanged.
+    val payloadJson: String,
+    val url: String,      // first item's URL — for resume lookup + history-card display
+    val title: String?,   // denormalized purely so the list renders without decoding
+    val position: Long,   // TV-side progress (not part of the phone payload)
+    val duration: Long,   // TV-side progress
     val timestamp: Long = System.currentTimeMillis(),
-    val contentType: String? = null,
-    val headers: Map<String, String>? = null,
-    val thumbnailPath: String? = null,
-    val playlistJson: String? = null,
-    val playlistIndex: Int = 0,
-    val preferredAudioLanguage: String? = null,
-    val preferredSubtitleLanguage: String? = null,
-    val externalSubtitleUrl: String? = null,
-    val videoFilter: String? = null,
-    val customFilterValues: List<Float>? = null,
-    val playbackSpeed: Float? = null,
-    val videoScalingMode: Int? = null,
+    // Remote poster/backdrop URL from the payload's visual_metadata (null for browser-
+    // detected videos with no metadata — the card falls back to a play glyph).
+    val thumbnailUrl: String? = null,
     val isFavorite: Boolean = false
 )
 
@@ -54,33 +53,16 @@ class HistoryStore(private val context: Context) {
     }
 
     suspend fun saveProgress(
+        id: String,
+        payloadJson: String,
         url: String,
         title: String?,
         position: Long,
         duration: Long,
-        contentType: String?,
-        headers: Map<String, String>?,
-        thumbnailPath: String? = null,
-        playlistJson: String? = null,
-        playlistIndex: Int = 0,
-        preferredAudioLanguage: String? = null,
-        preferredSubtitleLanguage: String? = null,
-        externalSubtitleUrl: String? = null,
-        videoFilter: String? = null,
-        customFilterValues: List<Float>? = null,
-        playbackSpeed: Float? = null,
-        videoScalingMode: Int? = null
+        thumbnailUrl: String? = null
     ) {
-        if (url.isBlank()) return
-        
-        // For playlist items, use a stable ID based on the playlist content
-        // so all episodes update the same history entry instead of creating duplicates.
-        val id = if (playlistJson != null) {
-            "playlist_${playlistJson.hashCode()}"
-        } else {
-            url
-        }
-        
+        if (url.isBlank() || payloadJson.isBlank()) return
+
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
             val currentList = try {
@@ -89,29 +71,20 @@ class HistoryStore(private val context: Context) {
                 mutableListOf()
             }
 
-            // check for existing item to preserve thumbnail if new one is not provided
+            // Preserve an existing artwork URL if the caller didn't supply one (e.g. the
+            // periodic position-only save), and keep the existing favorite flag.
             val existingItem = currentList.find { it.id == id }
-            val finalThumbnailPath = thumbnailPath ?: existingItem?.thumbnailPath
+            val finalThumbnailUrl = thumbnailUrl ?: existingItem?.thumbnailUrl
 
             val newItem = PlaybackHistoryItem(
                 id = id,
+                payloadJson = payloadJson,
                 url = url,
                 title = title,
                 position = position,
                 duration = duration,
                 timestamp = System.currentTimeMillis(),
-                contentType = contentType,
-                headers = headers,
-                thumbnailPath = finalThumbnailPath,
-                playlistJson = playlistJson,
-                playlistIndex = playlistIndex,
-                preferredAudioLanguage = preferredAudioLanguage,
-                preferredSubtitleLanguage = preferredSubtitleLanguage,
-                externalSubtitleUrl = externalSubtitleUrl,
-                videoFilter = videoFilter,
-                customFilterValues = customFilterValues,
-                playbackSpeed = playbackSpeed,
-                videoScalingMode = videoScalingMode,
+                thumbnailUrl = finalThumbnailUrl,
                 isFavorite = existingItem?.isFavorite ?: false
             )
 

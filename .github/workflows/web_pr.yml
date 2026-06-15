@@ -1,11 +1,12 @@
 name: Web PR Checks
+#
+# Runs on every PR to main so the required `web` status always reports,
+# but the heavy build steps only execute when web-relevant paths change
+# (see the paths-filter step). On unrelated PRs the job is a fast no-op pass.
 
 on:
   pull_request:
     branches: [ "main" ]
-    paths:
-      - 'web/site/**'
-      - '.github/workflows/web_pr.yml'
   workflow_dispatch:
 
 # Cancel superseded runs on the same PR.
@@ -15,6 +16,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   check:
@@ -25,23 +27,37 @@ jobs:
       run:
         working-directory: ./web/site
     steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'web/site/**'
+              - '.github/workflows/web_pr.yml'
+
       - uses: actions/checkout@v4
+        if: steps.filter.outputs.relevant == 'true'
 
       - uses: pnpm/action-setup@v4
+        if: steps.filter.outputs.relevant == 'true'
         with:
           version: 9
 
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.relevant == 'true'
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: web/site/pnpm-lock.yaml
 
       - name: Install dependencies
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Type & Svelte check
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm check
 
       - name: Build
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm build

@@ -1,14 +1,13 @@
 name: Extension PR Checks
 # protocol submodule: playbridgeapp/playbridge-protocol
+#
+# Runs on every PR to main so the required `extension` status always reports,
+# but the heavy build steps only execute when extension-relevant paths change
+# (see the paths-filter step). On unrelated PRs the job is a fast no-op pass.
 
 on:
   pull_request:
     branches: [ "main" ]
-    paths:
-      - 'extension/**'
-      - 'protocol/**'
-      - '.gitmodules'
-      - '.github/workflows/extension_pr.yml'
   workflow_dispatch:
 
 concurrency:
@@ -17,6 +16,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   check:
@@ -27,27 +27,43 @@ jobs:
       run:
         working-directory: ./extension
     steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'extension/**'
+              - 'protocol/**'
+              - '.gitmodules'
+              - '.github/workflows/extension_pr.yml'
+
       - uses: actions/checkout@v4
+        if: steps.filter.outputs.relevant == 'true'
         with:
           submodules: true
 
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.relevant == 'true'
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: extension/package-lock.json
 
       - name: Install dependencies
+        if: steps.filter.outputs.relevant == 'true'
         run: npm ci
 
       # esbuild (npm run build) does NOT type-check, so do it explicitly.
       - name: Type check
+        if: steps.filter.outputs.relevant == 'true'
         run: npx tsc --noEmit
 
       - name: Build
+        if: steps.filter.outputs.relevant == 'true'
         run: npm run build
 
       # Validate the built add-on the same way AMO will before the release
       # signing pipeline runs. Catches manifest / API issues early.
       - name: Lint extension (web-ext)
+        if: steps.filter.outputs.relevant == 'true'
         run: npx --yes web-ext lint --source-dir dist

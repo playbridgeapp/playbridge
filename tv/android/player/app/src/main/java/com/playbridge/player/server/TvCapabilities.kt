@@ -15,7 +15,7 @@ data class TvCapabilities(
 )
 
 object TvCapabilityProvider {
-    private const val GECKO_PACKAGE = "com.playbridge.browser"
+    private const val GECKO_PACKAGE = "com.playbridge.geckoview.plugin"
 
     // Both engines are compiled into the player app; external players were removed.
     // Bare engine ids, shared with every receiver (Apple TV/desktop already use the same scheme).

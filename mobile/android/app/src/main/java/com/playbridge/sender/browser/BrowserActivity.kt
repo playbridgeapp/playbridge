@@ -1,6 +1,8 @@
 package com.playbridge.sender.browser
 import com.playbridge.sender.library.*
 import com.playbridge.sender.cast.*
+import com.playbridge.sender.ui.TvDeviceGuard
+import com.playbridge.sender.ui.WrongDeviceDialog
 
 import android.os.Bundle
 import android.util.Log
@@ -201,7 +203,12 @@ class BrowserActivity : ComponentActivity() {
     private val connectionCoordinator: ConnectionCoordinator by inject()
     private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
-    private val tabManager = TabManager()
+
+    /**
+     * Process-wide singleton — live EngineSessions survive Activity recreation
+     * (theme change, system-initiated recreation). See [Components.tabManager].
+     */
+    private val tabManager: TabManager get() = Components.tabManager
 
     override fun onResume() {
         super.onResume()
@@ -249,9 +256,6 @@ class BrowserActivity : ComponentActivity() {
                 requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
             }
         }
-
-        // Set tabManager reference for resolving Kotlin tab IDs from extension messages
-        Components.tabManager = tabManager
 
         // Install the bundled video detector extension
         Components.installBundledExtension()
@@ -312,11 +316,23 @@ class BrowserActivity : ComponentActivity() {
             }
             // Tracks the last "main" tab so Settings/overlays know where to return
             var lastMainScreen by remember { mutableStateOf(currentScreen) }
+            // The screen the Remote was opened from, so Back returns there (e.g. Phone Files,
+            // Connection) rather than always falling back to the last main tab.
+            var remoteOrigin by remember { mutableStateOf<Screen?>(null) }
+            // The screen the Dashboard was opened from, so its close (X) returns there.
+            var dashboardOrigin by remember { mutableStateOf<Screen?>(null) }
             var isSettingsFromLibrary by remember { mutableStateOf(false) }
             val clipboardManager = LocalClipboardManager.current
             val keyboardController = LocalSoftwareKeyboardController.current
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
             val context = LocalContext.current
+            var showTvWarning by remember { mutableStateOf(TvDeviceGuard.shouldWarn(context)) }
+            if (showTvWarning) {
+                WrongDeviceDialog(onDismiss = {
+                    TvDeviceGuard.dismiss(context)
+                    showTvWarning = false
+                })
+            }
             val connectionState by connectionViewModel.connectionState.collectAsState()
             val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
             val scope = rememberCoroutineScope()
@@ -682,6 +698,11 @@ class BrowserActivity : ComponentActivity() {
             }
 
             val detectVideosEnabled by settingsRepository.detectVideos.collectAsState(initial = true)
+            // Detection messages now arrive via native messaging (Components.processMessage),
+            // so the setting is enforced there rather than at the old hash-signal parse site.
+            LaunchedEffect(detectVideosEnabled) {
+                Components.detectVideosEnabled = detectVideosEnabled
+            }
             var isDesktopMode by remember { mutableStateOf(false) }
             var isSecureConnection by remember { mutableStateOf(false) }
             var siteSecurityInfo by remember { mutableStateOf<SiteSecurityInfo?>(null) }
@@ -841,7 +862,12 @@ class BrowserActivity : ComponentActivity() {
                             )
                         )
                         if (connectionViewModel.webSocketClient.send(cmd)) {
-                            connectionCoordinator.tvActiveContext.value = "player"
+                            // Library content — record identity for the progress tracker.
+                            connectionCoordinator.startLocalPlaybackSession(
+                                tmdbId = content.visual_metadata?.tmdb_id?.toIntOrNull(),
+                                season = content.visual_metadata?.season,
+                                episodeStart = content.visual_metadata?.episode,
+                            )
                             if (autoSwitchToRemote) {
                                 connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                 currentScreen = Screen.Remote
@@ -873,7 +899,9 @@ class BrowserActivity : ComponentActivity() {
                                 payload = playbridge.PlaylistPayload(items = video.playlistPayload!!)
                             )
                             if (connectionViewModel.webSocketClient.send(cmd)) {
-                                connectionCoordinator.tvActiveContext.value = "player"
+                                // Browser content has no library identity — clear it so the
+                                // progress tracker can't attribute it to the previous title.
+                                connectionCoordinator.startLocalPlaybackSession(null, null, null)
                                 if (autoSwitchToRemote) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                     currentScreen = Screen.Remote
@@ -902,7 +930,7 @@ class BrowserActivity : ComponentActivity() {
                             )
                             connectionViewModel.sendCommandAndRecord(cmd, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
                             if (connectionViewModel.webSocketClient.send(cmd)) {
-                                connectionCoordinator.tvActiveContext.value = "player"
+                                connectionCoordinator.startLocalPlaybackSession(null, null, null) // browser content
                                 session?.let { tabManager.pauseMedia(it) }
                                 if (autoSwitchToRemote) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
@@ -1017,13 +1045,16 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            // Auto-reconnect to TV when opening the cast sheet
+            // Auto-reconnect to the last TV when opening the cast sheet — but only while
+            // auto-connect is still enabled. A manual disconnect turns it off, so reopening the
+            // sheet then respects that choice instead of immediately reconnecting.
             LaunchedEffect(showVideoSheet) {
                 // Don't auto-reconnect the native receiver when a DLNA target is active.
                 if (showVideoSheet && connectionState is WebSocketClient.ConnectionState.Disconnected &&
-                    connectionViewModel.activeDlnaTarget.value == null) {
+                    connectionViewModel.activeDlnaTarget.value == null &&
+                    connectionViewModel.autoConnectEnabled.value) {
                     tvDevice?.let { device ->
-                        Log.d("BrowserActivity", "Cast sheet opened while disconnected. Retrying connection to ${device.name}")
+                        Log.d("BrowserActivity", "Cast sheet opened while disconnected. Reconnecting to ${device.name}")
                         connectionViewModel.connect(device)
                     }
                 }
@@ -1081,7 +1112,6 @@ class BrowserActivity : ComponentActivity() {
                 previousUrl = previousUrlState,
                 pendingDownload = pendingDownloadState,
                 isDesktopMode = isDesktopMode,
-                detectVideosEnabled = detectVideosEnabled,
                 isSecureConnection = isSecureConnectionState,
                 siteSecurityInfo = siteSecurityInfoState,
                 pendingPopup = pendingPopupState,
@@ -1120,29 +1150,6 @@ class BrowserActivity : ComponentActivity() {
                 onTorrentDownloaded = { bytes ->
                     interceptedTorrentBytes = bytes
                 },
-                onVideoHashDetected = { url, kotlinTabId ->
-                    try {
-                        val hashData = url.substringAfter("#playbridge-video=")
-                        val decoded = java.net.URLDecoder.decode(hashData, "UTF-8")
-                        Log.d(TAG, "PlayBridge video signal for tab $kotlinTabId: $decoded")
-
-                        val json = kotlinx.serialization.json.Json.parseToJsonElement(decoded)
-                        if (json is kotlinx.serialization.json.JsonObject) {
-                            VideoDetector.onMessageReceived(kotlinx.serialization.json.JsonObject(mapOf(
-                                "type" to kotlinx.serialization.json.JsonPrimitive("video_detected"),
-                                "url" to (json["url"] ?: kotlinx.serialization.json.JsonPrimitive("")),
-                                "contentType" to (json["contentType"] ?: kotlinx.serialization.json.JsonNull),
-                                "detectedBy" to (json["detectedBy"] ?: kotlinx.serialization.json.JsonPrimitive("unknown")),
-                                "originUrl" to (json["originUrl"] ?: kotlinx.serialization.json.JsonNull),
-                                "headers" to (json["headers"] ?: kotlinx.serialization.json.JsonNull),
-                                "timestamp" to (json["timestamp"] ?: kotlinx.serialization.json.JsonPrimitive(System.currentTimeMillis()))
-                            )), kotlinTabId)
-                            Log.d(TAG, "Video added to VideoDetector for tab $kotlinTabId from hash signal")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error parsing playbridge-video hash", e)
-                    }
-                },
                 onFullScreenChange = { fullScreen, isPortrait ->
                     isFullscreenVideoPortrait = isPortrait
                     isFullscreen = fullScreen
@@ -1173,7 +1180,10 @@ class BrowserActivity : ComponentActivity() {
                                             isLoading = isLoading,
                                             isEditing = isEditing,
                                             isSecure = isSecureConnection,
-                                            onLogoClick = { currentScreen = Screen.Dashboard },
+                                            onLogoClick = {
+                                                dashboardOrigin = currentScreen
+                                                currentScreen = Screen.Dashboard
+                                            },
                                             onSecurityIconClick = { showSiteInfoSheet = true },
                                             onEditingChange = { editing ->
                                                 isEditing = editing
@@ -1454,9 +1464,21 @@ class BrowserActivity : ComponentActivity() {
                     // content
                     AppNavHost(
                         currentScreen = currentScreen,
-                        onScreenChange = { currentScreen = it },
+                        onScreenChange = { target ->
+                            // Remember where Remote / Dashboard were launched from so Back / close
+                            // can return there instead of always the last main tab.
+                            if (target == Screen.Remote && currentScreen != Screen.Remote) {
+                                remoteOrigin = currentScreen
+                            }
+                            if (target == Screen.Dashboard && currentScreen != Screen.Dashboard) {
+                                dashboardOrigin = currentScreen
+                            }
+                            currentScreen = target
+                        },
                         lastMainScreen = lastMainScreen,
                         onLastMainScreenChange = { lastMainScreen = it },
+                        remoteReturnScreen = remoteOrigin ?: lastMainScreen,
+                        dashboardReturnScreen = dashboardOrigin ?: lastMainScreen,
                         innerPadding = innerPadding,
                         session = session,
                         onMagnetDetected = { interceptedMagnet = it },
@@ -1471,6 +1493,13 @@ class BrowserActivity : ComponentActivity() {
                         backPressedTime = backPressedTime,
                         onBackPressedTimeChange = { backPressedTime = it },
                         onFinishActivity = { finish() },
+                        onFullExit = {
+                            // Hard exit: kill the cast foreground service and remove the app from
+                            // recents. We do NOT send a Stop to the TV — the process (and its
+                            // local proxy) just dies, so the TV errors out when it next needs it.
+                            com.playbridge.sender.cast.CastSessionService.stop(this@BrowserActivity)
+                            finishAndRemoveTask()
+                        },
                         showVideoSheet = showVideoSheet,
                         onShowVideoSheetChange = { showVideoSheet = it },
                         forcedVideos = forcedVideos,
@@ -1653,7 +1682,11 @@ class BrowserActivity : ComponentActivity() {
                              }
                              else -> false
                          }
-                         if (sent) Toast.makeText(this@BrowserActivity, "Play command sent to TV", Toast.LENGTH_SHORT).show()
+                         if (sent) {
+                             // Cast-sheet content is browser-detected — no library identity.
+                             connectionCoordinator.startLocalPlaybackSession(null, null, null)
+                             Toast.makeText(this@BrowserActivity, "Play command sent to TV", Toast.LENGTH_SHORT).show()
+                         }
                          showVideoSheet = false
                          forcePlaylistSheet = null
                     },
@@ -1700,21 +1733,11 @@ class BrowserActivity : ComponentActivity() {
                     onPlayerModeChange = { mode ->
                         composeScope.launch { settingsRepository.setTvPlayerMode(mode) }
                     },
-                    availableTvDevices = remember(discoveredDevices, history, activeDlnaTarget) {
-                        (history + discoveredDevices + listOfNotNull(activeDlnaTarget))
-                            .distinctBy { it.uuid.ifEmpty { "${it.ip}:${it.port}" } }
-                    },
                     // When a DLNA renderer is the active target, show it as the destination.
                     selectedTvDevice = activeDlnaTarget ?: tvDevice,
-                    onTvChange = { device ->
-                        if (device.isDlna) connectionViewModel.selectDlnaTarget(device)
-                        else connectionViewModel.connect(device)
-                    },
-                    tvConnectionState = when {
-                        activeDlnaTarget != null -> true
-                        connectionState is WebSocketClient.ConnectionState.Connected -> true
-                        connectionState is WebSocketClient.ConnectionState.Error -> false
-                        else -> null
+                    onOpenAllDevices = {
+                        showVideoSheet = false
+                        currentScreen = Screen.Connection
                     },
                     browseUrl = castSheetBrowseOverride ?: currentUrl,
                     onBrowseClick = { selectedMode, desktopMode ->
@@ -1811,22 +1834,16 @@ class BrowserActivity : ComponentActivity() {
                     fun openPopupTab() {
                         scope.launch(Dispatchers.Main) {
                             val tabId = tabManager.createTab(url = popup.popupUrl, store = store, parentId = selectedTab?.id, select = true)
-                            tabManager.sessions[tabId] = popup.engineSession
-
-                            // Register standard observer for popup tab
-                            popup.engineSession.register(object : EngineSession.Observer {
-                                override fun onStateUpdated(state: mozilla.components.concept.engine.EngineSessionState) {
-                                    tabManager.engineStates[tabId] = state
-                                    tabManager.onAnyStateUpdated?.invoke(tabId)
-                                }
-                                override fun onNavigationStateChange(canGoBack: Boolean?, canGoForward: Boolean?) {
-                                    val current = tabManager.navigationStates[tabId] ?: TabNavigationState()
-                                    tabManager.navigationStates[tabId] = current.copy(
-                                        canGoBack = canGoBack ?: current.canGoBack,
-                                        canGoForward = canGoForward ?: current.canGoForward
-                                    )
-                                }
-                            })
+                            // Link the popup's engine session in the store —
+                            // EngineMiddleware's EngineObserver takes over
+                            // URL/title/nav/state sync and crash handling.
+                            store.dispatch(
+                                mozilla.components.browser.state.action.EngineAction.LinkEngineSessionAction(
+                                    tabId,
+                                    popup.engineSession,
+                                    skipLoading = true
+                                )
+                            )
                         }
                     }
                     Box(modifier = Modifier.fillMaxSize().padding(bottom = innerPadding.calculateBottomPadding()), contentAlignment = androidx.compose.ui.Alignment.BottomCenter) {
@@ -1839,7 +1856,11 @@ class BrowserActivity : ComponentActivity() {
                                  pendingPopup = null
                                  pendingPopupState.value = null
                              },
-                            onDismiss = { popup.rawGeckoSession.close(); pendingPopup = null; pendingPopupState.value = null }
+                            onDismiss = {
+                                try { popup.engineSession.close() } catch (_: Exception) {}
+                                pendingPopup = null
+                                pendingPopupState.value = null
+                            }
                         )
                     }
                 }
@@ -1929,19 +1950,48 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onDestroy() {
         Log.d("PB_STARTUP", "onDestroy: isFinishing=$isFinishing, sessions=${tabManager.sessions.size}")
-        tabManager.sessions.values.forEach { it.close() }
+        // Only tear sessions down when the Activity is actually finishing.
+        // On configuration-change recreation (theme, split screen, etc.) the
+        // singleton TabManager keeps the live sessions and the new Activity
+        // re-renders them — closing them here caused blank tabs + lost history.
+        if (isFinishing) {
+            tabManager.closeAllSessions()
+        }
         super.onDestroy()
     }
 
     @Composable
     fun BrowserView(session: EngineSession, onLongPressLink: (String) -> Unit) {
-        key(session) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { context -> GeckoEngineView(context).apply { render(session) } },
-                update = { view -> view.render(session) }
-            )
-        }
+        // ONE persistent GeckoEngineView for all tabs (Fenix-style):
+        // SessionFeature/EngineViewPresenter observes the store and renders
+        // whatever tab is selected — creating engine sessions on demand,
+        // releasing the view for crashed tabs, and re-rendering on session
+        // changes. No more per-tab view recreation (the old `key(session)`
+        // AndroidView), which caused surface churn on every tab switch.
+        // `session` is unused for rendering but kept for callsite compatibility.
+        val featureHolder = remember { arrayOfNulls<mozilla.components.feature.session.SessionFeature>(1) }
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { context ->
+                GeckoEngineView(context).also { view ->
+                    featureHolder[0] = mozilla.components.feature.session.SessionFeature(
+                        Components.store,
+                        Components.sessionUseCases.goBack,
+                        Components.sessionUseCases.goForward,
+                        view
+                    ).also { it.start() }
+                }
+            },
+            onRelease = {
+                // release() stops the presenter and releases the engine view.
+                try {
+                    featureHolder[0]?.release()
+                } catch (e: Exception) {
+                    Log.e(TAG, "BrowserView: error releasing session feature", e)
+                }
+                featureHolder[0] = null
+            }
+        )
     }
 
     @Composable

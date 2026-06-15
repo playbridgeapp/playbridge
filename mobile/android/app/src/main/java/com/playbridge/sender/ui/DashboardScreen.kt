@@ -46,10 +46,15 @@ fun DashboardScreen(
     isConnected: Boolean,
     isSecure: Boolean,
     connectedDeviceName: String?,
-    onNavigate: (Screen) -> Unit
+    onNavigate: (Screen) -> Unit,
+    onExit: () -> Unit = {},
+    // Close the Dashboard (top-left X) → return to the screen it was opened from.
+    // Defaults to the active main screen to preserve the old behavior.
+    onClose: () -> Unit = { onNavigate(currentScreen) },
 ) {
     // ── Entrance animations ─────────────────────────────────────────────────
     var visible by remember { mutableStateOf(false) }
+    var showExitConfirm by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { visible = true }
 
     val logoScale by animateFloatAsState(
@@ -299,6 +304,9 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(36.dp))
 
             // ── Navigation Cards Grid ───────────────────────────────────────
+            // Order: hero content (Browser, Library) on top; then Connection (gateway + live
+            // status), Phone Files and Debrid as the other content sources; Cast History — a
+            // passive log — last in the trailing slot.
             val items = listOf(
                 DashboardItem(
                     icon = Icons.Default.Language,
@@ -315,13 +323,6 @@ fun DashboardScreen(
                     gradientColors = listOf(Color(0xFF6A1B9A), Color(0xFF8E24AA))
                 ),
                 DashboardItem(
-                    icon = Icons.Default.Cloud,
-                    title = "Debrid",
-                    subtitle = "Cloud torrents",
-                    screen = Screen.DebridLibrary,
-                    gradientColors = listOf(Color(0xFF00838F), Color(0xFF00ACC1))
-                ),
-                DashboardItem(
                     icon = Icons.Default.Tv,
                     title = "Connection",
                     subtitle = if (isConnected) "Connected" else "Not connected",
@@ -332,18 +333,25 @@ fun DashboardScreen(
                         listOf(Color(0xFF424242), Color(0xFF616161))
                 ),
                 DashboardItem(
-                    icon = Icons.Default.History,
-                    title = "Cast History",
-                    subtitle = "Recent casts",
-                    screen = Screen.CastHistory,
-                    gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00))
-                ),
-                DashboardItem(
                     icon = Icons.Default.Folder,
                     title = "Phone Files",
                     subtitle = "Cast videos & audio",
                     screen = Screen.PhoneFiles,
                     gradientColors = listOf(Color(0xFF4527A0), Color(0xFF5E35B1))
+                ),
+                DashboardItem(
+                    icon = Icons.Default.Cloud,
+                    title = "Debrid",
+                    subtitle = "Cloud torrents",
+                    screen = Screen.DebridLibrary,
+                    gradientColors = listOf(Color(0xFF00838F), Color(0xFF00ACC1))
+                ),
+                DashboardItem(
+                    icon = Icons.Default.History,
+                    title = "Cast History",
+                    subtitle = "Recent casts",
+                    screen = Screen.CastHistory,
+                    gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00))
                 )
             )
 
@@ -389,6 +397,27 @@ fun DashboardScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // ── Exit ─────────────────────────────────────────────────────────
+            // Fully quits the app (distinct from the top-left "Close Dashboard", which
+            // only dismisses this screen).
+            OutlinedButton(
+                onClick = { showExitConfirm = true },
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PowerSettingsNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Exit PlayBridge", fontWeight = FontWeight.Medium)
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
 
@@ -400,7 +429,7 @@ fun DashboardScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             IconButton(
-                onClick = { onNavigate(currentScreen) },
+                onClick = onClose,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .size(40.dp)
@@ -413,6 +442,28 @@ fun DashboardScreen(
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                 )
             }
+        }
+
+        // Confirm before fully quitting — this is a hard exit, not a background close.
+        if (showExitConfirm) {
+            AlertDialog(
+                onDismissRequest = { showExitConfirm = false },
+                title = { Text("Exit PlayBridge?") },
+                text = { Text("This fully quits the app. Any cast that relies on PlayBridge — phone files, DLNA, or queued playback — will stop or error out.") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showExitConfirm = false
+                            onExit()
+                        }
+                    ) {
+                        Text("Exit", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showExitConfirm = false }) { Text("Cancel") }
+                },
+            )
         }
     }
 }

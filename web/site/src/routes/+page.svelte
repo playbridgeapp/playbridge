@@ -4,9 +4,7 @@
   import HowItWorks from '$lib/components/HowItWorks.svelte';
   import Platforms from '$lib/components/Platforms.svelte';
   import Features from '$lib/components/Features.svelte';
-  import OpenSource from '$lib/components/OpenSource.svelte';
   import Install from '$lib/components/Install.svelte';
-  import FAQ from '$lib/components/FAQ.svelte';
   import { SITE } from '$lib/data/site';
 
   const jsonLd = {
@@ -35,6 +33,4 @@
 <HowItWorks />
 <Platforms />
 <Features />
-<OpenSource />
 <Install />
-<FAQ />

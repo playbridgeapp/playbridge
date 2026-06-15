@@ -52,7 +52,6 @@ internal class FakePlaybackEngine : PlaybackEngine {
     override fun setAudioTrack(id: String?) {}
     override fun setSubtitleTrack(id: String?) {}
     override suspend fun attachExternalSubtitle(url: String, language: String?) {}
-    override fun setFilter(filter: VideoFilter, customParams: List<Float>?) {}
     override fun release() {
         released = true
         _state.value = PlaybackState.Idle

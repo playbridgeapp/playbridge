@@ -90,6 +90,23 @@ fun decodePlayPayloadListJson(json: String): List<PlayPayload>? = try {
  */
 fun encodePlayPayloadListJson(items: List<PlayPayload>): String = playListAdapter.toJson(items)
 
+/**
+ * Encode a full [PlaylistPayload] (items + start_index + visual_metadata) to JSON.
+ * This is the canonical "what the phone sent" blob the TV stores in history so that a
+ * replay can be reconstructed through the exact same launch path as a live cast.
+ */
+fun encodePlaylistPayloadJson(payload: PlaylistPayload): String = playlistAdapter.toJson(payload)
+
+/**
+ * Decode a JSON-encoded [PlaylistPayload]. Returns null on parse failure (logged).
+ */
+fun decodePlaylistPayloadJson(json: String): PlaylistPayload? = try {
+    playlistAdapter.fromJson(json)
+} catch (e: Exception) {
+    android.util.Log.w("IncomingMessage", "decodePlaylistPayloadJson failed: ${e.message}")
+    null
+}
+
 // ==================== Outbound command encoders (Wire-typed) ====================
 // Build the canonical envelope `{"type":"command","action":<a>,"payload":<wire-json>}`.
 // Inner payload comes from Moshi+Wire; the envelope uses kotlinx-serialization so we

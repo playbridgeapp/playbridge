@@ -60,12 +60,23 @@ class DlnaCastTarget(
         avTransport.setAvTransportUri(proxyUrl)
         avTransport.play()
 
-        // If duration is still unknown, probe it in the background (non-blocking) for VOD — not for
-        // live (the proxy learns that from the HLS playlist shortly after this).
+        // Resume point: seek once the renderer has begun playback (an immediate Seek is
+        // ignored by most renderers while still TRANSITIONING).
+        if (media.startPositionMs > 0 && !proxy.isLiveStream) {
+            scope.launch {
+                delay(2_500)
+                runCatching { avTransport.seek(formatTime(media.startPositionMs)) }
+            }
+        }
+
+        // If duration is still unknown, probe it in the background (non-blocking) for non-HLS VOD.
+        // HLS gets its duration from the playlist (proxy.vodDurationMs) — and MediaMetadataRetriever
+        // can't open an .m3u8 anyway — so skip the (8s-timeout) probe for it.
         if (cachedDurationMs <= 0L) {
             scope.launch {
-                delay(2000) // let the renderer fetch the playlist so isLiveStream is known
-                if (cachedDurationMs <= 0L && !proxy.isLiveStream) {
+                delay(2000) // let the renderer fetch the playlist so live/VOD + duration are known
+                val isHls = proxy.isLiveStream || proxy.vodDurationMs > 0L
+                if (cachedDurationMs <= 0L && !isHls) {
                     val probed = probeDurationMs(proxyUrl)
                     if (probed > 0L) cachedDurationMs = probed
                 }
@@ -97,13 +108,17 @@ class DlnaCastTarget(
             val pos = avTransport.getPositionInfo()
             val state = mapState(avTransport.getTransportState())
             val live = proxy.isLiveStream
-            // Duration: renderer's TrackDuration, else GetMediaInfo (a few tries), else our
-            // probed/seeded value. Live streams have no fixed total.
+            // Duration, renderer-first: TrackDuration, else GetMediaInfo (a few tries), else our
+            // HLS playlist #EXTINF sum (the proxy's vodDurationMs — MediaMetadataRetriever can't
+            // read .m3u8), else our probed/seeded value. Live streams have no fixed total.
             var durationMs = if (live) 0L else parseTime(pos?.trackDuration)
             if (!live && durationMs <= 0L) {
                 if (cachedDurationMs <= 0L && durationTries < 20) {
                     durationTries++
                     cachedDurationMs = parseTime(avTransport.getMediaDuration())
+                }
+                if (cachedDurationMs <= 0L && proxy.vodDurationMs > 0L) {
+                    cachedDurationMs = proxy.vodDurationMs
                 }
                 durationMs = cachedDurationMs
             } else if (durationMs > 0L) {
