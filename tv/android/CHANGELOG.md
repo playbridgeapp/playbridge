@@ -3,6 +3,19 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.2.8] — 2026-06-15 (versionCode 208)
+
+### Added
+- Dedicated subtitle selection overlay with live dialogue line previews, fine/coarse sync control, and language grouping. (#32)
+- Save and persist playback progress every ~5 seconds to survive force-kill events. (#31)
+
+### Changed
+- TV history now stores raw playlist payloads, ensuring subtitles, audio language, and headers are fully restored on replay. (#31)
+- Replaced on-pause screenshot capture with poster/backdrop art. (#31)
+
+### Removed
+- Video filters feature end-to-end from TV engine, UI, and settings. (#31)
+
 ## Player [0.2.7] — 2026-06-13 (versionCode 207)
 
 ### Added

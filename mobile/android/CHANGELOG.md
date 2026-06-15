@@ -3,6 +3,20 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.7] — 2026-06-15 (versionCode 207)
+
+### Added
+- **Phone Files revamp**: Added SAF file picker, search, sort sheet (name/size/modified), and a per-tab folder row. Play locally via 'This Device' or cast to the active target. Hoist screen state so it survives navigation. (#34)
+- **Cast bar**: Permanent three-state (playing/idle) cast bar with quick navigation to Remote or Device Picker. (#34)
+- Hard 'Exit PlayBridge' button on the Dashboard. (#34)
+
+### Changed
+- Overhauled back button navigation rules to return to Dashboard from primary screens, and double-tap Dashboard back button to soft exit. (#34)
+- Multi-language subtitle delivery: sends all available subtitle tracks, prioritizing preferred languages and matching release names to ensure better auto-sync. (#32)
+
+### Removed
+- Video filter remote controls and settings. (#31)
+
 ## [0.2.6] — 2026-06-13 (versionCode 206)
 
 ### Added
