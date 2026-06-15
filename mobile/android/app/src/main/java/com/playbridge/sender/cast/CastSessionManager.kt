@@ -223,6 +223,12 @@ class CastSessionManager(
     fun dlnaStop() {
         _dlnaInterrupts.tryEmit(Unit) // explicit stop ends any episode-queue plan
         _dlnaCast.value?.let { t -> scope.launch { runCatching { t.stop() } } }
+        // Treat an explicit Stop as ending the now-playing session: clear the title/meta and
+        // status so the cast bar drops to idle and the Remote no longer shows stale media.
+        // The renderer stays selected (activeDlnaTarget), so the user can cast to it again.
+        _dlnaMediaTitle.value = null
+        _dlnaNowPlayingMeta.value = null
+        _dlnaStatus.value = null
     }
 
     fun dlnaSeek(positionMs: Long) {

@@ -316,6 +316,11 @@ class BrowserActivity : ComponentActivity() {
             }
             // Tracks the last "main" tab so Settings/overlays know where to return
             var lastMainScreen by remember { mutableStateOf(currentScreen) }
+            // The screen the Remote was opened from, so Back returns there (e.g. Phone Files,
+            // Connection) rather than always falling back to the last main tab.
+            var remoteOrigin by remember { mutableStateOf<Screen?>(null) }
+            // The screen the Dashboard was opened from, so its close (X) returns there.
+            var dashboardOrigin by remember { mutableStateOf<Screen?>(null) }
             var isSettingsFromLibrary by remember { mutableStateOf(false) }
             val clipboardManager = LocalClipboardManager.current
             val keyboardController = LocalSoftwareKeyboardController.current
@@ -1175,7 +1180,10 @@ class BrowserActivity : ComponentActivity() {
                                             isLoading = isLoading,
                                             isEditing = isEditing,
                                             isSecure = isSecureConnection,
-                                            onLogoClick = { currentScreen = Screen.Dashboard },
+                                            onLogoClick = {
+                                                dashboardOrigin = currentScreen
+                                                currentScreen = Screen.Dashboard
+                                            },
                                             onSecurityIconClick = { showSiteInfoSheet = true },
                                             onEditingChange = { editing ->
                                                 isEditing = editing
@@ -1456,9 +1464,21 @@ class BrowserActivity : ComponentActivity() {
                     // content
                     AppNavHost(
                         currentScreen = currentScreen,
-                        onScreenChange = { currentScreen = it },
+                        onScreenChange = { target ->
+                            // Remember where Remote / Dashboard were launched from so Back / close
+                            // can return there instead of always the last main tab.
+                            if (target == Screen.Remote && currentScreen != Screen.Remote) {
+                                remoteOrigin = currentScreen
+                            }
+                            if (target == Screen.Dashboard && currentScreen != Screen.Dashboard) {
+                                dashboardOrigin = currentScreen
+                            }
+                            currentScreen = target
+                        },
                         lastMainScreen = lastMainScreen,
                         onLastMainScreenChange = { lastMainScreen = it },
+                        remoteReturnScreen = remoteOrigin ?: lastMainScreen,
+                        dashboardReturnScreen = dashboardOrigin ?: lastMainScreen,
                         innerPadding = innerPadding,
                         session = session,
                         onMagnetDetected = { interceptedMagnet = it },
@@ -1473,6 +1493,13 @@ class BrowserActivity : ComponentActivity() {
                         backPressedTime = backPressedTime,
                         onBackPressedTimeChange = { backPressedTime = it },
                         onFinishActivity = { finish() },
+                        onFullExit = {
+                            // Hard exit: kill the cast foreground service and remove the app from
+                            // recents. We do NOT send a Stop to the TV — the process (and its
+                            // local proxy) just dies, so the TV errors out when it next needs it.
+                            com.playbridge.sender.cast.CastSessionService.stop(this@BrowserActivity)
+                            finishAndRemoveTask()
+                        },
                         showVideoSheet = showVideoSheet,
                         onShowVideoSheetChange = { showVideoSheet = it },
                         forcedVideos = forcedVideos,
