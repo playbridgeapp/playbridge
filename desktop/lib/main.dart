@@ -226,7 +226,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     if (path == null || !_sender.isConnected) return;
     _pendingCastFile = null; // one-shot
     _sender.removeListener(_maybeCastPendingFile);
-    unawaited(_sender.castLocalFile(File(path), title: widget.initialCastTitle));
+    unawaited(
+        _sender.castLocalFile(File(path), title: widget.initialCastTitle));
   }
 
   Future<void> _initTrayAndWindow() async {

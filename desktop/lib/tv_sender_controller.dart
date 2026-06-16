@@ -252,9 +252,10 @@ class TvSenderController extends ChangeNotifier {
       final token = _fileServer.register(file, clientIp: active.host);
       final url = _fileServer.urlFor(token, host, filename: filename);
       final payload = PlayPayload()..url = url;
-      final label = (titles != null && i < titles.length && titles[i].isNotEmpty)
-          ? titles[i]
-          : filename;
+      final label =
+          (titles != null && i < titles.length && titles[i].isNotEmpty)
+              ? titles[i]
+              : filename;
       if (label.isNotEmpty) payload.title = label;
       items.add(payload);
     }
@@ -269,7 +270,10 @@ class TvSenderController extends ChangeNotifier {
           : '${items.length} items';
       _castPlaylist = [
         for (var i = 0; i < items.length; i++)
-          (index: i, title: items[i].hasTitle() ? items[i].title : 'Item ${i + 1}'),
+          (
+            index: i,
+            title: items[i].hasTitle() ? items[i].title : 'Item ${i + 1}'
+          ),
       ];
       _castIndex = 0;
       notifyListeners();
@@ -364,7 +368,13 @@ class TvSenderController extends ChangeNotifier {
 
   /// TV states that mean nothing is playing → hide the now-casting card.
   static const _terminalStates = {
-    'idle', 'stopped', 'ended', 'finished', 'complete', 'none', 'error',
+    'idle',
+    'stopped',
+    'ended',
+    'finished',
+    'complete',
+    'none',
+    'error',
   };
 
   void _onTvMessage(String text) {

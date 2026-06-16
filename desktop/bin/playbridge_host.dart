@@ -82,7 +82,8 @@ void _writeMessage(Object message) {
 }
 
 /// Reads length-prefixed native messages from stdin until it closes.
-Future<void> _readNativeMessages(void Function(Map<String, dynamic>) onMessage) async {
+Future<void> _readNativeMessages(
+    void Function(Map<String, dynamic>) onMessage) async {
   final buf = <int>[];
   await for (final chunk in stdin) {
     buf.addAll(chunk);

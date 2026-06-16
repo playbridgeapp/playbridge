@@ -9,10 +9,23 @@ import '../player_engine.dart';
 /// seeks) ask for the whole file, so seeking jumps to the end. Mirrors the
 /// phone's `VideoDetector.PLAYER_SKIP_HEADERS`.
 const _playerSkipHeaders = <String>{
-  'range', 'accept-encoding', 'host', 'connection', 'content-length',
-  'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
-  'sec-fetch-storage-access', 'sec-gpc', 'sec-ch-ua', 'sec-ch-ua-mobile',
-  'sec-ch-ua-platform', 'priority', 'upgrade-insecure-requests', 'te', 'pragma',
+  'range',
+  'accept-encoding',
+  'host',
+  'connection',
+  'content-length',
+  'sec-fetch-dest',
+  'sec-fetch-mode',
+  'sec-fetch-site',
+  'sec-fetch-storage-access',
+  'sec-gpc',
+  'sec-ch-ua',
+  'sec-ch-ua-mobile',
+  'sec-ch-ua-platform',
+  'priority',
+  'upgrade-insecure-requests',
+  'te',
+  'pragma',
 };
 
 /// Strips the browser-only headers above, keeping the ones a player needs
@@ -228,7 +241,8 @@ class MpvEngine extends PlayerEngine {
   Future<void> openPlaylist(List<QueueItem> items, int startIndex) async {
     final playlist = Playlist(
       items
-          .map((i) => Media(i.url, httpHeaders: sanitizePlayerHeaders(i.headers)))
+          .map((i) =>
+              Media(i.url, httpHeaders: sanitizePlayerHeaders(i.headers)))
           .toList(),
       index: startIndex,
     );

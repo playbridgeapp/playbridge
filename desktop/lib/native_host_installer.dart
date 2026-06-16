@@ -64,10 +64,11 @@ class NativeHostInstaller {
     final onDisk = findHostBinary();
     if (onDisk != null) return onDisk;
     try {
-      final exe = Platform.isWindows ? 'playbridge_host.exe' : 'playbridge_host';
+      final exe =
+          Platform.isWindows ? 'playbridge_host.exe' : 'playbridge_host';
       final data = await rootBundle.load('assets/host/$exe');
-      final dir = Directory(
-          '${(await getApplicationSupportDirectory()).path}/host');
+      final dir =
+          Directory('${(await getApplicationSupportDirectory()).path}/host');
       if (!dir.existsSync()) dir.createSync(recursive: true);
       final out = File('${dir.path}/$exe');
       await out.writeAsBytes(
@@ -90,17 +91,25 @@ class NativeHostInstaller {
     if (Platform.isMacOS) {
       final s = '$home/Library/Application Support';
       out['Firefox'] = (dir: '$s/Mozilla/NativeMessagingHosts', firefox: true);
-      out['Chrome'] = (dir: '$s/Google/Chrome/NativeMessagingHosts', firefox: false);
-      out['Chromium'] = (dir: '$s/Chromium/NativeMessagingHosts', firefox: false);
+      out['Chrome'] =
+          (dir: '$s/Google/Chrome/NativeMessagingHosts', firefox: false);
+      out['Chromium'] =
+          (dir: '$s/Chromium/NativeMessagingHosts', firefox: false);
       out['Brave'] = (
         dir: '$s/BraveSoftware/Brave-Browser/NativeMessagingHosts',
         firefox: false,
       );
-      out['Edge'] = (dir: '$s/Microsoft Edge/NativeMessagingHosts', firefox: false);
+      out['Edge'] =
+          (dir: '$s/Microsoft Edge/NativeMessagingHosts', firefox: false);
     } else if (Platform.isLinux) {
-      out['Firefox'] = (dir: '$home/.mozilla/native-messaging-hosts', firefox: true);
-      out['Chrome'] = (dir: '$home/.config/google-chrome/NativeMessagingHosts', firefox: false);
-      out['Chromium'] = (dir: '$home/.config/chromium/NativeMessagingHosts', firefox: false);
+      out['Firefox'] =
+          (dir: '$home/.mozilla/native-messaging-hosts', firefox: true);
+      out['Chrome'] = (
+        dir: '$home/.config/google-chrome/NativeMessagingHosts',
+        firefox: false
+      );
+      out['Chromium'] =
+          (dir: '$home/.config/chromium/NativeMessagingHosts', firefox: false);
       out['Brave'] = (
         dir: '$home/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts',
         firefox: false,
@@ -149,7 +158,8 @@ class NativeHostInstaller {
       try {
         if (!dir.existsSync()) dir.createSync(recursive: true);
         final file = File('${dir.path}/$hostName.json');
-        await file.writeAsString(_manifest(host, entry.value.firefox), flush: true);
+        await file.writeAsString(_manifest(host, entry.value.firefox),
+            flush: true);
         result[entry.key] = 'ready';
       } catch (e) {
         result[entry.key] = 'error: $e';
@@ -169,7 +179,8 @@ class NativeHostInstaller {
     final result = <String, String>{};
     final Directory dir;
     try {
-      dir = Directory('${(await getApplicationSupportDirectory()).path}\\native');
+      dir =
+          Directory('${(await getApplicationSupportDirectory()).path}\\native');
       if (!dir.existsSync()) dir.createSync(recursive: true);
     } catch (e) {
       result['manifests'] = 'error: $e';
@@ -203,7 +214,14 @@ class NativeHostInstaller {
           'HKCU\\Software\\${entry.value.subkey}\\NativeMessagingHosts\\$hostName';
       try {
         final res = await Process.run('reg', [
-          'add', key, '/ve', '/t', 'REG_SZ', '/d', entry.value.manifest, '/f',
+          'add',
+          key,
+          '/ve',
+          '/t',
+          'REG_SZ',
+          '/d',
+          entry.value.manifest,
+          '/f',
         ]);
         result[entry.key] = res.exitCode == 0
             ? 'ready'

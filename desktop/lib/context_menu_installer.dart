@@ -98,16 +98,29 @@ class ContextMenuInstaller {
       final base =
           'HKCU\\Software\\Classes\\SystemFileAssociations\\$type\\shell\\PlayBridge';
       try {
-        final label = await Process.run(
-            'reg', ['add', base, '/ve', '/t', 'REG_SZ', '/d', _menuLabel, '/f']);
+        final label = await Process.run('reg',
+            ['add', base, '/ve', '/t', 'REG_SZ', '/d', _menuLabel, '/f']);
         // Icon: reuse the app's icon from the running exe (index 0).
         await Process.run('reg', [
-          'add', base, '/v', 'Icon', '/t', 'REG_SZ',
-          '/d', Platform.resolvedExecutable, '/f',
+          'add',
+          base,
+          '/v',
+          'Icon',
+          '/t',
+          'REG_SZ',
+          '/d',
+          Platform.resolvedExecutable,
+          '/f',
         ]);
         final cmd = await Process.run('reg', [
-          'add', '$base\\command', '/ve', '/t', 'REG_SZ',
-          '/d', '"$castBin" "%1"', '/f',
+          'add',
+          '$base\\command',
+          '/ve',
+          '/t',
+          'REG_SZ',
+          '/d',
+          '"$castBin" "%1"',
+          '/f',
         ]);
         result[type] = (label.exitCode == 0 && cmd.exitCode == 0)
             ? 'ready'
@@ -134,7 +147,9 @@ class ContextMenuInstaller {
           .writeAsString(_macInfoPlist(), flush: true);
       await File('${bundle.path}/document.wflow')
           .writeAsString(_macWflow(castBin), flush: true);
-      return {'macOS': 'ready (Finder → right-click → Quick Actions → $_menuLabel)'};
+      return {
+        'macOS': 'ready (Finder → right-click → Quick Actions → $_menuLabel)'
+      };
     } catch (e) {
       return {'macOS': 'error: $e'};
     }
@@ -169,7 +184,8 @@ class ContextMenuInstaller {
   // result). If a future macOS rejects this document, re-create the action once
   // in Automator and replace document.wflow.
   static String _macWflow(String castBin) {
-    final script = 'for f in "\$@"; do ("$castBin" "\$f" >/dev/null 2>&1 &); done';
+    final script =
+        'for f in "\$@"; do ("$castBin" "\$f" >/dev/null 2>&1 &); done';
     final escaped = const HtmlEscape().convert(script);
     return '''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -101,11 +101,12 @@ class ExtensionBridge {
       case 'cast':
         final url = obj['url'] as String?;
         if (url == null || url.isEmpty) {
-          _send(socket, {'type': 'result', 'ok': false, 'error': 'missing url'});
+          _send(
+              socket, {'type': 'result', 'ok': false, 'error': 'missing url'});
           break;
         }
-        final headers = (obj['headers'] as Map?)
-            ?.map((k, v) => MapEntry('$k', '$v'));
+        final headers =
+            (obj['headers'] as Map?)?.map((k, v) => MapEntry('$k', '$v'));
         final ok = _controller.castUrl(url,
             headers: headers, title: obj['title'] as String?);
         _send(socket, {
@@ -121,7 +122,8 @@ class ExtensionBridge {
         // reply once it resolves.
         final path = obj['path'] as String?;
         if (path == null || path.isEmpty) {
-          _send(socket, {'type': 'result', 'ok': false, 'error': 'missing path'});
+          _send(
+              socket, {'type': 'result', 'ok': false, 'error': 'missing path'});
           break;
         }
         final fileTitle = obj['title'] as String?;

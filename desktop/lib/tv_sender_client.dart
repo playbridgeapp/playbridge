@@ -150,7 +150,8 @@ class TvSenderClient {
       );
       await channel.ready;
       _channel = channel;
-      _sub = channel.stream.listen(_onMessage, onError: _onError, onDone: _onDone);
+      _sub =
+          channel.stream.listen(_onMessage, onError: _onError, onDone: _onDone);
 
       if (token == null || token.isEmpty) {
         channel.sink.add(senderPairingRequestJson(
@@ -204,7 +205,8 @@ class TvSenderClient {
         certFp.isNotEmpty &&
         _capturedPin != null &&
         certFp != _capturedPin) {
-      debugPrint('[tv-sender] approved pin ($certFp) != served ($_capturedPin) — refusing');
+      debugPrint(
+          '[tv-sender] approved pin ($certFp) != served ($_capturedPin) — refusing');
       _setState(SenderConnectionState.pinMismatch);
       _close();
       return;

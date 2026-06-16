@@ -24,8 +24,7 @@ Future<void> main(List<String> args) async {
   }
   final target = args[0];
   final title = args.length > 1 && args[1].isNotEmpty ? args[1] : null;
-  final isUrl =
-      target.startsWith('http://') || target.startsWith('https://');
+  final isUrl = target.startsWith('http://') || target.startsWith('https://');
   final value = isUrl ? target : File(target).absolute.path;
 
   if (!isUrl && !File(value).existsSync()) {
@@ -127,7 +126,11 @@ Future<bool> _forward(
 Future<bool> _launchApp(String value, String? title) async {
   final exeFile = File(Platform.resolvedExecutable);
   final exeDir = exeFile.parent.path;
-  final args = ['--cast-file', value, if (title != null) ...['--cast-title', title]];
+  final args = [
+    '--cast-file',
+    value,
+    if (title != null) ...['--cast-title', title]
+  ];
 
   try {
     if (Platform.isMacOS) {
@@ -161,7 +164,7 @@ List<String> _appExeNames() {
   return ['playbridge_desktop', 'PlayBridge'];
 }
 
-/// Walk up from <bundle>.app/Contents/Resources/<bin> to the `.app` path.
+/// Walk up from `<bundle>.app/Contents/Resources/<bin>` to the `.app` path.
 String? _macAppBundle(File exeFile) {
   var dir = exeFile.parent;
   for (var i = 0; i < 5; i++) {

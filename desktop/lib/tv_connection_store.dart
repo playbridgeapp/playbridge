@@ -122,8 +122,8 @@ class TvConnectionStore {
 
   bool isPaired(String uuid) => byUuid(uuid) != null;
 
-  Future<void> _save(List<TvRecord> list) => _prefs.setString(
-      _kTvs, jsonEncode(list.map((t) => t.toJson()).toList()));
+  Future<void> _save(List<TvRecord> list) =>
+      _prefs.setString(_kTvs, jsonEncode(list.map((t) => t.toJson()).toList()));
 
   /// Insert or replace by [TvRecord.uuid] (the stable identity).
   Future<void> upsert(TvRecord tv) async {

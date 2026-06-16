@@ -36,8 +36,8 @@ class LocalFileServer {
 
   Future<void> start() async {
     if (_server != null) return;
-    final handler =
-        const Pipeline().addHandler(_handle); // no logging: avoids leaking tokens
+    final handler = const Pipeline()
+        .addHandler(_handle); // no logging: avoids leaking tokens
     // Bind all interfaces so the TV can reach us on the LAN; access is gated by
     // the per-grant token + IP check, not by the bind address.
     _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, 0);
@@ -58,8 +58,9 @@ class LocalFileServer {
 
   /// The URL the TV should fetch, given the desktop's LAN [host] address.
   String urlFor(String token, String host, {String? filename}) {
-    final suffix =
-        (filename != null && filename.isNotEmpty) ? '/${Uri.encodeComponent(filename)}' : '';
+    final suffix = (filename != null && filename.isNotEmpty)
+        ? '/${Uri.encodeComponent(filename)}'
+        : '';
     return 'http://$host:${port ?? 0}/f/$token$suffix';
   }
 
@@ -82,7 +83,8 @@ class LocalFileServer {
     final grant = _grants[token];
     if (grant == null || grant.expired) {
       _grants.remove(token);
-      debugPrint('[file-server] ${request.method} ${_short(token)} from $remote '
+      debugPrint(
+          '[file-server] ${request.method} ${_short(token)} from $remote '
           '→ 404 (${grant == null ? 'no grant' : 'expired'})');
       return Response.notFound('');
     }

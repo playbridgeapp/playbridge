@@ -31,8 +31,20 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
 
   /// Extensions accepted via drag-and-drop and the file picker.
   static const _mediaExts = {
-    'mp4', 'm4v', 'mkv', 'webm', 'avi', 'mov', 'wmv', 'flv',
-    'mp3', 'flac', 'm4a', 'aac', 'ogg', 'wav',
+    'mp4',
+    'm4v',
+    'mkv',
+    'webm',
+    'avi',
+    'mov',
+    'wmv',
+    'flv',
+    'mp3',
+    'flac',
+    'm4a',
+    'aac',
+    'ogg',
+    'wav',
   };
 
   @override
@@ -322,8 +334,8 @@ class _SelfCastToggle extends StatelessWidget {
         Expanded(
           child: Text(
             'Show this device (for testing on one machine)',
-            style:
-                TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.5)),
+            style: TextStyle(
+                fontSize: 12, color: Colors.white.withValues(alpha: 0.5)),
           ),
         ),
         Switch(value: value, onChanged: onChanged),
