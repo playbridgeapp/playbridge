@@ -212,10 +212,18 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   bool _senderWasCasting = false;
   void _handleSenderChange() {
     final casting = _sender.isCasting;
-    if (casting && !_senderWasCasting && !_showingVideo) {
-      setState(() => _dest = _Dest.nowCasting);
-    }
+    if (casting == _senderWasCasting) return; // only react to edges
     _senderWasCasting = casting;
+    setState(() {
+      if (casting && !_showingVideo) {
+        // Cast started → jump to the Now Playing tab.
+        _dest = _Dest.nowCasting;
+      } else if (!casting && _dest == _Dest.nowCasting) {
+        // Cast ended while on Now Playing (now hidden) → fall back to Send to TV.
+        _dest = _Dest.sendToTv;
+      }
+      // setState also rebuilds the sidebar so the Now Playing item shows/hides.
+    });
   }
 
   String? _pendingCastFile;
@@ -567,6 +575,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                     showingVideo: _showingVideo,
                                     hasMedia: hasMedia,
                                     playerState: _player.state,
+                                    senderCasting: _sender.isCasting,
                                     onDestSelect: (d) => setState(() {
                                       _dest = d;
                                       _showingVideo = false;
@@ -759,6 +768,7 @@ class _NavSidebar extends StatelessWidget {
     required this.showingVideo,
     required this.hasMedia,
     required this.playerState,
+    required this.senderCasting,
     required this.onDestSelect,
     required this.onShowVideo,
   });
@@ -767,6 +777,7 @@ class _NavSidebar extends StatelessWidget {
   final bool showingVideo;
   final bool hasMedia;
   final String playerState;
+  final bool senderCasting;
   final ValueChanged<_Dest> onDestSelect;
   final VoidCallback onShowVideo;
 
@@ -851,12 +862,14 @@ class _NavSidebar extends StatelessWidget {
                 selected: !showingVideo && dest == _Dest.sendToTv,
                 onTap: () => onDestSelect(_Dest.sendToTv),
               ),
-              _NavItem(
-                icon: Icons.cast_connected,
-                label: 'Now Playing',
-                selected: !showingVideo && dest == _Dest.nowCasting,
-                onTap: () => onDestSelect(_Dest.nowCasting),
-              ),
+              // Only while something is casting — hidden when nothing is playing.
+              if (senderCasting)
+                _NavItem(
+                  icon: Icons.cast_connected,
+                  label: 'Now Playing',
+                  selected: !showingVideo && dest == _Dest.nowCasting,
+                  onTap: () => onDestSelect(_Dest.nowCasting),
+                ),
               const Spacer(),
               Padding(
                 padding:
