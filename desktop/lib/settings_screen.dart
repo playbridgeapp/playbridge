@@ -86,6 +86,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // — Playback ————————————————————————————
             _Section('Playback'),
             _Tile(
+              icon: Icons.fullscreen,
+              title: 'Full screen on play',
+              subtitle:
+                  'Automatically enter full screen when a video starts playing.',
+              trailing: Switch(
+                value: widget.store.autoFullScreen,
+                onChanged: (v) async {
+                  await widget.store.setAutoFullScreen(v);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+            _Tile(
               icon: Icons.insights,
               title: 'Show playback stats',
               subtitle:

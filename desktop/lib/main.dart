@@ -7,24 +7,31 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'context_menu_installer.dart';
 import 'discovery.dart';
 import 'engines/mpv_engine.dart';
+import 'extension_bridge.dart';
 import 'favorites_screen.dart';
 import 'history_screen.dart';
 import 'history_store.dart';
+import 'native_host_installer.dart';
+import 'now_casting_screen.dart';
 import 'pairing_store.dart';
 import 'pair_screen.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
 import 'playback_surface.dart';
 import 'preplay_overlay.dart';
+import 'send_to_tv_screen.dart';
 import 'server.dart';
 import 'settings_screen.dart';
 import 'shader_background.dart';
 import 'stats_overlay.dart';
 import 'tray_controller.dart';
+import 'tv_connection_store.dart';
+import 'tv_sender_controller.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await windowManager.ensureInitialized();
@@ -36,11 +43,23 @@ Future<void> main() async {
   final results = await Future.wait([
     PairingStore.load(),
     HistoryStore.load(),
+    TvConnectionStore.load(),
   ]);
   runApp(ReceiverApp(
     store: results[0] as PairingStore,
     history: results[1] as HistoryStore,
+    tvStore: results[2] as TvConnectionStore,
+    // "Play on TV" cold-start: the cast helper launches the app with these when
+    // it isn't already running. The app casts the file once a TV connects.
+    initialCastFile: _argValue(args, '--cast-file'),
+    initialCastTitle: _argValue(args, '--cast-title'),
   ));
+}
+
+/// Reads `--flag value` from argv (null if absent).
+String? _argValue(List<String> args, String flag) {
+  final i = args.indexOf(flag);
+  return (i >= 0 && i + 1 < args.length) ? args[i + 1] : null;
 }
 
 // Keyboard shortcuts
@@ -69,13 +88,23 @@ class StatsToggleIntent extends Intent {
 }
 
 // Navigation destinations — nowPlaying is a mode, not a persistent screen.
-enum _Dest { cast, history, favorites, settings }
+enum _Dest { cast, sendToTv, nowCasting, history, favorites, settings }
 
 class ReceiverApp extends StatefulWidget {
-  const ReceiverApp({super.key, required this.store, required this.history});
+  const ReceiverApp({
+    super.key,
+    required this.store,
+    required this.history,
+    required this.tvStore,
+    this.initialCastFile,
+    this.initialCastTitle,
+  });
 
   final PairingStore store;
   final HistoryStore history;
+  final TvConnectionStore tvStore;
+  final String? initialCastFile;
+  final String? initialCastTitle;
 
   @override
   State<ReceiverApp> createState() => _ReceiverAppState();
@@ -86,6 +115,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final ReceiverServer _server;
   late final DiscoveryPublisher _discovery;
   late final TrayController _tray;
+  late final TvSenderController _sender;
+  late final ExtensionBridge _extBridge;
 
   bool _hadMedia = false;
   String? _lastTrackedUrl;
@@ -149,6 +180,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     );
     _tray =
         TrayController(player: _player, server: _server, store: widget.store);
+    _sender = TvSenderController(identity: widget.store, store: widget.tvStore);
+    _extBridge = ExtensionBridge(_sender);
 
     windowManager.addListener(this);
     _player.addListener(_handlePlayerChange);
@@ -157,6 +190,44 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _bootServerThenDiscovery();
     _resolveHost();
     _initTrayAndWindow();
+    unawaited(_sender.start());
+    unawaited(_extBridge.start());
+    // Register the browser native-messaging host + the OS "Play on TV" context
+    // menu so the extension and file manager can reach us without the user
+    // editing files by hand (idempotent, best-effort).
+    unawaited(NativeHostInstaller.installSilently());
+    unawaited(ContextMenuInstaller.installSilently());
+
+    // Jump to the Now Playing tab when a cast starts (unless watching local
+    // video here). Tracks the rising edge so it doesn't fight tab navigation.
+    _sender.addListener(_handleSenderChange);
+
+    // Cold-start "Play on TV": cast the launched file once a TV is connected.
+    if (widget.initialCastFile != null) {
+      _pendingCastFile = widget.initialCastFile;
+      _sender.addListener(_maybeCastPendingFile);
+    }
+  }
+
+  bool _senderWasCasting = false;
+  void _handleSenderChange() {
+    final casting = _sender.isCasting;
+    if (casting && !_senderWasCasting && !_showingVideo) {
+      setState(() => _dest = _Dest.nowCasting);
+    }
+    _senderWasCasting = casting;
+  }
+
+  String? _pendingCastFile;
+
+  /// When launched with `--cast-file`, wait for a TV connection then cast once.
+  void _maybeCastPendingFile() {
+    final path = _pendingCastFile;
+    if (path == null || !_sender.isConnected) return;
+    _pendingCastFile = null; // one-shot
+    _sender.removeListener(_maybeCastPendingFile);
+    unawaited(
+        _sender.castLocalFile(File(path), title: widget.initialCastTitle));
   }
 
   Future<void> _initTrayAndWindow() async {
@@ -168,7 +239,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   }
 
   void _handlePlayRequest() {
-    unawaited(_revealWindow(fullScreen: true));
+    unawaited(_revealWindow(fullScreen: widget.store.autoFullScreen));
     if (!_showingVideo) {
       setState(() => _showingVideo = true);
     }
@@ -242,7 +313,16 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     await windowManager.show();
     await windowManager.focus();
     if (fullScreen) {
+      // The first play after launch often misses the transition (the window
+      // isn't key yet right after show/focus), which is why it only worked on
+      // the second try. Attempt it, then — after the macOS transition animation
+      // would have finished — retry once if it didn't take. Checking post-
+      // animation avoids toggling back out mid-transition.
       await windowManager.setFullScreen(true);
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (!await windowManager.isFullScreen()) {
+        await windowManager.setFullScreen(true);
+      }
     }
   }
 
@@ -328,6 +408,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _player.removeListener(_handlePlayerChange);
     _player.playRequests.removeListener(_handlePlayRequest);
     _tray.dispose();
+    _sender.removeListener(_handleSenderChange);
+    if (_pendingCastFile != null) _sender.removeListener(_maybeCastPendingFile);
+    _extBridge.stop();
+    _sender.dispose();
     _discovery.stop();
     _server.stop();
     _player.dispose();
@@ -644,6 +728,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           onAllow: _server.approvePairing,
           onDeny: _server.denyPairing,
         ),
+      _Dest.sendToTv => SendToTvScreen(controller: _sender),
+      _Dest.nowCasting => NowCastingScreen(controller: _sender),
       _Dest.history => HistoryScreen(
           store: widget.history,
           player: _player,
@@ -727,7 +813,9 @@ class _NavSidebar extends StatelessWidget {
                   ],
                 ),
               ),
-              if (hasMedia) ...[
+              // ── Receive: this computer plays what a phone casts to it ──
+              const _NavSectionLabel('Receive'),
+              if (hasMedia)
                 _NavItem(
                   icon: playerState == 'playing'
                       ? Icons.play_circle
@@ -737,15 +825,6 @@ class _NavSidebar extends StatelessWidget {
                   accent: true,
                   onTap: onShowVideo,
                 ),
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  child: Divider(
-                    height: 1,
-                    color: Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-              ],
               _NavItem(
                 icon: Icons.cast,
                 label: 'Cast',
@@ -763,6 +842,20 @@ class _NavSidebar extends StatelessWidget {
                 label: 'Favorites',
                 selected: !showingVideo && dest == _Dest.favorites,
                 onTap: () => onDestSelect(_Dest.favorites),
+              ),
+              // ── Send: this computer casts to a TV ──
+              const _NavSectionLabel('Send'),
+              _NavItem(
+                icon: Icons.connected_tv,
+                label: 'Send to TV',
+                selected: !showingVideo && dest == _Dest.sendToTv,
+                onTap: () => onDestSelect(_Dest.sendToTv),
+              ),
+              _NavItem(
+                icon: Icons.cast_connected,
+                label: 'Now Playing',
+                selected: !showingVideo && dest == _Dest.nowCasting,
+                onTap: () => onDestSelect(_Dest.nowCasting),
               ),
               const Spacer(),
               Padding(
@@ -782,6 +875,29 @@ class _NavSidebar extends StatelessWidget {
               const SizedBox(height: 12),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small uppercase section header in the sidebar (e.g. "Receive", "Send").
+class _NavSectionLabel extends StatelessWidget {
+  const _NavSectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          fontSize: 10,
+          letterSpacing: 1.0,
+          fontWeight: FontWeight.w700,
+          color: Colors.white.withValues(alpha: 0.38),
         ),
       ),
     );

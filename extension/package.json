@@ -6,9 +6,13 @@
     "build": "node build.mjs",
     "watch": "node build.mjs --watch"
   },
+  "dependencies": {
+    "webextension-polyfill": "^0.12.0"
+  },
   "devDependencies": {
     "@bufbuild/protobuf": "^2.12.0",
     "@types/firefox-webext-browser": "^143.0.0",
+    "@types/webextension-polyfill": "^0.12.1",
     "esbuild": "^0.25.0",
     "typescript": "^5.0.0"
   }
