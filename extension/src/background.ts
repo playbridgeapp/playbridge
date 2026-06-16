@@ -431,7 +431,7 @@ browser.webRequest.onHeadersReceived.addListener(
           const decoder = new TextDecoder("utf-8");
           let checked = false;
           let acc = "";
-          filter.ondata = (ev) => {
+          filter.ondata = (ev: any) => {
             filter.write(ev.data);
             if (checked) return;
             acc += decoder.decode(ev.data, { stream: true });
@@ -550,7 +550,10 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  return false;
+  // Unhandled. The polyfill's onMessage listener type requires every path to
+  // return `true` or a Promise (not `boolean`/void), so return true; nothing
+  // here calls sendResponse, and the unused port is harmless.
+  return true;
 });
 
 // ==================== Context menu ====================
