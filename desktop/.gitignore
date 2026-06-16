@@ -33,6 +33,12 @@ migrate_working_dir/
 .pub/
 /build/
 
+# Bundled native-messaging host + cast helper binaries — generated output,
+# compiled per-platform by scripts/build_host.sh (and by CI). Keep the README so
+# the asset directory still exists for `flutter build`.
+/assets/host/*
+!/assets/host/README.md
+
 # Symbolication related
 app.*.symbols
 

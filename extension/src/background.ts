@@ -1,10 +1,24 @@
-import type {
-  PlayPayload,
-  BrowserPayload,
-} from "../../protocol/generated/typescript/messages";
+import browser from "./browser";
 
-import { CONFIG } from "./config";
 import { HlsParser } from "./hls-parser";
+import * as bridge from "./native-bridge";
+
+// Firefox-only: response-body filtering (used to sniff HLS playlist bodies).
+// Absent in Chrome MV3, where detection degrades to header/URL signals only.
+const FILTER_AVAILABLE =
+  typeof (browser.webRequest as { filterResponseData?: unknown })
+    .filterResponseData === "function";
+
+// ==================== Debug logging ====================
+// Flip PB_DEBUG to false to silence. Logs go to the extension's background
+// console: about:debugging → This Firefox → PlayBridge Video Detector → Inspect.
+const PB_DEBUG = false;
+function plog(...args: unknown[]) {
+  if (PB_DEBUG) console.log("[PB]", ...args);
+}
+const short = (u: string) => (u.length > 110 ? u.slice(0, 110) + "…" : u);
+
+plog("background loaded. filterResponseData available:", FILTER_AVAILABLE);
 
 // ==================== Video detection ====================
 
@@ -44,6 +58,39 @@ const tabSeenUrls = new Map<number, Set<string>>();
 const tabHeadersCaptured = new Map<number, Set<string>>();
 const requestHeadersMap = new Map<string, StoredHeaders>();
 
+// Some requests (iframe/worker-initiated, esp. under Fission site isolation)
+// surface in webRequest with tabId -1. Videos filed under -1 are invisible to
+// the popup, which queries the real (active) tab. We recover the real tab two
+// ways: (1) the SAME url usually also fires onBeforeRequest WITH a real tabId,
+// so we keep a short-lived url→tab map; (2) fall back to the active tab. This
+// mirrors the phone, which resolves a -1 request via originUrl / selected tab.
+const urlToTab = new Map<string, { tabId: number; ts: number }>();
+const URL_TAB_TTL_MS = 60_000;
+let activeTabId = -1;
+
+function rememberUrlTab(url: string, tabId: number) {
+  if (tabId >= 0) urlToTab.set(url, { tabId, ts: Date.now() });
+}
+function resolveTabId(rawTabId: number, url: string): number {
+  if (rawTabId >= 0) return rawTabId;
+  const mapped = urlToTab.get(url);
+  if (mapped && Date.now() - mapped.ts < URL_TAB_TTL_MS) return mapped.tabId;
+  return activeTabId; // best-effort: the focused tab (may still be -1 if unknown)
+}
+function refreshActiveTab() {
+  browser.tabs.query({ active: true, currentWindow: true })
+    .then((tabs) => { if (tabs[0]?.id != null) activeTabId = tabs[0].id; })
+    .catch(() => {});
+}
+refreshActiveTab();
+browser.tabs.onActivated.addListener((info) => {
+  activeTabId = info.tabId;
+  updateBadge(info.tabId);
+});
+if (browser.windows?.onFocusChanged) {
+  browser.windows.onFocusChanged.addListener(() => refreshActiveTab());
+}
+
 const CLEANUP_INTERVAL_MS = 30_000;
 const HEADER_TTL_MS = 60_000;
 
@@ -51,6 +98,9 @@ setInterval(() => {
   const now = Date.now();
   for (const [id, data] of requestHeadersMap.entries()) {
     if (now - data.timestamp > HEADER_TTL_MS) requestHeadersMap.delete(id);
+  }
+  for (const [u, data] of urlToTab.entries()) {
+    if (now - data.ts > URL_TAB_TTL_MS) urlToTab.delete(u);
   }
 }, CLEANUP_INTERVAL_MS);
 
@@ -70,6 +120,66 @@ function cleanupTab(tabId: number) {
   tabVideos.delete(tabId);
   tabSeenUrls.delete(tabId);
   tabHeadersCaptured.delete(tabId);
+  updateBadge(tabId); // clears the count back to empty
+  persistVideos(tabId); // drops the persisted copy too
+}
+
+// ── MV3 service-worker survival ──────────────────────────────────────────────
+// Chrome suspends the background service worker after ~30s idle, wiping the
+// in-memory Maps — so the popup would see no detections from a previous SW
+// lifetime. Persist per-tab detections to storage.session (in-memory, cleared
+// when the browser closes) and rehydrate on wake. Firefox MV2 uses a persistent
+// background page and older Firefox lacks storage.session, so this no-ops there.
+const sessionStore: any = (browser.storage as any)?.session;
+const vkey = (tabId: number) => `pb_videos_${tabId}`;
+
+function persistVideos(tabId: number) {
+  if (!sessionStore || tabId < 0) return;
+  const v = tabVideos.get(tabId);
+  try {
+    if (v && v.length) sessionStore.set({ [vkey(tabId)]: v });
+    else sessionStore.remove(vkey(tabId));
+  } catch (_) {}
+}
+
+// Resolves once the in-memory Maps have been re-merged from storage.session.
+// getVideos awaits this so a just-woken SW doesn't report an empty list.
+const hydrated: Promise<void> = (async () => {
+  if (!sessionStore) return;
+  try {
+    const all = await sessionStore.get(null);
+    for (const [k, v] of Object.entries(all ?? {})) {
+      if (!k.startsWith("pb_videos_") || !Array.isArray(v)) continue;
+      const tabId = Number(k.slice("pb_videos_".length));
+      if (!Number.isFinite(tabId)) continue;
+      const existing = getTabVideos(tabId);
+      const seen = getTabSeenUrls(tabId);
+      for (const item of v as VideoData[]) {
+        if (!seen.has(item.url)) {
+          existing.push(item);
+          seen.add(item.url);
+        }
+      }
+    }
+  } catch (_) {}
+})();
+
+// ── Toolbar badge: count of detected streams on a tab ────────────────────────
+// MV3 Chrome exposes browser.action; MV2 Firefox exposes browser.browserAction.
+const actionApi: any =
+  (browser as any).action ?? (browser as any).browserAction;
+try {
+  // Match the popup theme: --accent (#D0BCFF) with near-black text (--bg-primary).
+  actionApi?.setBadgeBackgroundColor?.({ color: "#D0BCFF" });
+  actionApi?.setBadgeTextColor?.({ color: "#1C1B1F" });
+} catch (_) {}
+
+function updateBadge(tabId: number) {
+  if (!actionApi || tabId < 0) return;
+  const n = tabVideos.get(tabId)?.length ?? 0;
+  try {
+    actionApi.setBadgeText({ tabId, text: n > 0 ? String(n) : "" });
+  } catch (_) {}
 }
 
 browser.tabs.onRemoved.addListener((tabId) => cleanupTab(tabId));
@@ -77,7 +187,6 @@ browser.tabs.onRemoved.addListener((tabId) => cleanupTab(tabId));
 function handleNavigation(details: { frameId: number; tabId: number; url: string }) {
   if (details.frameId !== 0) return;
   cleanupTab(details.tabId);
-  browser.tabs.sendMessage(details.tabId, { type: "clear_videos" }).catch(() => {});
 }
 
 if (browser.webNavigation) {
@@ -110,24 +219,54 @@ function notifyContentScript(video: VideoData, tabId: number, headers: Record<st
     videos.push(video);
     if (videos.length > 50) videos.shift();
   }
+  plog("  → reported to tab", tabId, "(tab now has", videos.length, "videos):", short(video.url));
+  updateBadge(tabId);
+  persistVideos(tabId);
 
-  if (tabId > 0) {
-    browser.tabs.sendMessage(tabId, { type: "video_detected", ...video }).catch(() => {});
-  }
+  // Notify an open popup (if any) so it can refresh its list live.
+  browser.runtime.sendMessage({ type: "video_detected", ...video }).catch(() => {});
+}
+
+function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+// Merge enrichment (qualities / subtitle preview) into an already-reported video
+// and rebroadcast. Bypasses the dedup guard in notifyContentScript, which would
+// otherwise drop this follow-up because the URL was already seen.
+function updateStoredVideo(video: VideoData, tabId: number) {
+  const videos = getTabVideos(tabId);
+  const idx = videos.findIndex((v) => v.url === video.url);
+  if (idx !== -1) videos[idx] = { ...videos[idx], ...video };
+  persistVideos(tabId);
+  browser.runtime.sendMessage({ type: "video_detected", ...video }).catch(() => {});
 }
 
 function processAndNotifyVideo(videoData: VideoData, tabId: number, headers: Record<string, string> | null) {
+  // Report the video IMMEDIATELY. Detection must never be gated on a follow-up
+  // fetch (playlist parse / subtitle preview): origins that stall requests
+  // missing Referer/Origin would hang that fetch forever and the video would
+  // never be reported. Enrichment is sent as a non-blocking follow-up update.
+  // This mirrors the phone, which reports on webRequest and parses lazily after.
+  notifyContentScript(videoData, tabId, headers);
+
   if (videoData.url.toLowerCase().includes("m3u8")) {
-    HlsParser.parsePlaylist(videoData.url).then((playlist) => {
-      if (playlist.videoQualities.length > 0) videoData.qualities = playlist.videoQualities;
-      notifyContentScript(videoData, tabId, headers);
-    }).catch(() => notifyContentScript(videoData, tabId, headers));
+    HlsParser.parsePlaylist(videoData.url, headers ?? undefined)
+      .then((playlist) => {
+        if (playlist.videoQualities.length > 0) {
+          videoData.qualities = playlist.videoQualities;
+          updateStoredVideo(videoData, tabId);
+        }
+      })
+      .catch(() => {});
   } else if (
     videoData.detectedBy === "subtitle_extension" ||
     videoData.url.endsWith(".srt") ||
     videoData.url.endsWith(".vtt")
   ) {
-    fetch(videoData.url, { method: "GET", headers: { Range: "bytes=0-1500" } })
+    fetchWithTimeout(videoData.url, { method: "GET", headers: { Range: "bytes=0-1500" } }, 8000)
       .then((r) => r.text())
       .then((text) => {
         const lines = text.split(/\r?\n/);
@@ -140,28 +279,34 @@ function processAndNotifyVideo(videoData: VideoData, tabId: number, headers: Rec
           if (clean) validLines.push(clean);
           if (validLines.length >= 6) break;
         }
-        if (validLines.length > 0) videoData.subtitlePreview = validLines.join(" • ") + "...";
-        notifyContentScript(videoData, tabId, headers);
+        if (validLines.length > 0) {
+          videoData.subtitlePreview = validLines.join(" • ") + "...";
+          updateStoredVideo(videoData, tabId);
+        }
       })
-      .catch(() => notifyContentScript(videoData, tabId, headers));
-  } else {
-    notifyContentScript(videoData, tabId, headers);
+      .catch(() => {});
   }
 }
 
-// ==================== WebSocket / protocol ====================
+// ==================== PlayBridge desktop bridge ====================
+// Casting goes through the desktop app via the native-messaging host: the app
+// holds the pinned wss link to the TV and owns TV discovery/pairing/selection.
+// The extension just hands it a URL + the request headers it captured.
 
-let wsConnection: WebSocket | null = null;
-let playbridgePort: number = CONFIG.DEFAULT_PORT;
-let wsStatus: "disconnected" | "connecting" | "connected" = "disconnected";
-let intentionalDisconnect = false;
-let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-let reconnectDelay = 5_000;
-let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+function bridgeStatusLabel(): "disconnected" | "connecting" | "connected" {
+  const s = bridge.getState();
+  if (!s.desktopConnected) return "disconnected";
+  return s.activeTv ? "connected" : "connecting";
+}
 
-function updateWsStatus(status: typeof wsStatus) {
-  wsStatus = status;
-  const msg = { type: "ws_status_update", status };
+function broadcastStatus() {
+  const s = bridge.getState();
+  const msg = {
+    type: "ws_status_update",
+    status: bridgeStatusLabel(),
+    activeTv: s.activeTv,
+    devices: s.devices,
+  };
   browser.runtime.sendMessage(msg).catch(() => {});
   browser.tabs.query({}).then((tabs) => {
     for (const tab of tabs) {
@@ -170,100 +315,11 @@ function updateWsStatus(status: typeof wsStatus) {
   });
 }
 
-function connectWebSocket(ip: string, pin: string) {
-  intentionalDisconnect = false;
-  if (reconnectTimeout) { clearTimeout(reconnectTimeout); reconnectTimeout = null; }
+bridge.onState(() => broadcastStatus());
 
-  if (wsConnection) {
-    wsConnection.onclose = null;
-    wsConnection.onerror = null;
-    wsConnection.close();
-    wsConnection = null;
-  }
-
-  browser.storage.local.set({ pb_ip: ip, pb_pin: pin });
-  updateWsStatus("connecting");
-
-  try {
-    wsConnection = new WebSocket(`ws://${ip}:${playbridgePort}`);
-
-    wsConnection.onopen = () => {
-      reconnectDelay = 5_000;
-      updateWsStatus("connected");
-      if (pin) wsConnection!.send(JSON.stringify({ type: "auth", pin }));
-
-      if (heartbeatInterval) clearInterval(heartbeatInterval);
-      heartbeatInterval = setInterval(() => {
-        if (wsConnection?.readyState === WebSocket.OPEN) {
-          try { wsConnection.send(JSON.stringify({ type: "ping" })); }
-          catch (_) { wsConnection!.close(); }
-        }
-      }, 30_000);
-    };
-
-    wsConnection.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data as string);
-        if (msg.type === "ping") wsConnection!.send(JSON.stringify({ type: "pong" }));
-      } catch (_) {}
-    };
-
-    wsConnection.onclose = () => {
-      updateWsStatus("disconnected");
-      wsConnection = null;
-      if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
-
-      if (!intentionalDisconnect) {
-        reconnectTimeout = setTimeout(() => {
-          if (wsStatus !== "disconnected" || intentionalDisconnect) return;
-          browser.storage.local.get(["pb_ip", "pb_pin", "savedConnections"]).then((res) => {
-            if (res.pb_ip) {
-              connectWebSocket(res.pb_ip as string, (res.pb_pin as string) ?? "");
-            } else if (Array.isArray(res.savedConnections) && res.savedConnections.length > 0) {
-              const c = res.savedConnections[0] as { ip: string; pin?: string };
-              connectWebSocket(c.ip, c.pin ?? "");
-            }
-          });
-        }, reconnectDelay);
-        reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
-      }
-    };
-
-    wsConnection.onerror = () => { /* close handler fires */ };
-  } catch (e) {
-    console.error("[PlayBridge BG] WS setup error:", e);
-    updateWsStatus("disconnected");
-  }
-}
-
-function sendPlayCommand(payload: PlayPayload): boolean {
-  if (wsStatus !== "connected" || !wsConnection) return false;
-  // The standalone `play` command was removed — a single video is sent as a
-  // one-item playlist so the TV always sets up a queue.
-  const command = {
-    type: "command",
-    action: "playlist",
-    payload: { items: [payload], startIndex: 0 },
-  };
-  wsConnection.send(JSON.stringify(command));
-  return true;
-}
-
-
-function sendBrowserCommand(payload: BrowserPayload): boolean {
-  if (wsStatus !== "connected" || !wsConnection) return false;
-  wsConnection.send(JSON.stringify({ type: "command", action: "browser", payload }));
-  return true;
-}
-
-function videoDataToPlayPayload(video: VideoData): PlayPayload {
-  return {
-    url: video.url,
-    contentType: video.contentType,
-    headers: video.headers ?? {},
-    detectedBy: video.detectedBy,
-    subtitles: video.subtitles ?? [],
-  };
+function castVideo(video: VideoData): Promise<{ ok: boolean; error?: string }> {
+  const title = video.url.split("/").pop() || video.url;
+  return bridge.cast(video.url, video.headers ?? {}, title);
 }
 
 // ==================== Request header capture ====================
@@ -284,17 +340,45 @@ browser.webRequest.onBeforeSendHeaders.addListener(
   ["requestHeaders"],
 );
 
+// Visibility probe: log every request the extension can see whose URL looks
+// stream-ish, BEFORE any filtering. If your m3u8 never appears here, the request
+// isn't reaching the extension at all (e.g. a sandboxed/cross-origin iframe).
+browser.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    // Record the real tab for this URL so a later tabId:-1 sighting can be mapped back.
+    rememberUrlTab(details.url, details.tabId);
+    const u = details.url.toLowerCase();
+    if (u.includes("m3u8") || u.includes(".mpd") || u.includes(".ts") || u.includes("video")) {
+      plog("onBeforeRequest:", short(details.url),
+        "| type:", details.type, "| frameId:", details.frameId, "| tabId:", details.tabId);
+    }
+  },
+  { urls: ["<all_urls>"] },
+);
+
 browser.webRequest.onHeadersReceived.addListener(
   (details) => {
+    // Resolve a real tab for tabId:-1 sightings (iframe/worker-initiated requests)
+    // so detections aren't filed under -1 where the popup can't see them.
+    const tabId = resolveTabId(details.tabId, details.url);
+    if (details.url.toLowerCase().includes("m3u8") || details.url.toLowerCase().includes(".mpd")) {
+      plog("onHeadersReceived:", short(details.url),
+        "| type:", details.type, "| frameId:", details.frameId,
+        "| rawTabId:", details.tabId, "| resolvedTabId:", tabId, "| status:", details.statusCode);
+    }
     const ctHeader = details.responseHeaders?.find((h) => h.name.toLowerCase() === "content-type");
-    const contentType = ctHeader?.value?.toLowerCase() ?? "unknown";
+    // Default to "" (not "unknown") and DON'T bail when the header is absent:
+    // many HLS/live-stream origins omit Content-Type entirely, and the URL-pattern
+    // + #EXTM3U body-sniff checks below must still run for those. (The phone
+    // extension has the same comment — bailing here is the bug that made Firefox
+    // miss headerless m3u8/mpd streams the phone detects.)
+    const contentType = ctHeader?.value?.toLowerCase() ?? "";
     const stored = requestHeadersMap.get(details.requestId);
 
-    if (!ctHeader) { if (stored) requestHeadersMap.delete(details.requestId); return; }
-
-    const captured = getTabHeadersCaptured(details.tabId);
-    const seen = getTabSeenUrls(details.tabId);
+    const captured = getTabHeadersCaptured(tabId);
+    const seen = getTabSeenUrls(tabId);
     if (seen.has(details.url) && (captured.has(details.url) || !stored)) {
+      if (details.url.toLowerCase().includes("m3u8")) plog("  skip (already seen / no new headers):", short(details.url));
       if (stored) requestHeadersMap.delete(details.requestId);
       return;
     }
@@ -302,10 +386,16 @@ browser.webRequest.onHeadersReceived.addListener(
     const urlLower = details.url.toLowerCase().split("?")[0];
     const isSegment = [".ts", ".m4s"].some((ext) => urlLower.endsWith(ext)) ||
       urlLower.includes("/segment") || urlLower.includes("frag");
-    if (isSegment) { if (stored) requestHeadersMap.delete(details.requestId); return; }
+    if (isSegment) {
+      if (details.url.toLowerCase().includes("m3u8")) plog("  skip (matched isSegment .ts/.m4s/segment/frag):", short(details.url));
+      if (stored) requestHeadersMap.delete(details.requestId); return;
+    }
 
     const isVideoContentType = VIDEO_CONTENT_TYPES.some((t) => contentType.includes(t));
     const isM3u8Url = details.url.toLowerCase().includes("m3u8");
+    // DASH manifests are often served as text/xml or octet-stream, which the
+    // content-type list misses — match the URL like we do for m3u8.
+    const isMpdUrl = urlLower.endsWith(".mpd") || details.url.toLowerCase().includes(".mpd?");
     const hasVideoExt = [".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".m4v", ".wmv", ".3gp"]
       .some((ext) => urlLower.endsWith(ext));
     const hasSubExt = [".vtt", ".srt"].some((ext) => urlLower.endsWith(ext));
@@ -317,20 +407,27 @@ browser.webRequest.onHeadersReceived.addListener(
     let detectedBy = "unknown";
     if (isVideoContentType) { isVideo = true; detectedBy = "content_type"; }
     else if (isM3u8Url) { isVideo = true; detectedBy = "url_pattern_m3u8"; }
+    else if (isMpdUrl) { isVideo = true; detectedBy = "url_pattern_mpd"; }
     else if (isVideoExtMatch || hasVideoExt) { isVideo = true; detectedBy = "url_extension"; }
     else if (hasSubExt) { isVideo = true; detectedBy = "subtitle_extension"; }
 
     if (isVideo) {
+      plog("  ✓ DETECTED:", detectedBy, "| ct:", contentType || "(none)", "| tabId:", tabId, "|", short(details.url));
       processAndNotifyVideo(
-        { url: details.url, tabId: details.tabId, contentType, detectedBy, originUrl: details.originUrl ?? "", timestamp: Date.now() },
-        details.tabId,
+        { url: details.url, tabId, contentType, detectedBy, originUrl: details.originUrl ?? "", timestamp: Date.now() },
+        tabId,
         stored?.headers ?? null,
       );
     } else {
       const skipTypes = ["image", "font", "stylesheet", "script"];
-      if (details.statusCode === 200 && !skipTypes.includes(details.type) && browser.webRequest.filterResponseData) {
+      const sniffable = details.statusCode === 200 && !skipTypes.includes(details.type) && FILTER_AVAILABLE;
+      if (details.url.toLowerCase().includes("m3u8")) {
+        plog("  not matched by ct/url; body-sniff", sniffable ? "ENABLED" : "SKIPPED",
+          "(status:", details.statusCode, "type:", details.type, "filter:", FILTER_AVAILABLE + ")");
+      }
+      if (sniffable) {
         try {
-          const filter = browser.webRequest.filterResponseData(details.requestId);
+          const filter = (browser.webRequest as any).filterResponseData(details.requestId);
           const decoder = new TextDecoder("utf-8");
           let checked = false;
           let acc = "";
@@ -341,9 +438,10 @@ browser.webRequest.onHeadersReceived.addListener(
             if (acc.length >= 7) {
               checked = true;
               if (acc.trim().startsWith("#EXTM3U")) {
+                plog("  ✓ DETECTED via body sniff (#EXTM3U):", short(details.url));
                 processAndNotifyVideo(
-                  { url: details.url, tabId: details.tabId, contentType, detectedBy: "body_content_m3u8", originUrl: details.originUrl ?? "", timestamp: Date.now() },
-                  details.tabId,
+                  { url: details.url, tabId, contentType, detectedBy: "body_content_m3u8", originUrl: details.originUrl ?? "", timestamp: Date.now() },
+                  tabId,
                   stored?.headers ?? null,
                 );
               }
@@ -352,14 +450,15 @@ browser.webRequest.onHeadersReceived.addListener(
           };
           filter.onstop = () => { try { filter.disconnect(); } catch (_) {} };
           filter.onerror = () => {};
-        } catch (_) {}
+        } catch (e) { plog("  filterResponseData threw:", (e as Error)?.message); }
       }
     }
 
     if (stored) requestHeadersMap.delete(details.requestId);
   },
   { urls: ["<all_urls>"] },
-  ["responseHeaders", "blocking"],
+  // Blocking (needed for filterResponseData) is Firefox-only; Chrome MV3 observes.
+  (FILTER_AVAILABLE ? ["responseHeaders", "blocking"] : ["responseHeaders"]) as any,
 );
 
 // ==================== Runtime message handler ====================
@@ -369,15 +468,24 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (msg.action === "getVideos") {
     const tabId = (msg.tabId ?? sender.tab?.id) as number | undefined;
-    const videos = tabId ? (tabVideos.get(tabId) ?? []) : [];
-    sendResponse({ videos, count: videos.length });
-    return true;
+    // Await rehydration so a freshly-woken MV3 service worker doesn't reply with
+    // an empty list before storage.session has been merged back in.
+    hydrated.then(() => {
+      const videos = tabId ? (tabVideos.get(tabId) ?? []) : [];
+      plog("getVideos query for tabId", tabId, "→", videos.length, "videos.",
+        "All tabs with videos:", [...tabVideos.entries()].map(([t, v]) => `${t}:${v.length}`).join(", ") || "(none)");
+      sendResponse({ videos, count: videos.length });
+    });
+    return true; // async response
   }
 
   if (msg.action === "clearVideos") {
     const tabId = (msg.tabId ?? sender.tab?.id) as number | undefined;
     if (tabId) cleanupTab(tabId);
-    else { tabVideos.clear(); tabSeenUrls.clear(); tabHeadersCaptured.clear(); requestHeadersMap.clear(); }
+    else {
+      tabVideos.clear(); tabSeenUrls.clear(); tabHeadersCaptured.clear(); requestHeadersMap.clear();
+      sessionStore?.clear?.();
+    }
     sendResponse({ cleared: true });
     return true;
   }
@@ -391,23 +499,26 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (msg.action === "wsGetStatus") {
-    browser.storage.local.get(["pb_ip", "pb_pin", "pb_port"]).then((res) =>
-      sendResponse({ status: wsStatus, ip: res.pb_ip ?? "", pin: res.pb_pin ?? "", port: res.pb_port ?? CONFIG.DEFAULT_PORT })
-    );
+    const s = bridge.getState();
+    sendResponse({
+      status: bridgeStatusLabel(),
+      desktopConnected: s.desktopConnected,
+      activeTv: s.activeTv,
+      devices: s.devices,
+    });
     return true;
   }
 
   if (msg.action === "wsConnect") {
-    if (msg.port) { playbridgePort = msg.port as number; browser.storage.local.set({ pb_port: msg.port }); }
-    connectWebSocket(msg.ip as string, msg.pin as string);
+    // TV selection/pairing is owned by the desktop app; just (re)connect the
+    // bridge and pull fresh state.
+    bridge.refresh();
     sendResponse({ connecting: true });
     return true;
   }
 
   if (msg.action === "wsDisconnect") {
-    intentionalDisconnect = true;
-    if (reconnectTimeout) { clearTimeout(reconnectTimeout); reconnectTimeout = null; }
-    if (wsConnection) { wsConnection.close(); browser.storage.local.remove(["pb_ip", "pb_pin"]); }
+    // Disconnecting from a TV is done in the desktop app; nothing to do here.
     sendResponse({ disconnected: true });
     return true;
   }
@@ -415,29 +526,27 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg.action === "wsPlayOnTv") {
     const tabId = (sender.tab?.id ?? msg.tabId) as number | undefined;
     const videos = tabId ? getTabVideos(tabId) : [];
-    const video = videos.find((v) => v.url === msg.url) ?? msg.video as VideoData | undefined;
-    if (video) {
-      if (msg.subtitleUrl) video.subtitles = [msg.subtitleUrl as string];
-      const success = sendPlayCommand(videoDataToPlayPayload(video));
-      sendResponse({ success, reason: success ? null : "Not connected to TV" });
-    } else {
+    const video = videos.find((v) => v.url === msg.url) ?? (msg.video as VideoData | undefined);
+    if (!video) {
       sendResponse({ success: false, reason: "Video not found" });
+      return true;
     }
+    if (msg.subtitleUrl) video.subtitles = [msg.subtitleUrl as string];
+    castVideo(video).then((r) =>
+      sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+    );
     return true;
   }
 
   if (msg.action === "wsSendToTv") {
-    if (wsStatus !== "connected" || !wsConnection) {
-      sendResponse({ success: false, reason: "Not connected to TV" });
-      return true;
+    if (msg.target === "player") {
+      const url = msg.url as string;
+      bridge.cast(url, {}, url.split("/").pop() || url).then((r) =>
+        sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+      );
+    } else {
+      sendResponse({ success: false, reason: "Unsupported target" });
     }
-    let success = false;
-    if (msg.target === "browser") {
-      success = sendBrowserCommand({ url: msg.url as string });
-    } else if (msg.target === "player") {
-      success = sendPlayCommand({ url: msg.url as string, headers: {}, subtitles: [], title: msg.url as string });
-    }
-    sendResponse({ success, reason: success ? null : "Invalid target" });
     return true;
   }
 
@@ -446,32 +555,45 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ==================== Context menu ====================
 
-browser.menus.create({ id: "playbridge-parent", title: "PlayBridge", contexts: ["all"], icons: { "16": "icon.png" } });
-browser.menus.create({ id: "playbridge-play", parentId: "playbridge-parent", title: "Play on TV", contexts: ["link", "video", "audio"] });
-browser.menus.create({ id: "playbridge-open", parentId: "playbridge-parent", title: "Open on TV", contexts: ["all"] });
+// Firefox exposes this as `browser.menus` (with the "menus" permission); Chrome
+// and the polyfill expose `browser.contextMenus`. Use whichever is present.
+const menusApi: typeof browser.contextMenus =
+  (browser as any).menus ?? browser.contextMenus;
 
-browser.menus.onClicked.addListener((info, tab) => {
-  if (wsStatus !== "connected" || !wsConnection) {
-    browser.notifications.create("pb-not-connected", { type: "basic", iconUrl: "icon.png", title: "PlayBridge", message: "Not connected to TV." });
+function createContextMenus() {
+  menusApi.create({ id: "playbridge-parent", title: "PlayBridge", contexts: ["all"] });
+  menusApi.create({ id: "playbridge-play", parentId: "playbridge-parent", title: "Play on TV", contexts: ["link", "video", "audio"] });
+  menusApi.create({ id: "playbridge-open", parentId: "playbridge-parent", title: "Open on TV", contexts: ["all"] });
+}
+
+// Create on install/update; removeAll first avoids duplicate-id errors when the
+// MV3 service worker re-evaluates this file on wake.
+browser.runtime.onInstalled.addListener(() => {
+  menusApi.removeAll().then(createContextMenus).catch(() => {});
+});
+
+menusApi.onClicked.addListener((info, tab) => {
+  const s = bridge.getState();
+  if (!s.desktopConnected || !s.activeTv) {
+    browser.notifications.create("pb-not-connected", {
+      type: "basic",
+      iconUrl: "icon.png",
+      title: "PlayBridge",
+      message: s.desktopConnected
+        ? "No TV connected — open the PlayBridge app and pick a TV."
+        : "PlayBridge desktop app is not running.",
+    });
     return;
   }
-  if (info.menuItemId === "playbridge-play") {
-    const url = info.srcUrl ?? info.linkUrl;
-    if (url) sendPlayCommand({ url, headers: {}, subtitles: [] });
-  } else if (info.menuItemId === "playbridge-open") {
-    const url = info.linkUrl ?? info.pageUrl ?? tab?.url;
-    if (url) sendBrowserCommand({ url });
-  }
+  const url =
+    info.menuItemId === "playbridge-play"
+      ? (info.srcUrl ?? info.linkUrl)
+      : (info.linkUrl ?? info.pageUrl ?? tab?.url);
+  if (url) bridge.cast(url, {}, url.split("/").pop() || url);
 });
 
 // ==================== Startup ====================
 
-browser.storage.local.get(["pb_ip", "pb_pin", "pb_port", "savedConnections"]).then((res) => {
-  if (res.pb_port) playbridgePort = res.pb_port as number;
-  if (res.pb_ip) {
-    connectWebSocket(res.pb_ip as string, (res.pb_pin as string) ?? "");
-  } else if (Array.isArray(res.savedConnections) && res.savedConnections.length > 0) {
-    const c = res.savedConnections[0] as { ip: string; pin?: string };
-    connectWebSocket(c.ip, c.pin ?? "");
-  }
-});
+// Connect to the desktop app on startup; the bridge auto-reconnects if the app
+// isn't running yet.
+bridge.connect();

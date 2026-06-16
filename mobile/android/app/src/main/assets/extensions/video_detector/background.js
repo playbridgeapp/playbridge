@@ -33,11 +33,31 @@ const tabHeadersCaptured = new Map();  // geckoTabId → Set<url>
 // Map to store headers temporarily: requestId -> { headers, tabId, timestamp }
 const requestHeadersMap = new Map();
 
+// url → { tabId, ts }. Some requests (iframe/worker-initiated) surface in
+// webRequest with tabId -1. The SAME url usually also fires onBeforeRequest WITH
+// a real tabId, so we record that here and map a later -1 sighting back to it.
+// If there's no mapping we leave tabId as -1 and let the native side resolve it
+// from originUrl / the selected tab (its existing fallback).
+const urlToTab = new Map();
+const URL_TAB_TTL_MS = 60000;
+
 // Configuration for cleanup
 const CLEANUP_INTERVAL_MS = 30000; // 30 seconds
 const HEADER_TTL_MS = 60000; // 1 minute
 
 const DEBUG = false; // Set to true for verbose logging
+
+function rememberUrlTab(url, tabId) {
+    if (typeof tabId === 'number' && tabId >= 0) {
+        urlToTab.set(url, { tabId, ts: Date.now() });
+    }
+}
+function resolveTabId(rawTabId, url) {
+    if (typeof rawTabId === 'number' && rawTabId >= 0) return rawTabId;
+    const mapped = urlToTab.get(url);
+    if (mapped && Date.now() - mapped.ts < URL_TAB_TTL_MS) return mapped.tabId;
+    return rawTabId; // leave -1; native side resolves via originUrl / selected tab
+}
 
 // Periodic cleanup to prevent memory leaks from incomplete requests
 setInterval(() => {
@@ -48,6 +68,9 @@ setInterval(() => {
             requestHeadersMap.delete(requestId);
             cleanedCount++;
         }
+    }
+    for (const [url, data] of urlToTab.entries()) {
+        if (now - data.ts > URL_TAB_TTL_MS) urlToTab.delete(url);
     }
     if (cleanedCount > 0) {
         console.log(`[VideoDetector BG] Cleaned up ${cleanedCount} stale header entries`);
@@ -225,7 +248,10 @@ function reportVideo(video, tabId, headers = null) {
 // 0. Log all requests (Debug)
 browser.webRequest.onBeforeRequest.addListener(
     (details) => {
-        if (DEBUG) console.log(`[VideoDetector BG] Request: ${details.url} (Type: ${details.type})`);
+        // Record the real tab for this URL so a later tabId:-1 sighting (e.g. an
+        // iframe/worker-initiated request) can be mapped back to it.
+        rememberUrlTab(details.url, details.tabId);
+        if (DEBUG) console.log(`[VideoDetector BG] Request: ${details.url} (Type: ${details.type}, tabId: ${details.tabId})`);
     },
     { urls: ["<all_urls>"] }
 );
@@ -273,6 +299,10 @@ browser.webRequest.onHeadersReceived.addListener(
         if (DEBUG) console.log(`[VideoDetector BG] Response: ${details.url} | Content-Type: ${contentType || 'none'}`);
 
         const storedData = requestHeadersMap.get(details.requestId);
+        // Resolve a real tab for tabId:-1 sightings (iframe/worker-initiated
+        // requests) so detections aren't filed under -1. Falls back to -1 (native
+        // side resolves via originUrl / selected tab) when no mapping exists.
+        const tabId = resolveTabId(details.tabId, details.url);
         const urlFull = details.url.toLowerCase();
         const urlPath = urlFull.split('?')[0]; // Ignore query params for extension checks
 
@@ -306,12 +336,12 @@ browser.webRequest.onHeadersReceived.addListener(
 
             reportVideo({
                 url: details.url,
-                tabId: details.tabId,
+                tabId: tabId,
                 contentType: contentType || null,
                 detectedBy: detectedBy,
                 originUrl: details.originUrl || '',
                 timestamp: Date.now()
-            }, details.tabId, headers);
+            }, tabId, headers);
         } else {
             // Check if it's a potential hidden M3U8 stream in a generic (or absent)
             // response type by sniffing the first bytes of the body for #EXTM3U.
@@ -340,12 +370,12 @@ browser.webRequest.onHeadersReceived.addListener(
                                 const headers = storedData ? storedData.headers : null;
                                 reportVideo({
                                     url: details.url,
-                                    tabId: details.tabId,
+                                    tabId: tabId,
                                     contentType: contentType || null,
                                     detectedBy: 'body_content_m3u8',
                                     originUrl: details.originUrl || '',
                                     timestamp: Date.now()
-                                }, details.tabId, headers);
+                                }, tabId, headers);
                             }
                             // Stop intercepting further chunks to save resources
                             filter.disconnect();

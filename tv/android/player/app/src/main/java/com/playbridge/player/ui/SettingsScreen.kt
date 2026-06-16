@@ -234,7 +234,7 @@ fun SettingsScreen(
                         item {
                             SettingToggleItem(
                                 label = "Allow insecure connections (ws)",
-                                description = "Off = encrypted wss only. Enable for older senders that can't use TLS (e.g. the browser extension).",
+                                description = "Off = encrypted wss only (recommended). WARNING: turning this on exposes this device over plain ws:// — pairing tokens and stream links are sent unencrypted and can be read by anyone on your network. Only enable for legacy senders that can't use TLS.",
                                 checked = allowInsecureWs,
                                 onCheckedChange = {
                                     allowInsecureWs = it

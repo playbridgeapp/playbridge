@@ -26,10 +26,18 @@ export interface HlsPlaylist {
 }
 
 export class HlsParser {
-  static async parsePlaylist(masterPlaylistUrl: string): Promise<HlsPlaylist> {
+  static async parsePlaylist(
+    masterPlaylistUrl: string,
+    headers?: Record<string, string>,
+  ): Promise<HlsPlaylist> {
     const empty: HlsPlaylist = { videoQualities: [], audioTracks: [], masterPlaylistUrl, segmentPrefixes: [] };
+    // Enrichment is best-effort: time the fetch out so a stalling origin can
+    // never wedge the caller. (fetch silently drops forbidden headers like
+    // Referer/Origin/User-Agent, but passing what we have is harmless.)
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(masterPlaylistUrl);
+      const response = await fetch(masterPlaylistUrl, { headers, signal: controller.signal });
       const content = await response.text();
 
       if (!content.startsWith("#EXTM3U")) return empty;
@@ -118,6 +126,8 @@ export class HlsParser {
     } catch (e) {
       console.error("[HlsParser] error:", e);
       return empty;
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

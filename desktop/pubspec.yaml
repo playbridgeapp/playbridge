@@ -1,7 +1,7 @@
 name: playbridge_desktop
 description: "PlayBridge desktop receiver — accepts cast commands from the phone and plays via libmpv."
 publish_to: 'none'
-version: 0.2.1+13
+version: 0.3.0+14
 
 environment:
   sdk: ^3.6.0
@@ -37,12 +37,21 @@ dependencies:
   # crypto hashes the SPKI pin.
   basic_utils: ^5.7.0
   crypto: ^3.0.3
+  # ASN.1 parsing for the sender-side SPKI pin (tv_sender_client.dart). Transitive
+  # via basic_utils, pinned directly because we import pointycastle/asn1.dart.
+  pointycastle: ^3.9.1
 
   # Service-like behavior: tray icon + programmatic window control.
   # Launch-at-login is implemented in lib/auto_launch.dart (no plugin).
   tray_manager: ^0.5.1
   window_manager: ^0.4.3
   path_provider: ^2.1.5
+
+  # Native file picker for the "Cast a file" action (desktop sender).
+  file_selector: ^1.0.3
+
+  # Drag-and-drop of local files onto the Send to TV screen (→ playlist).
+  desktop_drop: ^0.5.0
 
 dev_dependencies:
   flutter_test:
@@ -53,3 +62,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/tray_icon.png
+    # The native-messaging host binary, bundled so `flutter build` carries it and
+    # the app can register it with browsers. Compile it via scripts/build_host.sh
+    # before building. Empty in a fresh checkout (the app falls back to build/).
+    - assets/host/

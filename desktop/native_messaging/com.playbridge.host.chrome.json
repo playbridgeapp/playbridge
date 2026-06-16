@@ -1,0 +1,9 @@
+{
+  "name": "com.playbridge.host",
+  "description": "PlayBridge native-messaging host — relays the browser extension to the desktop app",
+  "path": "/ABSOLUTE/PATH/TO/playbridge_host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://lhkbcaaoomlmoleggodlbafalokdgokn/"
+  ]
+}
