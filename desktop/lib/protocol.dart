@@ -62,6 +62,13 @@ class ControlCmd extends Command {
   const ControlCmd(this.command);
 }
 
+/// A remote key press from the phone (e.g. `volume_up` / `volume_down`). Most keys
+/// are TV-browser navigation and don't apply to the desktop player; volume does.
+class RemoteCmd extends Command {
+  final String key;
+  const RemoteCmd(this.key);
+}
+
 class PlaylistCmd extends Command {
   final List<PlayPayload> items;
   final int startIndex;
@@ -150,6 +157,8 @@ Command parseCommand(String json) {
         switch (action) {
           case 'control':
             return ControlCmd((payload?['command'] ?? '') as String);
+          case 'remote':
+            return RemoteCmd((payload?['key'] ?? '') as String);
           case 'context_query':
             return const ContextQueryCmd();
           case 'playlist':

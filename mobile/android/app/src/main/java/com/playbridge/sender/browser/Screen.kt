@@ -24,4 +24,8 @@ sealed class Screen {
     data class LibraryDetail(val id: String, val type: String, val source: String? = null) : Screen()
     object Dashboard : Screen()
     object PhoneFiles : Screen()
+    object Iptv : Screen()
+    data class IptvDetail(val playlistId: Long) : Screen()
+    object Collections : Screen()
+    data class CollectionDetail(val collectionId: Long) : Screen()
 }

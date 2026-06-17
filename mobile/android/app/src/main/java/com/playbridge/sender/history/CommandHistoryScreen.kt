@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.OpenInBrowser
@@ -32,7 +33,8 @@ fun CastHistoryScreen(
     onItemClick: (CommandHistoryEntity) -> Unit,
     onDelete: (CommandHistoryEntity) -> Unit,
     onClearHistory: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onAddToCollection: (CommandHistoryEntity) -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -88,7 +90,8 @@ fun CastHistoryScreen(
                     CastHistoryItem(
                         item = item,
                         onClick = { onItemClick(item) },
-                        onDelete = { onDelete(item) }
+                        onDelete = { onDelete(item) },
+                        onAddToCollection = { onAddToCollection(item) }
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                 }
@@ -101,7 +104,8 @@ fun CastHistoryScreen(
 fun CastHistoryItem(
     item: CommandHistoryEntity,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onAddToCollection: () -> Unit = {}
 ) {
     val dateFormat = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
     val icon = if (item.commandType.lowercase() == "play") Icons.Default.PlayArrow else Icons.Default.OpenInBrowser
@@ -133,12 +137,21 @@ fun CastHistoryItem(
             Icon(icon, contentDescription = null)
         },
         trailingContent = {
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Delete",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row {
+                IconButton(onClick = onAddToCollection) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.PlaylistAdd,
+                        contentDescription = "Add to Collection",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         },
         modifier = Modifier.clickable(onClick = onClick)

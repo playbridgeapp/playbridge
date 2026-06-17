@@ -29,6 +29,9 @@ class SettingsRepository(
         val BLOCK_POPUPS = booleanPreferencesKey("block_popups")
         val POPUP_WHITELIST = stringSetPreferencesKey("popup_whitelist")
         val POPUP_BLACKLIST = stringSetPreferencesKey("popup_blacklist")
+        val IPTV_SORT = stringPreferencesKey("iptv_sort")           // "ADDED_DATE" | "NAME"
+        val IPTV_SORT_ASCENDING = booleanPreferencesKey("iptv_sort_ascending")
+        val IPTV_ACTIVE_FIRST = booleanPreferencesKey("iptv_active_first")
     }
 
     // 2. Flow definitions for reactive Compose collectors
@@ -49,6 +52,11 @@ class SettingsRepository(
     val blockPopups: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.BLOCK_POPUPS] ?: true }
     val popupWhitelist: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.POPUP_WHITELIST] ?: emptySet() }
     val popupBlacklist: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.POPUP_BLACKLIST] ?: emptySet() }
+    /** IPTV playlist sort key: "ADDED_DATE" (default) or "NAME". */
+    val iptvSort: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.IPTV_SORT] ?: "ADDED_DATE" }
+    val iptvSortAscending: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.IPTV_SORT_ASCENDING] ?: false }
+    /** When exploring a playlist, float probe-confirmed live channels to the top. */
+    val iptvActiveFirst: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.IPTV_ACTIVE_FIRST] ?: true }
 
     // 3. Mutator methods
     suspend fun setAutoSwitchToRemote(value: Boolean) = write { it[Keys.AUTO_SWITCH_TO_REMOTE] = value }
@@ -63,6 +71,9 @@ class SettingsRepository(
     suspend fun setTrackWatchProgress(value: Boolean) = write { it[Keys.TRACK_WATCH_PROGRESS] = value }
     suspend fun setAutoAddToWatching(value: Boolean) = write { it[Keys.AUTO_ADD_TO_WATCHING] = value }
     suspend fun setBlockPopups(value: Boolean) = write { it[Keys.BLOCK_POPUPS] = value }
+    suspend fun setIptvSort(value: String) = write { it[Keys.IPTV_SORT] = value }
+    suspend fun setIptvSortAscending(value: Boolean) = write { it[Keys.IPTV_SORT_ASCENDING] = value }
+    suspend fun setIptvActiveFirst(value: Boolean) = write { it[Keys.IPTV_ACTIVE_FIRST] = value }
     
     suspend fun addPopupWhitelist(host: String) = write { prefs ->
         val current = prefs[Keys.POPUP_WHITELIST] ?: emptySet()

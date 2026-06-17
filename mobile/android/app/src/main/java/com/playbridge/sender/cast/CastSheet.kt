@@ -90,7 +90,9 @@ fun CastSheet(
     onContentClick: (playbridge.PlayPayload) -> Unit = {},
     onQueueContent: (playbridge.PlayPayload) -> Unit = {},
     detectionEnabled: Boolean = true,
-    onEnableDetection: (() -> Unit)? = null
+    onEnableDetection: (() -> Unit)? = null,
+    // When provided, each detected-video card's ⋮ menu gets a "Save to Collection" action.
+    onSaveToCollection: ((DetectedVideo) -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -769,7 +771,8 @@ fun CastSheet(
                                     dispatchExternalPlayerForVideo(video)
                                 },
                                 onPreviewClick = { previewVideo = video },
-                                onPlayPhoneClick = { dispatchPhoneForVideo(video) }
+                                onPlayPhoneClick = { dispatchPhoneForVideo(video) },
+                                onSaveToCollection = onSaveToCollection?.let { cb -> { cb(video) } }
                             )
                         }
                     }
