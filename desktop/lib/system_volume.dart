@@ -30,10 +30,14 @@ class SystemVolume {
   static Future<bool> _macStep(bool up) async {
     final delta = up ? stepPercent : -stepPercent;
     final r = await Process.run('osascript', [
-      '-e', 'set v to (output volume of (get volume settings)) + ($delta)',
-      '-e', 'if v > 100 then set v to 100',
-      '-e', 'if v < 0 then set v to 0',
-      '-e', 'set volume output volume v',
+      '-e',
+      'set v to (output volume of (get volume settings)) + ($delta)',
+      '-e',
+      'if v > 100 then set v to 100',
+      '-e',
+      'if v < 0 then set v to 0',
+      '-e',
+      'set volume output volume v',
     ]);
     return r.exitCode == 0;
   }
@@ -42,7 +46,16 @@ class SystemVolume {
     final sign = up ? '+' : '-';
     // Try PipeWire, then PulseAudio, then ALSA — whichever is installed.
     final attempts = <(String, List<String>)>[
-      ('wpctl', ['set-volume', '-l', '1.0', '@DEFAULT_AUDIO_SINK@', '$stepPercent%$sign']),
+      (
+        'wpctl',
+        [
+          'set-volume',
+          '-l',
+          '1.0',
+          '@DEFAULT_AUDIO_SINK@',
+          '$stepPercent%$sign'
+        ]
+      ),
       ('pactl', ['set-sink-volume', '@DEFAULT_SINK@', '$sign$stepPercent%']),
       ('amixer', ['-q', 'sset', 'Master', '$stepPercent%$sign']),
     ];
