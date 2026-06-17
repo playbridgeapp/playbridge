@@ -125,22 +125,18 @@ class TvSenderClient {
     _pinMismatch = false;
     _setState(SenderConnectionState.connecting);
 
-    final secure = wssPort != null;
-    final uri =
-        Uri.parse(secure ? 'wss://$host:$wssPort/' : 'ws://$host:$port/');
+    final resolvedWssPort = wssPort ?? (port + 1);
+    final uri = Uri.parse('wss://$host:$resolvedWssPort/');
 
-    HttpClient? customClient;
-    if (secure) {
-      customClient = HttpClient()
-        ..badCertificateCallback = (X509Certificate cert, String h, int p) {
-          final pin = spkiPinFromCertDer(cert.der);
-          _capturedPin = pin;
-          if (expectedPin == null) return true; // trust-on-first-use at pairing
-          if (pin == expectedPin) return true;
-          _pinMismatch = true;
-          return false;
-        };
-    }
+    final customClient = HttpClient()
+      ..badCertificateCallback = (X509Certificate cert, String h, int p) {
+        final pin = spkiPinFromCertDer(cert.der);
+        _capturedPin = pin;
+        if (expectedPin == null) return true; // trust-on-first-use at pairing
+        if (pin == expectedPin) return true;
+        _pinMismatch = true;
+        return false;
+      };
 
     try {
       final channel = IOWebSocketChannel.connect(

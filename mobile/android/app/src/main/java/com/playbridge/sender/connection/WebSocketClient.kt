@@ -146,11 +146,10 @@ class WebSocketClient {
         pinMismatch = false
 
         val conn = targetConnection
-        val wssPort = conn?.wssPort
-        val useTls = wssPort != null
-        isSecure = useTls
-        val url = if (useTls) "wss://$ip:$wssPort/" else "ws://$ip:$port/"
-        val httpClient = if (useTls) buildPinningClient(conn?.pin) else client
+        val wssPort = conn?.wssPort ?: (port + 1)
+        isSecure = true
+        val url = "wss://$ip:$wssPort/"
+        val httpClient = buildPinningClient(conn?.pin)
         Log.i(TAG, "Connecting to $url")
 
         val request = Request.Builder()

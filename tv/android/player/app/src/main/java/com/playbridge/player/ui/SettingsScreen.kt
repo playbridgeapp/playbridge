@@ -54,7 +54,6 @@ fun SettingsScreen(
     var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
     var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
     var showIpDialog by remember { mutableStateOf(false) }
-    var allowInsecureWs by remember { mutableStateOf(prefs.getBoolean("allow_insecure_ws", false)) }
     var hideSoftKeyboard by remember { mutableStateOf(prefs.getBoolean("hide_soft_keyboard", false)) }
     var frameRateMatching by remember { mutableStateOf(prefs.getBoolean("frame_rate_matching", false)) }
     var tunneledPlayback by remember { mutableStateOf(prefs.getBoolean("tunneled_playback", false)) }
@@ -229,18 +228,6 @@ fun SettingsScreen(
                                 label = "Custom Network IP",
                                 description = if (customIp.isEmpty() || customIp == "auto") "Automatic" else customIp,
                                 onClick = { showIpDialog = true }
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Allow insecure connections (ws)",
-                                description = "Off = encrypted wss only (recommended). WARNING: turning this on exposes this device over plain ws:// — pairing tokens and stream links are sent unencrypted and can be read by anyone on your network. Only enable for legacy senders that can't use TLS.",
-                                checked = allowInsecureWs,
-                                onCheckedChange = {
-                                    allowInsecureWs = it
-                                    prefs.edit().putBoolean("allow_insecure_ws", it).apply()
-                                    restartServer()
-                                }
                             )
                         }
                         item {

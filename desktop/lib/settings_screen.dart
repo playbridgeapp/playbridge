@@ -152,24 +152,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 danger: true,
               ),
 
-            // — Security ————————————————————————————
-            _Section('Security'),
-            _Tile(
-              icon: Icons.lock,
-              title: 'Allow insecure connections (ws)',
-              subtitle:
-                  "Off = encrypted wss only. Enable for older senders that "
-                  "can't use TLS (e.g. the browser extension).",
-              trailing: Switch(
-                value: widget.store.allowInsecure,
-                onChanged: (v) async {
-                  await widget.store.setAllowInsecure(v);
-                  await widget.server.reloadListeners();
-                  if (mounted) setState(() {});
-                },
-              ),
-            ),
-
             // — System ——————————————————————————————
             _Section('System'),
             if (!Platform.isWindows)
