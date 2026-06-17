@@ -309,20 +309,19 @@ object M3uParser {
     }
 
     private fun resolveUrl(baseUrl: String, relativeUrl: String): String {
+        if (relativeUrl.contains("://")) {
+            return relativeUrl
+        }
         return try {
             val base = Url(baseUrl)
-            val relative = Url(relativeUrl)
-            if (relative.protocol.name == "http" || relative.protocol.name == "https") {
-                relativeUrl
+            if (relativeUrl.startsWith("//")) {
+                "${base.protocol.name}:$relativeUrl"
+            } else if (relativeUrl.startsWith("/")) {
+                "${base.protocol.name}://${base.hostWithPort}${relativeUrl}"
             } else {
-                // Manual resolution for relative paths since Ktor Url doesn't have a simple 'resolve'
-                if (relativeUrl.startsWith("/")) {
-                    "${base.protocol.name}://${base.hostWithPort}${relativeUrl}"
-                } else {
-                    val lastSlash = base.fullPath.lastIndexOf('/')
-                    val path = if (lastSlash != -1) base.fullPath.substring(0, lastSlash + 1) else "/"
-                    "${base.protocol.name}://${base.hostWithPort}${path}${relativeUrl}"
-                }
+                val lastSlash = base.fullPath.lastIndexOf('/')
+                val path = if (lastSlash != -1) base.fullPath.substring(0, lastSlash + 1) else "/"
+                "${base.protocol.name}://${base.hostWithPort}${path}${relativeUrl}"
             }
         } catch (e: Exception) {
             relativeUrl
