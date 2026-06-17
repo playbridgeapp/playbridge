@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Check
@@ -224,7 +225,8 @@ internal fun VideoItemDetailed(
     onCopyClick: () -> Unit,
     onOpenWithClick: () -> Unit,
     onPreviewClick: () -> Unit,
-    onPlayPhoneClick: () -> Unit
+    onPlayPhoneClick: () -> Unit,
+    onSaveToCollection: (() -> Unit)? = null
 ) {
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
     val videoType = remember(video) { getVideoType(video) }
@@ -548,6 +550,21 @@ internal fun VideoItemDetailed(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false }
                         ) {
+                            onSaveToCollection?.let { save ->
+                                DropdownMenuItem(
+                                    text = { Text("Save to Collection") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.PlaylistAdd,
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        save()
+                                        menuExpanded = false
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Open with...") },
                                 leadingIcon = {

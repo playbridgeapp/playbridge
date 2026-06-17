@@ -113,6 +113,69 @@ object DatabaseProvider {
         }
     }
 
+    private val MIGRATION_17_18 = object : Migration(17, 18) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // IPTV playlists + their cached channels (IPTV_PLAN.md §2).
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `iptv_playlists` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`name` TEXT NOT NULL, " +
+                    "`source` TEXT NOT NULL, " +
+                    "`sourceType` TEXT NOT NULL, " +
+                    "`addedAt` INTEGER NOT NULL, " +
+                    "`updatedAt` INTEGER NOT NULL, " +
+                    "`channelCount` INTEGER NOT NULL)"
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `iptv_channels` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`playlistId` INTEGER NOT NULL, " +
+                    "`name` TEXT NOT NULL, " +
+                    "`url` TEXT NOT NULL, " +
+                    "`logo` TEXT, " +
+                    "`groupTitle` TEXT, " +
+                    "`tvgId` TEXT, " +
+                    "`orderIndex` INTEGER NOT NULL, " +
+                    "`headersJson` TEXT, " +
+                    "`probeStatus` TEXT NOT NULL, " +
+                    "`probeLatencyMs` INTEGER, " +
+                    "`probedAt` INTEGER, " +
+                    "FOREIGN KEY(`playlistId`) REFERENCES `iptv_playlists`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_iptv_channels_playlistId` ON `iptv_channels` (`playlistId`)")
+        }
+    }
+
+    private val MIGRATION_18_19 = object : Migration(18, 19) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // User-curated collections + their ordered items (COLLECTIONS_PLAN.md §2).
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `collections` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`name` TEXT NOT NULL, " +
+                    "`addedAt` INTEGER NOT NULL, " +
+                    "`updatedAt` INTEGER NOT NULL, " +
+                    "`itemCount` INTEGER NOT NULL)"
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `collection_items` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`collectionId` INTEGER NOT NULL, " +
+                    "`title` TEXT NOT NULL, " +
+                    "`url` TEXT NOT NULL, " +
+                    "`kind` TEXT NOT NULL, " +
+                    "`mimeType` TEXT, " +
+                    "`headersJson` TEXT, " +
+                    "`logo` TEXT, " +
+                    "`sourceTag` TEXT, " +
+                    "`orderIndex` INTEGER NOT NULL, " +
+                    "`addedAt` INTEGER NOT NULL, " +
+                    "FOREIGN KEY(`collectionId`) REFERENCES `collections`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_collection_items_collectionId` ON `collection_items` (`collectionId`)")
+        }
+    }
+
     @Volatile
     private var INSTANCE: HistoryDatabase? = null
 
@@ -123,7 +186,7 @@ object DatabaseProvider {
                 HistoryDatabase::class.java,
                 "history_database"
             )
-            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
+            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
             .fallbackToDestructiveMigration()
             .build()
             INSTANCE = instance

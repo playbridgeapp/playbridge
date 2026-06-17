@@ -319,6 +319,12 @@ class BrowserActivity : ComponentActivity() {
             // The screen the Remote was opened from, so Back returns there (e.g. Phone Files,
             // Connection) rather than always falling back to the last main tab.
             var remoteOrigin by remember { mutableStateOf<Screen?>(null) }
+            // Keep the Remote's return target pointed at wherever we actually were last, even
+            // when playback auto-switches into the Remote directly (which bypasses
+            // onScreenChange and would otherwise leave remoteOrigin stale — e.g. stuck on IPTV).
+            LaunchedEffect(currentScreen) {
+                if (currentScreen != Screen.Remote) remoteOrigin = currentScreen
+            }
             // The screen the Dashboard was opened from, so its close (X) returns there.
             var dashboardOrigin by remember { mutableStateOf<Screen?>(null) }
             var isSettingsFromLibrary by remember { mutableStateOf(false) }
@@ -1346,6 +1352,10 @@ class BrowserActivity : ComponentActivity() {
                             Screen.DebridLibrary -> {}
                             Screen.Dashboard -> {}
                             Screen.PhoneFiles -> {}
+                            Screen.Iptv -> {}
+                            is Screen.IptvDetail -> {}
+                            Screen.Collections -> {}
+                            is Screen.CollectionDetail -> {}
                         }
                     },
                         bottomBar = {

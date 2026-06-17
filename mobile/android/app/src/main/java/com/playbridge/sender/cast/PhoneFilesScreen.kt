@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
@@ -126,6 +127,7 @@ fun PhoneFilesScreen(
     uiState: PhoneFilesUiState,
     onBack: () -> Unit,
     onOpenAllDevices: () -> Unit = {},
+    onAddToCollection: (PhoneMediaItem) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -365,7 +367,13 @@ fun PhoneFilesScreen(
                                     .calculateBottomPadding() + 84.dp
                             ),
                         ) {
-                            items(shown) { media -> PhoneMediaRow(media) { playOrCast(media) } }
+                            items(shown) { media ->
+                                PhoneMediaRow(
+                                    media = media,
+                                    onClick = { playOrCast(media) },
+                                    onAddToCollection = { onAddToCollection(media) },
+                                )
+                            }
                         }
                     }
                 }
@@ -488,12 +496,16 @@ private fun OptionRow(label: String, selected: Boolean, enabled: Boolean = true,
 }
 
 @Composable
-private fun PhoneMediaRow(media: PhoneMediaItem, onClick: () -> Unit) {
+private fun PhoneMediaRow(
+    media: PhoneMediaItem,
+    onClick: () -> Unit,
+    onAddToCollection: () -> Unit = {},
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         MediaThumbnail(media)
@@ -512,6 +524,13 @@ private fun PhoneMediaRow(media: PhoneMediaItem, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        IconButton(onClick = onAddToCollection) {
+            Icon(
+                Icons.AutoMirrored.Filled.PlaylistAdd,
+                contentDescription = "Add to Collection",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

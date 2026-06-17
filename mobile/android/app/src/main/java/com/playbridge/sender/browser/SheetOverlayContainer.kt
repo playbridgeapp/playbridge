@@ -21,6 +21,7 @@ import com.playbridge.sender.data.library.StremioSubtitleService
 import com.playbridge.sender.library.MagnetParsingSheet
 import playbridge.PlayPayload
 import org.koin.compose.koinInject
+import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,9 +120,25 @@ fun SheetOverlayContainer(
 
         // 3. Cast Sheet
         if (showVideoSheet) {
+            val collectionsViewModel: com.playbridge.sender.collection.CollectionsViewModel = koinViewModel()
+            val castSheetContext = LocalContext.current
+            // Set when "Save to Collection" is tapped on a card → shows the collection picker.
+            var saveToCollectionDraft by remember {
+                mutableStateOf<com.playbridge.sender.data.collection.CollectionItemDraft?>(null)
+            }
             CastSheet(
                 videos = detectedVideos,
                 onDismiss = onDismissVideoSheet,
+                onSaveToCollection = { video ->
+                    saveToCollectionDraft = com.playbridge.sender.data.collection.CollectionItemDraft(
+                        title = video.title ?: (try { java.net.URI(video.url).host } catch (e: Exception) { null } ?: video.url),
+                        url = video.url,
+                        kind = com.playbridge.sender.data.collection.CollectionItemKind.WEB,
+                        mimeType = video.contentType,
+                        headers = video.headers ?: emptyMap(),
+                        sourceTag = com.playbridge.sender.data.collection.CollectionSource.BROWSER,
+                    )
+                },
                 onVideoClick = onVideoClick,
                 onQueueVideo = onQueueVideo,
                 onDownload = onDownloadVideo,
@@ -145,6 +162,22 @@ fun SheetOverlayContainer(
                 detectionEnabled = detectVideosEnabled,
                 onEnableDetection = if (!detectVideosEnabled) onToggleVideoDetect else null
             )
+
+            // Collection picker, shown over the cast sheet when saving a detected video.
+            saveToCollectionDraft?.let { draft ->
+                com.playbridge.sender.collection.AddToCollectionSheet(
+                    viewModel = collectionsViewModel,
+                    draft = draft,
+                    onDismiss = { saveToCollectionDraft = null },
+                    onAdded = { name, added ->
+                        Toast.makeText(
+                            castSheetContext,
+                            if (added) "Saved to $name" else "Already in $name",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                )
+            }
         }
 
         // 4. Magnet Parsing Sheet

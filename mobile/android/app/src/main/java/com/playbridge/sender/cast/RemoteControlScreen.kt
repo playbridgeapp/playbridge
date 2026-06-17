@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.clickable
@@ -42,11 +43,14 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 
 /** Live playback status synced from the TV via `status` messages. */
 data class TvPlaybackStatus(
@@ -199,14 +203,16 @@ fun RemoteControlScreen(
                 ) {
                     when (ctx) {
                         RemoteContext.PLAYER -> {
-                            // ── Now Playing: title + live seekbar ──
+                            // ── Now Playing: title only — the seek control lives down in the
+                            //    SeekVolumeBar (swipe ◄► to seek, ▲▼ for volume). ──
                             NowPlayingPanel(
                                 title = mediaTitle,
                                 episodeLabel = episodeLabelFor(currentEpisodeIndex, episodes),
                                 positionMs = positionMs,
                                 durationMs = durationMs,
                                 isLive = isLive,
-                                onSeekTo = onSeekTo
+                                onSeekTo = onSeekTo,
+                                showProgress = false
                             )
 
                             // Native-only: track pickers/settings — hidden for DLNA renderers.
@@ -228,13 +234,17 @@ fun RemoteControlScreen(
                                 modifier = Modifier.weight(1f)
                             )
 
-                            // ── Volume + transport controls ── (volume is native-only for now)
-                            if (!dlnaMode) {
-                                VolumeRow(
-                                    onVolumeUp = { onRemoteKey("volume_up") },
-                                    onVolumeDown = { onRemoteKey("volume_down") }
-                                )
-                            }
+                            // ── Combined seek + volume bar ──
+                            // Swipe left/right to scrub, up/down for volume (volume is native-only).
+                            SeekVolumeBar(
+                                positionMs = positionMs,
+                                durationMs = durationMs,
+                                isLive = isLive,
+                                enableVolume = !dlnaMode,
+                                onSeekTo = onSeekTo,
+                                onVolumeUp = { onRemoteKey("volume_up") },
+                                onVolumeDown = { onRemoteKey("volume_down") }
+                            )
                             // No Back/Home here — Stop already exits playback, so they'd be redundant.
                             MediaControlRow(
                                 isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
@@ -641,6 +651,139 @@ private fun VolumeRow(
     }
 }
 
+/** Drag-axis lock for the combined seek/volume gesture surface. */
+private enum class DragAxis { HORIZONTAL, VERTICAL }
+
+/**
+ * Combined seek + volume control that sits where the volume rocker used to be (player context).
+ * Swipe **left/right** to scrub the seekbar (absolute seek sent on release); swipe **up/down**
+ * to step the volume. The gesture locks to whichever axis the drag starts on. Seeking needs a
+ * finite duration (disabled for live / unknown-duration streams); volume is gated by
+ * [enableVolume] (native receiver only — DLNA volume isn't wired).
+ */
+@Composable
+private fun SeekVolumeBar(
+    positionMs: Long,
+    durationMs: Long,
+    isLive: Boolean,
+    enableVolume: Boolean,
+    onSeekTo: (Long) -> Unit,
+    onVolumeUp: () -> Unit,
+    onVolumeDown: () -> Unit,
+) {
+    val hasDuration = durationMs > 0L && !isLive
+    val currentPosition by rememberUpdatedState(positionMs)
+
+    var widthPx by remember { mutableStateOf(0f) }
+    var dragging by remember { mutableStateOf(false) }
+    var dragMs by remember { mutableStateOf(0f) }
+    var activeAxis by remember { mutableStateOf<DragAxis?>(null) }
+
+    // Vertical travel required for one volume step.
+    val volumeStepPx = with(LocalDensity.current) { 28.dp.toPx() }
+
+    val displayMs = if (dragging && hasDuration) dragMs else currentPosition.toFloat()
+    val fraction = if (hasDuration && durationMs > 0L)
+        (displayMs / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+
+    val primary = MaterialTheme.colorScheme.primary
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .onSizeChanged { widthPx = it.width.toFloat() }
+            .pointerInput(hasDuration, enableVolume, durationMs) {
+                var axis: DragAxis? = null
+                var volAccum = 0f
+                detectDragGestures(
+                    onDragStart = {
+                        axis = null
+                        volAccum = 0f
+                        dragMs = currentPosition.toFloat()
+                    },
+                    onDrag = { change, drag ->
+                        change.consume()
+                        if (axis == null) {
+                            axis = if (abs(drag.x) >= abs(drag.y)) DragAxis.HORIZONTAL else DragAxis.VERTICAL
+                            activeAxis = axis
+                            if (axis == DragAxis.HORIZONTAL && hasDuration) dragging = true
+                        }
+                        when (axis) {
+                            DragAxis.HORIZONTAL -> if (hasDuration && widthPx > 0f) {
+                                val deltaMs = (drag.x / widthPx) * durationMs.toFloat()
+                                dragMs = (dragMs + deltaMs).coerceIn(0f, durationMs.toFloat())
+                            }
+                            DragAxis.VERTICAL -> if (enableVolume) {
+                                volAccum -= drag.y // swipe up (negative y) raises volume
+                                while (volAccum >= volumeStepPx) { onVolumeUp(); volAccum -= volumeStepPx }
+                                while (volAccum <= -volumeStepPx) { onVolumeDown(); volAccum += volumeStepPx }
+                            }
+                            else -> {}
+                        }
+                    },
+                    onDragEnd = {
+                        if (axis == DragAxis.HORIZONTAL && hasDuration) onSeekTo(dragMs.toLong())
+                        dragging = false
+                        activeAxis = null
+                        axis = null
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        activeAxis = null
+                        axis = null
+                    },
+                )
+            },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        // Progress fill — only meaningful with a finite duration.
+        if (hasDuration) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(fraction)
+                    .background(primary.copy(alpha = 0.25f))
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (hasDuration) formatTime(displayMs.toLong()) else formatTime(currentPosition),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val centerLabel = when (activeAxis) {
+                DragAxis.VERTICAL -> "Volume"
+                DragAxis.HORIZONTAL -> "Seek"
+                else -> if (enableVolume) "◄ ► seek · ▲ ▼ volume" else "◄ ► seek"
+            }
+            Text(
+                text = centerLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+            )
+            Text(
+                text = if (isLive) "LIVE" else if (durationMs > 0L) formatTime(durationMs) else "--:--",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isLive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 
 @Composable
 private fun TouchpadArea(
@@ -961,7 +1104,10 @@ private fun NowPlayingPanel(
     positionMs: Long,
     durationMs: Long,
     isLive: Boolean = false,
-    onSeekTo: (Long) -> Unit
+    onSeekTo: (Long) -> Unit,
+    // When false, only the title/episode label show — the seek control is rendered
+    // elsewhere (the SeekVolumeBar in the player context).
+    showProgress: Boolean = true
 ) {
     val hasDuration = durationMs > 0L
     var dragging by remember { mutableStateOf(false) }
@@ -992,34 +1138,36 @@ private fun NowPlayingPanel(
             )
         }
 
-        Slider(
-            value = sliderValue,
-            onValueChange = {
-                dragging = true
-                dragValue = it
-            },
-            onValueChangeFinished = {
-                if (hasDuration) onSeekTo(dragValue.toLong())
-            },
-            valueRange = 0f..(if (hasDuration) durationMs.toFloat() else 1f),
-            enabled = hasDuration,
-            modifier = Modifier.fillMaxWidth()
-        )
+        if (showProgress) {
+            Slider(
+                value = sliderValue,
+                onValueChange = {
+                    dragging = true
+                    dragValue = it
+                },
+                onValueChangeFinished = {
+                    if (hasDuration) onSeekTo(dragValue.toLong())
+                },
+                valueRange = 0f..(if (hasDuration) durationMs.toFloat() else 1f),
+                enabled = hasDuration,
+                modifier = Modifier.fillMaxWidth()
+            )
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            // Show the real elapsed position even when duration is unknown (DLNA streams that
-            // don't report a total) — sliderValue is clamped to [0,duration] and would pin to 0.
-            Text(
-                text = formatTime(if (dragging) dragValue.toLong() else positionMs),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Text(
-                text = if (isLive) "LIVE" else if (hasDuration) formatTime(durationMs) else "--:--",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isLive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(modifier = Modifier.fillMaxWidth()) {
+                // Show the real elapsed position even when duration is unknown (DLNA streams that
+                // don't report a total) — sliderValue is clamped to [0,duration] and would pin to 0.
+                Text(
+                    text = formatTime(if (dragging) dragValue.toLong() else positionMs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = if (isLive) "LIVE" else if (hasDuration) formatTime(durationMs) else "--:--",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isLive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
