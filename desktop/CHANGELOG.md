@@ -2,6 +2,15 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1+15] — 2026-06-17
+
+### Added
+- **Host OS Volume Control**: Remote volume commands from the phone now drive the host system's OS volume (via `osascript` on macOS, `wpctl`/`pactl`/`amixer` on Linux, and `SendKeys` on Windows), falling back to in-app player volume. (#39)
+- Support for handling remote seek and volume control websocket commands. (#39)
+
+### Changed
+- Hide the **Now Playing** sidebar tab when no media is casting. (#38)
+
 ## [0.3.0+14] — 2026-06-16
 
 ### Added
