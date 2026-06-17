@@ -130,33 +130,9 @@ class ReceiverServer extends ChangeNotifier {
       debugPrint('[server] TLS listener failed to start: $e');
     }
 
-    // Plaintext ws:// only when the user explicitly opts into insecure connections.
-    // We do NOT auto-fall-back to ws on wss failure — that would be a silent
-    // plaintext downgrade. Instead we fail closed and surface a hint.
-    if (store.allowInsecure) {
-      final http =
-          await shelf_io.serve(handler, InternetAddress.anyIPv4, _port);
-      _servers.add(http);
-      debugPrint(
-          '[server] ws  listening on ${http.address.address}:${http.port} (insecure allowed)');
-    }
-
-    tlsError = (!wssUp && !store.allowInsecure)
-        ? 'Secure server failed to start — enable "Allow insecure" in Settings to connect.'
-        : null;
+    tlsError = !wssUp ? 'Secure server failed to start' : null;
 
     // Notify so UI (e.g. the Cast screen address) reflects the bound wss port.
-    notifyListeners();
-  }
-
-  /// Rebinds listeners after the insecure-connection setting changes.
-  Future<void> reloadListeners() async {
-    for (final s in _servers) {
-      await s.close(force: true);
-    }
-    _servers.clear();
-    _wssPort = null;
-    await _bindListeners();
     notifyListeners();
   }
 

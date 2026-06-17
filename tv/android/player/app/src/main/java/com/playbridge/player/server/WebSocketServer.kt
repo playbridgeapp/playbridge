@@ -15,8 +15,6 @@ import io.ktor.server.cio.*
 import io.ktor.server.engine.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import io.ktor.server.websocket.*
-import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +23,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.time.Duration.Companion.seconds
 
 private const val TAG = "WebSocketServer"
 
@@ -39,10 +36,6 @@ class WebSocketServer(
     // App-private directory for the persisted TLS identity (PKCS12). wss:// is
     // disabled if null.
     private val tlsDir: File? = null,
-    // When false (default) external clients must use wss://; ws:// is bound to
-    // loopback only (for the same-device in-app browser). When true, ws:// also
-    // binds externally for legacy senders.
-    private val allowInsecure: Boolean = false,
     // Invoked after the wss bind attempt with the bound port (null if it failed),
     // so the caller advertises wss_port over NSD only when it's actually up.
     private val onWssReady: ((Int?) -> Unit)? = null,
@@ -57,9 +50,6 @@ class WebSocketServer(
     )
     private var server: EmbeddedServer<*, *>? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    // Connected clients
-    private val clients = ConcurrentHashMap<String, WebSocketSession>()
 
     // wss:// (Java-WebSocket) transport + its authenticated connections.
     private var wssServer: WssTransport? = null
@@ -124,15 +114,8 @@ class WebSocketServer(
                 server?.stop(1000, 2000)
                 server = null
 
-                val bindHost = if (allowInsecure) "0.0.0.0" else "127.0.0.1"
+                val bindHost = "0.0.0.0"
                 server = embeddedServer(CIO, host = bindHost, port = port) {
-                    install(WebSockets) {
-                        pingPeriod = 15.seconds
-                        timeout = 15.seconds
-                        maxFrameSize = Long.MAX_VALUE
-                        masking = false
-                    }
-
                     routing {
                         // HTTP endpoint: download log files
                         get("/logs") {
@@ -156,15 +139,11 @@ class WebSocketServer(
                             FileLogger.clearLogs()
                             call.respondText("Logs cleared.", ContentType.Text.Plain)
                         }
-
-                        webSocket("/") {
-                            handleConnection(this)
-                        }
                     }
                 }.start(wait = false)
 
                 _connectionState.value = ConnectionState.Running(port)
-                FileLogger.i(TAG, "ws server on $bindHost:$port (insecure=$allowInsecure)")
+                FileLogger.i(TAG, "http log server on $bindHost:$port")
                 startWssTransport()
                 onWssReady?.invoke(boundWssPort)
 
@@ -188,15 +167,6 @@ class WebSocketServer(
     fun stop() {
         try {
             runBlocking {
-                clients.values.forEach { session ->
-                    try {
-                        session.close(CloseReason(CloseReason.Codes.GOING_AWAY, "Server stopping"))
-                    } catch (e: Exception) {
-                        FileLogger.e(TAG, "Error closing client", e)
-                    }
-                }
-                clients.clear()
-
                 server?.stop(500, 1000)
                 server = null
                 try { wssServer?.stop(500) } catch (e: Exception) { FileLogger.e(TAG, "Error stopping wss", e) }
@@ -212,194 +182,10 @@ class WebSocketServer(
         }
     }
 
-    private suspend fun handleConnection(session: WebSocketServerSession) {
-        val clientId = java.util.UUID.randomUUID().toString()
-        FileLogger.i(TAG, "New connection attempt: $clientId")
-        // NOTE: connectionAttemptFlow is only emitted when request_pairing is received below,
-        // NOT unconditionally here. Emitting on every connection would re-open PairingScreen
-        // whenever a paired phone reconnects with its saved token.
-
-        try {
-            // Localhost connections (e.g. PlayBridge Browser app on the same device) skip auth
-            val remoteHost = session.call.request.local.remoteHost
-            val isLocalhost = remoteHost == "127.0.0.1" || remoteHost == "::1"
-
-            // Authentication phase — loop until auth resolves or connection closes.
-            var isAuthenticated = isLocalhost
-            if (isLocalhost) FileLogger.i(TAG, "Localhost connection — skipping auth: $clientId")
-
-            while (!isAuthenticated) {
-                val frame = session.incoming.receive()
-                if (frame is Frame.Text) {
-                    val text = frame.readText()
-
-                    if (text.contains("\"type\":\"ping\"") || text.contains("\"type\": \"ping\"")) {
-                        session.send(Frame.Text(createPongJson()))
-                        continue
-                    }
-
-                    if (text.contains("\"type\":\"pairing_request\"")) {
-                        // Another device already waiting — deny immediately.
-                        if (_pendingPairingRequest.value != null) {
-                            FileLogger.w(TAG, "Pairing request ignored — another request already pending")
-                            session.send(Frame.Text(createPairingDeniedJson()))
-                            session.close(CloseReason(CloseReason.Codes.NORMAL, "busy"))
-                            return
-                        }
-
-                        val parsed = parseIncomingMessage(text)
-                        val msg = (parsed as? IncomingMessage.PairingRequest)?.msg
-                        if (msg == null) {
-                            FileLogger.w(TAG, "Failed to parse pairing_request: $parsed")
-                            session.send(Frame.Text(createPairingDeniedJson()))
-                            session.close(CloseReason(CloseReason.Codes.NORMAL, "parse_error"))
-                            return
-                        }
-
-                        FileLogger.i(TAG, "pairing_request from ${msg.device_name} (${msg.device_uuid})")
-                        val approval = CompletableDeferred<Boolean>()
-                        val request = PairingRequest(msg.device_name, msg.device_uuid, approval)
-                        _pendingPairingRequest.value = request
-                        _connectionAttemptFlow.tryEmit(Unit)
-
-                        // Auto-deny after 30 seconds if the user doesn't respond.
-                        val timeoutJob = scope.launch {
-                            delay(30_000)
-                            FileLogger.i(TAG, "Pairing request timed out for ${msg.device_name}")
-                            approval.complete(false)
-                        }
-
-                        val approved = approval.await()
-                        timeoutJob.cancel()
-                        _pendingPairingRequest.value = null
-
-                        if (approved) {
-                            val token = onPairingApproved(msg.device_name, msg.device_uuid)
-                            FileLogger.i(TAG, "Pairing approved for ${msg.device_name} — token issued")
-                            val caps = capabilities()
-                            session.send(Frame.Text(createPairingApprovedJson(
-                                token, players = caps.players, browsers = caps.browsers
-                            )))
-                            isAuthenticated = true
-                        } else {
-                            FileLogger.i(TAG, "Pairing denied for ${msg.device_name}")
-                            session.send(Frame.Text(createPairingDeniedJson()))
-                            session.close(CloseReason(CloseReason.Codes.NORMAL, "denied"))
-                            return
-                        }
-                        continue
-                    }
-
-                    // Reconnect with saved token.
-                    if (text.contains("\"type\":\"auth\"")) {
-                        try {
-                            val authMessage = (parseIncomingMessage(text) as? IncomingMessage.Auth)?.msg
-                            val token = authMessage?.token
-                            if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
-                                isAuthenticated = true
-                                FileLogger.i(TAG, "Client reconnected with saved token: $clientId")
-                                val caps = capabilities()
-                                session.send(Frame.Text(createAuthResponseJson(
-                                    success = true, players = caps.players, browsers = caps.browsers
-                                )))
-                            } else {
-                                FileLogger.w(TAG, "Auth rejected — unknown or revoked token: $clientId")
-                                session.send(Frame.Text("{\"type\":\"auth_response\",\"success\":false}"))
-                                session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid token"))
-                                return
-                            }
-                        } catch (e: Exception) {
-                            FileLogger.w(TAG, "Failed to parse auth message for $clientId", e)
-                        }
-                    }
-                } else {
-                    if (frame is Frame.Close) {
-                        FileLogger.i(TAG, "Client closed connection during auth: $clientId")
-                        return
-                    }
-                }
-            }
-
-            // Authentication successful, register client
-            clients[clientId] = session
-            _connectedClientCount.value = clients.size
-            _connectionState.value = ConnectionState.Connected(clientId)
-            FileLogger.i(TAG, "Client registered: $clientId (total: ${clients.size})")
-
-            for (frame in session.incoming) {
-                when (frame) {
-                    is Frame.Text -> {
-                        val text = frame.readText()
-                        val msg = parseIncomingMessage(text)
-
-                        // Only log non-mouse messages to avoid spam
-                        if (msg !is IncomingMessage.Mouse) {
-                            Log.d(TAG, "Parsed message: ${msg.javaClass.simpleName}")
-                        }
-
-                        when (msg) {
-                            is IncomingMessage.Ping -> {
-                                session.send(Frame.Text(createPongJson()))
-                            }
-                            is IncomingMessage.Playlist -> {
-                                val start = msg.payload.items.getOrNull(msg.payload.start_index)
-                                FileLogger.i(TAG, "Playlist command parsed - ${msg.payload.items.size} item(s), start: ${start?.url}, Title: ${start?.title}")
-                                FileLogger.i(TAG, "Raw JSON body: $text")
-                                _commands.emit(msg)
-                            }
-                            else -> {
-                                _commands.emit(msg)
-                            }
-                        }
-                    }
-                    is Frame.Binary -> {
-                        val bytes = frame.readBytes()
-                        if (bytes.size == 9) {
-                            val unpacked = com.playbridge.shared.protocol.MousePacket.unpack(bytes)
-                            if (unpacked != null) {
-                                _commands.emit(
-                                    IncomingMessage.Mouse(
-                                        playbridge.MousePayload(
-                                            event = unpacked.event,
-                                            dx = unpacked.dx,
-                                            dy = unpacked.dy,
-                                        )
-                                    )
-                                )
-                            }
-                        }
-                    }
-                    is Frame.Close -> {
-                        FileLogger.i(TAG, "Client requested close: $clientId")
-                    }
-                    else -> {}
-                }
-            }
-        } catch (e: kotlinx.coroutines.channels.ClosedReceiveChannelException) {
-            FileLogger.i(TAG, "Channel closed by client: $clientId")
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "Connection error for client $clientId", e)
-        } finally {
-            clients.remove(clientId)
-            _connectedClientCount.value = clients.size
-            if (clients.isEmpty()) {
-                _connectionState.value = ConnectionState.Running(port)
-            }
-            FileLogger.i(TAG, "Client disconnected: $clientId (remaining: ${clients.size})")
-        }
-    }
-
     /**
      * Broadcast status update to all connected clients
      */
     suspend fun broadcastStatus(statusJson: String) {
-        clients.values.forEach { session ->
-            try {
-                session.send(Frame.Text(statusJson))
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Failed to send status", e)
-            }
-        }
         wssClients.forEach { conn ->
             try {
                 conn.send(statusJson)
@@ -435,13 +221,10 @@ class WebSocketServer(
     }
 
     // wss failed and ws:// is loopback-only ⇒ unreachable by external senders.
-    // Surface a hint so the user knows to enable "Allow insecure" in Settings.
     private fun signalUnreachableIfSecureOnly() {
-        if (!allowInsecure) {
-            _connectionState.value = ConnectionState.Error(
-                "Secure server failed — enable \"Allow insecure\" in Settings"
-            )
-        }
+        _connectionState.value = ConnectionState.Error(
+            "Secure server failed to start"
+        )
     }
 
     // Shared pairing approval: shows the prompt and awaits the user's Allow/Deny
@@ -576,8 +359,8 @@ class WebSocketServer(
         }
 
         private fun refreshCount() {
-            _connectedClientCount.value = clients.size + wssClients.size
-            if (clients.isEmpty() && wssClients.isEmpty()) {
+            _connectedClientCount.value = wssClients.size
+            if (wssClients.isEmpty()) {
                 _connectionState.value = ConnectionState.Running(port)
             }
         }

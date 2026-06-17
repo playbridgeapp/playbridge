@@ -13,7 +13,6 @@ struct PairingRequest {
 
 // MARK: - Server Logic
 class WebSocketServer: ObservableObject {
-    private var listener: NWListener?
     private var tlsListener: NWListener?
     private var connectedConnections: [NWConnection] = []
     private var historyStore: HistoryStore?
@@ -108,36 +107,19 @@ class WebSocketServer: ObservableObject {
         if serverState != "Ready to Connect" { restart() }
     }
 
-    private let allowInsecureKey = "pb_allow_insecure"
-
-    /// When false (default) the receiver serves wss:// only; ws:// is opt-in for
-    /// legacy senders that can't pin a self-signed cert.
-    var allowInsecure: Bool {
-        get { UserDefaults.standard.bool(forKey: allowInsecureKey) }
-        set { UserDefaults.standard.set(newValue, forKey: allowInsecureKey) }
-    }
-
     func start(port: UInt16 = 8765) {
         let wssPort = port + 1
-        let insecure = allowInsecure
 
-        // wss is the default transport. It carries the mDNS service unless ws is
-        // enabled, in which case ws carries it so legacy clients can reach 8765.
+        // wss is the default and only transport. It carries the mDNS service.
         let tlsUp = startTLSListener(
             port: wssPort,
-            service: insecure ? nil : makeBonjourService(wssPort: wssPort)
+            service: makeBonjourService(wssPort: wssPort)
         )
 
-        // ws only when explicitly opted in — no silent plaintext fallback.
-        if insecure {
-            startPlaintextListener(
-                port: port,
-                service: makeBonjourService(wssPort: tlsUp ? wssPort : nil)
-            )
-        } else if !tlsUp {
+        if !tlsUp {
             // Fail closed: no listener is running, so surface why.
             DispatchQueue.main.async {
-                self.serverState = "Secure server failed — enable Allow Insecure in Settings"
+                self.serverState = "Secure server failed to start"
             }
         }
         startKeepalive()
@@ -196,23 +178,7 @@ class WebSocketServer: ObservableObject {
         }
     }
 
-    private func startPlaintextListener(port: UInt16, service: NWListener.Service?) {
-        let parameters = NWParameters(tls: nil, tcp: makeTCPOptions())
-        let wsOptions = NWProtocolWebSocket.Options()
-        wsOptions.autoReplyPing = true
-        parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
-        do {
-            let l = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: port))
-            l.service = service
-            l.stateUpdateHandler = makeStateHandler(label: "ws", primary: service != nil)
-            l.newConnectionHandler = { [weak self] connection in
-                self?.handleNewConnection(connection)
-            }
-            l.start(queue: .main)
-            listener = l
-            print("[ws] listening on \(port)")
-        } catch { print("Server error: \(error)") }
-    }
+
 
     /// Starts the encrypted wss:// listener on [port], reusing the plaintext
     /// connection handler. Returns false if the TLS identity is unavailable or
@@ -262,10 +228,6 @@ class WebSocketServer: ObservableObject {
         keepaliveTimer = nil
         restartWork?.cancel()
         restartWork = nil
-        listener?.stateUpdateHandler = nil
-        listener?.newConnectionHandler = nil
-        listener?.cancel()
-        listener = nil
         tlsListener?.stateUpdateHandler = nil
         tlsListener?.newConnectionHandler = nil
         tlsListener?.cancel()

@@ -3,8 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var server: WebSocketServer
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
-    // Same key as WebSocketServer.allowInsecure.
-    @AppStorage("pb_allow_insecure") var allowInsecure: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 40) {
@@ -63,14 +61,6 @@ struct SettingsView: View {
                         }
                         .foregroundColor(Theme.accent)
                     }
-                }
-
-                Section(header: Text("Security")) {
-                    Toggle("Allow insecure connections (ws)", isOn: $allowInsecure)
-                        .onChange(of: allowInsecure) { _, _ in server.restart() }
-                    Text("Off = encrypted wss only. Enable for older senders that can't use TLS (e.g. the browser extension).")
-                        .font(.footnote)
-                        .foregroundColor(.gray)
                 }
             }
             .listStyle(.grouped)
