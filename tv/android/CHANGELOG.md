@@ -3,6 +3,14 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.2.9] — 2026-06-17 (versionCode 209)
+
+### Changed
+- Settings: Updated "Allow insecure connections (ws)" toggle description to warn users about security implications of unencrypted websocket connections. (#36)
+
+### Removed
+- ContentSniffer: Removed unused legacy `getUnsafeOkHttpClient` helper. (#36)
+
 ## Player [0.2.8] — 2026-06-15 (versionCode 208)
 
 ### Added

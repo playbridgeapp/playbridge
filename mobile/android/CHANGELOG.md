@@ -3,6 +3,21 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.8] — 2026-06-17 (versionCode 208)
+
+### Added
+- **IPTV Integration**: Dashboard tile, playlist manager (URL/file upload), category-grouped channel explorer with search, active-first URL probing, and in-app playback or casting. (#39)
+- **Collections**: Dashboard tile, custom collections (create, rename, delete, reorder, deduplicate), and quick "Add to Collection" actions from IPTV, Phone Files, Debrid, Cast History, and the browser cast sheet. (#39)
+- **Remote Control Redesign**: Combined seek and volume gesture bar (horizontal swipe to seek, vertical swipe for volume). (#39)
+- Upgraded local Room Database (v17 -> v19) to store playlists, channels, and collection schemas. (#39)
+
+### Changed
+- Improved UI bottom padding to prevent the Now Playing bar from overlapping the bottom list items. (#39)
+
+### Fixed
+- Fixed back navigation from the Remote screen returning to a stale/outdated screen. (#39)
+- Resolved relative URL resolution failures in the shared M3U parser. (#39)
+
 ## [0.2.7] — 2026-06-15 (versionCode 207)
 
 ### Added
