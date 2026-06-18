@@ -288,6 +288,34 @@ class ConnectionViewModel(
         return false
     }
 
+    /**
+     * Cast a web stream (e.g. an IPTV channel) with optional request [headers] to the active
+     * target. Prefers an active DLNA renderer (proxy injects headers); otherwise a connected
+     * native receiver. Returns false if no target is available.
+     */
+    fun castWebStream(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        title: String? = null,
+        mime: String? = null,
+    ): Boolean {
+        if (castSessionManager.isDlnaActive) {
+            castSessionManager.playOnDlna(
+                MediaItem(url = url, headers = headers, mimeType = mime, title = title)
+            )
+            return true
+        }
+        if (connectionState.value is WebSocketClient.ConnectionState.Connected) {
+            val cmd = createSingleVideoCommandJson(
+                PlayPayload(url = url, title = title ?: "Channel", headers = headers, content_type = mime),
+            )
+            sendCommandAndRecord(cmd, "play", url, title)
+            castSessionManager.notifyNativePlaybackStarted()
+            return true
+        }
+        return false
+    }
+
     fun disconnect() {
         webSocketClient.disconnect()
         // Also disable auto-connect so it doesn't immediately reconnect

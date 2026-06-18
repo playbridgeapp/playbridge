@@ -154,6 +154,12 @@ fun AppNavHost(
     // 1. Inject ViewModels & Singletons
     val connectionViewModel: ConnectionViewModel = koinViewModel()
     val libraryViewModel: LibraryViewModel = koinViewModel()
+    val iptvViewModel: com.playbridge.sender.iptv.IptvViewModel = koinViewModel()
+    val collectionsViewModel: com.playbridge.sender.collection.CollectionsViewModel = koinViewModel()
+    // Centralized "Add to Collection": any screen sets this draft → one shared sheet shows.
+    var addToCollectionDraft by remember { mutableStateOf<com.playbridge.sender.data.collection.CollectionItemDraft?>(null) }
+    val onAddToCollection: (com.playbridge.sender.data.collection.CollectionItemDraft) -> Unit =
+        { addToCollectionDraft = it }
     val connectionCoordinator: ConnectionCoordinator = koinInject()
     val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
     val dlnaQueueCoordinator: com.playbridge.sender.connection.DlnaQueueCoordinator = koinInject()
@@ -545,7 +551,17 @@ fun AppNavHost(
                         onClearHistory = {
                             scope.launch(Dispatchers.IO) { db.commandHistoryDao().clear() }
                         },
-                        onBack = { onScreenChange(lastMainScreen) }
+                        onBack = { onScreenChange(lastMainScreen) },
+                        onAddToCollection = { item ->
+                            onAddToCollection(
+                                com.playbridge.sender.data.collection.CollectionItemDraft(
+                                    title = item.title ?: item.url,
+                                    url = item.url,
+                                    kind = com.playbridge.sender.data.collection.CollectionItemKind.WEB,
+                                    sourceTag = com.playbridge.sender.data.collection.CollectionSource.HISTORY,
+                                )
+                            )
+                        }
                     )
                 }
                  Screen.Tabs -> {
@@ -1270,6 +1286,17 @@ fun AppNavHost(
                         uiState = phoneFilesUiState,
                         onBack = { onScreenChange(Screen.Dashboard) },
                         onOpenAllDevices = { onScreenChange(Screen.Connection) },
+                        onAddToCollection = { media ->
+                            onAddToCollection(
+                                com.playbridge.sender.data.collection.CollectionItemDraft(
+                                    title = media.title,
+                                    url = media.uri.toString(),
+                                    kind = com.playbridge.sender.data.collection.CollectionItemKind.LOCAL,
+                                    mimeType = media.mimeType,
+                                    sourceTag = com.playbridge.sender.data.collection.CollectionSource.PHONE_FILE,
+                                )
+                            )
+                        },
                     )
                 }
                 Screen.DebridLibrary -> {
@@ -1283,7 +1310,54 @@ fun AppNavHost(
                         onShowCastSheet = { video ->
                             onForcedVideosChange(listOf(video))
                             onShowVideoSheetChange(true)
+                        },
+                        onAddToCollection = { title, url ->
+                            onAddToCollection(
+                                com.playbridge.sender.data.collection.CollectionItemDraft(
+                                    title = title,
+                                    url = url,
+                                    kind = com.playbridge.sender.data.collection.CollectionItemKind.WEB,
+                                    sourceTag = com.playbridge.sender.data.collection.CollectionSource.DEBRID,
+                                )
+                            )
                         }
+                    )
+                }
+                Screen.Iptv -> {
+                    BackHandler { onScreenChange(Screen.Dashboard) }
+                    com.playbridge.sender.iptv.IptvScreen(
+                        viewModel = iptvViewModel,
+                        onBack = { onScreenChange(Screen.Dashboard) },
+                        onOpenPlaylist = { id -> onScreenChange(Screen.IptvDetail(id)) },
+                    )
+                }
+                is Screen.IptvDetail -> {
+                    val detail = targetScreen as Screen.IptvDetail
+                    BackHandler { onScreenChange(Screen.Iptv) }
+                    com.playbridge.sender.iptv.IptvDetailScreen(
+                        playlistId = detail.playlistId,
+                        viewModel = iptvViewModel,
+                        connectionViewModel = connectionViewModel,
+                        collectionsViewModel = collectionsViewModel,
+                        onBack = { onScreenChange(Screen.Iptv) },
+                    )
+                }
+                Screen.Collections -> {
+                    BackHandler { onScreenChange(Screen.Dashboard) }
+                    com.playbridge.sender.collection.CollectionsScreen(
+                        viewModel = collectionsViewModel,
+                        onBack = { onScreenChange(Screen.Dashboard) },
+                        onOpenCollection = { id -> onScreenChange(Screen.CollectionDetail(id)) },
+                    )
+                }
+                is Screen.CollectionDetail -> {
+                    val detail = targetScreen as Screen.CollectionDetail
+                    BackHandler { onScreenChange(Screen.Collections) }
+                    com.playbridge.sender.collection.CollectionDetailScreen(
+                        collectionId = detail.collectionId,
+                        viewModel = collectionsViewModel,
+                        connectionViewModel = connectionViewModel,
+                        onBack = { onScreenChange(Screen.Collections) },
                     )
                 }
             }
@@ -1300,7 +1374,11 @@ fun AppNavHost(
             val showNowPlayingBar = targetScreen == Screen.Library ||
                 targetScreen == Screen.PhoneFiles ||
                 targetScreen == Screen.DebridLibrary ||
-                targetScreen is Screen.LibraryDetail
+                targetScreen is Screen.LibraryDetail ||
+                targetScreen == Screen.Iptv ||
+                targetScreen is Screen.IptvDetail ||
+                targetScreen == Screen.Collections ||
+                targetScreen is Screen.CollectionDetail
             if (showNowPlayingBar) {
                 val dlnaActive = activeDlnaTarget != null
                 // A stopped/ended/errored renderer (incl. after Stop) is not "playing", even
@@ -1390,6 +1468,22 @@ fun AppNavHost(
                 )
             }
         }
+    }
+
+    // Shared Add-to-Collection sheet, driven by any screen's onAddToCollection(draft).
+    addToCollectionDraft?.let { draft ->
+        com.playbridge.sender.collection.AddToCollectionSheet(
+            viewModel = collectionsViewModel,
+            draft = draft,
+            onDismiss = { addToCollectionDraft = null },
+            onAdded = { name, added ->
+                Toast.makeText(
+                    context,
+                    if (added) "Added to $name" else "Already in $name",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            },
+        )
     }
 }
 

@@ -47,6 +47,10 @@ val appModule = module {
     single { get<HistoryDatabase>().playbackResumeDao() }
     single { get<HistoryDatabase>().commandHistoryDao() }
     single { get<HistoryDatabase>().tabDao() }
+    single { get<HistoryDatabase>().iptvPlaylistDao() }
+    single { get<HistoryDatabase>().iptvChannelDao() }
+    single { get<HistoryDatabase>().collectionDao() }
+    single { get<HistoryDatabase>().collectionItemDao() }
 
     // 3. Core Repositories & Services
     single {
@@ -72,6 +76,20 @@ val appModule = module {
         DebridRepository(
             context = androidContext(),
             client = get()
+        )
+    }
+    single {
+        com.playbridge.sender.data.iptv.IptvRepository(
+            context = androidContext(),
+            playlistDao = get(),
+            channelDao = get(),
+            httpClient = get()
+        )
+    }
+    single {
+        com.playbridge.sender.data.collection.CollectionsRepository(
+            collectionDao = get(),
+            itemDao = get()
         )
     }
 
@@ -154,6 +172,20 @@ val appModule = module {
             tmdb = get(),
             database = get(),
             addonRepository = get()
+        )
+    }
+
+    viewModel {
+        com.playbridge.sender.iptv.IptvViewModel(
+            application = androidApplication(),
+            repository = get(),
+            settings = get()
+        )
+    }
+
+    viewModel {
+        com.playbridge.sender.collection.CollectionsViewModel(
+            repository = get()
         )
     }
 

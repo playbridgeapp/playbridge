@@ -2,6 +2,14 @@ package com.playbridge.sender.data.history
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import com.playbridge.sender.data.collection.CollectionDao
+import com.playbridge.sender.data.collection.CollectionEntity
+import com.playbridge.sender.data.collection.CollectionItemDao
+import com.playbridge.sender.data.collection.CollectionItemEntity
+import com.playbridge.sender.data.iptv.IptvChannelDao
+import com.playbridge.sender.data.iptv.IptvChannelEntity
+import com.playbridge.sender.data.iptv.IptvPlaylistDao
+import com.playbridge.sender.data.iptv.IptvPlaylistEntity
 import com.playbridge.sender.data.library.AddonDao
 import com.playbridge.sender.data.library.InstalledAddonEntity
 import com.playbridge.sender.data.library.PlaybackResumeDao
@@ -10,8 +18,8 @@ import com.playbridge.sender.data.library.WatchlistDao
 import com.playbridge.sender.data.library.WatchlistEntity
 
 @Database(
-    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class, SearchHistoryEntity::class, PlaybackResumeEntity::class],
-    version = 17
+    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class, SearchHistoryEntity::class, PlaybackResumeEntity::class, IptvPlaylistEntity::class, IptvChannelEntity::class, CollectionEntity::class, CollectionItemEntity::class],
+    version = 19
 )
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
@@ -22,4 +30,8 @@ abstract class HistoryDatabase : RoomDatabase() {
     abstract fun watchlistDao(): WatchlistDao
     abstract fun searchHistoryDao(): SearchHistoryDao
     abstract fun playbackResumeDao(): PlaybackResumeDao
+    abstract fun iptvPlaylistDao(): IptvPlaylistDao
+    abstract fun iptvChannelDao(): IptvChannelDao
+    abstract fun collectionDao(): CollectionDao
+    abstract fun collectionItemDao(): CollectionItemDao
 }

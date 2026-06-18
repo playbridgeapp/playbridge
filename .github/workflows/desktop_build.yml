@@ -55,6 +55,11 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter pub get
 
+    - name: Build bundled helpers (native host + cast)
+      if: steps.check_tag.outputs.skipped == 'false'
+      shell: bash
+      run: bash scripts/build_host.sh
+
     - name: Build Windows
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter build windows --release
@@ -148,6 +153,11 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter pub get
 
+    - name: Build bundled helpers (native host + cast)
+      if: steps.check_tag.outputs.skipped == 'false'
+      shell: bash
+      run: bash scripts/build_host.sh
+
     - name: Build Linux
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter build linux --release
@@ -209,6 +219,11 @@ jobs:
     - name: Install dependencies
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter pub get
+
+    - name: Build bundled helpers (native host + cast)
+      if: steps.check_tag.outputs.skipped == 'false'
+      shell: bash
+      run: bash scripts/build_host.sh
 
     - name: Build macOS
       if: steps.check_tag.outputs.skipped == 'false'

@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -39,7 +40,8 @@ private const val TAG_LIBRARY = "DebridLibraryScreen"
 fun DebridLibraryScreen(
     onMenuClick: () -> Unit,
     onCopyUrl: (String) -> Unit,
-    onShowCastSheet: (DetectedVideo) -> Unit
+    onShowCastSheet: (DetectedVideo) -> Unit,
+    onAddToCollection: (title: String, url: String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -757,6 +759,29 @@ fun DebridLibraryScreen(
                                                 }
                                             }) {
                                                 Icon(Icons.Default.Tv, "Play on TV", tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                            IconButton(onClick = {
+                                                scope.launch {
+                                                    try {
+                                                        Toast.makeText(context, "Resolving link...", Toast.LENGTH_SHORT).show()
+                                                        val provider = repository.getActiveProvider() ?: return@launch
+                                                        val configName = repository.getConfiguredProviderName()
+                                                        val link = when (configName) {
+                                                            DebridRepository.PROVIDER_PREMIUMIZE -> file.id
+                                                            DebridRepository.PROVIDER_TORBOX -> "${torrentDetails!!.id}:${file.id}"
+                                                            else -> if (file.link.isNotEmpty()) file.link else file.id
+                                                        }
+                                                        val unrestricted = provider.unrestrictLink(link)
+                                                        onAddToCollection(
+                                                            file.path.substringAfterLast('/'),
+                                                            unrestricted.downloadUrl,
+                                                        )
+                                                    } catch (e: Exception) {
+                                                        unrestrictionError = e.message ?: "Unknown error"
+                                                    }
+                                                }
+                                            }) {
+                                                Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "Add to Collection", tint = MaterialTheme.colorScheme.primary)
                                             }
                                         }
                                     }

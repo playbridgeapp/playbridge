@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -345,6 +346,20 @@ fun DashboardScreen(
                     subtitle = "Cloud torrents",
                     screen = Screen.DebridLibrary,
                     gradientColors = listOf(Color(0xFF00838F), Color(0xFF00ACC1))
+                ),
+                DashboardItem(
+                    icon = Icons.Default.LiveTv,
+                    title = "IPTV",
+                    subtitle = "Live channels",
+                    screen = Screen.Iptv,
+                    gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B))
+                ),
+                DashboardItem(
+                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                    title = "Collections",
+                    subtitle = "Your playlists",
+                    screen = Screen.Collections,
+                    gradientColors = listOf(Color(0xFFAD1457), Color(0xFFD81B60))
                 ),
                 DashboardItem(
                     icon = Icons.Default.History,

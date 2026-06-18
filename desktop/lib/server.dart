@@ -12,6 +12,7 @@ import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
 import 'protocol.dart';
+import 'system_volume.dart';
 
 const int kDefaultPort = 8765;
 
@@ -129,33 +130,9 @@ class ReceiverServer extends ChangeNotifier {
       debugPrint('[server] TLS listener failed to start: $e');
     }
 
-    // Plaintext ws:// only when the user explicitly opts into insecure connections.
-    // We do NOT auto-fall-back to ws on wss failure — that would be a silent
-    // plaintext downgrade. Instead we fail closed and surface a hint.
-    if (store.allowInsecure) {
-      final http =
-          await shelf_io.serve(handler, InternetAddress.anyIPv4, _port);
-      _servers.add(http);
-      debugPrint(
-          '[server] ws  listening on ${http.address.address}:${http.port} (insecure allowed)');
-    }
-
-    tlsError = (!wssUp && !store.allowInsecure)
-        ? 'Secure server failed to start — enable "Allow insecure" in Settings to connect.'
-        : null;
+    tlsError = !wssUp ? 'Secure server failed to start' : null;
 
     // Notify so UI (e.g. the Cast screen address) reflects the bound wss port.
-    notifyListeners();
-  }
-
-  /// Rebinds listeners after the insecure-connection setting changes.
-  Future<void> reloadListeners() async {
-    for (final s in _servers) {
-      await s.close(force: true);
-    }
-    _servers.clear();
-    _wssPort = null;
-    await _bindListeners();
     notifyListeners();
   }
 
@@ -421,10 +398,50 @@ class ReceiverServer extends ChangeNotifier {
             if (dur > 0 && target > dur) target = dur;
             unawaited(player.seek(Duration(milliseconds: target)));
         }
+      case RemoteCmd(:final key):
+        _handleRemoteKey(key);
       case UnknownCmd(:final type):
         debugPrint('[server] unknown command: $type');
       default:
         break;
+    }
+  }
+
+  /// Apply a phone remote key. Only volume is meaningful for the desktop player;
+  /// other (TV-browser) keys are ignored.
+  void _handleRemoteKey(String key) {
+    switch (key) {
+      case 'volume_up':
+        unawaited(_adjustVolume(up: true));
+      case 'volume_down':
+        unawaited(_adjustVolume(up: false));
+      default:
+        debugPrint('[server] ignoring remote key: $key');
+    }
+  }
+
+  // Drop overlapping volume events: a swipe fires many in a row and each backend
+  // call spawns a process, so we coalesce while one is in flight.
+  bool _volumeBusy = false;
+
+  /// Move the **host/OS** volume one step; fall back to the player's own volume
+  /// only when no system backend is available (e.g. headless Linux).
+  Future<void> _adjustVolume({required bool up}) async {
+    if (_volumeBusy) return;
+    _volumeBusy = true;
+    try {
+      final handled = await SystemVolume.step(up: up);
+      if (!handled) {
+        const step = 0.05;
+        final next =
+            (player.volume + (up ? step : -step)).clamp(0.0, 1.0).toDouble();
+        await player.setVolume(next);
+        debugPrint('[server] player volume -> $next (no system backend)');
+      } else {
+        debugPrint('[server] system volume ${up ? 'up' : 'down'}');
+      }
+    } finally {
+      _volumeBusy = false;
     }
   }
 

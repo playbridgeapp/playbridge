@@ -86,6 +86,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // — Playback ————————————————————————————
             _Section('Playback'),
             _Tile(
+              icon: Icons.fullscreen,
+              title: 'Full screen on play',
+              subtitle:
+                  'Automatically enter full screen when a video starts playing.',
+              trailing: Switch(
+                value: widget.store.autoFullScreen,
+                onChanged: (v) async {
+                  await widget.store.setAutoFullScreen(v);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+            _Tile(
               icon: Icons.insights,
               title: 'Show playback stats',
               subtitle:
@@ -138,24 +151,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
                 danger: true,
               ),
-
-            // — Security ————————————————————————————
-            _Section('Security'),
-            _Tile(
-              icon: Icons.lock,
-              title: 'Allow insecure connections (ws)',
-              subtitle:
-                  "Off = encrypted wss only. Enable for older senders that "
-                  "can't use TLS (e.g. the browser extension).",
-              trailing: Switch(
-                value: widget.store.allowInsecure,
-                onChanged: (v) async {
-                  await widget.store.setAllowInsecure(v);
-                  await widget.server.reloadListeners();
-                  if (mounted) setState(() {});
-                },
-              ),
-            ),
 
             // — System ——————————————————————————————
             _Section('System'),

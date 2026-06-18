@@ -4,6 +4,8 @@
     "module": "ESNext",
     "moduleResolution": "node",
     "strict": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "types": ["firefox-webext-browser"],

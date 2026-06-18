@@ -49,17 +49,25 @@ jobs:
           echo "skipped=false" >> $GITHUB_OUTPUT
         fi
 
+    - name: Set up pnpm
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: pnpm/action-setup@v4
+      with:
+        version: 9
+
     - name: Set up Node
       if: steps.check_tag.outputs.skipped == 'false'
       uses: actions/setup-node@v4
       with:
         node-version: '20'
+        cache: pnpm
+        cache-dependency-path: extension/pnpm-lock.yaml
 
     - name: Install dependencies and build
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
-        npm install
-        npm run build
+        pnpm install --frozen-lockfile
+        pnpm run build
 
     - name: Install web-ext
       if: steps.check_tag.outputs.skipped == 'false'
@@ -71,19 +79,26 @@ jobs:
         AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
         AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
       run: |
+        # Build now emits dist/firefox and dist/chrome — sign the Firefox build.
         web-ext sign \
-          --source-dir dist \
+          --source-dir dist/firefox \
           --artifacts-dir dist \
           --channel unlisted \
           --api-key "$AMO_JWT_ISSUER" \
           --api-secret "$AMO_JWT_SECRET"
 
-    - name: Rename output
+    - name: Rename Firefox output
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
-        find dist -name "*.xpi" -type f | while read f; do
+        find dist -maxdepth 1 -name "*.xpi" -type f | while read f; do
           mv "$f" "dist/playbridge-extension-${{ steps.version.outputs.version }}.xpi"
         done
+
+    - name: Package Chrome zip (for the Chrome Web Store)
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        # Zip the CONTENTS of dist/chrome so manifest.json sits at the archive root.
+        (cd dist/chrome && zip -r "../playbridge-extension-chrome-${{ steps.version.outputs.version }}.zip" .)
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -94,7 +109,7 @@ jobs:
       run: |
         aws s3 cp dist/ \
           s3://${{ secrets.R2_BUCKET }}/extension-release/ \
-          --recursive --exclude "*" --include "*.xpi"
+          --recursive --exclude "*" --include "*.xpi" --include "*.zip"
 
   release:
     needs: build-extension
@@ -129,10 +144,13 @@ jobs:
           name: PlayBridge Extension v${{ steps.version.outputs.version }}
           body: |
             <!-- tag: 9f2d8e -->
-            **Firefox Extension:** v${{ steps.version.outputs.version }}
+            **PlayBridge Extension:** v${{ steps.version.outputs.version }}
 
-            Install by dragging the `.xpi` file into Firefox, or via `about:addons` → Install Add-on From File.
-          files: output/*.xpi
+            | Browser | File | Install |
+            |---------|------|---------|
+            | Firefox | `playbridge-extension-${{ steps.version.outputs.version }}.xpi` | Drag into Firefox, or `about:addons` → Install Add-on From File |
+            | Chrome / Edge / Brave | `playbridge-extension-chrome-${{ steps.version.outputs.version }}.zip` | Unzip, then `chrome://extensions` → Developer mode → Load unpacked (or upload the zip to the Chrome Web Store) |
+          files: output/*
           generate_release_notes: false
 
       - name: Clean up R2 after release

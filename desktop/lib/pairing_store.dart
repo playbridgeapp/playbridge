@@ -44,8 +44,8 @@ class PairingStore {
   static const _kDeviceName = 'pb.device_name';
   static const _kEngineType = 'pb.engine_type';
   static const _kPairedDevices = 'pb.paired_devices';
-  static const _kAllowInsecure = 'pb.allow_insecure';
   static const _kShowStats = 'pb.show_stats';
+  static const _kAutoFullScreen = 'pb.auto_fullscreen';
 
   final SharedPreferences _prefs;
 
@@ -79,18 +79,18 @@ class PairingStore {
   Future<void> setDeviceName(String name) =>
       _prefs.setString(_kDeviceName, name);
 
-  /// When false (default) the receiver serves wss:// only; ws:// is enabled
-  /// only as an opt-in for legacy senders that can't pin a self-signed cert.
-  bool get allowInsecure => _prefs.getBool(_kAllowInsecure) ?? false;
-
-  Future<void> setAllowInsecure(bool value) =>
-      _prefs.setBool(_kAllowInsecure, value);
-
   /// Whether the live playback-stats overlay is shown (toggleable via the `i`
   /// hotkey or the Settings switch).
   bool get showStats => _prefs.getBool(_kShowStats) ?? false;
 
   Future<void> setShowStats(bool value) => _prefs.setBool(_kShowStats, value);
+
+  /// Whether playback automatically enters full screen when a video starts.
+  /// Enabled by default.
+  bool get autoFullScreen => _prefs.getBool(_kAutoFullScreen) ?? true;
+
+  Future<void> setAutoFullScreen(bool value) =>
+      _prefs.setBool(_kAutoFullScreen, value);
 
   // ─── Paired devices ──────────────────────────────────────────────────────
 

@@ -101,10 +101,6 @@ class ContentSniffer {
         }
     }
 
-    /** Kept for binary compatibility with existing callers. */
-    fun getUnsafeOkHttpClient(headers: Map<String, String>? = null): okhttp3.OkHttpClient =
-        getOkHttpClient(headers, trustAllCerts = true)
-
     /**
      * Attempts to infer the content type from the URL extension.
      * If unknown, fetches the first few bytes to detect content type by signature.

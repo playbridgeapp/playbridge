@@ -197,8 +197,6 @@ class ServerService : Service() {
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val port = pairingStore.serverPort.first()
             val ip = getLocalIpAddress(applicationContext) ?: "unknown"
-            val allowInsecure = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-                .getBoolean("allow_insecure_ws", false)
 
             val tlsDir = java.io.File(filesDir, "tls").also { it.mkdirs() }
             webSocketServer = WebSocketServer(
@@ -218,7 +216,6 @@ class ServerService : Service() {
                     newToken
                 },
                 tlsDir = tlsDir,
-                allowInsecure = allowInsecure,
                 // Register NSD once the wss bind result is known, advertising
                 // wss_port only if it actually came up.
                 onWssReady = { wssPort -> registerNsdService(port, wssPort) },

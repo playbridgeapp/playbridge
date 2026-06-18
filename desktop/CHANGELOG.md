@@ -2,6 +2,39 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1+15] — 2026-06-17
+
+### Added
+- **Host OS Volume Control**: Remote volume commands from the phone now drive the host system's OS volume (via `osascript` on macOS, `wpctl`/`pactl`/`amixer` on Linux, and `SendKeys` on Windows), falling back to in-app player volume. (#39)
+- Support for handling remote seek and volume control websocket commands. (#39)
+
+### Changed
+- Hide the **Now Playing** sidebar tab when no media is casting. (#38)
+
+## [0.3.0+14] — 2026-06-16
+
+### Added
+- **Send to TV (sender role):** discover and pair PlayBridge TVs on the LAN over a
+  pinned `wss://` link; cast local files served over tokenized LAN HTTP.
+- **Drag-and-drop + multi-file casting:** drop one or more media files onto the
+  Send to TV screen (or pick several) to cast them as a playlist.
+- **Now Playing tab:** the now-casting card (title, interactive seek, transport)
+  plus the TV playlist with tap-to-jump; auto-opens when a cast starts.
+- **Browser bridge:** the extension casts through this app via a token-gated
+  loopback bridge + native-messaging host (host auto-registered on launch;
+  Windows via HKCU registry, macOS/Linux via manifest files).
+- **"Play on TV" OS context menu:** right-click a media file → cast it (Windows
+  `SystemFileAssociations`, macOS Quick Action, Linux Nautilus script).
+- **Setting:** "Full screen on play" (Settings → Playback), enabled by default.
+- Sidebar grouped into **Receive** and **Send** sections.
+
+### Fixed
+- Seeking jumped to the end of the file: browser-only request headers
+  (`Range`, `Sec-*`, etc.) are now stripped before handing the URL to mpv.
+- First play after launch now reliably enters full screen (retry once after the
+  transition settles).
+- The now-casting card hides immediately on Stop and on TV-side end/idle.
+
 ## [0.2.1+13] — 2026-06-12
 
 ### Added

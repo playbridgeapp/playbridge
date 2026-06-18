@@ -62,6 +62,13 @@ class ControlCmd extends Command {
   const ControlCmd(this.command);
 }
 
+/// A remote key press from the phone (e.g. `volume_up` / `volume_down`). Most keys
+/// are TV-browser navigation and don't apply to the desktop player; volume does.
+class RemoteCmd extends Command {
+  final String key;
+  const RemoteCmd(this.key);
+}
+
 class PlaylistCmd extends Command {
   final List<PlayPayload> items;
   final int startIndex;
@@ -150,6 +157,8 @@ Command parseCommand(String json) {
         switch (action) {
           case 'control':
             return ControlCmd((payload?['command'] ?? '') as String);
+          case 'remote':
+            return RemoteCmd((payload?['key'] ?? '') as String);
           case 'context_query':
             return const ContextQueryCmd();
           case 'playlist':
@@ -279,3 +288,54 @@ String playlistStatusJson({
       'currentIndex': currentIndex,
       'totalCount': items.length,
     });
+
+// ==================== Sender-side outgoing builders ====================
+// The desktop acting as a SENDER (casting to a TV receiver) builds these. The
+// wire format mirrors the phone's shared `create*Json` (IncomingMessage.kt) so
+// the Android/Apple TV parsers accept them unchanged.
+//
+// NOTE: pairing_request uses snake_case `device_name`/`device_uuid` to match the
+// TV receivers. (The receiver-side `parseCommand` above reads camelCase — that
+// path is desktop-as-receiver only and is unrelated to this sender wire format.)
+
+String senderPingJson() => jsonEncode({'type': 'ping'});
+
+String senderAuthJson(String token) =>
+    jsonEncode({'type': 'auth', 'token': token});
+
+String senderPairingRequestJson({
+  required String deviceName,
+  required String deviceUUID,
+}) =>
+    jsonEncode({
+      'type': 'pairing_request',
+      'device_name': deviceName,
+      'device_uuid': deviceUUID,
+    });
+
+/// `{"type":"command","action":<action>,"payload":<payload>}` — mirrors the
+/// shared `envelope(...)` builder.
+String _commandEnvelope(String action, Object? payload) =>
+    jsonEncode({'type': 'command', 'action': action, 'payload': payload});
+
+/// Proto payloads are serialized via the generated proto3-JSON encoder so the
+/// field names match the `.proto` contract both TVs were generated from.
+String senderPlaylistCommandJson(PlaylistPayload payload) =>
+    _commandEnvelope('playlist', payload.toProto3Json());
+
+/// A single video is sent as a one-item playlist — there is no standalone
+/// `play` command; the TV always builds a queue so `queue_add` can append.
+String senderSingleVideoCommandJson(PlayPayload video) =>
+    senderPlaylistCommandJson(PlaylistPayload(items: [video]));
+
+String senderQueueAddJson(PlayPayload item) =>
+    _commandEnvelope('queue_add', {'item': item.toProto3Json()});
+
+String senderPlaylistJumpJson(int index) =>
+    _commandEnvelope('playlist_jump', {'index': index});
+
+String senderControlCommandJson(String command) =>
+    _commandEnvelope('control', {'command': command});
+
+String senderContextQueryJson() =>
+    jsonEncode({'type': 'command', 'action': 'context_query'});
