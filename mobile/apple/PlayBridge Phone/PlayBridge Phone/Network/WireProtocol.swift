@@ -35,7 +35,8 @@ enum WireProtocol {
         contentType: String? = nil,
         subtitles: [String] = [],
         headers: [String: String] = [:],
-        detectedBy: String? = nil
+        detectedBy: String? = nil,
+        playerMode: String? = nil
     ) -> String {
         var item: [String: Any] = ["url": url]
         if let title, !title.isEmpty { item["title"] = title }
@@ -43,8 +44,40 @@ enum WireProtocol {
         if !subtitles.isEmpty { item["subtitles"] = subtitles }
         if !headers.isEmpty { item["headers"] = headers }
         if let detectedBy, !detectedBy.isEmpty { item["detectedBy"] = detectedBy }
+        if let playerMode, playerMode != "tv" { item["playerMode"] = playerMode }
         let payload: [String: Any] = ["items": [item], "startIndex": 0]
         return envelope(action: "playlist", payload: payload)
+    }
+
+    static func queueVideoCommand(
+        url: String,
+        title: String? = nil,
+        contentType: String? = nil,
+        subtitles: [String] = [],
+        headers: [String: String] = [:],
+        detectedBy: String? = nil,
+        playerMode: String? = nil
+    ) -> String {
+        var item: [String: Any] = ["url": url]
+        if let title, !title.isEmpty { item["title"] = title }
+        if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
+        if !subtitles.isEmpty { item["subtitles"] = subtitles }
+        if !headers.isEmpty { item["headers"] = headers }
+        if let detectedBy, !detectedBy.isEmpty { item["detectedBy"] = detectedBy }
+        if let playerMode, playerMode != "tv" { item["playerMode"] = playerMode }
+        let payload: [String: Any] = ["item": item]
+        return envelope(action: "queue_add", payload: payload)
+    }
+
+    static func browserCommand(
+        url: String,
+        browserMode: String? = nil,
+        desktopMode: Bool = false
+    ) -> String {
+        var payload: [String: Any] = ["url": url]
+        if let browserMode, !browserMode.isEmpty { payload["browserMode"] = browserMode }
+        if desktopMode { payload["desktopMode"] = true }
+        return envelope(action: "browser", payload: payload)
     }
 
     static func controlCommand(_ command: String) -> String {

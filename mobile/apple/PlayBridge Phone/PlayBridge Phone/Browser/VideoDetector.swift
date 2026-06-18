@@ -20,6 +20,11 @@ final class VideoDetector: ObservableObject {
     /// Ingest one `{type:'video', url, contentType, detectedBy, originUrl}` message.
     func ingest(_ body: [String: Any]) {
         guard let url = body["url"] as? String, !url.isEmpty else { return }
+        
+        if ContentBlocker.shouldBlock(urlString: url) {
+            return
+        }
+
         let contentType = (body["contentType"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let kind = DetectedVideo.classify(url: url, contentType: contentType)
 

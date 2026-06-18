@@ -1,155 +1,427 @@
 import SwiftUI
 
-/// Main screen once connected: now-playing sync, cast-a-URL, the TV playlist, and the remote.
 struct DashboardScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
-    @State private var castURL: String = ""
+    @EnvironmentObject private var nav: NavigationViewModel
+    @State private var showExitConfirm = false
+    @State private var showComingSoonAlert = false
+    @State private var comingSoonFeatureName = ""
 
-    private var serverName: String {
-        if case .connected(let name, _) = vm.state { return name }
-        return vm.pairedDevice?.name ?? "TV"
-    }
-
+    private var isConnected: Bool { vm.isConnected }
     private var isSecure: Bool {
         if case .connected(_, let secure) = vm.state { return secure }
         return false
     }
+    private var connectedDeviceName: String? {
+        if case .connected(let name, _) = vm.state { return name }
+        return vm.pairedDevice?.name
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                topBar
-                nowPlayingCard
-                castCard
-                playlistCard
-                RemoteControlView()
+        ZStack {
+            // ── Animated Ambient Mesh Background ─────────────────────────────────
+            MeshBackground()
+
+            // ── Main Content ─────────────────────────────────────────────────────
+            ScrollView {
+                VStack(alignment: .center, spacing: 0) {
+                    Spacer().frame(height: 60)
+
+                    Text("PlayBridge")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundColor(Theme.onSurface)
+
+                    Spacer().frame(height: 4)
+
+                    Text("CONSOLE HUB")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(Theme.primary.opacity(0.7))
+                        .tracking(3)
+
+                    Spacer().frame(height: 16)
+
+                    // ── Interactive Connection Status Pill ────────────────────────────
+                    StatusPill(
+                        isConnected: isConnected,
+                        isSecure: isSecure,
+                        name: connectedDeviceName,
+                        action: { nav.navigate(to: .connection) }
+                    )
+
+                    Spacer().frame(height: 36)
+
+                    // ── Grid Cards ────────────────────────────────────────────────────
+                    cardsGrid
+
+                    Spacer().frame(height: 32)
+
+                    // ── Exit Button ───────────────────────────────────────────────────
+                    exitButton
+
+                    Spacer().frame(height: 24)
+                }
+                .padding(.horizontal, 24)
             }
-            .padding(20)
+
+            // ── Top Left Close Button ─────────────────────────────────────────
+            closeButton
         }
-        .background(Theme.surface.ignoresSafeArea())
+        .alert("Exit PlayBridge?", isPresented: $showExitConfirm) {
+            Button("Exit", role: .destructive) { exit(0) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This fully quits the app. Any cast that relies on PlayBridge — phone files, DLNA, or queued playback — will stop or error out.")
+        }
+        .alert("\(comingSoonFeatureName) Coming Soon", isPresented: $showComingSoonAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This feature is not yet ported from Android to iOS. The core bridge and web browser are fully functional.")
+        }
     }
 
-    // MARK: - Top bar
+    // MARK: - Components
 
-    private var topBar: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(serverName).font(.title3.bold()).foregroundColor(Theme.onSurface)
-                    if isSecure { Image(systemName: "lock.fill").font(.caption).foregroundColor(Theme.primary) }
+    private var cardsGrid: some View {
+        VStack(spacing: 12) {
+            // Row 1: Large Cards (Browser, Library)
+            HStack(spacing: 12) {
+                cardView(
+                    title: "Browser",
+                    subtitle: "Browse the web",
+                    systemImage: "globe",
+                    gradient: [Color(hex: 0x1565C0), Color(hex: 0x1E88E5)],
+                    tall: true,
+                    isActive: nav.lastMainScreen == .browser,
+                    action: { nav.navigate(to: .browser) }
+                )
+
+                cardView(
+                    title: "Library",
+                    subtitle: "Your media library",
+                    systemImage: "books.vertical.fill",
+                    gradient: [Color(hex: 0x6A1B9A), Color(hex: 0x8E24AA)],
+                    tall: true,
+                    isActive: false,
+                    comingSoon: true
+                )
+            }
+
+            // Row 2: Connection, Phone Files, Debrid
+            HStack(spacing: 12) {
+                cardView(
+                    title: "Connection",
+                    subtitle: isConnected ? "Connected" : "Not connected",
+                    systemImage: "tv",
+                    gradient: isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
+                    tall: false,
+                    isActive: nav.lastMainScreen == .connection,
+                    action: { nav.navigate(to: .connection) }
+                )
+
+                cardView(
+                    title: "Phone Files",
+                    subtitle: "Cast videos & audio",
+                    systemImage: "folder",
+                    gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)],
+                    tall: false,
+                    isActive: false,
+                    comingSoon: true
+                )
+
+                cardView(
+                    title: "Debrid",
+                    subtitle: "Cloud torrents",
+                    systemImage: "cloud",
+                    gradient: [Color(hex: 0x00838F), Color(hex: 0x00ACC1)],
+                    tall: false,
+                    isActive: false,
+                    comingSoon: true
+                )
+            }
+
+            // Row 3: IPTV, Collections, Cast History
+            HStack(spacing: 12) {
+                cardView(
+                    title: "IPTV",
+                    subtitle: "Live channels",
+                    systemImage: "tv.fill",
+                    gradient: [Color(hex: 0x00695C), Color(hex: 0x00897B)],
+                    tall: false,
+                    isActive: false,
+                    comingSoon: true
+                )
+
+                cardView(
+                    title: "Collections",
+                    subtitle: "Your playlists",
+                    systemImage: "play.rectangle.fill",
+                    gradient: [Color(hex: 0xAD1457), Color(hex: 0xD81B60)],
+                    tall: false,
+                    isActive: false,
+                    comingSoon: true
+                )
+
+                cardView(
+                    title: "Cast History",
+                    subtitle: "Recent casts",
+                    systemImage: "clock.arrow.circlepath",
+                    gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)],
+                    tall: false,
+                    isActive: false,
+                    comingSoon: true
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cardView(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        gradient: [Color],
+        tall: Bool,
+        isActive: Bool,
+        comingSoon: Bool = false,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        Button {
+            if comingSoon {
+                comingSoonFeatureName = title
+                showComingSoonAlert = true
+            } else {
+                action?()
+            }
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                // Background Gradient
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(LinearGradient(colors: gradient, startPoint: .topLeading, endPoint: .bottomTrailing))
+
+                // Inner glow / glass sheen
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(
+                        RadialGradient(
+                            colors: [Color.white.opacity(0.15), Color.clear],
+                            center: .topLeading,
+                            startRadius: 0,
+                            endRadius: 150
+                        )
+                    )
+
+                // Translucent borders
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.white.opacity(isActive ? 0.35 : 0.15), Color.white.opacity(0.03)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+
+                // Subtle Decorative Circles in Background
+                Circle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(width: 80, height: 80)
+                    .offset(x: 15, y: -15)
+                    .clipped()
+
+                // Content Column
+                VStack(alignment: .leading, spacing: 0) {
+                    // Icon Container
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.2))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: systemImage)
+                            .font(.system(size: 20))
+                            .foregroundColor(.white)
+                    }
+
+                    Spacer()
+
+                    // Text Details
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: tall ? 16 : 13, weight: .semibold))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+
+                        Text(subtitle)
+                            .font(.system(size: tall ? 12 : 10))
+                            .foregroundColor(Color.white.opacity(0.7))
+                            .lineLimit(1)
+                    }
                 }
-                Text(statusLine).font(.caption).foregroundColor(Theme.onSurfaceVariant)
+                .padding(tall ? 16 : 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // ACTIVE indicator
+                if isActive {
+                    ActiveBadge()
+                        .padding(.top, 12)
+                        .padding(.trailing, 12)
+                }
+            }
+            .frame(height: tall ? 150 : 120)
+            .opacity(comingSoon ? 0.4 : 1.0)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var exitButton: some View {
+        Button {
+            showExitConfirm = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "power")
+                    .font(.system(size: 16, weight: .medium))
+                Text("Exit PlayBridge")
+                    .font(.system(size: 15, weight: .medium))
+            }
+            .foregroundColor(Theme.danger)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Theme.danger.opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var closeButton: some View {
+        VStack {
+            HStack {
+                Button {
+                    nav.navigate(to: nav.dashboardOrigin ?? .browser)
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(Theme.surfaceContainer.opacity(0.5))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(Theme.onSurface.opacity(0.8))
+                    }
+                }
+                .padding(.leading, 16)
+                .padding(.top, 8)
+                Spacer()
             }
             Spacer()
-            Button { vm.disconnect() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2).foregroundColor(Theme.onSurfaceVariant)
+        }
+        .ignoresSafeArea()
+    }
+}
+
+// MARK: - Helper Views
+
+struct MeshBackground: View {
+    @State private var animateBlob1 = false
+    @State private var animateBlob2 = false
+
+    var body: some View {
+        ZStack {
+            Theme.surface.ignoresSafeArea()
+
+            // Drift Blob 1 (Top-Right-ish)
+            Circle()
+                .fill(Theme.primary.opacity(0.12))
+                .frame(width: 400, height: 400)
+                .blur(radius: 80)
+                .offset(x: animateBlob1 ? 100 : -50, y: animateBlob1 ? -100 : 50)
+                .animation(.linear(duration: 28).repeatForever(autoreverses: true), value: animateBlob1)
+
+            // Drift Blob 2 (Bottom-Left-ish)
+            Circle()
+                .fill(Color(hex: 0x8E24AA).opacity(0.10))
+                .frame(width: 350, height: 350)
+                .blur(radius: 70)
+                .offset(x: animateBlob2 ? -100 : 50, y: animateBlob2 ? 100 : -50)
+                .animation(.linear(duration: 42).repeatForever(autoreverses: true), value: animateBlob2)
+        }
+        .onAppear {
+            animateBlob1 = true
+            animateBlob2 = true
+        }
+    }
+}
+
+
+
+struct StatusPill: View {
+    let isConnected: Bool
+    let isSecure: Bool
+    let name: String?
+    let action: () -> Void
+
+    @State private var pulse = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(isConnected ? (isSecure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000)) : Theme.onSurfaceVariant.opacity(0.4))
+                    .frame(width: 8, height: 8)
+                    .opacity(isConnected ? (pulse ? 0.4 : 1.0) : 1.0)
+                    .animation(isConnected ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : .default, value: pulse)
+
+                Text(text)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(isConnected ? (isSecure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000)) : Theme.onSurfaceVariant)
+                    .lineLimit(1)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(isConnected ? (isSecure ? Color(hex: 0x4CAF50).opacity(0.15) : Color(hex: 0xFFA000).opacity(0.15)) : Theme.surfaceContainer.opacity(0.6))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(isConnected ? (isSecure ? Color(hex: 0x4CAF50).opacity(0.3) : Color(hex: 0xFFA000).opacity(0.3)) : Theme.outlineVariant.opacity(0.2), lineWidth: 1)
+            )
         }
-        .padding(.top, 8)
-    }
-
-    private var statusLine: String {
-        switch vm.coordinator.activeContext {
-        case "player": return "Now playing"
-        case "browser": return "Browsing"
-        default: return "Connected · idle"
-        }
-    }
-
-    // MARK: - Now playing
-
-    @ViewBuilder private var nowPlayingCard: some View {
-        if let p = vm.coordinator.playback {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(p.title ?? "Untitled")
-                    .font(.headline).foregroundColor(Theme.onSurface)
-                    .lineLimit(2)
-                ProgressView(value: progress(p))
-                    .tint(Theme.primary)
-                HStack {
-                    Text(format(ms: p.positionMs)).foregroundColor(Theme.onSurfaceVariant)
-                    Spacer()
-                    Text(p.state.capitalized).foregroundColor(Theme.primary)
-                    Spacer()
-                    Text(format(ms: p.durationMs)).foregroundColor(Theme.onSurfaceVariant)
-                }
-                .font(.caption)
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surfaceContainer)
-            .cornerRadius(16)
+        .buttonStyle(.plain)
+        .onAppear {
+            pulse = true
         }
     }
 
-    private func progress(_ p: TvPlaybackStatus) -> Double {
-        guard p.durationMs > 0 else { return 0 }
-        return min(1, max(0, Double(p.positionMs) / Double(p.durationMs)))
-    }
-
-    // MARK: - Cast
-
-    private var castCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("Cast a link")
-            HStack {
-                TextField("Paste a video URL (mp4, m3u8, …)", text: $castURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .foregroundColor(Theme.onSurface)
-                    .padding(12)
-                    .background(Theme.surfaceContainerLow)
-                    .cornerRadius(12)
-                Button {
-                    vm.cast(urlString: castURL)
-                    castURL = ""
-                } label: {
-                    Image(systemName: "play.tv.fill").padding(.horizontal, 4)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.primaryDim)
-                .disabled(castURL.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
+    private var text: String {
+        if isConnected {
+            let displayName = name ?? "TV"
+            let truncatedName = displayName.count > 18 ? String(displayName.prefix(15)) + "..." : displayName
+            return isSecure ? "Connected to \(truncatedName) securely" : "Connected to \(displayName)"
+        } else {
+            return "No device connected"
         }
     }
+}
 
-    // MARK: - Playlist
+struct ActiveBadge: View {
+    @State private var pulse = false
 
-    @ViewBuilder private var playlistCard: some View {
-        if let pl = vm.coordinator.playlist, pl.items.count > 1 {
-            VStack(alignment: .leading, spacing: 8) {
-                sectionTitle("Playlist (\(pl.currentIndex + 1)/\(pl.totalCount))")
-                ForEach(pl.items) { item in
-                    Button { vm.jump(toIndex: item.index) } label: {
-                        HStack {
-                            Image(systemName: item.index == pl.currentIndex ? "play.circle.fill" : "circle")
-                                .foregroundColor(item.index == pl.currentIndex ? Theme.primary : Theme.onSurfaceVariant)
-                            Text(item.title).foregroundColor(Theme.onSurface).lineLimit(1)
-                            Spacer()
-                        }
-                        .padding(10)
-                        .background(item.index == pl.currentIndex ? Theme.surfaceContainerHigh : Theme.surfaceContainerLow)
-                        .cornerRadius(10)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color.white)
+                .frame(width: 4, height: 4)
+                .opacity(pulse ? 0.4 : 1.0)
+                .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
+
+            Text("ACTIVE")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(.white)
         }
-    }
-
-    // MARK: - Helpers
-
-    private func sectionTitle(_ text: String) -> some View {
-        Text(text.uppercased()).font(.caption.bold()).foregroundColor(Theme.onSurfaceVariant)
-    }
-
-    private func format(ms: Int64) -> String {
-        let totalSeconds = Int(ms / 1000)
-        let h = totalSeconds / 3600
-        let m = (totalSeconds % 3600) / 60
-        let s = totalSeconds % 60
-        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(Color.white.opacity(0.22))
+        .cornerRadius(8)
+        .onAppear {
+            pulse = true
+        }
     }
 }

@@ -4,7 +4,8 @@ import SwiftUI
 /// badge, and tab switching. Detection runs automatically via the injected user script.
 struct BrowserScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
-    @StateObject private var store = BrowserStore()
+    @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var store: BrowserStore
     @State private var showTabs = false
 
     var body: some View {
@@ -27,6 +28,7 @@ struct BrowserScreen: View {
                                       originUrl: store.activeTab?.urlString, headers: [:],
                                       kind: DetectedVideo.classify(url: url, contentType: payload["contentType"] as? String))
                 vm.castStream(v)
+                nav.navigate(to: .remote)
             }
         }
     }
@@ -37,11 +39,12 @@ private struct ActiveTabView: View {
     @ObservedObject var tab: BrowserTab
     @ObservedObject var store: BrowserStore
     @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var nav: NavigationViewModel
     @Binding var showTabs: Bool
 
     @State private var address = ""
     @State private var showDetected = false
-    @State private var previewVideo: DetectedVideo?
+    @State private var showMenu = false
     @FocusState private var addressFocused: Bool
 
     private var streams: [DetectedVideo] { tab.detector.videos.filter { !$0.isSubtitle } }
@@ -57,23 +60,65 @@ private struct ActiveTabView: View {
             toolbar
         }
         .sheet(isPresented: $showDetected) {
-            DetectedStreamsSheet(videos: tab.detector.videos) { video in
-                showDetected = false
-                previewVideo = video
-            }
-            .environmentObject(vm)
+            CastSheet(videos: tab.detector.videos, tab: tab, store: store)
+                .environmentObject(vm)
+                .environmentObject(nav)
         }
-        .sheet(item: $previewVideo) { video in
-            StreamPreviewSheet(video: video, detected: tab.detector.videos).environmentObject(vm)
+        .sheet(isPresented: $showMenu) {
+            MenuSheet(tab: tab, store: store, isPresented: $showMenu)
         }
         .onAppear { address = tab.urlString }
         .onChange(of: tab.urlString) { newValue in
             if !addressFocused { address = newValue }
         }
+        .overlay(alignment: .bottom) {
+            if let msg = tab.blockedAdMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: "shield.fill")
+                        .foregroundColor(Theme.primary)
+                        .font(.system(size: 14, weight: .bold))
+                    Text(msg)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.onSurface)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    Capsule()
+                        .fill(Theme.surfaceContainerHigh.opacity(0.95))
+                        .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 3)
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(Theme.primary.opacity(0.3), lineWidth: 1)
+                )
+                .padding(.bottom, 72) // position above the bottom toolbar
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            tab.blockedAdMessage = nil
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private var addressBar: some View {
         HStack(spacing: 8) {
+            Button {
+                nav.navigate(to: .dashboard)
+            } label: {
+                Image(systemName: "house.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.primary)
+                    .frame(width: 24, height: 24)
+                    .background(Theme.surfaceContainerHigh)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
             Image(systemName: tab.urlString.hasPrefix("https") ? "lock.fill" : "globe")
                 .font(.caption).foregroundColor(Theme.onSurfaceVariant)
             TextField("Search or enter address", text: $address)
@@ -108,29 +153,23 @@ private struct ActiveTabView: View {
             Spacer()
             detectedButton
             Spacer()
-            adBlockButton
+            if vm.isConnected {
+                toolButton("gamecontroller.fill", enabled: true) { nav.navigate(to: .remote) }
+            }
             toolButton("square.on.square", enabled: true, badge: store.tabs.count) { showTabs = true }
-            toolButton("plus", enabled: true) { store.newTab() }
+            toolButton("ellipsis", enabled: true) { showMenu = true }
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .background(Theme.surfaceContainerLow)
     }
 
-    private var adBlockButton: some View {
-        Button { store.toggleAdBlock() } label: {
-            Image(systemName: store.adBlockEnabled ? "shield.fill" : "shield.slash")
-                .font(.title3)
-                .foregroundColor(store.adBlockEnabled ? Theme.primary : Theme.onSurfaceVariant)
-                .frame(width: 44, height: 36)
-        }
-    }
-
     @ViewBuilder private var detectedButton: some View {
         let count = streams.count
-        Button { if count > 0 { showDetected = true } } label: {
+        let canTap = count > 0 || vm.isConnected
+        Button { showDetected = true } label: {
             HStack(spacing: 6) {
                 Image(systemName: count > 0 ? "play.tv.fill" : "play.tv")
-                Text(count > 0 ? "\(count) stream\(count == 1 ? "" : "s")" : "No streams")
+                Text(count > 0 ? "\(count) stream\(count == 1 ? "" : "s")" : "Cast")
                     .font(.caption.bold())
             }
             .foregroundColor(count > 0 ? Theme.onPrimary : Theme.onSurfaceVariant)
@@ -138,7 +177,7 @@ private struct ActiveTabView: View {
             .background(count > 0 ? AnyShapeStyle(Theme.ctaGradient) : AnyShapeStyle(Theme.surfaceContainerHigh))
             .clipShape(Capsule())
         }
-        .disabled(count == 0)
+        .disabled(!canTap)
     }
 
     private func toolButton(_ systemImage: String, enabled: Bool, badge: Int? = nil, action: @escaping () -> Void) -> some View {

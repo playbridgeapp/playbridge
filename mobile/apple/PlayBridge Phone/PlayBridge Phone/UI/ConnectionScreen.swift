@@ -4,6 +4,7 @@ import SwiftUI
 /// on the LAN, a manual-IP fallback, and inline status for each connection/pairing state.
 struct ConnectionScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var nav: NavigationViewModel
     @State private var manualIP: String = ""
 
     var body: some View {
@@ -11,6 +12,7 @@ struct ConnectionScreen: View {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 statusBanner
+                connectedSection
                 savedSection
                 discoveredSection
                 manualSection
@@ -23,13 +25,23 @@ struct ConnectionScreen: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("PlayBridge")
-                .font(.largeTitle.bold())
-                .foregroundColor(Theme.onSurface)
-            Text("Connect to your TV")
-                .font(.subheadline)
-                .foregroundColor(Theme.onSurfaceVariant)
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("PlayBridge")
+                    .font(.largeTitle.bold())
+                    .foregroundColor(Theme.onSurface)
+                Text("Connect to your TV")
+                    .font(.subheadline)
+                    .foregroundColor(Theme.onSurfaceVariant)
+            }
+            Spacer()
+            Button {
+                nav.navigate(to: .dashboard)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(Theme.onSurfaceVariant)
+            }
         }
         .padding(.top, 12)
     }
@@ -158,6 +170,79 @@ struct ConnectionScreen: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.primaryDim)
                 .disabled(manualIP.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    @ViewBuilder private var connectedSection: some View {
+        if case .connected(let serverName, let secure) = vm.state {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("Connected TV")
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 16) {
+                        Image(systemName: "tv")
+                            .font(.system(size: 32))
+                            .foregroundColor(Theme.primary)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(serverName)
+                                .foregroundColor(Theme.onSurface)
+                                .font(.headline)
+                            
+                            if let saved = vm.pairedDevice {
+                                Text("\(saved.ip):\(secure ? (saved.wssPort != nil ? String(saved.wssPort!) : String(saved.port)) : String(saved.port))")
+                                    .foregroundColor(Theme.onSurfaceVariant)
+                                    .font(.caption)
+                            }
+                            
+                            HStack(spacing: 4) {
+                                Image(systemName: secure ? "lock.fill" : "lock.open.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(secure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
+                                Text(secure ? "Secure (wss)" : "Not secure (ws)")
+                                    .font(.caption)
+                                    .foregroundColor(secure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
+                            }
+                        }
+                        Spacer()
+                    }
+                    
+                    HStack {
+                        Button {
+                            nav.navigate(to: .remote)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "gamecontroller.fill")
+                                Text("Remote Control")
+                            }
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(Theme.onPrimary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Theme.primaryDim)
+                            .cornerRadius(10)
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+                        
+                        Button {
+                            vm.disconnect()
+                        } label: {
+                            Text("Disconnect")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(Theme.danger)
+                                .cornerRadius(10)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(14)
+                .background(Theme.surfaceContainer)
+                .cornerRadius(14)
             }
         }
     }

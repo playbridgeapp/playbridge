@@ -11,14 +11,14 @@ final class BrowserStore: ObservableObject {
     var onPageCast: (([String: Any]) -> Void)?
 
     @Published var adBlockEnabled: Bool = ContentBlocker.isEnabled
-    private var ruleList: WKContentRuleList?
+    private var ruleLists: [WKContentRuleList] = []
 
     static let homeURL = "https://www.google.com"
 
     init() {
         newTab()
         Task { @MainActor in
-            ruleList = await ContentBlocker.compile()
+            ruleLists = await ContentBlocker.compileAll()
             applyRulesToAllTabs()
         }
     }
@@ -48,12 +48,24 @@ final class BrowserStore: ObservableObject {
         activeTab?.reload()
     }
 
+    /// Re-compiles rules and applies them to all active webviews
+    @MainActor
+    func updateAdBlockRules() async {
+        ruleLists = await ContentBlocker.compileAll()
+        applyRulesToAllTabs()
+        activeTab?.reload()
+    }
+
     private func applyRulesToAllTabs() { tabs.forEach { applyRules(to: $0) } }
 
     private func applyRules(to tab: BrowserTab) {
         let cc = tab.webView.configuration.userContentController
         cc.removeAllContentRuleLists()
-        if adBlockEnabled, let ruleList { cc.add(ruleList) }
+        if adBlockEnabled {
+            for list in ruleLists {
+                cc.add(list)
+            }
+        }
     }
 
     func select(_ id: UUID) { activeID = id }

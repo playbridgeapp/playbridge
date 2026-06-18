@@ -103,7 +103,7 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Cast a browser-detected stream: chosen quality URL (or the master), `mediaHeaders`,
     /// attached subtitles. Mirrors the Android `CastSheet` → `createSingleVideoCommandJson` path.
-    func castStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = []) {
+    func castStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
         let url = quality?.url ?? video.url
         ws.send(WireProtocol.singleVideoCommand(
             url: url,
@@ -111,7 +111,33 @@ final class ConnectionViewModel: ObservableObject {
             contentType: video.contentType,
             subtitles: subtitles,
             headers: VideoDetector.mediaHeaders(for: video),
-            detectedBy: video.detectedBy
+            detectedBy: video.detectedBy,
+            playerMode: playerMode
+        ))
+    }
+
+    /// Queue a browser-detected stream.
+    func queueStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
+        let url = quality?.url ?? video.url
+        ws.send(WireProtocol.queueVideoCommand(
+            url: url,
+            title: video.displayTitle,
+            contentType: video.contentType,
+            subtitles: subtitles,
+            headers: VideoDetector.mediaHeaders(for: video),
+            detectedBy: video.detectedBy,
+            playerMode: playerMode
+        ))
+    }
+
+    /// Open a URL on the TV browser.
+    func browseTo(url: String, browserMode: String? = nil, desktopMode: Bool = false) {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        ws.send(WireProtocol.browserCommand(
+            url: trimmed,
+            browserMode: browserMode,
+            desktopMode: desktopMode
         ))
     }
 

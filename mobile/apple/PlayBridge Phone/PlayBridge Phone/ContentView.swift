@@ -2,32 +2,32 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var nav: NavigationViewModel
 
     var body: some View {
-        TabView {
-            BrowserScreen()
-                .tabItem { Label("Browse", systemImage: "globe") }
+        ZStack {
+            Theme.surface.ignoresSafeArea()
 
-            castTab
-                .tabItem { Label("Cast", systemImage: "tv") }
+            switch nav.currentScreen {
+            case .browser:
+                BrowserScreen()
+                    .transition(.opacity)
+            case .dashboard:
+                DashboardScreen()
+                    .transition(.opacity)
+            case .connection:
+                ConnectionScreen()
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .remote:
+                RemoteControlScreen()
+                    .transition(.move(edge: .bottom))
+            }
         }
         .tint(Theme.primary)
         .onAppear {
             // Auto-reconnect to a previously paired receiver on launch.
             if vm.pairedDevice != nil, !vm.state.isConnected {
                 vm.reconnectSaved()
-            }
-        }
-    }
-
-    /// The Cast tab shows the remote dashboard when connected, otherwise the connect/pair flow.
-    private var castTab: some View {
-        ZStack {
-            Theme.surface.ignoresSafeArea()
-            if vm.state.isConnected {
-                DashboardScreen()
-            } else {
-                ConnectionScreen()
             }
         }
     }
