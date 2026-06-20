@@ -144,7 +144,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             Toast.makeText(this, "Seek failed (network error)", Toast.LENGTH_SHORT).show()
             // Seek back to the pre-seek position (known-good). Using positionMs here would
             // re-seek to the stuck target because MPV reports the target as time-pos mid-seek.
-            MPVLib.command("seek", (preSeePositionMs / 1000.0).toString(), "absolute+keyframes")
+            MPVLib.command("seek", (preSeePositionMs / 1000.0).toString(), "absolute")
         }
     }
 
@@ -416,7 +416,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Format IDs: MPV_FORMAT_STRING=1, MPV_FORMAT_FLAG=3, MPV_FORMAT_INT64=4, MPV_FORMAT_DOUBLE=5
         MPVLib.addObserver(this)
         MPVLib.observeProperty("pause",               3) // Boolean
-        MPVLib.observeProperty("time-pos",            4) // Long (seconds)
+        MPVLib.observeProperty("time-pos",            5) // Double (seconds)
         MPVLib.observeProperty("duration",            4) // Long (seconds)
         MPVLib.observeProperty("height",              4) // Long (px)
         MPVLib.observeProperty("video-bitrate",       4) // Long (bits/s)
@@ -540,9 +540,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun eventProperty(property: String, value: Long) {
         when (property) {
-            "time-pos" -> {
-                positionMs = value * 1000
-            }
             "duration" -> {
                 durationMs = value * 1000
             }
@@ -576,6 +573,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun eventProperty(property: String, value: Double) {
         when (property) {
+            "time-pos" -> {
+                positionMs = (value * 1000).toLong()
+            }
             "demuxer-cache-time" -> {
                 bufferAheadMs = (value * 1000).toLong()
             }

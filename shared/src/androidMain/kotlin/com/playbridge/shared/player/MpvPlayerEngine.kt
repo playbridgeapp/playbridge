@@ -105,7 +105,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
             // Register properties to observe
             MPVLib.observeProperty("pause",               3) // Boolean
-            MPVLib.observeProperty("time-pos",            4) // Long (seconds)
+            MPVLib.observeProperty("time-pos",            5) // Double (seconds)
             MPVLib.observeProperty("duration",            4) // Long (seconds)
             MPVLib.observeProperty("height",              4) // Long (px)
             MPVLib.observeProperty("video-bitrate",       4) // Long (bits/s)
@@ -198,7 +198,6 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun eventProperty(property: String, value: Long) {
         when (property) {
-            "time-pos" -> _position.value = value * 1000
             "duration" -> _duration.value = value * 1000
             "height" -> _videoHeight.value = value
             "video-bitrate" -> _videoBitrate.value = value
@@ -299,7 +298,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     override fun seek(positionMs: Long) {
         logger.d(TAG, "seek($positionMs)")
         if (!mpvInitialized) return
-        MPVLib.command("seek", (positionMs / 1000.0).toString(), "absolute+keyframes")
+        MPVLib.command("seek", (positionMs / 1000.0).toString(), "absolute")
     }
 
     override fun setRate(rate: Float) {

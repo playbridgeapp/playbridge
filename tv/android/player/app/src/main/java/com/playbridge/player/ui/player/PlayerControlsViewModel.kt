@@ -288,8 +288,6 @@ class PlayerControlsViewModel : ViewModel() {
                         }
                     }
                     
-                    com.playbridge.player.logging.FileLogger.d("PlayerControlsViewModel", "Progress: currentPos=$currentPos, segmentsCount=${_controlsState.value.skipSegments.size}, active=$activeSegment")
-                    
                     val context = contextRef?.get()
                     var isAutoSkipTriggered = false
                     if (activeSegment != null && context != null && lastSkippedSegment != activeSegment) {
@@ -324,6 +322,10 @@ class PlayerControlsViewModel : ViewModel() {
                         if (isAutoSkipEnabled) null else activeSegment
                     }
 
+                    if (_controlsState.value.activeSkipSegment != uiActiveSegment) {
+                        com.playbridge.player.logging.FileLogger.d("PlayerControlsViewModel", "Active segment changed: old=${_controlsState.value.activeSkipSegment}, new=$uiActiveSegment")
+                    }
+
                     _controlsState.update { s ->
                         s.copy(
                             currentPosition = if (isScrubbing) s.currentPosition else it.currentPosition,
@@ -336,7 +338,7 @@ class PlayerControlsViewModel : ViewModel() {
                         )
                     }
                 }
-                delay(1000)
+                delay(250)
             }
         }
     }
