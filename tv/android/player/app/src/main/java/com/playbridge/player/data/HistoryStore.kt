@@ -63,6 +63,9 @@ class HistoryStore(private val context: Context) {
     ) {
         if (url.isBlank() || payloadJson.isBlank()) return
 
+        val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("enable_history", true)) return
+
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
             val currentList = try {

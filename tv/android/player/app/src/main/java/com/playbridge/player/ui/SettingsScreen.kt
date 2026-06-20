@@ -58,6 +58,7 @@ fun SettingsScreen(
     var frameRateMatching by remember { mutableStateOf(prefs.getBoolean("frame_rate_matching", false)) }
     var tunneledPlayback by remember { mutableStateOf(prefs.getBoolean("tunneled_playback", false)) }
     var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
+    var enableHistory by remember { mutableStateOf(prefs.getBoolean("enable_history", true)) }
     var isRestarting by remember { mutableStateOf(false) }
     var themeStr by remember { mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK") }
 
@@ -212,6 +213,17 @@ fun SettingsScreen(
                                 onCheckedChange = {
                                     tunneledPlayback = it
                                     prefs.edit().putBoolean("tunneled_playback", it).apply()
+                                }
+                            )
+                        }
+                        item {
+                            SettingToggleItem(
+                                label = "Save Cast History",
+                                description = "Keep track of recently played videos and your progress.",
+                                checked = enableHistory,
+                                onCheckedChange = {
+                                    enableHistory = it
+                                    prefs.edit().putBoolean("enable_history", it).apply()
                                 }
                             )
                         }
