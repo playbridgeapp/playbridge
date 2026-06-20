@@ -236,7 +236,7 @@ fun MainContent(
     // (The pairing is done — now let the user see their history/favourites.)
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketServer.ConnectionState.Connected) {
-            if (currentScreen == Screen.Pairing) {
+            if (currentScreen == Screen.Pairing && enableHistory) {
                 currentScreen = Screen.History
             }
         }
