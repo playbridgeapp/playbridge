@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.playbridge.player.player.SubtitleManager
 import com.playbridge.player.player.SubtitleCueLoader
+import com.playbridge.player.player.SkipSegment
 
 class PlayerControlsViewModel : ViewModel() {
     private val _controlsState = MutableStateFlow(PlayerControlsState())
@@ -22,6 +23,7 @@ class PlayerControlsViewModel : ViewModel() {
     private var subtitleManager: SubtitleManager? = null
     private var onlineSubtitleJob: Job? = null
     private var cachedOnlineTracks: List<UnifiedTrack> = emptyList()
+    private var lastSkippedSegment: SkipSegment? = null
 
     /** Request headers for fetching subtitle files (set by the activity when media loads). */
     var subtitleRequestHeaders: Map<String, String>? = null
@@ -41,8 +43,11 @@ class PlayerControlsViewModel : ViewModel() {
         }
     }
 
-    fun setEngine(playerEngine: PlayerEngineAdapter, engineType: String) {
+    private var contextRef: java.lang.ref.WeakReference<android.content.Context>? = null
+
+    fun setEngine(playerEngine: PlayerEngineAdapter, engineType: String, context: android.content.Context) {
         this.engine = playerEngine
+        this.contextRef = java.lang.ref.WeakReference(context.applicationContext)
         _controlsState.update { it.copy(engineType = engineType) }
         startProgressUpdates()
     }
@@ -151,8 +156,11 @@ class PlayerControlsViewModel : ViewModel() {
         _controlsState.update { it.copy(isBuffering = isBuffering) }
     }
     
+    private var skipSegmentsJob: kotlinx.coroutines.Job? = null
+
     fun setPrePlay(
         metadata: playbridge.VisualMetadata?,
+        context: android.content.Context? = null,
         clearOnlineSubs: Boolean = true,
         showCountdown: Boolean = true
     ) {
@@ -160,12 +168,18 @@ class PlayerControlsViewModel : ViewModel() {
             onlineSubtitleJob?.cancel()
             cachedOnlineTracks = emptyList()
         }
+        skipSegmentsJob?.cancel()
+        lastSkippedSegment = null
 
         _controlsState.update { state ->
             val nextActiveMetadata = metadata ?: if (!clearOnlineSubs) state.activeMetadata else null
+            val nextSkipSegments = if (metadata != null) emptyList() else if (!clearOnlineSubs) state.skipSegments else emptyList()
+            val nextActiveSkipSegment = if (metadata != null) null else if (!clearOnlineSubs) state.activeSkipSegment else null
             state.copy(
                 activeMetadata = nextActiveMetadata,
-                prePlayMetadata = if (metadata != null && showCountdown) metadata else null
+                prePlayMetadata = if (metadata != null && showCountdown) metadata else null,
+                skipSegments = nextSkipSegments,
+                activeSkipSegment = nextActiveSkipSegment
             )
         }
 
@@ -195,6 +209,23 @@ class PlayerControlsViewModel : ViewModel() {
                         s.copy(subtitleTracks = s.subtitleTracks + newTracks)
                     }
                 } catch (_: Exception) { }
+            }
+        }
+
+        val season = metadata?.season
+        val episode = metadata?.episode
+        if (imdbId != null && context != null && season != null && episode != null) {
+            val appCtx = context.applicationContext
+            skipSegmentsJob = viewModelScope.launch {
+                try {
+                    val segments = com.playbridge.player.player.SkipSegmentFetcher.fetchSegments(
+                        appCtx, imdbId, season, episode
+                    )
+                    com.playbridge.player.logging.FileLogger.i("PlayerControlsViewModel", "Set skipSegments in state: $segments")
+                    _controlsState.update { it.copy(skipSegments = segments) }
+                } catch (e: Exception) {
+                    com.playbridge.player.logging.FileLogger.e("PlayerControlsViewModel", "Error fetching skip segments: ${e.message}")
+                }
             }
         }
     }
@@ -239,20 +270,69 @@ class PlayerControlsViewModel : ViewModel() {
             resetAutoHideTimer()
         }
     }
-
     private fun startProgressUpdates() {
         progressUpdateJob?.cancel()
         progressUpdateJob = viewModelScope.launch {
             while (true) {
                 engine?.let {
+                    val currentPos = if (isScrubbing) _controlsState.value.currentPosition else it.currentPosition
+                    val duration = it.duration
+                    
+                    val activeSegment = _controlsState.value.skipSegments.firstOrNull { segment ->
+                        currentPos >= segment.startMs && currentPos <= segment.endMs && segment != lastSkippedSegment
+                    }
+                    
+                    lastSkippedSegment?.let { skipped ->
+                        if (currentPos < skipped.startMs || currentPos > skipped.endMs) {
+                            lastSkippedSegment = null
+                        }
+                    }
+                    
+                    com.playbridge.player.logging.FileLogger.d("PlayerControlsViewModel", "Progress: currentPos=$currentPos, segmentsCount=${_controlsState.value.skipSegments.size}, active=$activeSegment")
+                    
+                    val context = contextRef?.get()
+                    var isAutoSkipTriggered = false
+                    if (activeSegment != null && context != null && lastSkippedSegment != activeSegment) {
+                        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                        val shouldAutoSkip = when (activeSegment.type) {
+                            "intro" -> prefs.getBoolean("auto_skip_intro", false)
+                            "recap" -> prefs.getBoolean("auto_skip_recap", false)
+                            "outro" -> prefs.getBoolean("auto_skip_outro", false)
+                            else -> false
+                        }
+                        if (shouldAutoSkip) {
+                            lastSkippedSegment = activeSegment
+                            isAutoSkipTriggered = true
+                            engine?.seekTo(activeSegment.endMs + 1000)
+                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                android.widget.Toast.makeText(context, "Auto-skipped ${activeSegment.type}", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+
+                    val uiActiveSegment = if (isAutoSkipTriggered) null else {
+                        val isAutoSkipEnabled = if (context != null && activeSegment != null) {
+                            val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                            when (activeSegment.type) {
+                                "intro" -> prefs.getBoolean("auto_skip_intro", false)
+                                "recap" -> prefs.getBoolean("auto_skip_recap", false)
+                                "outro" -> prefs.getBoolean("auto_skip_outro", false)
+                                else -> false
+                            }
+                        } else false
+                        
+                        if (isAutoSkipEnabled) null else activeSegment
+                    }
+
                     _controlsState.update { s ->
                         s.copy(
                             currentPosition = if (isScrubbing) s.currentPosition else it.currentPosition,
-                            duration = it.duration,
+                            duration = duration,
                             bufferedPosition = it.bufferedPosition,
                             isPlaying = it.isPlaying,
                             streamInfo = it.streamInfo,
-                            hdrFormat = it.hdrFormat
+                            hdrFormat = it.hdrFormat,
+                            activeSkipSegment = uiActiveSegment
                         )
                     }
                 }
@@ -379,6 +459,18 @@ class PlayerControlsViewModel : ViewModel() {
     fun clearSubtitle() {
         subtitleManager?.disable()
         _controlsState.update { it.copy(currentSubtitleText = null) }
+    }
+
+    fun skipCurrentSegment() {
+        val segment = _controlsState.value.activeSkipSegment ?: return
+        lastSkippedSegment = segment
+        engine?.seekTo(segment.endMs + 1000)
+        _controlsState.update { it.copy(activeSkipSegment = null) }
+        resetAutoHideTimer()
+    }
+
+    fun setSkipButtonFocused(focused: Boolean) {
+        _controlsState.update { it.copy(isSkipButtonFocused = focused) }
     }
 
     fun detach() {

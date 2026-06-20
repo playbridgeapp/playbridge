@@ -156,7 +156,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     Toast.makeText(this@MpvPlayerActivity, it, Toast.LENGTH_SHORT).show()
                     controlsViewModel.setTitle(it)
                 }
-                controlsViewModel.setPrePlay(item.visual_metadata, showCountdown = false)
+                controlsViewModel.setPrePlay(item.visual_metadata, context = this@MpvPlayerActivity, showCountdown = false)
                 controlsViewModel.hideControls()
             }
             stopPlayback()
@@ -280,6 +280,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
                         onSeek = { controlsViewModel.handleScrubbing(it) },
+                        onSkipSegment = { controlsViewModel.skipCurrentSegment() },
+                        onSkipButtonFocusChanged = { controlsViewModel.setSkipButtonFocused(it) },
                         onPrePlayStartNow = {
                             launchJob?.cancel()
                             controlsViewModel.setPrePlayLaunching(true)
@@ -407,7 +409,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
         )
 
-        controlsViewModel.setEngine(engineAdapter, "mpv")
+        controlsViewModel.setEngine(engineAdapter, "mpv", this)
 
         // Register MPV observer NOW — after controlsManager is initialized — so that
         // property-change callbacks can safely reference controlsManager without crashing.

@@ -4,12 +4,20 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.tv.material3.Surface
+import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Border
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.compose.ui.unit.sp
@@ -44,6 +52,8 @@ fun PlayerControlsOverlay(
     onToggleAudioBoost: () -> Unit = {},
     onAdjustSubtitleDelay: (Long) -> Unit = {},
     onPreloadSubtitles: (List<String>) -> Unit = {},
+    onSkipSegment: () -> Unit = {},
+    onSkipButtonFocusChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -224,6 +234,62 @@ fun PlayerControlsOverlay(
                 text = state.currentSubtitleText,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
+        }
+
+        // Skip Segment Button (Netflix style)
+        state.activeSkipSegment?.let { segment ->
+            val focusRequester = remember { FocusRequester() }
+            
+            // Request focus when the button becomes visible
+            LaunchedEffect(segment) {
+                focusRequester.requestFocus()
+            }
+            
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(end = 48.dp, bottom = 120.dp), // floats above seekbar / controls
+                contentAlignment = Alignment.BottomEnd
+            ) {
+                Surface(
+                    onClick = { onSkipSegment() },
+                    modifier = Modifier
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { focusState ->
+                            onSkipButtonFocusChanged(focusState.isFocused)
+                        }
+                        .width(140.dp)
+                        .height(40.dp),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = Color.Black.copy(alpha = 0.55f),
+                        focusedContainerColor = Color.Black.copy(alpha = 0.8f)
+                    ),
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
+                    border = ClickableSurfaceDefaults.border(
+                        border = Border(
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f))
+                        ),
+                        focusedBorder = Border(
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color.White)
+                        )
+                    )
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Skip ${segment.type.replaceFirstChar { it.uppercase() }}",
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.White
+                            )
+                        )
+                    }
+                }
+            }
         }
 
         // PrePlay Overlay — TOP layer, deliberately last: it must cover the
