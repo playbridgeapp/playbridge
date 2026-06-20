@@ -1,8 +1,8 @@
 package com.playbridge.sender.cast.dlna
 
 import android.media.MediaMetadataRetriever
-import android.net.Uri
 import com.playbridge.sender.cast.Capability
+import androidx.core.net.toUri
 import com.playbridge.sender.cast.CastTarget
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackState
@@ -51,7 +51,7 @@ class DlnaCastTarget(
         cachedDurationMs = media.durationMs.coerceAtLeast(0L) // e.g. MediaStore for local files
         durationTries = 0
         val proxyUrl = if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
-            proxy.publishLocal(Uri.parse(media.url), media.mimeType)
+            proxy.publishLocal(media.url.toUri(), media.mimeType)
         } else {
             proxy.publish(media.url, media.headers, media.mimeType)
         }

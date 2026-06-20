@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -137,7 +138,7 @@ object VideoDetector {
      * Observed inside derivedStateOf in BrowserActivity so the video list re-derives and the
      * sheet's sort order updates automatically without the user closing and reopening the sheet.
      */
-    var processingVersion by mutableStateOf(0)
+    var processingVersion by mutableIntStateOf(0)
         private set
 
     /** Must be called from the main thread after updating any video's sort-relevant fields. */

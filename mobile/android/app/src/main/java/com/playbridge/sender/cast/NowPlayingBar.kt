@@ -46,9 +46,9 @@ fun NowPlayingBar(
     secondaryText: String?,
     leadingIcon: ImageVector,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     showTvIcon: Boolean = false,
     onTvIconClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
     accentColor: Color? = null,
 ) {
     val container = accentColor ?: MaterialTheme.colorScheme.primaryContainer

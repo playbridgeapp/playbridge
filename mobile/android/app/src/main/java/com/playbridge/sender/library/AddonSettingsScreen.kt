@@ -1,4 +1,5 @@
 package com.playbridge.sender.library
+import androidx.core.content.edit
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -244,9 +245,7 @@ fun AddonSettingsScreen(
                                 checked = autoRefreshCatalogs,
                                 onCheckedChange = {
                                     autoRefreshCatalogs = it
-                                    settingsPrefs.edit()
-                                        .putBoolean(LibraryViewModel.KEY_CATALOG_AUTO_REFRESH, it)
-                                        .apply()
+                                    settingsPrefs.edit { putBoolean(LibraryViewModel.KEY_CATALOG_AUTO_REFRESH, it) }
                                 }
                             )
                         }
@@ -265,9 +264,7 @@ fun AddonSettingsScreen(
                                     enabled = autoRefreshCatalogs,
                                     onClick = {
                                         refreshIntervalMin = minutes
-                                        settingsPrefs.edit()
-                                            .putInt(LibraryViewModel.KEY_CATALOG_REFRESH_INTERVAL_MIN, minutes)
-                                            .apply()
+                                        settingsPrefs.edit { putInt(LibraryViewModel.KEY_CATALOG_REFRESH_INTERVAL_MIN, minutes) }
                                     },
                                     label = { Text("$minutes min") }
                                 )

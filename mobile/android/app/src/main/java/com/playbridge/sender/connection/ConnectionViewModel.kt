@@ -1,9 +1,10 @@
 package com.playbridge.sender.connection
+import androidx.core.content.edit
 
 import android.app.Application
 import android.content.Context
-import android.net.Uri
 import android.os.Build
+import androidx.core.net.toUri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -97,7 +98,7 @@ class ConnectionViewModel(
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
     private val phoneDeviceName: String = Build.MODEL
     private val phoneDeviceUUID: String = prefs.getString("pb_phone_uuid", null)
-        ?: UUID.randomUUID().toString().also { prefs.edit().putString("pb_phone_uuid", it).apply() }
+        ?: UUID.randomUUID().toString().also { prefs.edit { putString("pb_phone_uuid", it) } }
 
     private var hasAttemptedInitialConnect = false
 
@@ -214,7 +215,7 @@ class ConnectionViewModel(
 
     fun setAutoConnectEnabled(enabled: Boolean) {
         _autoConnectEnabled.value = enabled
-        prefs.edit().putBoolean("auto_connect_tv", enabled).apply()
+        prefs.edit { putBoolean("auto_connect_tv", enabled) }
         // If enabling auto-connect and disconnected, try connecting immediately
         if (enabled && connectionState.value is WebSocketClient.ConnectionState.Disconnected) {
             viewModelScope.launch {
@@ -233,7 +234,7 @@ class ConnectionViewModel(
         // prior manual disconnect turned off. Set the flag directly rather than via
         // setAutoConnectEnabled() — its enable side-effect would kick off a second connect.
         _autoConnectEnabled.value = true
-        prefs.edit().putBoolean("auto_connect_tv", true).apply()
+        prefs.edit { putBoolean("auto_connect_tv", true) }
         viewModelScope.launch {
             // wss_port is a live property of the receiver; a saved/history entry may
             // predate TLS, so prefer the port from current discovery.
@@ -274,7 +275,7 @@ class ConnectionViewModel(
         if (connectionState.value is WebSocketClient.ConnectionState.Connected) {
             viewModelScope.launch {
                 val proxyUrl = DlnaProxyHolder.proxy(getApplication<Application>())
-                    .publishLocal(Uri.parse(uriString), mime)
+                    .publishLocal(uriString.toUri(), mime)
                 val cmd = createSingleVideoCommandJson(
                     PlayPayload(url = proxyUrl, title = title ?: "Phone file", content_type = mime),
                 )

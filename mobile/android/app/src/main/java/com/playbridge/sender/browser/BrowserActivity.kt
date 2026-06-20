@@ -1,4 +1,5 @@
 package com.playbridge.sender.browser
+import androidx.core.content.edit
 import com.playbridge.sender.library.*
 import com.playbridge.sender.cast.*
 import com.playbridge.sender.ui.TvDeviceGuard
@@ -294,7 +295,7 @@ class BrowserActivity : ComponentActivity() {
                 settingsRepository.setDetectVideos(legacyPrefs.getBoolean("detect_videos", true))
                 settingsRepository.setBlockPopups(legacyPrefs.getBoolean("block_popups", true))
                 
-                legacyPrefs.edit().putBoolean("needs_datastore_migration", false).apply()
+                legacyPrefs.edit { putBoolean("needs_datastore_migration", false) }
                 Log.d("BrowserActivity", "Migrated legacy SharedPreferences to Jetpack DataStore successfully.")
             }
         }
@@ -628,11 +629,11 @@ class BrowserActivity : ComponentActivity() {
             LaunchedEffect(currentScreen) {
                 if (currentScreen is Screen.Browser || currentScreen is Screen.Library || currentScreen is Screen.DebridLibrary || currentScreen is Screen.LibraryDetail) {
                     lastMainScreen = currentScreen
-                    prefs.edit().putString("last_main_screen", when (currentScreen) {
+                    prefs.edit { putString("last_main_screen", when (currentScreen) {
                         Screen.Library -> "library"
                         Screen.DebridLibrary -> "debrid"
                         else -> "browser"
-                    }).apply()
+                    }) }
                 }
             }
 
@@ -2047,10 +2048,10 @@ class BrowserActivity : ComponentActivity() {
     private fun MenuGridItem(
         icon: ImageVector,
         label: String,
+        modifier: Modifier = Modifier,
         selected: Boolean = false,
         tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
         labelColor: Color = MaterialTheme.colorScheme.onSurface,
-        modifier: Modifier = Modifier,
         onClick: () -> Unit
     ) {
         Column(

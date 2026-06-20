@@ -1,4 +1,5 @@
 package com.playbridge.sender.library
+import androidx.core.content.edit
 import com.playbridge.sender.cast.*
 
 import android.widget.Toast
@@ -782,7 +783,7 @@ fun LibraryDetailScreen(
                                 watchOnTv = watchOnTv,
                                 onWatchOnTvChange = {
                                     watchOnTv = it
-                                    browserPrefs.edit().putBoolean("watch_on_tv", it).apply()
+                                    browserPrefs.edit { putBoolean("watch_on_tv", it) }
                                 },
                                 selectedTvDevice = selectedTvDevice,
                                 onOpenConnectionScreen = onOpenConnectionScreen,
@@ -879,7 +880,7 @@ fun LibraryDetailScreen(
                                     watchOnTv = watchOnTv,
                                     onWatchOnTvChange = {
                                         watchOnTv = it
-                                        browserPrefs.edit().putBoolean("watch_on_tv", it).apply()
+                                        browserPrefs.edit { putBoolean("watch_on_tv", it) }
                                     },
                                     watchLabel = epResume
                                         ?.let { "Resume $epLabel · ${formatResumeTime(it.positionMs)}" }

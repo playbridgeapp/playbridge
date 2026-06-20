@@ -1,4 +1,5 @@
 package com.playbridge.sender.library
+import androidx.core.content.edit
 
 import android.content.Context
 import androidx.compose.foundation.layout.*
@@ -74,7 +75,7 @@ fun LibrarySettingsScreen(
                 value = tmdbApiKey,
                 onValueChange = { newKey ->
                     tmdbApiKey = newKey
-                    tmdbPrefs.edit().putString("tmdb_api_key", newKey.trim()).apply()
+                    tmdbPrefs.edit { putString("tmdb_api_key", newKey.trim()) }
                 },
                 label = { Text("TMDB API Key") },
                 placeholder = { Text("Enter your TMDB API key") },
@@ -96,7 +97,7 @@ fun LibrarySettingsScreen(
                 value = omdbApiKey,
                 onValueChange = { newKey ->
                     omdbApiKey = newKey
-                    tmdbPrefs.edit().putString("omdb_api_key", newKey.trim()).apply()
+                    tmdbPrefs.edit { putString("omdb_api_key", newKey.trim()) }
                 },
                 label = { Text("OMDB API Key (Optional)") },
                 placeholder = { Text("Enter your OMDB API key") },
@@ -118,7 +119,7 @@ fun LibrarySettingsScreen(
                 value = tvdbApiKey,
                 onValueChange = { newKey ->
                     tvdbApiKey = newKey
-                    tmdbPrefs.edit().putString("tvdb_api_key", newKey.trim()).apply()
+                    tmdbPrefs.edit { putString("tvdb_api_key", newKey.trim()) }
                 },
                 label = { Text("TVDB API Key (Optional)") },
                 placeholder = { Text("Get one free at thetvdb.com/dashboard") },
@@ -173,7 +174,7 @@ fun LibrarySettingsScreen(
                                 text = { Text(label) },
                                 onClick = {
                                     seriesSource = value
-                                    tmdbPrefs.edit().putString("series_meta_source", value).apply()
+                                    tmdbPrefs.edit { putString("series_meta_source", value) }
                                     seriesSourceExpanded = false
                                 }
                             )
@@ -191,7 +192,7 @@ fun LibrarySettingsScreen(
                     .fillMaxWidth()
                     .clickable {
                         showCardTextOverlay = !showCardTextOverlay
-                        tmdbPrefs.edit().putBoolean("show_card_text_overlay", showCardTextOverlay).apply()
+                        tmdbPrefs.edit { putBoolean("show_card_text_overlay", showCardTextOverlay) }
                     }
                     .padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -204,7 +205,7 @@ fun LibrarySettingsScreen(
                     checked = showCardTextOverlay,
                     onCheckedChange = { isChecked ->
                         showCardTextOverlay = isChecked
-                        tmdbPrefs.edit().putBoolean("show_card_text_overlay", isChecked).apply()
+                        tmdbPrefs.edit { putBoolean("show_card_text_overlay", isChecked) }
                     }
                 )
             }

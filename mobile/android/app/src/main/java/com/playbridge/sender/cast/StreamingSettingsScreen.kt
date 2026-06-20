@@ -1,4 +1,5 @@
 package com.playbridge.sender.cast
+import androidx.core.content.edit
 
 import android.content.Context
 import org.koin.compose.koinInject
@@ -143,7 +144,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                             onClick = {
                                 resolutionExpanded = false
                                 scope.launch { settingsRepository.setDefaultVideoQuality(code) }
-                                browserPrefs.edit().putString("default_video_quality", code).apply()
+                                browserPrefs.edit { putString("default_video_quality", code) }
                             }
                         )
                     }
@@ -159,13 +160,13 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                         checked = autoSelectEnabled,
                         onCheckedChange = { checked ->
                             autoSelectEnabled = checked
-                            browserPrefs.edit().putBoolean("auto_select_enabled", checked).apply()
+                            browserPrefs.edit { putBoolean("auto_select_enabled", checked) }
                         }
                     )
                 },
                 modifier = Modifier.clickable {
                     autoSelectEnabled = !autoSelectEnabled
-                    browserPrefs.edit().putBoolean("auto_select_enabled", autoSelectEnabled).apply()
+                    browserPrefs.edit { putBoolean("auto_select_enabled", autoSelectEnabled) }
                 }
             )
 
@@ -176,7 +177,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                     onValueChange = { raw ->
                         if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
                             minBitrateText = raw
-                            browserPrefs.edit().putString("auto_stream_min_mbps", raw.trim()).apply()
+                            browserPrefs.edit { putString("auto_stream_min_mbps", raw.trim()) }
                         }
                     },
                     label = { Text("Min Bitrate") },
@@ -194,7 +195,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                                 val doubleValue = raw.toDoubleOrNull() ?: 0.0
                                 settingsRepository.setMaxBitrateCapMbps(doubleValue)
                             }
-                            browserPrefs.edit().putString("auto_stream_max_mbps", raw.trim()).apply()
+                            browserPrefs.edit { putString("auto_stream_max_mbps", raw.trim()) }
                         }
                     },
                     label = { Text("Max Bitrate") },
@@ -217,7 +218,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                     onValueChange = { raw ->
                         if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
                             minSizeText = raw
-                            browserPrefs.edit().putString("auto_stream_min_gb", raw.trim()).apply()
+                            browserPrefs.edit { putString("auto_stream_min_gb", raw.trim()) }
                         }
                     },
                     label = { Text("Min Size") },
@@ -231,7 +232,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                     onValueChange = { raw ->
                         if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
                             maxSizeText = raw
-                            browserPrefs.edit().putString("auto_stream_max_gb", raw.trim()).apply()
+                            browserPrefs.edit { putString("auto_stream_max_gb", raw.trim()) }
                         }
                     },
                     label = { Text("Max Size") },
@@ -276,7 +277,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                             text = { Text("Any addon") },
                             onClick = {
                                 autoAddon = ""
-                                browserPrefs.edit().putString("auto_stream_addon", "").apply()
+                                browserPrefs.edit { putString("auto_stream_addon", "") }
                                 addonExpanded = false
                             }
                         )
@@ -285,7 +286,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                                 text = { Text(addon.name) },
                                 onClick = {
                                     autoAddon = addon.name
-                                    browserPrefs.edit().putString("auto_stream_addon", addon.name).apply()
+                                    browserPrefs.edit { putString("auto_stream_addon", addon.name) }
                                     addonExpanded = false
                                 }
                             )
@@ -319,9 +320,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                                 } else {
                                     autoSourceTypes + type
                                 }
-                                browserPrefs.edit()
-                                    .putString("auto_stream_source_types", SourceTypeFilter.toCsv(autoSourceTypes))
-                                    .apply()
+                                browserPrefs.edit { putString("auto_stream_source_types", SourceTypeFilter.toCsv(autoSourceTypes)) }
                             },
                             label = { Text(type.label) }
                         )
@@ -396,7 +395,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                             onClick = {
                                 audioExpanded = false
                                 scope.launch { settingsRepository.setPreferredAudioLang(code) }
-                                browserPrefs.edit().putString("preferred_audio_lang", code).apply()
+                                browserPrefs.edit { putString("preferred_audio_lang", code) }
                             }
                         )
                     }
@@ -436,7 +435,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                             onClick = {
                                 subExpanded = false
                                 scope.launch { settingsRepository.setPreferredSubtitleLang(code) }
-                                browserPrefs.edit().putString("preferred_subtitle_lang", code).apply()
+                                browserPrefs.edit { putString("preferred_subtitle_lang", code) }
                             }
                         )
                     }

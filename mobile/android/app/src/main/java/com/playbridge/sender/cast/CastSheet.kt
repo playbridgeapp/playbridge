@@ -2,6 +2,7 @@ package com.playbridge.sender.cast
 
 import com.playbridge.sender.downloads.DownloadUtils
 import android.content.ClipData
+import androidx.core.net.toUri
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
@@ -566,7 +567,7 @@ fun CastSheet(
                             try {
                                 val intent = android.content.Intent(
                                     android.content.Intent.ACTION_VIEW,
-                                    android.net.Uri.parse(browseUrl)
+                                    browseUrl.toUri()
                                 )
                                 context.startActivity(intent)
                             } catch (e: Exception) {

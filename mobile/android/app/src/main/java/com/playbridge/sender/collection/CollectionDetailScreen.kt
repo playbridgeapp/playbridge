@@ -1,4 +1,5 @@
 package com.playbridge.sender.collection
+import androidx.core.net.toUri
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -304,5 +305,5 @@ private fun sourceIcon(sourceTag: String?): ImageVector = when (sourceTag) {
 }
 
 private fun hostOf(url: String): String = runCatching {
-    android.net.Uri.parse(url).host ?: url
+    url.toUri().host ?: url
 }.getOrDefault(url)

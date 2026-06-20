@@ -1,4 +1,5 @@
 package com.playbridge.sender.settings
+import androidx.core.content.edit
 
 import com.playbridge.sender.browser.Components
 import android.content.Context
@@ -137,11 +138,11 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
     
     var isCloudBackingUp by remember { mutableStateOf(false) }
     var isCloudRestoring by remember { mutableStateOf(false) }
-    var lastBackupTimestamp by remember { mutableStateOf(backupManager.getLastBackupTimestamp()) }
+    var lastBackupTimestamp by remember { mutableLongStateOf(backupManager.getLastBackupTimestamp()) }
 
     var showCloudRestoreDialog by remember { mutableStateOf(false) }
     var restoreDeviceId by remember { mutableStateOf(backupManager.getDeviceId()) }
-    var restoreDateMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var restoreDateMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     DisposableEffect(Unit) {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -341,7 +342,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 value = s3Endpoint,
                 onValueChange = { 
                     s3Endpoint = it
-                    backupPrefs.edit().putString(BackupManager.KEY_ENDPOINT, it).apply()
+                    backupPrefs.edit { putString(BackupManager.KEY_ENDPOINT, it) }
                 },
                 label = { Text("Endpoint (e.g. s3.us-west-004.backblazeb2.com)") },
                 modifier = Modifier.fillMaxWidth(),
@@ -352,7 +353,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 value = s3Bucket,
                 onValueChange = { 
                     s3Bucket = it
-                    backupPrefs.edit().putString(BackupManager.KEY_BUCKET, it).apply()
+                    backupPrefs.edit { putString(BackupManager.KEY_BUCKET, it) }
                 },
                 label = { Text("Bucket Name") },
                 modifier = Modifier.fillMaxWidth(),
@@ -363,7 +364,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 value = s3AccessKey,
                 onValueChange = { 
                     s3AccessKey = it
-                    backupPrefs.edit().putString(BackupManager.KEY_ACCESS_KEY, it).apply()
+                    backupPrefs.edit { putString(BackupManager.KEY_ACCESS_KEY, it) }
                 },
                 label = { Text("Access Key ID") },
                 modifier = Modifier.fillMaxWidth(),
@@ -374,7 +375,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 value = s3SecretKey,
                 onValueChange = { 
                     s3SecretKey = it
-                    backupPrefs.edit().putString(BackupManager.KEY_SECRET_KEY, it).apply()
+                    backupPrefs.edit { putString(BackupManager.KEY_SECRET_KEY, it) }
                 },
                 label = { Text("Secret Access Key") },
                 modifier = Modifier.fillMaxWidth(),
@@ -387,7 +388,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 value = s3Region,
                 onValueChange = { 
                     s3Region = it
-                    backupPrefs.edit().putString(BackupManager.KEY_REGION, it).apply()
+                    backupPrefs.edit { putString(BackupManager.KEY_REGION, it) }
                 },
                 label = { Text("Region (default: us-east-1)") },
                 modifier = Modifier.fillMaxWidth(),
@@ -403,7 +404,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     checked = isBackupEnabled,
                     onCheckedChange = { 
                         isBackupEnabled = it
-                        backupPrefs.edit().putBoolean(BackupManager.KEY_ENABLED, it).apply()
+                        backupPrefs.edit { putBoolean(BackupManager.KEY_ENABLED, it) }
                     }
                 )
             }

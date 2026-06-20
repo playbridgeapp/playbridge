@@ -1,4 +1,5 @@
 package com.playbridge.sender.cast
+import androidx.core.content.edit
 
 import android.content.Context
 import androidx.compose.foundation.layout.*
@@ -38,11 +39,11 @@ fun MediaflowSettingsScreen(onBack: () -> Unit) {
 
     // Persist on every change, exactly like DebridSettingsScreen
     LaunchedEffect(proxyUrl, proxyPassword, autoSelect) {
-        prefs.edit()
-            .putString(MediaflowProxy.PREFS_KEY_URL, proxyUrl.trim())
-            .putString(MediaflowProxy.PREFS_KEY_PASSWORD, proxyPassword)
-            .putBoolean(MediaflowProxy.PREFS_KEY_AUTO_SELECT, autoSelect)
-            .apply()
+        prefs.edit {
+            putString(MediaflowProxy.PREFS_KEY_URL, proxyUrl.trim())
+            putString(MediaflowProxy.PREFS_KEY_PASSWORD, proxyPassword)
+            putBoolean(MediaflowProxy.PREFS_KEY_AUTO_SELECT, autoSelect)
+        }
     }
 
     Scaffold(

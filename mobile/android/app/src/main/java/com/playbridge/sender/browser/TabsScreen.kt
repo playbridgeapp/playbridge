@@ -2,6 +2,7 @@ package com.playbridge.sender.browser
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.core.net.toUri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -65,7 +66,7 @@ data class TabDisplayState(
                 && !url.contains("about:", ignoreCase = true)
         if (isValid) {
             val domain = try {
-                android.net.Uri.parse(url).host ?: ""
+                url.toUri().host ?: ""
             } catch (e: Exception) {
                 ""
             }

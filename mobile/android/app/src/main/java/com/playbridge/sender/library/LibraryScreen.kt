@@ -1,4 +1,5 @@
 package com.playbridge.sender.library
+import androidx.core.content.edit
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
@@ -193,13 +194,13 @@ private fun LibraryScreenContent(
 
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketClient.ConnectionState.Connected) {
-            browserPrefs.edit().putBoolean("watch_on_tv", true).apply()
+            browserPrefs.edit { putBoolean("watch_on_tv", true) }
         } else if (connectionState is WebSocketClient.ConnectionState.Disconnected ||
                    connectionState is WebSocketClient.ConnectionState.Error ||
                    connectionState is WebSocketClient.ConnectionState.AuthFailed ||
                    connectionState is WebSocketClient.ConnectionState.PairingDenied ||
                    connectionState is WebSocketClient.ConnectionState.PinMismatch) {
-            browserPrefs.edit().putBoolean("watch_on_tv", false).apply()
+            browserPrefs.edit { putBoolean("watch_on_tv", false) }
         }
     }
 
@@ -420,8 +421,8 @@ private fun LibraryScreenContent(
                                 // hooks just set it optimistically on selection.
                                 DeviceChip(
                                     showThisDevice = true,
-                                    onPickedThisDevice = { browserPrefs.edit().putBoolean("watch_on_tv", false).apply() },
-                                    onPickedDevice = { browserPrefs.edit().putBoolean("watch_on_tv", true).apply() },
+                                onPickedThisDevice = { browserPrefs.edit { putBoolean("watch_on_tv", false) } },
+                                onPickedDevice = { browserPrefs.edit { putBoolean("watch_on_tv", true) } },
                                     onOpenAllDevices = onOpenConnectionScreen
                                 )
                             }

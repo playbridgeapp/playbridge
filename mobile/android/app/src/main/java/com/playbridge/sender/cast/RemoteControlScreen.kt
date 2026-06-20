@@ -696,12 +696,12 @@ private fun SeekVolumeBar(
     val hasDuration = durationMs > 0L && !isLive
     val currentPosition by rememberUpdatedState(positionMs)
 
-    var widthPx by remember { mutableStateOf(0f) }
+    var widthPx by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
-    var dragMs by remember { mutableStateOf(0f) }
+    var dragMs by remember { mutableFloatStateOf(0f) }
     var activeAxis by remember { mutableStateOf<DragAxis?>(null) }
     var volumeDirection by remember { mutableStateOf<String?>(null) } // "up" or "down"
-    var touchDownTime by remember { mutableStateOf(0L) }
+    var touchDownTime by remember { mutableLongStateOf(0L) }
     var isAggressive by remember { mutableStateOf(false) }
 
     // Vertical travel required for one volume step.
@@ -1380,7 +1380,7 @@ private fun NowPlayingPanel(
 ) {
     val hasDuration = durationMs > 0L
     var dragging by remember { mutableStateOf(false) }
-    var dragValue by remember { mutableStateOf(0f) }
+    var dragValue by remember { mutableFloatStateOf(0f) }
 
     // Stop dragging once the TV's reported position catches up to where we seeked.
     LaunchedEffect(positionMs) { if (dragging) dragging = false }

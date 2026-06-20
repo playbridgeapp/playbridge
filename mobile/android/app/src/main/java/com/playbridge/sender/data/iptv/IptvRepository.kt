@@ -1,4 +1,5 @@
 package com.playbridge.sender.data.iptv
+import androidx.core.net.toUri
 
 import android.content.Context
 import android.net.Uri
@@ -88,7 +89,7 @@ class IptvRepository(
             IptvSourceType.URL -> M3uParser.fetchChannels(playlist.source, null)
             IptvSourceType.FILE -> withContext(Dispatchers.IO) {
                 runCatching {
-                    context.contentResolver.openInputStream(Uri.parse(playlist.source))
+                    context.contentResolver.openInputStream(playlist.source.toUri())
                         ?.bufferedReader()?.use { it.readText() }
                 }.getOrNull()?.let { M3uParser.parseM3uText(it) }
             }

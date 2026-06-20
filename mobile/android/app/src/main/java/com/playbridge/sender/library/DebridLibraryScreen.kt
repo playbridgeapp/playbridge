@@ -53,7 +53,7 @@ fun DebridLibraryScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     var isLoadingMore by remember { mutableStateOf(false) }
     var hasMorePages by remember { mutableStateOf(true) }
-    var currentPage by remember { mutableStateOf(1) }
+    var currentPage by remember { mutableIntStateOf(1) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     // ── Bottom sheet / info state ───────────────────────────────────────────

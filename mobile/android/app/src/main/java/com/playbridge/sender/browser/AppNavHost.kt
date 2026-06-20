@@ -2,8 +2,8 @@ package com.playbridge.sender.browser
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
+import androidx.core.net.toUri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -336,7 +336,7 @@ fun AppNavHost(
                                 if (urlBarTapped) {
                                     val pageTitle = selectedTab?.content?.title?.takeIf { it.isNotBlank() }
                                     val domain = try {
-                                        Uri.parse(currentUrl).host ?: currentUrl
+                                        currentUrl.toUri().host ?: currentUrl
                                     } catch (e: Exception) {
                                         currentUrl
                                     }

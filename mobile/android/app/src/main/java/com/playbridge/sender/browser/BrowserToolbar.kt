@@ -46,6 +46,7 @@ fun BrowserToolbar(
     isLoading: Boolean,
     onUrlChange: (String) -> Unit,
     onNavigate: (String) -> Unit,
+    modifier: Modifier = Modifier,
     onMagnetDetected: (String) -> Unit = {},
     onRefresh: () -> Unit,
     onStop: () -> Unit,
@@ -55,7 +56,6 @@ fun BrowserToolbar(
     isSecure: Boolean = false,
     onSecurityIconClick: () -> Unit = {},
     onEditingChange: (Boolean) -> Unit = {},
-    modifier: Modifier = Modifier
 ) {
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current

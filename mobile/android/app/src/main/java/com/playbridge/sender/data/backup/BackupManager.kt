@@ -1,4 +1,5 @@
 package com.playbridge.sender.data.backup
+import androidx.core.content.edit
 
 import android.content.Context
 import android.util.Log
@@ -34,7 +35,7 @@ class BackupManager(private val context: Context) {
     }
 
     fun saveLastBackupTimestamp() {
-        prefs.edit().putLong(KEY_LAST_BACKUP, System.currentTimeMillis()).apply()
+        prefs.edit { putLong(KEY_LAST_BACKUP, System.currentTimeMillis()) }
     }
 
     fun isConfigured(): Boolean {

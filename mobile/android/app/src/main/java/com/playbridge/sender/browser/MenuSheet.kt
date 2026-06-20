@@ -120,10 +120,10 @@ fun MenuSheet(
 private fun MenuGridItem(
     icon: ImageVector,
     label: String,
+    modifier: Modifier = Modifier,
     selected: Boolean = false,
     tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     labelColor: Color = MaterialTheme.colorScheme.onSurface,
-    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Column(
