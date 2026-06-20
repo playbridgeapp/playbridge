@@ -116,8 +116,8 @@ class InputHandler(
             val upEvent = KeyEvent(KeyEvent.ACTION_UP, keyCode)
 
             activity.runOnUiThread {
-                activity.dispatchKeyEvent(downEvent)
-                activity.dispatchKeyEvent(upEvent)
+                (activity as android.app.Activity).dispatchKeyEvent(downEvent)
+                (activity as android.app.Activity).dispatchKeyEvent(upEvent)
             }
         }
     }
