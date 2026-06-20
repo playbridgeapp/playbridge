@@ -576,6 +576,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                     hasMedia: hasMedia,
                                     playerState: _player.state,
                                     senderCasting: _sender.isCasting,
+                                    enableHistory: widget.store.enableHistory,
                                     onDestSelect: (d) => setState(() {
                                       _dest = d;
                                       _showingVideo = false;
@@ -755,6 +756,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           player: _player,
           showStats: _showStats,
           onNavigateToCast: () => setState(() => _dest = _Dest.cast),
+          onSettingsChanged: () => setState(() {
+            if (!widget.store.enableHistory && _dest == _Dest.history) {
+              _dest = _Dest.cast;
+            }
+          }),
         ),
     };
   }
@@ -769,6 +775,7 @@ class _NavSidebar extends StatelessWidget {
     required this.hasMedia,
     required this.playerState,
     required this.senderCasting,
+    required this.enableHistory,
     required this.onDestSelect,
     required this.onShowVideo,
   });
@@ -778,6 +785,7 @@ class _NavSidebar extends StatelessWidget {
   final bool hasMedia;
   final String playerState;
   final bool senderCasting;
+  final bool enableHistory;
   final ValueChanged<_Dest> onDestSelect;
   final VoidCallback onShowVideo;
 
@@ -842,12 +850,13 @@ class _NavSidebar extends StatelessWidget {
                 selected: !showingVideo && dest == _Dest.cast,
                 onTap: () => onDestSelect(_Dest.cast),
               ),
-              _NavItem(
-                icon: Icons.history,
-                label: 'History',
-                selected: !showingVideo && dest == _Dest.history,
-                onTap: () => onDestSelect(_Dest.history),
-              ),
+              if (enableHistory)
+                _NavItem(
+                  icon: Icons.history,
+                  label: 'History',
+                  selected: !showingVideo && dest == _Dest.history,
+                  onTap: () => onDestSelect(_Dest.history),
+                ),
               _NavItem(
                 icon: Icons.star_border,
                 label: 'Favorites',
