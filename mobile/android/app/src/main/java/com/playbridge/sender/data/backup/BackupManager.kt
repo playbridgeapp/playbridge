@@ -45,6 +45,12 @@ class BackupManager(private val context: Context) {
                !prefs.getString(KEY_SECRET_KEY, "").isNullOrBlank()
     }
 
+    /**
+     * Retrieves the device's ANDROID_ID to uniquely identify this device in backup filenames.
+     * Scanned as HardwareIds by lint. This is safe because on Android 8.0+ ANDROID_ID is scoped
+     * per-app/signing-key, preventing cross-app tracking.
+     */
+    @android.annotation.SuppressLint("HardwareIds")
     fun getDeviceId(): String {
         return android.provider.Settings.Secure.getString(
             context.contentResolver,

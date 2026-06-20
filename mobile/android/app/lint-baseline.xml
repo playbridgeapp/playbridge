@@ -2,432 +2,25 @@
 <issues format="6" by="lint 9.0.1" type="baseline" client="gradle" dependencies="false" name="AGP (9.0.1)" variant="all" version="9.0.1">
 
     <issue
-        id="WrongThread"
-        message="Method setMessageDelegate must be called from the UI thread, currently inferred thread is any thread"
-        errorLine1="                    extension.setMessageDelegate(globalMessageDelegate, &quot;browser&quot;)"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/browser/Components.kt"
-            line="389"
-            column="21"/>
-    </issue>
-
-    <issue
         id="PictureInPictureIssue"
         message="An activity in this app supports picture-in-picture and the targetSdkVersion is 31 or above; it is therefore strongly recommended to call both `setAutoEnterEnabled(true)` and `setSourceRectHint(...)`"
         errorLine1="    &lt;application"
         errorLine2="     ~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="24"
+            line="25"
             column="6"/>
     </issue>
 
     <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                        DownloadUtils.enqueueDownload(this@BrowserActivity, video.url, null, video.contentType, video.headers?.get(&quot;User-Agent&quot;), video.headers?.get(&quot;Cookie&quot;), video.headers?.get(&quot;Referer&quot;) ?: video.originUrl, pageTitle = selectedTab?.content?.title)"
-        errorLine2="                        ~~~~~~~~~~~~~">
+        id="AndroidGradlePluginVersion"
+        message="A newer version of Gradle than 9.5.1 is available: 9.6.0"
+        errorLine1="distributionUrl=https\://services.gradle.org/distributions/gradle-9.5.1-bin.zip"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/playbridge/sender/browser/BrowserActivity.kt"
-            line="1740"
-            column="25"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                        DownloadUtils.enqueueDownload(this@BrowserActivity, video.url, null, video.contentType, video.headers?.get(&quot;User-Agent&quot;), video.headers?.get(&quot;Cookie&quot;), video.headers?.get(&quot;Referer&quot;) ?: video.originUrl, pageTitle = selectedTab?.content?.title)"
-        errorLine2="                                      ~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/browser/BrowserActivity.kt"
-            line="1740"
-            column="39"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                        DownloadUtils.enqueueDownload(this@BrowserActivity, download.url, download.fileName, download.contentType, download.userAgent, download.cookie, download.referer, pageTitle = selectedTab?.content?.title)"
-        errorLine2="                        ~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/browser/BrowserActivity.kt"
-            line="1882"
-            column="25"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                        DownloadUtils.enqueueDownload(this@BrowserActivity, download.url, download.fileName, download.contentType, download.userAgent, download.cookie, download.referer, pageTitle = selectedTab?.content?.title)"
-        errorLine2="                                      ~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/browser/BrowserActivity.kt"
-            line="1882"
-            column="39"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                            text = DownloadUtils.formatFileSize(fileSize!!)"
-        errorLine2="                                   ~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/CastSheetComponents.kt"
-            line="448"
-            column="36"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                            text = DownloadUtils.formatFileSize(fileSize!!)"
-        errorLine2="                                                 ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/CastSheetComponents.kt"
-            line="448"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                        DownloadUtils.getDownloadErrorString(reason)"
-        errorLine2="                        ~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/downloads/DownloadsScreen.kt"
-            line="383"
-            column="25"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                        DownloadUtils.getDownloadErrorString(reason)"
-        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/downloads/DownloadsScreen.kt"
-            line="383"
-            column="39"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                                text = DownloadUtils.formatFileSize(file.bytes),"
-        errorLine2="                                                       ~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/library/MagnetParsingSheet.kt"
-            line="208"
-            column="56"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                                text = DownloadUtils.formatFileSize(file.bytes),"
-        errorLine2="                                                                     ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/library/MagnetParsingSheet.kt"
-            line="208"
-            column="70"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="    var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }"
-        errorLine2="                                                                          ~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="615"
-            column="75"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                            this.resizeMode = resizeMode"
-        errorLine2="                                 ~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="959"
-            column="34"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                            subtitleView?.apply {"
-        errorLine2="                            ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="962"
-            column="29"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                setApplyEmbeddedStyles(false)"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="963"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                setApplyEmbeddedFontSizes(false)"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="964"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                val customStyle = androidx.media3.ui.CaptionStyleCompat("
-        errorLine2="                                    ~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="965"
-            column="37"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                val customStyle = androidx.media3.ui.CaptionStyleCompat("
-        errorLine2="                                                                     ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="965"
-            column="70"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                    androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE,"
-        errorLine2="                                                                          ~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="969"
-            column="75"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                setStyle(customStyle)"
-        errorLine2="                                ~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="973"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18f)"
-        errorLine2="                                ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="974"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                    update = { it.resizeMode = resizeMode },"
-        errorLine2="                                  ~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="978"
-            column="35"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                        AspectRatioFrameLayout.RESIZE_MODE_FIT -> &quot;Fit to Screen&quot;"
-        errorLine2="                                                               ~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1478"
-            column="64"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> &quot;Zoomed&quot;"
-        errorLine2="                                                               ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1479"
-            column="64"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                                        AspectRatioFrameLayout.RESIZE_MODE_FILL -> &quot;Stretched&quot;"
-        errorLine2="                                                               ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1480"
-            column="64"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="    AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM"
-        errorLine2="                           ~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1751"
-            column="28"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="    AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM"
-        errorLine2="                                                                     ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1751"
-            column="70"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL"
-        errorLine2="                           ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1752"
-            column="28"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL"
-        errorLine2="                                                                      ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1752"
-            column="71"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT"
-        errorLine2="                                   ~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1753"
-            column="36"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="            .setDefaultRequestProperties(headersMap)"
-        errorLine2="             ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/VideoPreviewSheet.kt"
-            line="75"
-            column="14"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)"
-        errorLine2="                               ~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/VideoPreviewSheet.kt"
-            line="86"
-            column="32"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)"
-        errorLine2="                                                          ~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/VideoPreviewSheet.kt"
-            line="86"
-            column="59"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                DashMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)"
-        errorLine2="                                ~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/VideoPreviewSheet.kt"
-            line="90"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                DashMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)"
-        errorLine2="                                                           ~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/VideoPreviewSheet.kt"
-            line="90"
-            column="60"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)"
-        errorLine2="                                       ~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/VideoPreviewSheet.kt"
-            line="93"
-            column="40"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="                ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)"
-        errorLine2="                                                                  ~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/VideoPreviewSheet.kt"
-            line="93"
-            column="67"/>
-    </issue>
-
-    <issue
-        id="UnsafeOptInUsageError"
-        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
-        errorLine1="        player.setMediaSource(mediaSource)"
-        errorLine2="               ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/cast/VideoPreviewSheet.kt"
-            line="96"
-            column="16"/>
+            file="$HOME/repos/personal/playbridgeapp/PlayBridge/mobile/android/gradle/wrapper/gradle-wrapper.properties"
+            line="5"
+            column="17"/>
     </issue>
 
     <issue
@@ -448,7 +41,7 @@
         errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="1769"
+            line="1773"
             column="22"/>
     </issue>
 
@@ -459,7 +52,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="51"
+            line="52"
             column="13"/>
     </issue>
 
@@ -750,61 +343,6 @@
     </issue>
 
     <issue
-        id="HardwareIds"
-        message="Using `getString` to get device identifiers is not recommended"
-        errorLine1="        return android.provider.Settings.Secure.getString("
-        errorLine2="               ^">
-        <location
-            file="src/main/java/com/playbridge/sender/data/backup/BackupManager.kt"
-            line="49"
-            column="16"/>
-    </issue>
-
-    <issue
-        id="TrustAllX509TrustManager"
-        message="`checkClientTrusted` is empty, which could cause insecure network traffic due to trusting arbitrary TLS/SSL certificates presented by peers"
-        errorLine1="    override fun checkClientTrusted(chain: Array&lt;out X509Certificate>?, authType: String?) {}"
-        errorLine2="                 ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/connection/PinningTrustManager.kt"
-            line="24"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="CustomX509TrustManager"
-        message="Implementing a custom `X509TrustManager` is error-prone and likely to be insecure. It is likely to disable certificate validation altogether, and is non-trivial to implement correctly without calling Android&apos;s default implementation."
-        errorLine1="class PinningTrustManager("
-        errorLine2="      ~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/connection/PinningTrustManager.kt"
-            line="20"
-            column="7"/>
-    </issue>
-
-    <issue
-        id="InsecureBaseConfiguration"
-        message="Insecure Base Configuration"
-        errorLine1="    &lt;base-config cleartextTrafficPermitted=&quot;true&quot;>"
-        errorLine2="                                            ~~~~">
-        <location
-            file="src/main/res/xml/network_security_config.xml"
-            line="4"
-            column="45"/>
-    </issue>
-
-    <issue
-        id="QueryAllPackagesPermission"
-        message="A `&lt;queries>` declaration should generally be used instead of QUERY_ALL_PACKAGES; see https://g.co/dev/packagevisibility for details"
-        errorLine1="    &lt;uses-permission android:name=&quot;android.permission.QUERY_ALL_PACKAGES&quot; tools:node=&quot;remove&quot; />"
-        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/AndroidManifest.xml"
-            line="16"
-            column="22"/>
-    </issue>
-
-    <issue
         id="ObsoleteSdkInt"
         message="This folder configuration (`v26`) is unnecessary; `minSdkVersion` is 26. Merge all the resources in this folder into `mipmap-anydpi`.">
         <location
@@ -820,39 +358,6 @@
             file="src/main/res/layout/player_view.xml"
             line="12"
             column="5"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.array.com_google_android_gms_fonts_certs` appears to be unused"
-        errorLine1="    &lt;array name=&quot;com_google_android_gms_fonts_certs&quot;>"
-        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/font_certs.xml"
-            line="3"
-            column="12"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.array.com_google_android_gms_fonts_certs_dev` appears to be unused"
-        errorLine1="    &lt;string-array name=&quot;com_google_android_gms_fonts_certs_dev&quot;>"
-        errorLine2="                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/font_certs.xml"
-            line="7"
-            column="19"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.array.com_google_android_gms_fonts_certs_prod` appears to be unused"
-        errorLine1="    &lt;string-array name=&quot;com_google_android_gms_fonts_certs_prod&quot;>"
-        errorLine2="                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/font_certs.xml"
-            line="41"
-            column="19"/>
     </issue>
 
     <issue
@@ -942,17 +447,6 @@
         message="Found bitmap drawable `res/drawable/ic_playbridge_logo.png` in densityless folder">
         <location
             file="src/main/res/drawable/ic_playbridge_logo.png"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX function `createBitmap` instead?"
-        errorLine1="    val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)"
-        errorLine2="                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/playbridge/sender/player/PlayerActivity.kt"
-            line="2009"
-            column="18"/>
     </issue>
 
 </issues>

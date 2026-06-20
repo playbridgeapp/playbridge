@@ -18,6 +18,7 @@ android {
     lint {
         // Existing issues are recorded in lint-baseline.xml; CI fails only on NEW ones.
         baseline = file("lint-baseline.xml")
+        disable += "UnsafeOptInUsageError"
     }
 
     defaultConfig {
@@ -156,4 +157,10 @@ dependencies {
     implementation(libs.koin.compose)
 
     implementation(project(":shared"))
+}
+
+kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-opt-in=androidx.media3.common.util.UnstableApi")
+    }
 }

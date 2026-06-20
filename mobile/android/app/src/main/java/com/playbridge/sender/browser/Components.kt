@@ -385,9 +385,11 @@ object Components {
                     // Store extension reference
                     videoDetectorExtension = extension
 
-                    // Set up message delegate on the extension instance to receive messages
-                    extension.setMessageDelegate(globalMessageDelegate, "browser")
-                    Log.i(TAG, "Message delegate registered on Extension instance: ${extension.id}")
+                    // Set up message delegate on the extension instance to receive messages on the UI thread
+                    Handler(Looper.getMainLooper()).post {
+                        extension.setMessageDelegate(globalMessageDelegate, "browser")
+                        Log.i(TAG, "Message delegate registered on Extension instance: ${extension.id}")
+                    }
                 } else {
                     Log.e(TAG, "ensureBuiltIn returned null extension")
                 }

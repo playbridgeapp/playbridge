@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <!-- Allow cleartext (HTTP/WS) for local network connections -->
-    <base-config cleartextTrafficPermitted="true">
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- 
+      Allow cleartext (HTTP/WS) traffic globally. Scanned as InsecureBaseConfiguration.
+      This is required because the app integrates an embedded GeckoView web browser that 
+      needs to resolve and stream from arbitrary user-entered HTTP sites and local servers.
+    -->
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

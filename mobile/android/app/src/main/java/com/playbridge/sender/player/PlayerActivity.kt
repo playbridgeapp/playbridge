@@ -3,6 +3,7 @@ package com.playbridge.sender.player
 import android.app.Activity
 import android.content.Context
 import androidx.core.net.toUri
+import androidx.core.graphics.createBitmap
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
@@ -186,8 +187,11 @@ class PlayerActivity : ComponentActivity() {
         val contentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
 
         @Suppress("UNCHECKED_CAST")
-        val headers: Map<String, String> = (intent.getSerializableExtra(EXTRA_HEADERS) as? HashMap<String, String>)
-            ?: emptyMap()
+        val headers: Map<String, String> = androidx.core.content.IntentCompat.getSerializableExtra(
+            intent,
+            EXTRA_HEADERS,
+            HashMap::class.java
+        ) as? HashMap<String, String> ?: emptyMap()
 
         val subUrls = intent.getStringArrayListExtra(EXTRA_SUB_URLS).orEmpty()
         val subLabels = intent.getStringArrayListExtra(EXTRA_SUB_LABELS).orEmpty()
@@ -2006,7 +2010,7 @@ private fun captureFrame(playerView: PlayerView, onCaptured: (Bitmap?) -> Unit) 
         return
     }
 
-    val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
+    val bitmap = createBitmap(surfaceView.width, surfaceView.height)
     val handlerThread = HandlerThread("PixelCopy")
     handlerThread.start()
 
