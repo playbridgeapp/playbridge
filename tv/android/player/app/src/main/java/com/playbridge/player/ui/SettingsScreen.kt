@@ -65,6 +65,15 @@ fun SettingsScreen(
     var isGeckoInstalled by remember { mutableStateOf(false) }
     var showGeckoDialog by remember { mutableStateOf(false) }
 
+    // Skip segments states
+    var introDbApiKey by remember { mutableStateOf(prefs.getString("introdb_api_key", "") ?: "") }
+    var introDbApiUrl by remember { mutableStateOf(prefs.getString("introdb_api_url", "https://api.introdb.app") ?: "https://api.introdb.app") }
+    var autoSkipIntro by remember { mutableStateOf(prefs.getBoolean("auto_skip_intro", false)) }
+    var autoSkipRecap by remember { mutableStateOf(prefs.getBoolean("auto_skip_recap", false)) }
+    var autoSkipOutro by remember { mutableStateOf(prefs.getBoolean("auto_skip_outro", false)) }
+    var showApiKeyDialog by remember { mutableStateOf(false) }
+    var showApiUrlDialog by remember { mutableStateOf(false) }
+
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -217,6 +226,56 @@ fun SettingsScreen(
                                 onCheckedChange = {
                                     hideSoftKeyboard = it
                                     prefs.edit().putBoolean("hide_soft_keyboard", it).apply()
+                                }
+                            )
+                        }
+                    }
+
+                    SettingsCategory.INTEGRATIONS -> {
+                        item {
+                            SettingClickableItem(
+                                label = "IntroDB API Key",
+                                description = if (introDbApiKey.isEmpty()) "Not Configured" else "••••••••",
+                                onClick = { showApiKeyDialog = true }
+                            )
+                        }
+                        item {
+                            SettingClickableItem(
+                                label = "IntroDB API URL",
+                                description = introDbApiUrl,
+                                onClick = { showApiUrlDialog = true }
+                            )
+                        }
+                        item {
+                            SettingToggleItem(
+                                label = "Auto-Skip Intro",
+                                description = "Automatically skip show intros.",
+                                checked = autoSkipIntro,
+                                onCheckedChange = {
+                                    autoSkipIntro = it
+                                    prefs.edit().putBoolean("auto_skip_intro", it).apply()
+                                }
+                            )
+                        }
+                        item {
+                            SettingToggleItem(
+                                label = "Auto-Skip Recap",
+                                description = "Automatically skip show recaps.",
+                                checked = autoSkipRecap,
+                                onCheckedChange = {
+                                    autoSkipRecap = it
+                                    prefs.edit().putBoolean("auto_skip_recap", it).apply()
+                                }
+                            )
+                        }
+                        item {
+                            SettingToggleItem(
+                                label = "Auto-Skip Outro",
+                                description = "Automatically skip show outros/credits.",
+                                checked = autoSkipOutro,
+                                onCheckedChange = {
+                                    autoSkipOutro = it
+                                    prefs.edit().putBoolean("auto_skip_outro", it).apply()
                                 }
                             )
                         }
@@ -391,12 +450,112 @@ fun SettingsScreen(
             }
         }
     }
+
+    if (showApiKeyDialog) {
+        var tempKey by remember { mutableStateOf(introDbApiKey) }
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showApiKeyDialog = false }) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.width(400.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(32.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("IntroDB API Key", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "Enter your IntroDB API key or Clerk token. Leave empty if using the public API.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = tempKey,
+                        onValueChange = { tempKey = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+                            .padding(16.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(onClick = { showApiKeyDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
+                            Text("Cancel")
+                        }
+                        Button(onClick = {
+                            introDbApiKey = tempKey.trim()
+                            prefs.edit().putString("introdb_api_key", introDbApiKey).apply()
+                            showApiKeyDialog = false
+                        }) {
+                            Text("Save")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showApiUrlDialog) {
+        var tempUrl by remember { mutableStateOf(introDbApiUrl) }
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showApiUrlDialog = false }) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.width(400.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(32.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("IntroDB API URL", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "Set custom API url for skip segments. Default is https://api.introdb.app",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = tempUrl,
+                        onValueChange = { tempUrl = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+                            .padding(16.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(onClick = { showApiUrlDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
+                            Text("Cancel")
+                        }
+                        Button(onClick = {
+                            val finalUrl = tempUrl.trim().ifEmpty { "https://api.introdb.app" }
+                            introDbApiUrl = finalUrl
+                            prefs.edit().putString("introdb_api_url", finalUrl).apply()
+                            showApiUrlDialog = false
+                        }) {
+                            Text("Save")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 enum class SettingsCategory(val label: String, val icon: ImageVector) {
     PLAYER("Player", Icons.Default.PlayArrow),
     BROWSER("Browser", Icons.Default.Search),
     NETWORK("Network", Icons.Default.Settings),
+    INTEGRATIONS("Integrations", Icons.Default.Build),
     APPEARANCE("Appearance", Icons.Default.Add),
     ABOUT("About", Icons.Default.Info)
 }

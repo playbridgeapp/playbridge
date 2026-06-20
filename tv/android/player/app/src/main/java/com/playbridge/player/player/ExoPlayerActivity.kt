@@ -135,7 +135,7 @@ class ExoPlayerActivity : PlayerActivity() {
             displayTitle?.takeIf { it.isNotBlank() }?.let {
                 android.widget.Toast.makeText(this@ExoPlayerActivity, it, android.widget.Toast.LENGTH_SHORT).show()
             }
-            controlsViewModel.setPrePlay(item.visual_metadata, showCountdown = false)
+            controlsViewModel.setPrePlay(item.visual_metadata, context = this@ExoPlayerActivity, showCountdown = false)
             playVideo(
                 url = item.url,
                 title = displayTitle,
@@ -295,6 +295,8 @@ class ExoPlayerActivity : PlayerActivity() {
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
                         onSeek = { controlsViewModel.handleScrubbing(it) },
+                        onSkipSegment = { controlsViewModel.skipCurrentSegment() },
+                        onSkipButtonFocusChanged = { controlsViewModel.setSkipButtonFocused(it) },
                         onPrePlayStartNow = {
                             launchJob?.cancel()
                             controlsViewModel.setPrePlayLaunching(true)
@@ -427,7 +429,7 @@ class ExoPlayerActivity : PlayerActivity() {
             isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
         )
         
-        controlsViewModel.setEngine(engineAdapter, "exo")
+        controlsViewModel.setEngine(engineAdapter, "exo", this)
 
         // Register broadcast receiver for control commands
         val filter = IntentFilter().apply {

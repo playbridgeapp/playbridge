@@ -64,4 +64,7 @@ data class PlayerControlsState(
     // Bumped whenever a subtitle preview finishes loading, so the overlay re-reads the
     // SubtitleCueLoader cache. The cues themselves live in the loader, not in state.
     val subtitleCuesVersion: Int = 0,
+    val skipSegments: List<com.playbridge.player.player.SkipSegment> = emptyList(),
+    val activeSkipSegment: com.playbridge.player.player.SkipSegment? = null,
+    val isSkipButtonFocused: Boolean = false,
 )

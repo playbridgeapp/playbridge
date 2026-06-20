@@ -427,9 +427,9 @@ abstract class PlayerActivity : ComponentActivity() {
                 val metadata = playbridge.VisualMetadata.ADAPTER.decode(visualMetadataBytes)
                 FileLogger.i("PlayerActivity", "Received visual metadata (skipPreplay=$skipPreplay): ${metadata.title}")
                 if (skipPreplay) {
-                    controlsViewModel.setPrePlay(metadata, showCountdown = false)
+                    controlsViewModel.setPrePlay(metadata, context = this, showCountdown = false)
                 } else {
-                    controlsViewModel.setPrePlay(metadata)
+                    controlsViewModel.setPrePlay(metadata, context = this)
                     controlsViewModel.setPrePlayLaunching(true)
                     controlsViewModel.setPrePlayCountdown(-1) // -1 signifies "Connecting..."
                 }

@@ -144,7 +144,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             Toast.makeText(this, "Seek failed (network error)", Toast.LENGTH_SHORT).show()
             // Seek back to the pre-seek position (known-good). Using positionMs here would
             // re-seek to the stuck target because MPV reports the target as time-pos mid-seek.
-            MPVLib.command("seek", (preSeePositionMs / 1000.0).toString(), "absolute+keyframes")
+            MPVLib.command("seek", (preSeePositionMs / 1000.0).toString(), "absolute")
         }
     }
 
@@ -156,7 +156,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     Toast.makeText(this@MpvPlayerActivity, it, Toast.LENGTH_SHORT).show()
                     controlsViewModel.setTitle(it)
                 }
-                controlsViewModel.setPrePlay(item.visual_metadata, showCountdown = false)
+                controlsViewModel.setPrePlay(item.visual_metadata, context = this@MpvPlayerActivity, showCountdown = false)
                 controlsViewModel.hideControls()
             }
             stopPlayback()
@@ -280,6 +280,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         onLoop = { setLooping(!isLooping) },
                         onSwitchPlayer = { controlsViewModel.showSwitchPlayer() },
                         onSeek = { controlsViewModel.handleScrubbing(it) },
+                        onSkipSegment = { controlsViewModel.skipCurrentSegment() },
+                        onSkipButtonFocusChanged = { controlsViewModel.setSkipButtonFocused(it) },
                         onPrePlayStartNow = {
                             launchJob?.cancel()
                             controlsViewModel.setPrePlayLaunching(true)
@@ -407,14 +409,14 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
         )
 
-        controlsViewModel.setEngine(engineAdapter, "mpv")
+        controlsViewModel.setEngine(engineAdapter, "mpv", this)
 
         // Register MPV observer NOW — after controlsManager is initialized — so that
         // property-change callbacks can safely reference controlsManager without crashing.
         // Format IDs: MPV_FORMAT_STRING=1, MPV_FORMAT_FLAG=3, MPV_FORMAT_INT64=4, MPV_FORMAT_DOUBLE=5
         MPVLib.addObserver(this)
         MPVLib.observeProperty("pause",               3) // Boolean
-        MPVLib.observeProperty("time-pos",            4) // Long (seconds)
+        MPVLib.observeProperty("time-pos",            5) // Double (seconds)
         MPVLib.observeProperty("duration",            4) // Long (seconds)
         MPVLib.observeProperty("height",              4) // Long (px)
         MPVLib.observeProperty("video-bitrate",       4) // Long (bits/s)
@@ -538,9 +540,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun eventProperty(property: String, value: Long) {
         when (property) {
-            "time-pos" -> {
-                positionMs = value * 1000
-            }
             "duration" -> {
                 durationMs = value * 1000
             }
@@ -574,6 +573,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun eventProperty(property: String, value: Double) {
         when (property) {
+            "time-pos" -> {
+                positionMs = (value * 1000).toLong()
+            }
             "demuxer-cache-time" -> {
                 bufferAheadMs = (value * 1000).toLong()
             }
