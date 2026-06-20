@@ -3,8 +3,8 @@ package com.playbridge.sender.downloads
 import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.Context
-import android.net.Uri
 import android.os.Environment
+import androidx.core.net.toUri
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -62,7 +62,7 @@ object DownloadUtils {
                 Toast.makeText(context, "Loading stream info…", Toast.LENGTH_SHORT).show()
 
                 val mediaItem = MediaItem.Builder()
-                    .setUri(Uri.parse(url))
+                    .setUri(url.toUri())
                     .setMimeType(MimeTypes.APPLICATION_M3U8)
                     .build()
                 val helper = DownloadHelper.forMediaItem(
@@ -135,7 +135,7 @@ object DownloadUtils {
                     override fun onPrepareError(helper: DownloadHelper, e: IOException) {
                         // Manifest probe failed — fall back to full download
                         android.util.Log.w("DownloadUtils", "DownloadHelper prepare failed: ${e.message}")
-                        val req = DownloadRequest.Builder(url, Uri.parse(url))
+                        val req = DownloadRequest.Builder(url, url.toUri())
                             .setMimeType(MimeTypes.APPLICATION_M3U8)
                             .setData(displayName.toByteArray())
                             .build()
@@ -147,7 +147,7 @@ object DownloadUtils {
             }
 
             // --- Standard (non-HLS) download via system DownloadManager ---
-            val uri = Uri.parse(url)
+            val uri = url.toUri()
             val request = DownloadManager.Request(uri)
 
             if (cookies != null) request.addRequestHeader("Cookie", cookies)

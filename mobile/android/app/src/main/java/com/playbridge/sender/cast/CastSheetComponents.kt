@@ -2,6 +2,7 @@ package com.playbridge.sender.cast
 
 import com.playbridge.sender.downloads.DownloadUtils
 import android.content.ClipData
+import androidx.core.net.toUri
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
@@ -784,7 +785,7 @@ fun openInExternalPlayer(
 ) {
     try {
         val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
-        val uri = android.net.Uri.parse(url)
+        val uri = url.toUri()
 
         // standard call
         if (mimeType != null) {

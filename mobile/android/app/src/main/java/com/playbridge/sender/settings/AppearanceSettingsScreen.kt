@@ -1,4 +1,5 @@
 package com.playbridge.sender.settings
+import androidx.core.content.edit
 
 import android.app.Activity
 import android.content.Context
@@ -61,7 +62,7 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
                     onSelect = {
                         if (theme != selectedTheme) {
                             selectedTheme = theme
-                            prefs.edit().putString("app_theme", theme.name).apply()
+                            prefs.edit { putString("app_theme", theme.name) }
                             (context as? Activity)?.recreate()
                         }
                     }

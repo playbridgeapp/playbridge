@@ -18,6 +18,7 @@ android {
     lint {
         // Existing issues are recorded in lint-baseline.xml; CI fails only on NEW ones.
         baseline = file("lint-baseline.xml")
+        disable += "UnsafeOptInUsageError"
     }
 
     defaultConfig {
@@ -90,7 +91,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation("androidx.compose.material:material-icons-extended:1.7.6")
+    implementation("androidx.compose.material:material-icons-extended:1.7.8")
     implementation(libs.coil.compose)
 
 
@@ -156,4 +157,10 @@ dependencies {
     implementation(libs.koin.compose)
 
     implementation(project(":shared"))
+}
+
+kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-opt-in=androidx.media3.common.util.UnstableApi")
+    }
 }

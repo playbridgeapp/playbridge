@@ -3,6 +3,7 @@ package com.playbridge.sender.cast
 import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Build
 import android.os.Environment
 import android.os.ParcelFileDescriptor
@@ -95,7 +96,7 @@ object HlsExporter {
 
         // --- Step 1: read the manifest ---
         Log.d(TAG, "Step 1: reading manifest from $hlsUrl")
-        val manifestBytes = readManifest(Uri.parse(hlsUrl))
+        val manifestBytes = readManifest(hlsUrl.toUri())
         if (manifestBytes == null) {
             Log.e(TAG, "ABORT: manifest read returned null for $hlsUrl")
             return@withContext null
@@ -130,7 +131,7 @@ object HlsExporter {
 
             mediaPlaylistUrl = chosenVariant
             Log.d(TAG, "Using media playlist: $mediaPlaylistUrl")
-            val playlistBytes = readManifest(Uri.parse(mediaPlaylistUrl))
+            val playlistBytes = readManifest(mediaPlaylistUrl.toUri())
             if (playlistBytes == null) {
                 Log.e(TAG, "ABORT: media playlist read returned null")
                 return@withContext null
@@ -209,7 +210,7 @@ object HlsExporter {
                     Log.w(TAG, "  seg[$index] not in cache, falling back to network")
                     val ds = segmentDsFactory.createDataSource()
                     runCatching {
-                        ds.open(DataSpec(Uri.parse(segUrl)))
+                        ds.open(DataSpec(segUrl.toUri()))
                         while (isActive) {
                             val n = ds.read(buf, 0, buf.size)
                             if (n == C.RESULT_END_OF_INPUT) break

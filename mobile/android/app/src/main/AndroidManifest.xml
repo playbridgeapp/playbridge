@@ -13,7 +13,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" />
+    <!-- Explicitly remove QUERY_ALL_PACKAGES permission potentially merged from dependencies -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" tools:ignore="QueryAllPackagesPermission" />
 
     <!-- Phone Files: enumerate on-device videos/audio to cast (Android 13+ granular media perms; legacy below 33) -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
@@ -36,7 +37,6 @@
         <activity
             android:name=".browser.BrowserActivity"
             android:exported="true"
-            android:label="@string/app_name"
             android:theme="@style/Theme.PlayBridge"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density"
             android:windowSoftInputMode="adjustResize">

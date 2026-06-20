@@ -1,4 +1,5 @@
 package com.playbridge.sender.data.library
+import androidx.core.content.edit
 
 import android.content.Context
 import android.util.Log
@@ -97,10 +98,10 @@ class TvdbRepository(private val context: Context) {
                 response.body?.string() ?: return@withContext null
             ).data?.token ?: return@withContext null
 
-            prefs.edit()
-                .putString(KEY_TOKEN, token)
-                .putLong(KEY_EXPIRES, now + TOKEN_TTL_MS)
-                .apply()
+            prefs.edit {
+                putString(KEY_TOKEN, token)
+                putLong(KEY_EXPIRES, now + TOKEN_TTL_MS)
+            }
 
             Log.d(TAG, "TVDB token refreshed")
             token

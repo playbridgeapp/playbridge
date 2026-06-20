@@ -1,4 +1,5 @@
 package com.playbridge.sender.data.debrid
+import androidx.core.content.edit
 
 import android.content.Context
 import kotlinx.serialization.json.Json
@@ -55,10 +56,10 @@ class DebridRepository(
 
     /** Switch the active provider. The legacy key is kept in sync so existing backups stay correct. */
     fun setActiveProvider(provider: String) {
-        prefs().edit()
-            .putString(KEY_DEBRID_PROVIDER, provider)
-            .putString(KEY_DEBRID_API_KEY, getApiKeyFor(provider))
-            .apply()
+        prefs().edit {
+            putString(KEY_DEBRID_PROVIDER, provider)
+            putString(KEY_DEBRID_API_KEY, getApiKeyFor(provider))
+        }
     }
 
     /** The API key stored for a specific provider (empty if none). */
@@ -70,7 +71,7 @@ class DebridRepository(
         // One-time migration: the legacy single key belonged to the previously-active provider.
         val legacy = p.getString(KEY_DEBRID_API_KEY, "") ?: ""
         if (legacy.isNotBlank() && provider == getConfiguredProviderName()) {
-            p.edit().putString(apiKeyPrefName(provider), legacy).apply()
+            p.edit { putString(apiKeyPrefName(provider), legacy) }
             return legacy
         }
         return ""
@@ -80,11 +81,10 @@ class DebridRepository(
     fun saveApiKeyFor(provider: String, apiKey: String) {
         if (provider == PROVIDER_NONE) return
         val trimmed = apiKey.trim()
-        prefs().edit().apply {
+        prefs().edit {
             putString(apiKeyPrefName(provider), trimmed)
             // Keep the legacy key in sync when editing the active provider (backup compatibility).
             if (provider == getConfiguredProviderName()) putString(KEY_DEBRID_API_KEY, trimmed)
-            apply()
         }
     }
 
@@ -96,7 +96,7 @@ class DebridRepository(
         ALL_PROVIDERS.filter { getApiKeyFor(it).isNotBlank() }
 
     fun saveConfiguration(provider: String, apiKey: String) {
-        prefs().edit().putString(KEY_DEBRID_PROVIDER, provider).apply()
+        prefs().edit { putString(KEY_DEBRID_PROVIDER, provider) }
         saveApiKeyFor(provider, apiKey)
     }
 

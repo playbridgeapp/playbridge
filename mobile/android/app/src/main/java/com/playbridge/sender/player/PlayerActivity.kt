@@ -2,6 +2,8 @@ package com.playbridge.sender.player
 
 import android.app.Activity
 import android.content.Context
+import androidx.core.net.toUri
+import androidx.core.graphics.createBitmap
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
@@ -70,6 +72,7 @@ import android.util.Rational
 import android.view.View
 import android.view.ViewGroup
 import android.view.SurfaceView
+import android.widget.FrameLayout
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.graphics.graphicsLayer
@@ -184,8 +187,11 @@ class PlayerActivity : ComponentActivity() {
         val contentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
 
         @Suppress("UNCHECKED_CAST")
-        val headers: Map<String, String> = (intent.getSerializableExtra(EXTRA_HEADERS) as? HashMap<String, String>)
-            ?: emptyMap()
+        val headers: Map<String, String> = androidx.core.content.IntentCompat.getSerializableExtra(
+            intent,
+            EXTRA_HEADERS,
+            HashMap::class.java
+        ) as? HashMap<String, String> ?: emptyMap()
 
         val subUrls = intent.getStringArrayListExtra(EXTRA_SUB_URLS).orEmpty()
         val subLabels = intent.getStringArrayListExtra(EXTRA_SUB_LABELS).orEmpty()
@@ -369,7 +375,7 @@ class PlayerActivity : ComponentActivity() {
                     subtitles.mapIndexed { index, sub ->
                         val subMime = if (sub.url.endsWith(".srt", ignoreCase = true))
                             MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_VTT
-                        MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(sub.url))
+                        MediaItem.SubtitleConfiguration.Builder(sub.url.toUri())
                             .setMimeType(subMime)
                             .setLanguage(sub.language)
                             .setLabel(sub.label)
@@ -638,7 +644,7 @@ private fun PlayerScreen(
 
     // New states
     var isBackgroundModeEnabled by remember { mutableStateOf(false) }
-    var repeatMode by remember { mutableStateOf(player.repeatMode) }
+    var repeatMode by remember { mutableIntStateOf(player.repeatMode) }
     var abStartMs by remember { mutableStateOf<Long?>(null) }
     var abEndMs by remember { mutableStateOf<Long?>(null) }
     var isPanZoomEnabled by remember { mutableStateOf(false) }
@@ -952,7 +958,7 @@ private fun PlayerScreen(
                 AndroidView(
                     factory = { ctx ->
                         // Inflated from XML so it uses a SurfaceView surface (see player_view.xml).
-                        (LayoutInflater.from(ctx).inflate(R.layout.player_view, null) as PlayerView).apply {
+                        (LayoutInflater.from(ctx).inflate(R.layout.player_view, FrameLayout(ctx), false) as PlayerView).apply {
                             this.player = player
                             this.resizeMode = resizeMode
 
@@ -2004,7 +2010,7 @@ private fun captureFrame(playerView: PlayerView, onCaptured: (Bitmap?) -> Unit) 
         return
     }
 
-    val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
+    val bitmap = createBitmap(surfaceView.width, surfaceView.height)
     val handlerThread = HandlerThread("PixelCopy")
     handlerThread.start()
 
@@ -2074,15 +2080,10 @@ private fun saveBitmapToGallery(context: Context, bitmap: Bitmap, title: String)
 }
 
 private fun enterPip(activity: android.app.Activity) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val params = PictureInPictureParams.Builder()
-            .setAspectRatio(Rational(16, 9))
-            .build()
-        activity.enterPictureInPictureMode(params)
-    } else {
-        @Suppress("DEPRECATION")
-        activity.enterPictureInPictureMode()
-    }
+    val params = PictureInPictureParams.Builder()
+        .setAspectRatio(Rational(16, 9))
+        .build()
+    activity.enterPictureInPictureMode(params)
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -2101,7 +2102,7 @@ private fun StatsOverlay(
     }
 
     // Refresh state periodically for counters
-    var tick by remember { mutableStateOf(0) }
+    var tick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
             delay(1000)

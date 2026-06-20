@@ -1,4 +1,5 @@
 package com.playbridge.sender.cast
+import androidx.core.content.edit
 
 import android.content.Context
 import org.koin.compose.koinInject
@@ -158,7 +159,7 @@ fun TVSettingsScreen(
                             onClick = {
                                 browserMode = optionId
                                 browserExpanded = false
-                                prefs.edit().putString("tv_browser_mode", optionId).apply()
+                                prefs.edit { putString("tv_browser_mode", optionId) }
                             }
                         )
                     }

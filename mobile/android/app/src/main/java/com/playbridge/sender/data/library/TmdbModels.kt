@@ -3,6 +3,7 @@ package com.playbridge.sender.data.library
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.util.Locale
 
 // ==================== Images & Logos ====================
 
@@ -123,9 +124,8 @@ data class TmdbMovie(
     val year: String get() = releaseDate.take(4)
     val posterUrl: String? get() = posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
     val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w780$it" }
-    val rating: String get() = String.format("%.1f", voteAverage)
+    val rating: String get() = String.format(Locale.US, "%.1f", voteAverage)
 
-    /** IMDB-style ID for Stremio addon lookups (fetched separately from movie details) */
     @kotlinx.serialization.Transient
     var imdbId: String? = null
 }
@@ -151,7 +151,7 @@ data class TmdbTvShow(
     val year: String get() = firstAirDate.take(4)
     val posterUrl: String? get() = posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
     val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w780$it" }
-    val rating: String get() = String.format("%.1f", voteAverage)
+    val rating: String get() = String.format(Locale.US, "%.1f", voteAverage)
 
     @kotlinx.serialization.Transient
     var imdbId: String? = null
@@ -179,7 +179,7 @@ data class TmdbMovieDetails(
     val year: String get() = releaseDate.take(4)
     val posterUrl: String? get() = posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
     val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
-    val rating: String get() = String.format("%.1f", voteAverage)
+    val rating: String get() = String.format(Locale.US, "%.1f", voteAverage)
     val runtimeFormatted: String get() {
         val r = runtime ?: return ""
         return "${r / 60}h ${r % 60}m"
@@ -225,7 +225,7 @@ data class TmdbTvDetails(
     val year: String get() = firstAirDate.take(4)
     val posterUrl: String? get() = posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
     val backdropUrl: String? get() = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
-    val rating: String get() = String.format("%.1f", voteAverage)
+    val rating: String get() = String.format(Locale.US, "%.1f", voteAverage)
     val imdbId: String? get() = externalIds?.imdbId
     
     val logoUrl: String? get() = images?.logos?.firstOrNull()?.logoUrl

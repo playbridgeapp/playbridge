@@ -8,6 +8,7 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import java.util.Locale
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonArray
@@ -314,8 +315,8 @@ data class StemioBehaviorHints(
     val fileSizeFormatted: String? get() {
         val size = videoSize ?: return null
         return when {
-            size >= 1_073_741_824 -> String.format("%.1f GB", size / 1_073_741_824.0)
-            size >= 1_048_576 -> String.format("%.0f MB", size / 1_048_576.0)
+            size >= 1_073_741_824 -> String.format(Locale.US, "%.1f GB", size / 1_073_741_824.0)
+            size >= 1_048_576 -> String.format(Locale.US, "%.0f MB", size / 1_048_576.0)
             else -> "$size B"
         }
     }

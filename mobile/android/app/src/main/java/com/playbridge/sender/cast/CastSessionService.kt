@@ -39,6 +39,7 @@ class CastSessionService : Service(), KoinComponent {
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
 
+    @android.annotation.SuppressLint("WakelockTimeout")
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
@@ -118,13 +119,11 @@ class CastSessionService : Service(), KoinComponent {
     }
 
     private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
-                mgr.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "Casting", NotificationManager.IMPORTANCE_LOW),
-                )
-            }
+        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
+            mgr.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Casting", NotificationManager.IMPORTANCE_LOW),
+            )
         }
     }
 
@@ -135,11 +134,7 @@ class CastSessionService : Service(), KoinComponent {
 
         fun start(context: Context) {
             val intent = Intent(context, CastSessionService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {

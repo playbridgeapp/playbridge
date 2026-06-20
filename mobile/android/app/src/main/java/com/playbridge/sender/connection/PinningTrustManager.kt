@@ -17,10 +17,13 @@ import javax.net.ssl.X509TrustManager
  * The pin format (`sha256/<base64 SPKI>`) is OkHttp's `CertificatePinner.pin`,
  * which must match what the receivers compute from `cert.publicKey.encoded`.
  */
+@android.annotation.SuppressLint("TrustAllX509TrustManager", "CustomX509TrustManager")
 class PinningTrustManager(
     private val expectedPin: String?,
     private val onPresented: (String) -> Unit,
 ) : X509TrustManager {
+    // Empty because this is a client-side trust manager connecting to the TV's TLS WebSocket;
+    // client certificate validation is not used here.
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
 
     override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) {

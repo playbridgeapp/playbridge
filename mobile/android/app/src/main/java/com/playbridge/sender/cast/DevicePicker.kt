@@ -1,4 +1,5 @@
 package com.playbridge.sender.cast
+import androidx.core.content.edit
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -285,7 +286,7 @@ fun DeviceConnectionSheet(
                     selected = onPhone,
                     onClick = {
                         viewModel.disconnect()
-                        browserPrefs.edit().putBoolean("watch_on_tv", false).apply()
+                        browserPrefs.edit { putBoolean("watch_on_tv", false) }
                         onPickedThisDevice?.invoke()
                         onDismiss()
                     }
@@ -351,7 +352,7 @@ fun DeviceConnectionSheet(
                                     device.connectDevice.uuid
                                 )
                             }
-                            browserPrefs.edit().putBoolean("watch_on_tv", true).apply()
+                            browserPrefs.edit { putBoolean("watch_on_tv", true) }
                             onPickedDevice?.invoke(device.connectDevice)
                             onDismiss()
                         },

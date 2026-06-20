@@ -1,4 +1,5 @@
 package com.playbridge.sender.ui
+import androidx.core.content.edit
 
 import android.app.UiModeManager
 import android.content.Context
@@ -36,7 +37,7 @@ object TvDeviceGuard {
 
     fun dismiss(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_DISMISSED, true).apply()
+            .edit { putBoolean(KEY_DISMISSED, true) }
     }
 }
 
