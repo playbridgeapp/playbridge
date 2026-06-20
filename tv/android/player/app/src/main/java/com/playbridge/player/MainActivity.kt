@@ -154,6 +154,21 @@ fun MainContent(
     currentTheme: MutableState<AppTheme>
 ) {
     val scope = rememberCoroutineScope()
+    val currentContext = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember { currentContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
+    var enableHistory by remember { mutableStateOf(prefs.getBoolean("enable_history", true)) }
+
+    DisposableEffect(prefs) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "enable_history") {
+                enableHistory = prefs.getBoolean("enable_history", true)
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose {
+            prefs.unregisterOnSharedPreferenceChangeListener(listener)
+        }
+    }
 
     // Default to History; overridden below once we know whether any device has paired.
     var currentScreen by rememberSaveable { mutableStateOf(Screen.History) }
@@ -165,10 +180,18 @@ fun MainContent(
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
     val isOnboardingDone by pairingStore.isOnboardingDone.collectAsState(initial = true)
 
+    LaunchedEffect(enableHistory) {
+        if (!enableHistory && currentScreen == Screen.History) {
+            currentScreen = Screen.Pairing
+        }
+    }
+
     // On first launch: show PairingScreen only if no device has ever connected AND onboarding not done.
-    LaunchedEffect(pairedDevices, isOnboardingDone) {
+    LaunchedEffect(pairedDevices, isOnboardingDone, enableHistory) {
         if (!isInitialCheckDone) {
-            currentScreen = if (pairedDevices.isEmpty() && !isOnboardingDone) {
+            currentScreen = if (!enableHistory) {
+                Screen.Pairing
+            } else if (pairedDevices.isEmpty() && !isOnboardingDone) {
                 Screen.Pairing
             } else {
                 Screen.History
@@ -196,8 +219,6 @@ fun MainContent(
     var deviceName by remember { mutableStateOf("Android TV") }
     var deviceId by remember { mutableStateOf("") }
 
-    val currentContext = androidx.compose.ui.platform.LocalContext.current
-
     // Load initial values
     LaunchedEffect(Unit) {
         val appCtx = currentContext.applicationContext ?: currentContext
@@ -215,7 +236,7 @@ fun MainContent(
     // (The pairing is done — now let the user see their history/favourites.)
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketServer.ConnectionState.Connected) {
-            if (currentScreen == Screen.Pairing) {
+            if (currentScreen == Screen.Pairing && enableHistory) {
                 currentScreen = Screen.History
             }
         }
@@ -246,7 +267,8 @@ fun MainContent(
         Row(modifier = Modifier.fillMaxSize()) {
             AppSidebar(
                 currentScreen = currentScreen,
-                onScreenSelected = { currentScreen = it }
+                onScreenSelected = { currentScreen = it },
+                enableHistory = enableHistory
             )
 
             // Content Area
@@ -291,9 +313,10 @@ fun MainContent(
         }
     }
 
-    // Universal back handler: any screen that isn't History goes back to History.
-    androidx.activity.compose.BackHandler(enabled = currentScreen != Screen.History) {
-        currentScreen = Screen.History
+    // Universal back handler: any screen that isn't primary screen goes back to primary screen.
+    val primaryScreen = if (enableHistory) Screen.History else Screen.Pairing
+    androidx.activity.compose.BackHandler(enabled = currentScreen != primaryScreen) {
+        currentScreen = primaryScreen
     }
 }
 

@@ -28,6 +28,9 @@ class HistoryStore: ObservableObject {
     }
 
     func addToHistory(url: URL, title: String?, headers: [String: String]?) {
+        let enableHistory = UserDefaults.standard.object(forKey: "enable_history") as? Bool ?? true
+        guard enableHistory else { return }
+
         let newItem = PlaybackHistoryItem(
             url: url, title: title ?? "Unknown Media", timestamp: Date(), isFavorite: false,
             headers: headers

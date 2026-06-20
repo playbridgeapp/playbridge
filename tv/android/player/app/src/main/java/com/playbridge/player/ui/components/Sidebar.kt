@@ -26,6 +26,7 @@ import com.playbridge.player.Screen
 fun AppSidebar(
     currentScreen: Screen,
     onScreenSelected: (Screen) -> Unit,
+    enableHistory: Boolean,
     modifier: Modifier = Modifier
 ) {
     // Fixed-width persistent sidebar (Apple TV style: 400px width translates to ~300-400dp on TV)
@@ -60,13 +61,15 @@ fun AppSidebar(
                 onSelected = onScreenSelected
             )
 
-            SidebarItem(
-                screen = Screen.History,
-                currentScreen = currentScreen,
-                title = "History",
-                icon = Icons.AutoMirrored.Filled.List,
-                onSelected = onScreenSelected
-            )
+            if (enableHistory) {
+                SidebarItem(
+                    screen = Screen.History,
+                    currentScreen = currentScreen,
+                    title = "History",
+                    icon = Icons.AutoMirrored.Filled.List,
+                    onSelected = onScreenSelected
+                )
+            }
 
             SidebarItem(
                 screen = Screen.Favorites,

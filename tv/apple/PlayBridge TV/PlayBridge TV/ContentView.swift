@@ -16,6 +16,7 @@ struct ContentView: View {
     @StateObject private var historyStore = HistoryStore()
     @StateObject private var playlistStore = PlaylistStore()
     @StateObject private var server: WebSocketServer
+    @AppStorage("enable_history") var enableHistory: Bool = true
     @State private var currentScreen: AppScreen = .pairing
     @State private var time = 0.0
     @State private var playerStarted: Bool = false
@@ -50,9 +51,11 @@ struct ContentView: View {
                     MenuButton(
                         title: "Pair Device", icon: "sensor.tag.radiowaves.forward",
                         currentScreen: $currentScreen, screen: .pairing)
-                    MenuButton(
-                        title: "History", icon: "clock.arrow.circlepath",
-                        currentScreen: $currentScreen, screen: .history)
+                    if enableHistory {
+                        MenuButton(
+                            title: "History", icon: "clock.arrow.circlepath",
+                            currentScreen: $currentScreen, screen: .history)
+                    }
                     MenuButton(
                         title: "Favorites", icon: "star.fill", currentScreen: $currentScreen,
                         screen: .favorites)
@@ -143,6 +146,11 @@ struct ContentView: View {
                 server.stop()
                 UIApplication.shared.isIdleTimerDisabled = false  // allow normal sleep when backgrounded
             default: break
+            }
+        }
+        .onChange(of: enableHistory) { _, newValue in
+            if !newValue && currentScreen == .history {
+                currentScreen = .pairing
             }
         }
         .onReceive(server.$currentPlayRequest) { request in

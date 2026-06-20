@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var server: WebSocketServer
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
+    @AppStorage("enable_history") var enableHistory: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 40) {
@@ -36,6 +37,7 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    Toggle("Save Cast History", isOn: $enableHistory)
                 }
 
                 Section("Server Information") {
