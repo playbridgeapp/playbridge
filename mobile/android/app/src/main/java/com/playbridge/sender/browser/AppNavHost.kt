@@ -918,6 +918,8 @@ fun AppNavHost(
                                 // connection setup so they can be bundled into the play command without
                                 // delaying it.
                                 val subsDeferred = async {
+                                    val sendSubtitles = runCatching { settingsRepository.sendSubtitlesToTv.first() }.getOrDefault(true)
+                                    if (!sendSubtitles) return@async emptyList<String>()
                                     subtitleService.getAllSubtitleUrls(
                                         payload.visual_metadata?.imdb_id,
                                         payload.visual_metadata?.season,
@@ -987,6 +989,8 @@ fun AppNavHost(
                             scope.launch {
                                 // Fetch the start episode's subtitles in parallel with connecting.
                                 val startSubsDeferred = async {
+                                    val sendSubtitles = runCatching { settingsRepository.sendSubtitlesToTv.first() }.getOrDefault(true)
+                                    if (!sendSubtitles) return@async emptyList<String>()
                                     subtitleService.getAllSubtitleUrls(
                                         current.visual_metadata?.imdb_id,
                                         current.visual_metadata?.season,
@@ -1150,6 +1154,8 @@ fun AppNavHost(
                                 val startItem = playlist.items.getOrNull(playlist.start_index)
                                 val startVm = startItem?.visual_metadata
                                 val startSubsDeferred = async {
+                                    val sendSubtitles = runCatching { settingsRepository.sendSubtitlesToTv.first() }.getOrDefault(true)
+                                    if (!sendSubtitles) return@async emptyList<String>()
                                     subtitleService.getAllSubtitleUrls(
                                         startVm?.imdb_id, startVm?.season, startVm?.episode, preferredSubLang,
                                         videoRelease = subtitleService.filenameFromUrl(startItem?.url)
@@ -1420,26 +1426,6 @@ fun AppNavHost(
                     primaryText = primaryText,
                     secondaryText = secondaryText,
                     leadingIcon = leadingIcon,
-                    showPlayPause = playing,
-                    isPlaying = if (dlnaActive) {
-                        dlnaStatus?.state == PlaybackState.PLAYING
-                    } else {
-                        tvPlayback?.state == "playing"
-                    },
-                    onPlayPause = {
-                        if (dlnaActive) {
-                            if (dlnaStatus?.state == PlaybackState.PLAYING) {
-                                connectionViewModel.dlnaPause()
-                            } else {
-                                connectionViewModel.dlnaPlay()
-                            }
-                        } else {
-                            val cmd = if (tvPlayback?.state == "playing") "pause" else "play"
-                            connectionViewModel.webSocketClient.send(
-                                com.playbridge.shared.protocol.createControlCommandJson(cmd)
-                            )
-                        }
-                    },
                     onClick = {
                         if (playing) {
                             if (!dlnaActive) {
@@ -1452,6 +1438,10 @@ fun AppNavHost(
                             // Idle → choose / switch the cast destination.
                             showDevicePicker = true
                         }
+                    },
+                    showTvIcon = playing,
+                    onTvIconClick = {
+                        showDevicePicker = true
                     },
                     // Poster-matched accent on the library detail screen (the old FAB's
                     // dynamic styling); FAB-like primaryContainer elsewhere.

@@ -135,6 +135,7 @@ class ExoPlayerActivity : PlayerActivity() {
             displayTitle?.takeIf { it.isNotBlank() }?.let {
                 android.widget.Toast.makeText(this@ExoPlayerActivity, it, android.widget.Toast.LENGTH_SHORT).show()
             }
+            controlsViewModel.setPrePlay(item.visual_metadata, showCountdown = false)
             playVideo(
                 url = item.url,
                 title = displayTitle,
@@ -297,7 +298,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         onPrePlayStartNow = {
                             launchJob?.cancel()
                             controlsViewModel.setPrePlayLaunching(true)
-                            controlsViewModel.setPrePlay(null)
+                            controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
                         },
                         onPrePlayBack = {
                             launchJob?.cancel()
@@ -336,7 +337,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         },
                         onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
                         onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) },
-                        onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) }
+                        onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) },
                     )
                 }
             }
@@ -780,7 +781,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         triggerPrePlayCountdown(controlsViewModel) {
                             FileLogger.i(TAG, "Countdown finished - starting playback")
                             engine?.getExoPlayer()?.playWhenReady = true
-                            controlsViewModel.setPrePlay(null)
+                            controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
                         }
                     } else {
                         engine?.getExoPlayer()?.playWhenReady = true
@@ -1568,7 +1569,8 @@ class ExoPlayerActivity : PlayerActivity() {
         controlsViewModel.updateTracks(
             audio = mapTracks(androidx.media3.common.C.TRACK_TYPE_AUDIO, "audio"),
             subtitles = buildSubtitleTracks(tracks, params),
-            video = mapTracks(androidx.media3.common.C.TRACK_TYPE_VIDEO, "video")
+            video = mapTracks(androidx.media3.common.C.TRACK_TYPE_VIDEO, "video"),
+            currentSubtitleUrl = currentSubtitleUrl
         )
         controlsViewModel.setPlaybackSpeed(player.playbackParameters.speed)
         
@@ -1622,5 +1624,12 @@ class ExoPlayerActivity : PlayerActivity() {
         format.language?.let { if (it.isNotEmpty()) items.add(it.uppercase()) }
         if (format.bitrate != androidx.media3.common.Format.NO_VALUE) items.add("${format.bitrate / 1000} kbps")
         return if (items.isEmpty()) format.id ?: "Unknown" else items.joinToString(" • ")
+    }
+
+    override fun addExternalSubtitle(url: String) {
+        if (url !in subtitleUrls) {
+            subtitleUrls = subtitleUrls + url
+        }
+        applyUnifiedTrackSelection("external_sub", url)
     }
 }

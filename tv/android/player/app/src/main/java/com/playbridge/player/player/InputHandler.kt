@@ -14,7 +14,7 @@ private const val TAG = "InputHandler"
  * phone remote key simulation, and physical TV remote D-pad events.
  */
 class InputHandler(
-    private val activity: Activity,
+    private val activity: PlayerActivity,
     private val audioManager: AudioManager,
     private val engine: PlayerEngineAdapter,
     private val controls: PlayerControlsViewModel,
@@ -53,7 +53,7 @@ class InputHandler(
                 }
                 command.startsWith("add_subtitle:") -> {
                     val url = command.removePrefix("add_subtitle:")
-                    if (url.isNotBlank()) controls.loadExternalSubtitle(url)
+                    if (url.isNotBlank()) activity.addExternalSubtitle(url)
                     return
                 }
                 command == "audio_boost" -> {
@@ -116,8 +116,8 @@ class InputHandler(
             val upEvent = KeyEvent(KeyEvent.ACTION_UP, keyCode)
 
             activity.runOnUiThread {
-                activity.dispatchKeyEvent(downEvent)
-                activity.dispatchKeyEvent(upEvent)
+                (activity as android.app.Activity).dispatchKeyEvent(downEvent)
+                (activity as android.app.Activity).dispatchKeyEvent(upEvent)
             }
         }
     }

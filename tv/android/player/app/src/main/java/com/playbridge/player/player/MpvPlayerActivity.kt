@@ -156,6 +156,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     Toast.makeText(this@MpvPlayerActivity, it, Toast.LENGTH_SHORT).show()
                     controlsViewModel.setTitle(it)
                 }
+                controlsViewModel.setPrePlay(item.visual_metadata, showCountdown = false)
                 controlsViewModel.hideControls()
             }
             stopPlayback()
@@ -282,7 +283,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         onPrePlayStartNow = {
                             launchJob?.cancel()
                             controlsViewModel.setPrePlayLaunching(true)
-                            controlsViewModel.setPrePlay(null)
+                            controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
                         },
                         onPrePlayBack = {
                             launchJob?.cancel()
@@ -313,7 +314,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         },
                         onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
                         onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) },
-                        onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) }
+                        onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) },
                     )
                 }
             }
@@ -621,7 +622,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         triggerPrePlayCountdown(controlsViewModel) {
                             FileLogger.i(TAG, "Countdown finished - starting playback")
                             engine?.play()
-                            controlsViewModel.setPrePlay(null)
+                            controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
                         }
                     }
 
@@ -1089,7 +1090,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         val noSubSelected = allTracks.none { it.type == "sub" && it.isSelected } && currentSubtitleUrl == null
         val offSub = UnifiedTrack("none", "Off", noSubSelected, "sub")
         
-        controlsViewModel.updateTracks(audio, listOf(offSub) + embeddedSubs + externalSubs, video)
+        controlsViewModel.updateTracks(audio, listOf(offSub) + embeddedSubs + externalSubs, video, currentSubtitleUrl)
         controlsViewModel.setPlaybackSpeed(currentPlaybackSpeed)
     }
 
@@ -1192,5 +1193,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 if (dest.exists() && dest.length() == 0L) dest.delete()
             }
         }
+    }
+
+    override fun addExternalSubtitle(url: String) {
+        if (url !in subtitleUrls) {
+            subtitleUrls = subtitleUrls + url
+        }
+        applyMpvTrackSelection("external_sub", url)
     }
 }

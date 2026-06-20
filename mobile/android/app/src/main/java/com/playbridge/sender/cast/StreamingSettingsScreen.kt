@@ -66,6 +66,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
 
     val preferredSubLang by settingsRepository.preferredSubtitleLang.collectAsState(initial = "")
     var subExpanded by remember { mutableStateOf(false) }
+    val sendSubtitlesToTv by settingsRepository.sendSubtitlesToTv.collectAsState(initial = true)
 
     var minSizeText by remember {
         mutableStateOf(browserPrefs.getString("auto_stream_min_gb", "") ?: "")
@@ -441,6 +442,23 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            ListItem(
+                headlineContent = { Text("Send Subtitles to TV") },
+                supportingContent = { Text("Fetch and send addon subtitles automatically when casting from the library") },
+                trailingContent = {
+                    Switch(
+                        checked = sendSubtitlesToTv,
+                        onCheckedChange = { checked ->
+                            scope.launch { settingsRepository.setSendSubtitlesToTv(checked) }
+                        }
+                    )
+                },
+                modifier = Modifier.clickable {
+                    scope.launch { settingsRepository.setSendSubtitlesToTv(!sendSubtitlesToTv) }
+                }
+            )
         }
     }
 }

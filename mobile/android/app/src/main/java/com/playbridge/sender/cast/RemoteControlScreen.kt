@@ -1,4 +1,9 @@
 package com.playbridge.sender.cast
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import android.net.Uri
 import com.playbridge.sender.library.*
 import com.playbridge.sender.browser.*
 import com.playbridge.sender.connection.WebSocketClient
@@ -29,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.foundation.text.KeyboardActions
@@ -43,6 +49,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -50,6 +58,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.graphics.Brush
 import kotlin.math.abs
 
 /** Live playback status synced from the TV via `status` messages. */
@@ -64,7 +77,8 @@ data class TvPlaybackStatus(
 data class MediaTrack(
     val id: String,
     val name: String,
-    val selected: Boolean
+    val selected: Boolean,
+    val type: String? = null
 )
 
 /** TV player settings synced via `player_settings` messages. */
@@ -143,6 +157,7 @@ fun RemoteControlScreen(
 ) {
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showAddSubtitle by remember { mutableStateOf(false) }
+    var showSubtitlesSheet by remember { mutableStateOf(false) }
     // Input mode for the non-player (browser) hero area. Defaults to the touchpad.
     var inputMode by remember { mutableStateOf(RemoteInputMode.TOUCHPAD) }
     // When idle (e.g. right after Stop), the calm empty state can reveal the input surface on demand.
@@ -221,7 +236,7 @@ fun RemoteControlScreen(
                                     audioTracks = audioTracks,
                                     subtitleTracks = subtitleTracks,
                                     onSelectAudio = onSelectAudio,
-                                    onSelectSubtitle = onSelectSubtitle,
+                                    onSubtitlesClick = { showSubtitlesSheet = true },
                                     onMore = { showSettingsSheet = true }
                                 )
                             }
@@ -316,6 +331,13 @@ fun RemoteControlScreen(
                 showSettingsSheet = false
             },
             onDismiss = { showAddSubtitle = false }
+        )
+    }
+    if (showSubtitlesSheet) {
+        SubtitlesBottomSheet(
+            tracks = subtitleTracks,
+            onSelect = onSelectSubtitle,
+            onDismiss = { showSubtitlesSheet = false }
         )
     }
 }
@@ -678,6 +700,9 @@ private fun SeekVolumeBar(
     var dragging by remember { mutableStateOf(false) }
     var dragMs by remember { mutableStateOf(0f) }
     var activeAxis by remember { mutableStateOf<DragAxis?>(null) }
+    var volumeDirection by remember { mutableStateOf<String?>(null) } // "up" or "down"
+    var touchDownTime by remember { mutableStateOf(0L) }
+    var isAggressive by remember { mutableStateOf(false) }
 
     // Vertical travel required for one volume step.
     val volumeStepPx = with(LocalDensity.current) { 28.dp.toPx() }
@@ -687,21 +712,38 @@ private fun SeekVolumeBar(
         (displayMs / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
 
     val primary = MaterialTheme.colorScheme.primary
+
+    // Vertical offset to center the popups vertically on the screen (above the seekbar)
+    val popupOffset = with(LocalDensity.current) {
+        IntOffset(0, -180.dp.roundToPx())
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .height(76.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)), RoundedCornerShape(24.dp))
             .onSizeChanged { widthPx = it.width.toFloat() }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    touchDownTime = System.currentTimeMillis()
+                }
+            }
             .pointerInput(hasDuration, enableVolume, durationMs) {
                 var axis: DragAxis? = null
                 var volAccum = 0f
                 detectDragGestures(
                     onDragStart = {
+                        val dragStartTime = System.currentTimeMillis()
+                        isAggressive = (dragStartTime - touchDownTime) >= 400L
+
                         axis = null
                         volAccum = 0f
                         dragMs = currentPosition.toFloat()
+                        volumeDirection = null
                     },
                     onDrag = { change, drag ->
                         change.consume()
@@ -712,13 +754,30 @@ private fun SeekVolumeBar(
                         }
                         when (axis) {
                             DragAxis.HORIZONTAL -> if (hasDuration && widthPx > 0f) {
-                                val deltaMs = (drag.x / widthPx) * durationMs.toFloat()
+                                val rangeMs = if (isAggressive) {
+                                    durationMs.toFloat()
+                                } else {
+                                    (durationMs / 10L).coerceIn(120_000L, 600_000L).toFloat()
+                                }
+                                val deltaMs = (drag.x / widthPx) * rangeMs
                                 dragMs = (dragMs + deltaMs).coerceIn(0f, durationMs.toFloat())
                             }
                             DragAxis.VERTICAL -> if (enableVolume) {
+                                if (volumeDirection == null) {
+                                    volumeDirection = if (drag.y < 0) "up" else "down"
+                                }
                                 volAccum -= drag.y // swipe up (negative y) raises volume
-                                while (volAccum >= volumeStepPx) { onVolumeUp(); volAccum -= volumeStepPx }
-                                while (volAccum <= -volumeStepPx) { onVolumeDown(); volAccum += volumeStepPx }
+                                val stepPx = if (isAggressive) volumeStepPx / 2.5f else volumeStepPx
+                                while (volAccum >= stepPx) {
+                                    onVolumeUp()
+                                    volAccum -= stepPx
+                                    volumeDirection = "up"
+                                }
+                                while (volAccum <= -stepPx) {
+                                    onVolumeDown()
+                                    volAccum += stepPx
+                                    volumeDirection = "down"
+                                }
                             }
                             else -> {}
                         }
@@ -728,58 +787,268 @@ private fun SeekVolumeBar(
                         dragging = false
                         activeAxis = null
                         axis = null
+                        volumeDirection = null
+                        isAggressive = false
                     },
                     onDragCancel = {
                         dragging = false
                         activeAxis = null
                         axis = null
+                        volumeDirection = null
+                        isAggressive = false
                     },
                 )
             },
         contentAlignment = Alignment.CenterStart
     ) {
-        // Progress fill — only meaningful with a finite duration.
-        if (hasDuration) {
+        // --- Redesigned UX: Visual axis guides and guides in background ---
+        // Horizontal guide line
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Color.White.copy(alpha = 0.08f))
+                .align(Alignment.Center)
+        )
+        // Vertical guide line
+        if (enableVolume) {
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .fillMaxWidth(fraction)
-                    .background(primary.copy(alpha = 0.25f))
+                    .width(1.dp)
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .align(Alignment.Center)
             )
         }
 
-        Row(
+        // --- Arrow Indicators to suggest directions ---
+        // Left Seek arrow
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+            contentDescription = null,
+            tint = if (activeAxis == DragAxis.HORIZONTAL) primary else Color.White.copy(alpha = 0.3f),
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 8.dp)
+                .size(24.dp)
+        )
+        // Right Seek arrow
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = if (activeAxis == DragAxis.HORIZONTAL) primary else Color.White.copy(alpha = 0.3f),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 8.dp)
+                .size(24.dp)
+        )
+        // Top Volume arrow
+        if (enableVolume) {
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowUp,
+                contentDescription = null,
+                tint = if (activeAxis == DragAxis.VERTICAL) primary else Color.White.copy(alpha = 0.3f),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 2.dp)
+                    .size(14.dp)
+            )
+        }
+        // Bottom Volume arrow
+        if (enableVolume) {
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = if (activeAxis == DragAxis.VERTICAL) primary else Color.White.copy(alpha = 0.3f),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 2.dp)
+                    .size(14.dp)
+            )
+        }
+
+        // --- Content Column containing labels and progress bar ---
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 36.dp).padding(top = 18.dp, bottom = 18.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = if (hasDuration) formatTime(displayMs.toLong()) else formatTime(currentPosition),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            val centerLabel = when (activeAxis) {
-                DragAxis.VERTICAL -> "Volume"
-                DragAxis.HORIZONTAL -> "Seek"
-                else -> if (enableVolume) "◄ ► seek · ▲ ▼ volume" else "◄ ► seek"
+            // Top Status Label Row: seek text on left half, volume text on right half
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val seekLabel = if (activeAxis == DragAxis.HORIZONTAL) {
+                        if (isAggressive) "Fast Seeking ◄►" else "Seeking ◄►"
+                    } else "Swipe ◄► Seek"
+                    Text(
+                        text = seekLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (activeAxis == DragAxis.HORIZONTAL) primary else Color.White.copy(alpha = 0.6f)
+                    )
+                }
+                if (enableVolume) {
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val volumeLabel = if (activeAxis == DragAxis.VERTICAL) {
+                            if (isAggressive) "Fast Volume ▲▼" else "Adjusting Volume ▲▼"
+                        } else "Swipe ▲▼ Volume"
+                        Text(
+                            text = volumeLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (activeAxis == DragAxis.VERTICAL) primary else Color.White.copy(alpha = 0.6f)
+                        )
+                    }
+                }
             }
-            Text(
-                text = centerLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 8.dp)
+
+            // Center Progress Bar
+            if (hasDuration) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Color.White.copy(alpha = 0.12f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(fraction)
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(primary, primary.copy(alpha = 0.7f))
+                                )
+                            )
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Color.White.copy(alpha = 0.12f))
+                )
+            }
+
+            // Bottom Time Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = if (hasDuration) formatTime(displayMs.toLong()) else formatTime(currentPosition),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.5f)
+                )
+                Text(
+                    text = if (isLive) "LIVE" else if (durationMs > 0L) formatTime(durationMs) else "--:--",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.5f)
+                )
+            }
+        }
+    }
+
+    // --- Seek HUD Overlay popup ---
+    if (dragging && activeAxis == DragAxis.HORIZONTAL && hasDuration) {
+        val deltaMs = dragMs.toLong() - currentPosition
+        Popup(
+            alignment = Alignment.Center,
+            offset = popupOffset,
+            properties = PopupProperties(
+                focusable = false,
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
             )
-            Text(
-                text = if (isLive) "LIVE" else if (durationMs > 0L) formatTime(durationMs) else "--:--",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isLive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+        ) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.75f),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = if (isAggressive) "Fast Seek" else "Seek",
+                        color = primary,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "${formatTime(dragMs.toLong())} / ${formatTime(durationMs)}",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    val sign = if (deltaMs >= 0) "+" else "-"
+                    Text(
+                        "$sign${formatTime(abs(deltaMs))}",
+                        color = Color.White.copy(alpha = 0.8f),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+        }
+    }
+
+    // --- Volume HUD Overlay popup ---
+    if (activeAxis == DragAxis.VERTICAL && enableVolume) {
+        Popup(
+            alignment = Alignment.Center,
+            offset = popupOffset,
+            properties = PopupProperties(
+                focusable = false,
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
             )
+        ) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.75f),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val volumeIcon = when (volumeDirection) {
+                        "down" -> Icons.AutoMirrored.Filled.VolumeDown
+                        else -> Icons.AutoMirrored.Filled.VolumeUp
+                    }
+                    Icon(
+                        imageVector = volumeIcon,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    val volumeLabel = when (volumeDirection) {
+                        "up" -> if (isAggressive) "Volume Up (Fast) ▲" else "Volume Up ▲"
+                        "down" -> if (isAggressive) "Volume Down (Fast) ▼" else "Volume Down ▼"
+                        else -> if (isAggressive) "Volume (Fast)" else "Volume"
+                    }
+                    Text(
+                        volumeLabel,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
     }
 }
@@ -1245,7 +1514,7 @@ private fun TrackChipsRow(
     audioTracks: List<MediaTrack>,
     subtitleTracks: List<MediaTrack>,
     onSelectAudio: (String) -> Unit,
-    onSelectSubtitle: (String) -> Unit,
+    onSubtitlesClick: () -> Unit,
     onMore: () -> Unit
 ) {
     Row(
@@ -1263,13 +1532,40 @@ private fun TrackChipsRow(
             )
         }
         if (subtitleTracks.isNotEmpty()) {
-            TrackChip(
-                icon = Icons.Default.Subtitles,
-                label = "Subs",
-                tracks = subtitleTracks,
-                onSelect = onSelectSubtitle,
-                modifier = Modifier.weight(1f)
-            )
+            val selectedName = subtitleTracks.firstOrNull { it.selected }?.name ?: "—"
+            Surface(
+                onClick = onSubtitlesClick,
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.weight(1f).height(40.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Subtitles,
+                        contentDescription = "Subtitles",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Subs: $selectedName",
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        Icons.Default.ArrowDropDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
         if (audioTracks.isEmpty() && subtitleTracks.isEmpty()) {
             Spacer(modifier = Modifier.weight(1f))
@@ -1506,12 +1802,60 @@ private fun AddSubtitleDialog(
     var searching by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val fileName = runCatching {
+                val cursor = context.contentResolver.query(uri, null, null, null, null)
+                cursor?.use { c ->
+                    val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex != -1 && c.moveToFirst()) c.getString(nameIndex) else null
+                }
+            }.getOrNull() ?: uri.lastPathSegment ?: "subtitle.srt"
+
+            val extension = fileName.substringAfterLast('.', "").lowercase()
+            val supportedExtensions = setOf("srt", "vtt", "ass", "ssa", "sub")
+            if (extension !in supportedExtensions) {
+                android.widget.Toast.makeText(context, "Only subtitle files (.srt, .vtt, .ass) are supported", android.widget.Toast.LENGTH_SHORT).show()
+                return@rememberLauncherForActivityResult
+            }
+
+            val mime = when {
+                fileName.endsWith(".vtt", ignoreCase = true) -> "text/vtt"
+                else -> "application/x-subrip"
+            }
+
+            val proxyServer = com.playbridge.sender.cast.dlna.DlnaProxyHolder.proxy(context)
+            val proxyUrl = proxyServer.publishLocal(uri, mime)
+            val urlWithFragment = "$proxyUrl#${java.net.URLEncoder.encode(fileName, "UTF-8")}"
+            onAddUrl(urlWithFragment)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add subtitle") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = { filePickerLauncher.launch("*/*") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.filledTonalButtonColors()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.UploadFile,
+                        contentDescription = "Upload local file",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Choose Local Subtitle File")
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
@@ -1568,3 +1912,240 @@ private fun AddSubtitleDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
+
+
+private const val OFF_KEY = "__off__"
+private const val EMBEDDED_KEY = "__embedded__"
+private const val REMOTE_KEY = "__remote__"
+private const val EXTERNAL_KEY = "__external__"
+
+private data class SubGroup(
+    val key: String,
+    val label: String,
+    val tracks: List<MediaTrack>,
+    val hasSelected: Boolean
+)
+
+private data class SubInfo(val langKey: String, val langDisplay: String, val optionLabel: String)
+
+// Mapping from language token to display name
+private val LANG_TOKENS: Map<String, String> = buildMap {
+    fun add(display: String, vararg tokens: String) { tokens.forEach { put(it, display) } }
+    add("English", "english", "en", "eng")
+    add("Spanish", "spanish", "es", "spa", "esp")
+    add("French", "french", "fr", "fre", "fra")
+    add("German", "german", "de", "ger", "deu")
+    add("Italian", "italian", "it", "ita")
+    add("Japanese", "japanese", "ja", "jpn")
+    add("Korean", "korean", "ko", "kor")
+    add("Chinese", "chinese", "zh", "chi", "zho")
+    add("Russian", "russian", "ru", "rus")
+    add("Portuguese", "portuguese", "pt", "por")
+    add("Portuguese (BR)", "portuguese (br)", "pob", "pt-br", "ptbr")
+    add("Arabic", "arabic", "ar", "ara")
+    add("Hindi", "hindi", "hi", "hin")
+    add("Dutch", "dutch", "nl", "dut", "nld")
+    add("Swedish", "swedish", "sv", "swe")
+    add("Turkish", "turkish", "tr", "tur")
+    add("Polish", "polish", "pl", "pol")
+    add("Romanian", "romanian", "ro", "ron", "rum")
+    add("Greek", "greek", "el", "ell", "gre")
+    add("Czech", "czech", "cs", "cze", "ces")
+    add("Danish", "danish", "da", "dan")
+    add("Hungarian", "hungarian", "hu", "hun")
+    add("Bulgarian", "bulgarian", "bg", "bul")
+    add("Slovenian", "slovenian", "sl", "slv")
+    add("Indonesian", "indonesian", "id", "ind")
+    add("Hebrew", "hebrew", "he", "heb")
+    add("Finnish", "finish", "fi", "fin")
+    add("Serbian", "serbian", "sr", "srp")
+    add("Croatian", "croatian", "hr", "hrv")
+    add("Norwegian", "norwegian", "no", "nor")
+    add("Ukrainian", "ukrainian", "uk", "ukr")
+    add("Thai", "thai", "th", "tha")
+    add("Vietnamese", "vietnamese", "vi", "vie")
+    add("Persian", "persian", "farsi", "fa", "per", "fas")
+}
+
+private fun languageOf(segment: String): String? = LANG_TOKENS[segment.trim().lowercase()]
+
+private fun classifySub(t: MediaTrack): SubInfo {
+    if (t.id == "off" || t.id == "none") {
+        return SubInfo(OFF_KEY, "Off", "Off")
+    }
+
+    val isExternal = t.type == "external_sub" || t.id.startsWith("external_") || t.id.contains("://")
+    if (!isExternal) {
+        return SubInfo(EMBEDDED_KEY, "Embedded", t.name)
+    }
+
+    if (!t.name.contains("OpenSubtitles #")) {
+        return SubInfo(REMOTE_KEY, "Phone Remote", t.name.ifBlank { "Remote Subtitle" })
+    }
+
+    val segs = t.name.split(" · ", " • ").map { it.trim() }.filter { it.isNotEmpty() }
+    val lang = segs.firstNotNullOfOrNull { languageOf(it) }
+    return if (lang != null) {
+        val rest = segs.filter { languageOf(it) == null }.joinToString(" • ")
+        val opt = rest.ifBlank { "Add-on" }
+        SubInfo(lang.lowercase(), lang, opt)
+    } else {
+        SubInfo(EXTERNAL_KEY, "External", t.name.ifBlank { "Subtitle" })
+    }
+}
+
+private fun groupSubtitleTracks(tracks: List<MediaTrack>): List<SubGroup> {
+    val off = tracks.firstOrNull { it.id == "off" || it.id == "none" }
+    val byLang = LinkedHashMap<String, Pair<String, MutableList<MediaTrack>>>()
+    
+    tracks.filter { it.id != "off" && it.id != "none" }.forEach { t ->
+        val info = classifySub(t)
+        byLang.getOrPut(info.langKey) { info.langDisplay to mutableListOf() }.second.add(t)
+    }
+    
+    val groups = mutableListOf<SubGroup>()
+    if (off != null) {
+        groups.add(SubGroup(OFF_KEY, "Off", listOf(off), off.selected))
+    }
+
+    byLang[EMBEDDED_KEY]?.let { (display, list) ->
+        groups.add(SubGroup(EMBEDDED_KEY, display, list, list.any { it.selected }))
+    }
+
+    byLang[REMOTE_KEY]?.let { (display, list) ->
+        groups.add(SubGroup(REMOTE_KEY, display, list, list.any { it.selected }))
+    }
+
+    byLang.filterKeys { it != EMBEDDED_KEY && it != REMOTE_KEY && it != EXTERNAL_KEY }.forEach { (k, v) ->
+        groups.add(SubGroup(k, v.first, v.second, v.second.any { it.selected }))
+    }
+
+    byLang[EXTERNAL_KEY]?.let { (display, list) ->
+        groups.add(SubGroup(EXTERNAL_KEY, display, list, list.any { it.selected }))
+    }
+
+    return groups
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SubtitlesBottomSheet(
+    tracks: List<MediaTrack>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val groups = remember(tracks) { groupSubtitleTracks(tracks) }
+    
+    // Find the group that contains the currently selected track, or fallback to the first non-Off group, or the first group
+    val initialGroupKey = remember(groups) {
+        groups.firstOrNull { g -> g.tracks.any { it.selected } && g.key != OFF_KEY }?.key
+            ?: groups.firstOrNull { it.key != OFF_KEY }?.key
+            ?: groups.firstOrNull()?.key
+    }
+    var selectedGroupKey by remember(groups) { mutableStateOf(initialGroupKey) }
+    val currentGroup = groups.firstOrNull { it.key == selectedGroupKey }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Text(
+                text = "Subtitles",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Categories horizontal chips row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                groups.forEach { group ->
+                    val isSelected = selectedGroupKey == group.key
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { selectedGroupKey = group.key },
+                        label = {
+                            val countSuffix = if (group.key != OFF_KEY && group.tracks.isNotEmpty()) " (${group.tracks.size})" else ""
+                            Text(group.label + countSuffix)
+                        },
+                        leadingIcon = if (group.hasSelected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Active selection",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        } else null,
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (currentGroup != null) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(currentGroup.tracks, key = { it.id }) { track ->
+                        val isSelected = track.selected
+                        val displayLabel = if (currentGroup.key == OFF_KEY) "Off" else classifySub(track).optionLabel
+                        
+                        Surface(
+                            onClick = {
+                                onSelect(track.id)
+                                onDismiss()
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = displayLabel,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                )
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

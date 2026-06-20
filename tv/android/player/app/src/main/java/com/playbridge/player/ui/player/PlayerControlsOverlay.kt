@@ -92,7 +92,8 @@ fun PlayerControlsOverlay(
                         onPreloadLanguage = onPreloadSubtitles,
                         onTrackSelected = onTrackSelected,
                         onAdjustDelay = onAdjustSubtitleDelay,
-                        onDismiss = onOverlayDismiss
+                        onDismiss = onOverlayDismiss,
+                        activeMetadata = state.activeMetadata,
                     )
                 }
 

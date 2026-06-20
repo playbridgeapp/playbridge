@@ -47,6 +47,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import android.content.Context
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.model.TvDevice
@@ -208,6 +210,8 @@ fun DeviceConnectionSheet(
     onPickedThisDevice: (() -> Unit)? = null,
     onPickedDevice: ((TvDevice) -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val viewModel: ConnectionViewModel = koinViewModel()
     val discovered by viewModel.discoveredDevices.collectAsState()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
@@ -281,6 +285,7 @@ fun DeviceConnectionSheet(
                     selected = onPhone,
                     onClick = {
                         viewModel.disconnect()
+                        browserPrefs.edit().putBoolean("watch_on_tv", false).apply()
                         onPickedThisDevice?.invoke()
                         onDismiss()
                     }
@@ -346,6 +351,7 @@ fun DeviceConnectionSheet(
                                     device.connectDevice.uuid
                                 )
                             }
+                            browserPrefs.edit().putBoolean("watch_on_tv", true).apply()
                             onPickedDevice?.invoke(device.connectDevice)
                             onDismiss()
                         },

@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import android.util.Log
 import com.playbridge.player.player.SubtitleManager
 import com.playbridge.player.player.SubtitleCueLoader
 
@@ -21,6 +20,8 @@ class PlayerControlsViewModel : ViewModel() {
     private var progressUpdateJob: Job? = null
     private var engine: PlayerEngineAdapter? = null
     private var subtitleManager: SubtitleManager? = null
+    private var onlineSubtitleJob: Job? = null
+    private var cachedOnlineTracks: List<UnifiedTrack> = emptyList()
 
     /** Request headers for fetching subtitle files (set by the activity when media loads). */
     var subtitleRequestHeaders: Map<String, String>? = null
@@ -150,8 +151,52 @@ class PlayerControlsViewModel : ViewModel() {
         _controlsState.update { it.copy(isBuffering = isBuffering) }
     }
     
-    fun setPrePlay(metadata: playbridge.VisualMetadata?) {
-        _controlsState.update { it.copy(prePlayMetadata = metadata) }
+    fun setPrePlay(
+        metadata: playbridge.VisualMetadata?,
+        clearOnlineSubs: Boolean = true,
+        showCountdown: Boolean = true
+    ) {
+        if (clearOnlineSubs) {
+            onlineSubtitleJob?.cancel()
+            cachedOnlineTracks = emptyList()
+        }
+
+        _controlsState.update { state ->
+            val nextActiveMetadata = metadata ?: if (!clearOnlineSubs) state.activeMetadata else null
+            state.copy(
+                activeMetadata = nextActiveMetadata,
+                prePlayMetadata = if (metadata != null && showCountdown) metadata else null
+            )
+        }
+
+        val imdbId = metadata?.imdb_id?.takeIf { it.isNotBlank() }
+        if (imdbId != null) {
+            onlineSubtitleJob = viewModelScope.launch {
+                try {
+                    val results = com.playbridge.player.player.SubtitleFetcher.fetchSubtitles(
+                        imdbId = imdbId,
+                        season = metadata.season,
+                        episode = metadata.episode
+                    )
+                    val fetchedTracks = results.map { sub ->
+                        val name = "${sub.lang} · OpenSubtitles #${sub.id}"
+                        val urlWithFragment = "${sub.url}#${java.net.URLEncoder.encode(name, "UTF-8")}"
+                        UnifiedTrack(
+                            id = urlWithFragment,
+                            name = name,
+                            isSelected = false,
+                            type = "external_sub"
+                        )
+                    }
+                    cachedOnlineTracks = fetchedTracks
+                    _controlsState.update { s ->
+                        val existingIds = s.subtitleTracks.map { it.id }.toSet()
+                        val newTracks = fetchedTracks.filter { it.id !in existingIds }
+                        s.copy(subtitleTracks = s.subtitleTracks + newTracks)
+                    }
+                } catch (_: Exception) { }
+            }
+        }
     }
     
     fun setPrePlayCountdown(seconds: Int) {
@@ -283,11 +328,29 @@ class PlayerControlsViewModel : ViewModel() {
         resetAutoHideTimer()
     }
 
-    fun updateTracks(audio: List<UnifiedTrack>, subtitles: List<UnifiedTrack>, video: List<UnifiedTrack>) {
-        _controlsState.update { 
-            it.copy(
+    fun updateTracks(
+        audio: List<UnifiedTrack>,
+        subtitles: List<UnifiedTrack>,
+        video: List<UnifiedTrack>,
+        currentSubtitleUrl: String? = null
+    ) {
+        _controlsState.update { state ->
+            val mergedSubs = subtitles.toMutableList()
+            
+            // Re-apply selection states to the cached online tracks. An online track is selected
+            // if it matches the current active external subtitle URL.
+            val selectedSubId = currentSubtitleUrl ?: subtitles.firstOrNull { it.isSelected }?.id
+            val onlineTracks = cachedOnlineTracks.map { track ->
+                track.copy(isSelected = track.id == selectedSubId)
+            }
+            
+            // Append any online tracks that aren't already present in the list
+            val existingIds = mergedSubs.map { it.id }.toSet()
+            val newOnlineTracks = onlineTracks.filter { it.id !in existingIds }
+            
+            state.copy(
                 audioTracks = audio,
-                subtitleTracks = subtitles,
+                subtitleTracks = mergedSubs + newOnlineTracks,
                 videoTracks = video
             )
         }
@@ -322,6 +385,8 @@ class PlayerControlsViewModel : ViewModel() {
         autoHideJob?.cancel()
         progressUpdateJob?.cancel()
         commitSeekJob?.cancel()
+        onlineSubtitleJob?.cancel()
+        cachedOnlineTracks = emptyList()
         engine = null
     }
 }

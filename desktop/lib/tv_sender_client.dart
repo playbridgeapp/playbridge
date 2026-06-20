@@ -126,7 +126,10 @@ class TvSenderClient {
     _setState(SenderConnectionState.connecting);
 
     final resolvedWssPort = wssPort ?? (port + 1);
-    final uri = Uri.parse('wss://$host:$resolvedWssPort/');
+    final formattedHost = host.contains(':') && !host.startsWith('[')
+        ? '[${host.replaceFirst('%', '%25')}]'
+        : host;
+    final uri = Uri.parse('wss://$formattedHost:$resolvedWssPort/');
 
     final customClient = HttpClient()
       ..badCertificateCallback = (X509Certificate cert, String h, int p) {

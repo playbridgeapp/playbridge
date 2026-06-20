@@ -378,7 +378,10 @@ function connectWebSocket(ip, pin) {
     updateWsStatus('connecting');
     
     try {
-        wsConnection = new WebSocket(`ws://${ip}:${playbridgePort}`);
+        const formattedIp = ip.includes(':') && !ip.startsWith('[')
+            ? `[${ip.replace('%', '%25')}]`
+            : ip;
+        wsConnection = new WebSocket(`ws://${formattedIp}:${playbridgePort}`);
         
         wsConnection.onopen = () => {
             console.log('[VideoDetector BG] WS Connected to PlayBridge TV');

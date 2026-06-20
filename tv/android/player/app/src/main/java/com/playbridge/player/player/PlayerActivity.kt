@@ -182,6 +182,7 @@ abstract class PlayerActivity : ComponentActivity() {
                         put("id", t.id)
                         put("name", t.name)
                         put("selected", t.isSelected)
+                        put("type", t.type)
                     })
                 }
             }
@@ -419,19 +420,19 @@ abstract class PlayerActivity : ComponentActivity() {
     }
 
     protected fun handlePrePlayMetadata(intent: Intent?, controlsViewModel: PlayerControlsViewModel) {
-        if (intent?.getBooleanExtra(ServerService.EXTRA_SKIP_PREPLAY, false) == true) {
-            FileLogger.d("PlayerActivity", "Skipping pre-play metadata per EXTRA_SKIP_PREPLAY")
-            controlsViewModel.setPrePlay(null)
-            return
-        }
+        val skipPreplay = intent?.getBooleanExtra(ServerService.EXTRA_SKIP_PREPLAY, false) == true
         val visualMetadataBytes = intent?.getByteArrayExtra(ServerService.EXTRA_VISUAL_METADATA)
         if (visualMetadataBytes != null) {
             try {
                 val metadata = playbridge.VisualMetadata.ADAPTER.decode(visualMetadataBytes)
-                FileLogger.i("PlayerActivity", "Received pre-play metadata: ${metadata.title}")
-                controlsViewModel.setPrePlay(metadata)
-                controlsViewModel.setPrePlayLaunching(true)
-                controlsViewModel.setPrePlayCountdown(-1) // -1 signifies "Connecting..."
+                FileLogger.i("PlayerActivity", "Received visual metadata (skipPreplay=$skipPreplay): ${metadata.title}")
+                if (skipPreplay) {
+                    controlsViewModel.setPrePlay(metadata, showCountdown = false)
+                } else {
+                    controlsViewModel.setPrePlay(metadata)
+                    controlsViewModel.setPrePlayLaunching(true)
+                    controlsViewModel.setPrePlayCountdown(-1) // -1 signifies "Connecting..."
+                }
             } catch (e: Exception) {
                 FileLogger.e("PlayerActivity", "Failed to parse visual metadata", e)
                 controlsViewModel.setPrePlay(null)
@@ -495,7 +496,6 @@ abstract class PlayerActivity : ComponentActivity() {
 
         // Remove EXTRA_CONTENT_PAYLOAD so we don't re-resolve streams
         newIntent.removeExtra(ServerService.EXTRA_CONTENT_PAYLOAD)
-        newIntent.removeExtra(ServerService.EXTRA_VISUAL_METADATA)
         newIntent.putExtra(ServerService.EXTRA_SKIP_PREPLAY, true)
 
 
@@ -530,6 +530,15 @@ abstract class PlayerActivity : ComponentActivity() {
             PlaylistStore.currentPlaylist = queueItems
             newIntent.putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
             newIntent.putExtra(ServerService.EXTRA_PLAYLIST_INDEX, queueIndex)
+
+            // Carry the current item's visual metadata across the switch.
+            val currentItem = queueItems.getOrNull(queueIndex)
+            val currentVisualMetadata = currentItem?.visual_metadata
+            if (currentVisualMetadata != null) {
+                newIntent.putExtra(ServerService.EXTRA_VISUAL_METADATA, currentVisualMetadata.encode())
+            } else {
+                newIntent.removeExtra(ServerService.EXTRA_VISUAL_METADATA)
+            }
         } else {
             newIntent.removeExtra(ServerService.EXTRA_IS_PLAYLIST)
             newIntent.removeExtra(ServerService.EXTRA_PLAYLIST_INDEX)
@@ -544,6 +553,9 @@ abstract class PlayerActivity : ComponentActivity() {
         startActivity(newIntent)
         finish()
     }
+
+    abstract fun addExternalSubtitle(url: String)
+
     companion object {
         @Volatile
         private var current: java.lang.ref.WeakReference<PlayerActivity>? = null

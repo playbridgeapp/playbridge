@@ -9,8 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -29,11 +28,10 @@ import androidx.compose.ui.unit.dp
 /**
  * Persistent cast mini-bar shown across the main screens. It has two visual modes:
  *
- *  - **Playing** ([showPlayPause] = true): a cast session is active with media loaded —
- *    shows the title + "on <device>" and a play/pause button; tapping opens the Remote.
- *  - **Idle** ([showPlayPause] = false): no media is playing — shows the current cast
- *    destination (a connected TV/renderer, or "This Device" when nothing is connected) and
- *    tapping opens the device picker. No play/pause button.
+ *  - **Playing**: a cast session is active with media loaded — shows the title + "on <device>";
+ *    tapping opens the Remote. Shows a TV icon button on the right to open the connection sheet.
+ *  - **Idle**: no media is playing — shows the current cast destination (a connected TV/renderer,
+ *    or "This Device" when nothing is connected) and tapping opens the device picker.
  *
  * The bar is intentionally "dumb": the host computes [primaryText]/[secondaryText]/[leadingIcon]
  * and the mode flags from the live connection state.
@@ -47,10 +45,9 @@ fun NowPlayingBar(
     primaryText: String,
     secondaryText: String?,
     leadingIcon: ImageVector,
-    showPlayPause: Boolean,
-    isPlaying: Boolean,
-    onPlayPause: () -> Unit,
     onClick: () -> Unit,
+    showTvIcon: Boolean = false,
+    onTvIconClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     accentColor: Color? = null,
 ) {
@@ -100,11 +97,11 @@ fun NowPlayingBar(
                     )
                 }
             }
-            if (showPlayPause) {
-                IconButton(onClick = onPlayPause) {
+            if (showTvIcon && onTvIconClick != null) {
+                IconButton(onClick = onTvIconClick) {
                     Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        imageVector = Icons.Default.Tv,
+                        contentDescription = "Connection Sheet",
                         tint = content,
                     )
                 }
