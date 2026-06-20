@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +42,8 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 
 private const val OFF_KEY = "__off__"
+private const val EMBEDDED_KEY = "__embedded__"
+private const val REMOTE_KEY = "__remote__"
 private const val EXTERNAL_KEY = "__external__"
 
 private data class SubLangGroup(
@@ -99,6 +102,14 @@ private data class SubInfo(val langKey: String, val langDisplay: String, val opt
 
 /** Decide a subtitle's language group + option label. No recognizable language → External. */
 private fun classify(t: UnifiedTrack): SubInfo {
+    if (t.type == "sub" && t.id != "off" && t.id != "none") {
+        return SubInfo(EMBEDDED_KEY, "Embedded", t.name)
+    }
+
+    if (t.type == "external_sub" && !t.name.contains("OpenSubtitles #")) {
+        return SubInfo(REMOTE_KEY, "Phone Remote", t.name.ifBlank { "Remote Subtitle" })
+    }
+
     val segs = t.name.split(" · ", " • ").map { it.trim() }.filter { it.isNotEmpty() }
     val lang = segs.firstNotNullOfOrNull { languageOf(it) }
     return if (lang != null) {
@@ -117,16 +128,27 @@ private fun sourceLabel(t: UnifiedTrack): String =
     if (t.type == "external_sub") "EXTERNAL" else "EMBEDDED"
 
 private fun groupSubtitleTracks(tracks: List<UnifiedTrack>): List<SubLangGroup> {
-    val off = tracks.firstOrNull { it.id == "off" }
+    val off = tracks.firstOrNull { it.id == "off" || it.id == "none" }
     val byLang = LinkedHashMap<String, Pair<String, MutableList<UnifiedTrack>>>()
-    tracks.filter { it.id != "off" }.forEach { t ->
+    tracks.filter { it.id != "off" && it.id != "none" }.forEach { t ->
         val info = classify(t)
         byLang.getOrPut(info.langKey) { info.langDisplay to mutableListOf() }.second.add(t)
     }
     val groups = mutableListOf<SubLangGroup>()
     if (off != null) groups.add(SubLangGroup(OFF_KEY, "Off", listOf(off), off.isSelected))
-    // Real languages first (encounter order), the External bucket last.
-    byLang.filterKeys { it != EXTERNAL_KEY }.forEach { (k, v) ->
+
+    // Put "Embedded" group first after "Off" if it exists
+    byLang[EMBEDDED_KEY]?.let { (display, list) ->
+        groups.add(SubLangGroup(EMBEDDED_KEY, display, list, list.any { it.isSelected }))
+    }
+
+    // Put "Phone Remote" group next if it exists
+    byLang[REMOTE_KEY]?.let { (display, list) ->
+        groups.add(SubLangGroup(REMOTE_KEY, display, list, list.any { it.isSelected }))
+    }
+
+    // Real languages first (encounter order)
+    byLang.filterKeys { it != EMBEDDED_KEY && it != REMOTE_KEY && it != EXTERNAL_KEY }.forEach { (k, v) ->
         groups.add(SubLangGroup(k, v.first, v.second, v.second.any { it.isSelected }))
     }
     byLang[EXTERNAL_KEY]?.let { (display, list) ->
@@ -150,6 +172,7 @@ fun SubtitleSelectionOverlay(
     onTrackSelected: (UnifiedTrack) -> Unit,
     onAdjustDelay: (Long) -> Unit,
     onDismiss: () -> Unit,
+    activeMetadata: playbridge.VisualMetadata? = null,
 ) {
     BackHandler { onDismiss() }
 
@@ -169,13 +192,6 @@ fun SubtitleSelectionOverlay(
     val initialFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { initialFocus.requestFocus() } }
 
-    // Fetch previews only for the selected language's external subs (lazy, cached).
-    LaunchedEffect(selectedLangKey, groups) {
-        currentGroup?.takeIf { it.key != OFF_KEY }?.let { g ->
-            onPreloadLanguage(g.tracks.filter { it.type == "external_sub" }.map { it.id })
-        }
-    }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -187,12 +203,34 @@ fun SubtitleSelectionOverlay(
                 .padding(start = 48.dp, end = 48.dp, top = 40.dp, bottom = 56.dp),
             verticalArrangement = Arrangement.Top
         ) {
+            val searchInfo = activeMetadata?.let { meta ->
+                val imdbId = meta.imdb_id?.takeIf { it.isNotBlank() }
+                if (imdbId != null) {
+                    val s = meta.season
+                    val e = meta.episode
+                    if (s != null && s > 0 && e != null && e > 0) {
+                        "Source: https://opensubtitles-v3.strem.io/subtitles/series/$imdbId:$s:$e.json"
+                    } else {
+                        "Source: https://opensubtitles-v3.strem.io/subtitles/movie/$imdbId.json"
+                    }
+                } else null
+            }
+
             Text(
                 text = "Subtitles",
                 style = MaterialTheme.typography.headlineMedium,
                 color = Color.White,
-                modifier = Modifier.padding(bottom = 14.dp)
+                modifier = Modifier.padding(bottom = if (searchInfo != null) 4.dp else 14.dp)
             )
+
+            if (searchInfo != null) {
+                Text(
+                    text = searchInfo,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(bottom = 14.dp)
+                )
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 // ---- Language rail ----
@@ -226,35 +264,44 @@ fun SubtitleSelectionOverlay(
 
                 // ---- Options rail ----
                 RailColumn(title = "Subtitles", width = 380.dp) {
-                    if (currentGroup == null || currentGroup.key == OFF_KEY) {
-                        EmptyRailCard("Subtitles off")
-                    } else {
-                        LazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.heightIn(max = 460.dp)
-                        ) {
-                            items(currentGroup.tracks, key = { it.id }) { t ->
-                                val isExternal = t.type == "external_sub"
-                                // Re-windows when the offset (subtitleDelayMs) or cache version changes.
-                                val preview = remember(t.id, cuesVersion, subtitleDelayMs) {
-                                    if (!isExternal) null
-                                    else SubtitleCueLoader.cached(t.id)
-                                        ?.let { SubtitleCueLoader.preview(it, frozenPos + subtitleDelayMs) }
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (currentGroup == null || currentGroup.key == OFF_KEY) {
+                            EmptyRailCard("Subtitles off")
+                        } else {
+                            LazyColumn(
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.heightIn(max = 380.dp)
+                            ) {
+                                items(currentGroup.tracks, key = { it.id }) { t ->
+                                    val isExternal = t.type == "external_sub"
+                                    // Re-windows when the offset (subtitleDelayMs) or cache version changes.
+                                    val preview = remember(t.id, cuesVersion, subtitleDelayMs) {
+                                        if (!isExternal) null
+                                        else SubtitleCueLoader.cached(t.id)
+                                            ?.let { SubtitleCueLoader.preview(it, frozenPos + subtitleDelayMs) }
+                                    }
+                                    val loading = isExternal && SubtitleCueLoader.cached(t.id) == null
+                                    SubCard(
+                                        title = optionLabel(t),
+                                        meta = null,
+                                        source = sourceLabel(t),
+                                        trailingCount = null,
+                                        checked = t.isSelected,
+                                        highlighted = t.isSelected,
+                                        previewLines = preview,
+                                        loading = loading,
+                                        focusRequester = null,
+                                        onFocused = {
+                                            if (isExternal) {
+                                                onPreloadLanguage(listOf(t.id))
+                                            }
+                                        },
+                                        onClick = { onTrackSelected(t) }
+                                    )
                                 }
-                                val loading = isExternal && SubtitleCueLoader.cached(t.id) == null
-                                SubCard(
-                                    title = optionLabel(t),
-                                    meta = null,
-                                    source = sourceLabel(t),
-                                    trailingCount = null,
-                                    checked = t.isSelected,
-                                    highlighted = t.isSelected,
-                                    previewLines = preview,
-                                    loading = loading,
-                                    focusRequester = null,
-                                    onFocused = {},
-                                    onClick = { onTrackSelected(t) }
-                                )
                             }
                         }
                     }
@@ -298,6 +345,7 @@ private fun SubCard(
     previewLines: List<String>? = null,
     loading: Boolean = false,
 ) {
+    var isFocused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
@@ -310,7 +358,10 @@ private fun SubCard(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .onFocusChanged { if (it.isFocused) onFocused() }
+            .onFocusChanged {
+                isFocused = it.isFocused
+                if (it.isFocused) onFocused()
+            }
     ) {
         Row(
             modifier = Modifier
@@ -329,7 +380,7 @@ private fun SubCard(
                 }
                 // Preview mode (subtitle options): show the cue lines at the current scene
                 // instead of a filename, so you can eyeball which one is in sync.
-                val showPreview = loading || previewLines != null
+                val showPreview = isFocused && (loading || previewLines != null)
                 if (showPreview) {
                     when {
                         loading -> Text(
@@ -450,3 +501,6 @@ private fun SyncRow(label: String, minus: String, plus: String, step: Long, onAd
         ) { Text(plus, style = MaterialTheme.typography.labelSmall) }
     }
 }
+
+
+

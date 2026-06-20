@@ -185,6 +185,8 @@ class TvQueueCoordinator(
 
     /** Preferred-language addon subtitles for an episode (from its template's visual_metadata). */
     private suspend fun fetchSubtitlesFor(tmpl: playbridge.PlayPayload, resolvedUrl: String?): List<String> {
+        val sendSubtitles = runCatching { settingsRepository.sendSubtitlesToTv.first() }.getOrDefault(true)
+        if (!sendSubtitles) return emptyList()
         val pref = runCatching { settingsRepository.preferredSubtitleLang.first() }.getOrDefault("")
         val vm = tmpl.visual_metadata
         return subtitleService.getAllSubtitleUrls(

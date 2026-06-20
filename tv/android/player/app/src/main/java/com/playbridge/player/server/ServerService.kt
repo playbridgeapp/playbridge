@@ -326,6 +326,11 @@ class ServerService : Service() {
     }
 
     private fun handleMessage(msg: IncomingMessage) {
+        val isDebug = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (isDebug && msg !is IncomingMessage.Mouse) {
+            logDebugLong(TAG, "Command received: $msg")
+        }
+
         if (msg !is IncomingMessage.Mouse) {
             FileLogger.i(TAG, "=== MESSAGE RECEIVED ===")
             FileLogger.i(TAG, "Message type: ${msg.javaClass.simpleName}")
@@ -715,6 +720,16 @@ class ServerService : Service() {
         // Cancel scope after stopping server
         scope.cancel()
         super.onDestroy()
+    }
+
+    private fun logDebugLong(tag: String, message: String) {
+        val maxLogSize = 2000
+        var i = 0
+        while (i < message.length) {
+            val end = minOf(i + maxLogSize, message.length)
+            Log.d(tag, message.substring(i, end))
+            i += maxLogSize
+        }
     }
 
     companion object {

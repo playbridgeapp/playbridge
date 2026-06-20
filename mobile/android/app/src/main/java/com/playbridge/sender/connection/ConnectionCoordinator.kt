@@ -96,7 +96,8 @@ class ConnectionCoordinator(
                                                 MediaTrack(
                                                     id = o.optString("id"),
                                                     name = o.optString("name", "Track ${i + 1}"),
-                                                    selected = o.optBoolean("selected", false)
+                                                    selected = o.optBoolean("selected", false),
+                                                    type = if (o.has("type")) o.optString("type") else null
                                                 )
                                             )
                                         }

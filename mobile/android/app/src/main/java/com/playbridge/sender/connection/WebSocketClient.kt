@@ -29,6 +29,7 @@ private const val TAG = "WebSocketClient"
 class WebSocketClient {
     
     private val client = OkHttpClient.Builder()
+        .dns(LinkLocalDns())
         .pingInterval(15, TimeUnit.SECONDS)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -148,7 +149,8 @@ class WebSocketClient {
         val conn = targetConnection
         val wssPort = conn?.wssPort ?: (port + 1)
         isSecure = true
-        val url = "wss://$ip:$wssPort/"
+        val formattedHost = LinkLocalDns.encodeIpv6ToHost(ip)
+        val url = "wss://$formattedHost:$wssPort/"
         val httpClient = buildPinningClient(conn?.pin)
         Log.i(TAG, "Connecting to $url")
 
@@ -419,5 +421,50 @@ class WebSocketClient {
         disconnect()
         scope.cancel()
         client.dispatcher.executorService.shutdown()
+    }
+}
+
+internal class LinkLocalDns : Dns {
+    override fun lookup(hostname: String): List<java.net.InetAddress> {
+        if (hostname.endsWith(".local-ipv6")) {
+            try {
+                val decodedIp = decodeHostToIpv6String(hostname)
+                return listOf(java.net.InetAddress.getByName(decodedIp))
+            } catch (e: Exception) {
+                // fallback to default resolution
+            }
+        }
+        return Dns.SYSTEM.lookup(hostname)
+    }
+
+    companion object {
+        fun encodeIpv6ToHost(ip: String): String {
+            if (!ip.contains(":")) return ip
+            val cleanIp = ip.removePrefix("[").removeSuffix("]")
+            val rawIp = cleanIp.substringBefore("%")
+            val scope = cleanIp.substringAfter("%", "")
+            return try {
+                val addr = java.net.InetAddress.getByName(rawIp)
+                val hexBytes = addr.address.joinToString("") { "%02x".format(it) }
+                if (scope.isNotEmpty()) "$hexBytes-$scope.local-ipv6" else "$hexBytes.local-ipv6"
+            } catch (e: Exception) {
+                cleanIp // fallback
+            }
+        }
+
+        fun decodeHostToIpv6String(hostname: String): String {
+            if (!hostname.endsWith(".local-ipv6")) return hostname
+            val parts = hostname.removeSuffix(".local-ipv6")
+            val hexPart = parts.substringBefore("-")
+            if (hexPart.length != 32) return hostname
+            val scopePart = parts.substringAfter("-", "")
+            val ipStringBuilder = StringBuilder()
+            for (i in 0 until 8) {
+                if (i > 0) ipStringBuilder.append(":")
+                ipStringBuilder.append(hexPart.substring(i * 4, i * 4 + 4))
+            }
+            val ipStr = ipStringBuilder.toString()
+            return if (scopePart.isNotEmpty() && scopePart != parts) "$ipStr%$scopePart" else ipStr
+        }
     }
 }

@@ -174,6 +174,13 @@ fun LibraryDetailScreen(
         )
     }
 
+    // Reactively update watchOnTv mode when TV connection status changes live
+    LaunchedEffect(isTvConnected) {
+        if (isTvConnected) {
+            watchOnTv = true
+        }
+    }
+
     // Player mode (mirrors CastSheet; persisted to browser_prefs/tv_player_mode)
     val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
     val tmdbRepository: com.playbridge.sender.data.library.TmdbRepository = org.koin.compose.koinInject()
@@ -348,7 +355,7 @@ fun LibraryDetailScreen(
             logo_url = displayLogo,
             imdb_id = currentImdbId,
             tmdb_id = currentTmdbId?.toString(),
-            season = if (isSeries) selectedSeason else null,
+            season = if (isSeries) (episode?.season ?: selectedSeason) else null,
             episode = if (isSeries) episode?.episode else null,
             episode_title = if (isSeries) episode?.title else null
         )

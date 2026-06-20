@@ -38,6 +38,7 @@ data class PlayerControlsState(
     val hasPlaylist: Boolean = false,
     val engineType: String = "",
     val prePlayMetadata: playbridge.VisualMetadata? = null,
+    val activeMetadata: playbridge.VisualMetadata? = null,
     val prePlayCountdown: Int = 0,
     val isPrePlayLaunching: Boolean = false,
     
@@ -62,5 +63,5 @@ data class PlayerControlsState(
     val currentSubtitleText: String? = null,
     // Bumped whenever a subtitle preview finishes loading, so the overlay re-reads the
     // SubtitleCueLoader cache. The cues themselves live in the loader, not in state.
-    val subtitleCuesVersion: Int = 0
+    val subtitleCuesVersion: Int = 0,
 )
