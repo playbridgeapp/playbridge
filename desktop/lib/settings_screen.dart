@@ -15,6 +15,7 @@ class SettingsScreen extends StatefulWidget {
     required this.player,
     required this.showStats,
     required this.onNavigateToCast,
+    this.onSettingsChanged,
   });
 
   final ReceiverServer server;
@@ -22,6 +23,7 @@ class SettingsScreen extends StatefulWidget {
   final PlayerController player;
   final ValueNotifier<bool> showStats;
   final VoidCallback onNavigateToCast;
+  final VoidCallback? onSettingsChanged;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -110,6 +112,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: on,
                   onChanged: (v) => widget.showStats.value = v,
                 ),
+              ),
+            ),
+            _Tile(
+              icon: Icons.history,
+              title: 'Save Cast History',
+              subtitle:
+                  'Keep track of recently played videos and your progress.',
+              trailing: Switch(
+                value: widget.store.enableHistory,
+                onChanged: (v) async {
+                  await widget.store.setEnableHistory(v);
+                  if (mounted) setState(() {});
+                  widget.onSettingsChanged?.call();
+                },
               ),
             ),
 

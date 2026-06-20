@@ -46,6 +46,7 @@ class PairingStore {
   static const _kPairedDevices = 'pb.paired_devices';
   static const _kShowStats = 'pb.show_stats';
   static const _kAutoFullScreen = 'pb.auto_fullscreen';
+  static const _kEnableHistory = 'pb.enable_history';
 
   final SharedPreferences _prefs;
 
@@ -91,6 +92,11 @@ class PairingStore {
 
   Future<void> setAutoFullScreen(bool value) =>
       _prefs.setBool(_kAutoFullScreen, value);
+
+  bool get enableHistory => _prefs.getBool(_kEnableHistory) ?? true;
+
+  Future<void> setEnableHistory(bool value) =>
+      _prefs.setBool(_kEnableHistory, value);
 
   // ─── Paired devices ──────────────────────────────────────────────────────
 

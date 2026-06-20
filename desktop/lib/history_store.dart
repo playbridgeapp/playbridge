@@ -59,6 +59,9 @@ class HistoryStore extends ChangeNotifier {
   }
 
   Future<void> addOrBump(String url, String title) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool('pb.enable_history') ?? true)) return;
+
     _items.removeWhere((i) => i.url == url);
     _items.insert(
       0,
