@@ -397,9 +397,22 @@ browser.webRequest.onHeadersReceived.addListener(
         }
 
         // --- HTTP Error Detection ---
-        // If it's a main_frame request and status is >= 400, notify the native app
-        if (details.type === 'main_frame' && details.statusCode >= 400) {
-            console.log(`[VideoDetector BG] HTTP ERROR detected: ${details.statusCode} for ${details.url}`);
+        // GeckoView (unlike the desktop/Fenix Firefox app) has no built-in page for
+        // HTTP error status codes — it just renders whatever body the server returned.
+        // We synthesize a Chrome-style error page, but ONLY when the engine has nothing
+        // useful to show: status >= 400 AND a non-HTML response (empty body, or a bare
+        // non-HTML error like a JSON API error or a blank 500).
+        //
+        // Any real page the user should see is served as text/html, so we leave it for
+        // Gecko to render: a site's own custom 404, a login/paywall, and — crucially —
+        // anti-bot "prove you are not a bot" interstitials (Cloudflare, DDoS-Guard,
+        // PerimeterX, etc.). Those come back as 403/429/503 with an HTML body that runs
+        // a JS proof-of-work and then redirects to the real page. Triggering on the
+        // status code alone used to clobber them, sending the tab to a data: error page
+        // and killing the challenge before it could solve, so the site never loaded.
+        const isHtmlResponse = contentType.includes('text/html') || contentType.includes('application/xhtml');
+        if (details.type === 'main_frame' && details.statusCode >= 400 && !isHtmlResponse) {
+            console.log(`[VideoDetector BG] HTTP ERROR detected: ${details.statusCode} (${contentType || 'no content-type'}) for ${details.url}`);
 
             const errorMsg = {
                 type: 'http_error',

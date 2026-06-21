@@ -54,11 +54,39 @@ class PlaybackCoordinator(private val host: Host) {
         cursor = startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
     }
 
-    /** Append phone-driven `queue_add` items to the active queue. */
+    /**
+     * Append phone-driven `queue_add` items to the active queue.
+     *
+     * De-duplicates against what's already queued: the phone's lazy-queue bookkeeping can
+     * desync from the real queue (re-attach underestimating how far the queue extends, a
+     * delivered-but-reported-failed send being retried, etc.), and there is no other guard
+     * on the receiver. An episode is considered already present when its
+     * `visual_metadata` season/episode (and imdb_id, when both sides carry one) match an
+     * existing item; content without episode identity (channels, generic items) falls back
+     * to an exact URL match so legitimate repeats in an IPTV/M3U playlist are preserved.
+     */
     fun queueAdd(newItems: List<PlayPayload>) {
         if (newItems.isEmpty()) return
-        items.addAll(newItems)
+        val deduped = newItems.filterNot { isAlreadyQueued(it) }
+        if (deduped.isEmpty()) return
+        items.addAll(deduped)
         host.onPlaylistChanged(items, cursor)
+    }
+
+    private fun isAlreadyQueued(item: PlayPayload): Boolean {
+        val vm = item.visual_metadata
+        val season = vm?.season
+        val episode = vm?.episode
+        if (vm != null && season != null && episode != null) {
+            val imdb = vm.imdb_id
+            return items.any { existing ->
+                val o = existing.visual_metadata ?: return@any false
+                o.season == season && o.episode == episode &&
+                    (imdb == null || o.imdb_id == null || o.imdb_id == imdb)
+            }
+        }
+        // No episode identity — only suppress an exact-URL repeat.
+        return item.url.isNotBlank() && items.any { it.url == item.url }
     }
 
     /** Build the "(n/m)"-suffixed display title used in toasts and the now-playing surface. */

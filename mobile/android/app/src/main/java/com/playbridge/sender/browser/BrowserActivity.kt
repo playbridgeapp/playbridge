@@ -211,6 +211,29 @@ class BrowserActivity : ComponentActivity() {
      */
     private val tabManager: TabManager get() = Components.tabManager
 
+    /**
+     * A web URL captured from the launching/incoming Intent (a link tapped in another app),
+     * awaiting consumption by the Compose tree once tabs are restored. Compose state so
+     * [onNewIntent] updates trigger recomposition of the consuming effect.
+     */
+    private val pendingLinkUrl = androidx.compose.runtime.mutableStateOf<String?>(null)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        parseLinkIntent(intent)?.let { pendingLinkUrl.value = it }
+    }
+
+    /** Extracts an http/https URL from a VIEW intent, or null if it isn't one we handle. */
+    private fun parseLinkIntent(intent: Intent?): String? {
+        if (intent == null || intent.action != Intent.ACTION_VIEW) return null
+        val data = intent.data ?: return null
+        return when (data.scheme?.lowercase()) {
+            "http", "https" -> data.toString()
+            else -> null
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         Log.d("PB_STARTUP", "onResume: existingSessions=${tabManager.sessions.size}")
@@ -250,6 +273,9 @@ class BrowserActivity : ComponentActivity() {
             Components.initialize(applicationContext)
         }
         VideoDetector.init(applicationContext)
+
+        // Capture a web link that launched us (tapped in another app); consumed in Compose.
+        pendingLinkUrl.value = parseLinkIntent(intent)
 
         // Request notification permission for media controls on Android 13+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -372,6 +398,16 @@ class BrowserActivity : ComponentActivity() {
             var browserState by remember {
                 Log.d("PB_STARTUP", "Compose: initialising browserState — store has ${store.state.tabs.size} tabs, selectedTabId=${store.state.selectedTabId}")
                 mutableStateOf(store.state)
+            }
+
+            // Consume a pending web link once tabs are restored: open it in a fresh tab.
+            val pendingLink = pendingLinkUrl.value
+            LaunchedEffect(pendingLink, tabsRestoredOrReady.value) {
+                if (pendingLink != null && tabsRestoredOrReady.value) {
+                    tabManager.createTab(pendingLink, store)
+                    currentScreen = Screen.Browser
+                    pendingLinkUrl.value = null
+                }
             }
 
             // Debounced persistence: any onStateUpdated or store tab/selection change marks the tabs dirty;

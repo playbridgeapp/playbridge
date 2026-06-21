@@ -119,6 +119,14 @@ class WebSocketServer(
                     routing {
                         // HTTP endpoint: download log files
                         get("/logs") {
+                            if (!FileLogger.isEnabled()) {
+                                call.respondText(
+                                    "Logging is disabled on the TV.",
+                                    ContentType.Text.Plain,
+                                    HttpStatusCode.Forbidden
+                                )
+                                return@get
+                            }
                             val logFiles = FileLogger.getLogFiles()
                             if (logFiles.isEmpty()) {
                                 call.respondText("No log files found.", ContentType.Text.Plain)

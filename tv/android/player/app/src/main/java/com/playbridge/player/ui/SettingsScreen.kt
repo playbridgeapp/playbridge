@@ -23,12 +23,14 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import android.app.Activity
 import android.widget.Toast
+import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.theme.AppTheme
 import kotlinx.coroutines.delay
@@ -36,6 +38,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -151,6 +154,10 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(start = 48.dp, top = 48.dp, end = 64.dp, bottom = 48.dp)
         ) {
+            // Collected here (composable scope) rather than inside the LazyColumn's
+            // LazyListScope below, where @Composable calls like collectAsState aren't allowed.
+            val recentLogs by FileLogger.recent.collectAsState()
+            var loggingEnabled by remember { mutableStateOf(FileLogger.isEnabled()) }
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(24.dp),
@@ -327,6 +334,69 @@ fun SettingsScreen(
                                     }
                                 }
                             )
+                        }
+                    }
+
+                    SettingsCategory.LOGS -> {
+                        item {
+                            SettingToggleItem(
+                                label = "Enable Logging",
+                                description = "Save app logs to this device for troubleshooting. " +
+                                    "Off by default — logs can contain stream URLs and request " +
+                                    "headers (including Debrid tokens), so only enable when needed.",
+                                checked = loggingEnabled,
+                                onCheckedChange = {
+                                    loggingEnabled = it
+                                    FileLogger.setEnabled(it)
+                                }
+                            )
+                        }
+                        if (loggingEnabled) {
+                            item {
+                                SettingClickableItem(
+                                    label = "Clear Logs",
+                                    description = "Delete persisted log files on this device.",
+                                    onClick = { FileLogger.clearLogs() }
+                                )
+                            }
+                            item {
+                                Text(
+                                    text = "Phone can pull these logs over the network from Settings → TV → Logs.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
+                                )
+                            }
+                            if (recentLogs.isEmpty()) {
+                                item {
+                                    Text(
+                                        text = "No log entries yet.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(16.dp)
+                                    )
+                                }
+                            } else {
+                                // Newest last; show a bounded tail to keep the list snappy on TV.
+                                items(recentLogs.takeLast(500)) { line ->
+                                    Text(
+                                        text = line,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        } else {
+                            item {
+                                Text(
+                                    text = "Logging is disabled. No logs are being saved to this device.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(16.dp)
+                                )
+                            }
                         }
                     }
 
@@ -569,6 +639,7 @@ enum class SettingsCategory(val label: String, val icon: ImageVector) {
     NETWORK("Network", Icons.Default.Settings),
     INTEGRATIONS("Integrations", Icons.Default.Build),
     APPEARANCE("Appearance", Icons.Default.Add),
+    LOGS("Logs", Icons.AutoMirrored.Filled.List),
     ABOUT("About", Icons.Default.Info)
 }
 

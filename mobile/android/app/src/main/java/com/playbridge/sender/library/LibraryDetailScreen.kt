@@ -928,32 +928,32 @@ fun LibraryDetailScreen(
                         }
                     }
 
-                    // Action buttons — watchlist requires a TMDB id; the trailer button
-                    // shows whenever any trailer (TMDB or addon) is available.
+                    // Action buttons — always rendered so the watchlist control stays
+                    // discoverable: without a resolved TMDB id it shows disabled with a
+                    // "Connect TMDB to track" hint, and the trailer button independently
+                    // greys out when no trailer is available.
                     val tmdbIdForActions = resolvedTmdbId
-                    if (tmdbIdForActions != null || trailerOptions.isNotEmpty()) {
-                        item {
-                            ActionButtons(
-                                isWatchlisted = isWatchlisted,
-                                tracked = tracked,
-                                canWatchlist = tmdbIdForActions != null,
-                                onToggleWatchlist = {
-                                    if (tmdbIdForActions != null) {
-                                        viewModel.toggleWatchlist(
-                                            tmdbId = tmdbIdForActions,
-                                            mediaType = type,
-                                            title = displayTitle,
-                                            posterUrl = addonMeta?.poster,
-                                            year = displayYear,
-                                            rating = displayRating
-                                        )
-                                    }
-                                },
-                                trailers = trailerOptions,
-                                onPlayTrailer = onPlayTrailer,
-                                themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
-                            )
-                        }
+                    item {
+                        ActionButtons(
+                            isWatchlisted = isWatchlisted,
+                            tracked = tracked,
+                            canWatchlist = tmdbIdForActions != null,
+                            onToggleWatchlist = {
+                                if (tmdbIdForActions != null) {
+                                    viewModel.toggleWatchlist(
+                                        tmdbId = tmdbIdForActions,
+                                        mediaType = type,
+                                        title = displayTitle,
+                                        posterUrl = addonMeta?.poster,
+                                        year = displayYear,
+                                        rating = displayRating
+                                    )
+                                }
+                            },
+                            trailers = trailerOptions,
+                            onPlayTrailer = onPlayTrailer,
+                            themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
+                        )
                     }
 
                     // Overview / synopsis — kept up top, above seasons & episodes.

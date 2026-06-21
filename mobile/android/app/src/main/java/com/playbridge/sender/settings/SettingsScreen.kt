@@ -6,6 +6,7 @@ import com.playbridge.sender.cast.MediaflowSettingsScreen
 import com.playbridge.sender.browser.PopupBlockerSettingsScreen
 import com.playbridge.sender.cast.StreamingSettingsScreen
 import com.playbridge.sender.cast.TVSettingsScreen
+import com.playbridge.sender.diagnostics.LogsScreen
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
@@ -35,6 +36,7 @@ private sealed class SettingsSection {
     object TV : SettingsSection()
     object ImportExport : SettingsSection()
     object PopupBlocker : SettingsSection()
+    object Logs : SettingsSection()
 }
 
 private data class SettingsItemData(
@@ -69,6 +71,7 @@ fun SettingsScreen(
             onTV = { section = SettingsSection.TV },
             onImportExport = { section = SettingsSection.ImportExport },
             onPopupBlocker = { section = SettingsSection.PopupBlocker },
+            onLogs = { section = SettingsSection.Logs },
             showBack = showBack,
             isFromLibrary = isFromLibrary
         )
@@ -98,6 +101,11 @@ fun SettingsScreen(
         SettingsSection.ImportExport -> ImportExportSettingsScreen(
             onBack = { section = SettingsSection.Hub }
         )
+        SettingsSection.Logs -> LogsScreen(
+            onBack = { section = SettingsSection.Hub },
+            tvIp = tvIp,
+            tvPort = tvPort
+        )
     }
 }
 
@@ -113,6 +121,7 @@ private fun SettingsHubContent(
     onTV: () -> Unit,
     onImportExport: () -> Unit,
     onPopupBlocker: () -> Unit,
+    onLogs: () -> Unit,
     showBack: Boolean = true,
     isFromLibrary: Boolean = false
 ) {
@@ -210,6 +219,16 @@ private fun SettingsHubContent(
                             title = "Import / Export",
                             subtitle = "Backup and restore settings",
                             onClick = onImportExport
+                        )
+                    )
+
+                    // 8. Logs (Shared diagnostics)
+                    add(
+                        SettingsItemData(
+                            icon = Icons.Default.Description,
+                            title = "Logs",
+                            subtitle = "View phone and TV logs for troubleshooting",
+                            onClick = onLogs
                         )
                     )
 

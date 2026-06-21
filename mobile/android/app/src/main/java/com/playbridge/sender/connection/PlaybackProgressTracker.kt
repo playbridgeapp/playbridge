@@ -305,9 +305,16 @@ class PlaybackProgressTracker(
     }
 
     /**
-     * Season/episode for a playlist slot: prefer the TV's echoed values, fall back to
-     * the send-time pointer (start episode + slot offset — same estimate the remote's
-     * subtitle search uses).
+     * Season/episode for a playlist slot. Prefer the TV's echoed values (library queues
+     * always carry per-item season/episode in `visual_metadata`). The send-time pointer
+     * ([ConnectionCoordinator.nowPlayingEpisodeStart]) only describes the episode the
+     * session *started* on, so it's trusted for the start slot alone (index 0).
+     *
+     * Extrapolating `start + index` across later slots is season-unaware: once a queue
+     * crosses a season finale — or carries a stray leading item from a prior cast — the
+     * offset runs into bogus episode numbers and corrupts the forward-only progress
+     * pointer. Later slots without an echo therefore return null, and the caller skips
+     * them rather than writing fabricated progress.
      */
     private fun episodeOf(
         echoedSeason: Int?,
@@ -317,8 +324,8 @@ class PlaybackProgressTracker(
     ): Pair<Int?, Int?> {
         if (echoedSeason != null && echoedEpisode != null) return echoedSeason to echoedEpisode
         val season = t.nowPlayingSeason ?: return null to null
-        val start = connectionCoordinator.nowPlayingEpisodeStart.value
-        return season to (start + index)
+        if (index != 0) return null to null
+        return season to connectionCoordinator.nowPlayingEpisodeStart.value
     }
 
     private fun resetSession() {
