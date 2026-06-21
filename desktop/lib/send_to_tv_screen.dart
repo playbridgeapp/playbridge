@@ -152,6 +152,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                 paired: controller.pairedTvs.any((p) => p.uuid == tv.uuid),
                 busy: _isBusy(controller.state),
                 onTap: () => controller.connectToDiscovered(tv),
+                onForget: () => controller.forget(tv.uuid),
               )),
         if (offlinePaired.isNotEmpty) ...[
           const SizedBox(height: 24),
@@ -438,12 +439,14 @@ class _DiscoveredRow extends StatelessWidget {
     required this.paired,
     required this.busy,
     required this.onTap,
+    required this.onForget,
   });
 
   final DiscoveredTv tv;
   final bool paired;
   final bool busy;
   final VoidCallback onTap;
+  final VoidCallback onForget;
 
   @override
   Widget build(BuildContext context) {
@@ -453,10 +456,26 @@ class _DiscoveredRow extends StatelessWidget {
       title: tv.name,
       subtitle: '${tv.host}${secure ? '  ·  encrypted' : '  ·  insecure'}',
       subtitleColor: secure ? Colors.greenAccent : Colors.amberAccent,
-      trailing: FilledButton(
-        onPressed: busy ? null : onTap,
-        child: Text(paired ? 'Connect' : 'Pair'),
-      ),
+      trailing: paired
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FilledButton(
+                  onPressed: busy ? null : onTap,
+                  child: const Text('Connect'),
+                ),
+                IconButton(
+                  tooltip: 'Forget',
+                  iconSize: 18,
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: onForget,
+                ),
+              ],
+            )
+          : FilledButton(
+              onPressed: busy ? null : onTap,
+              child: const Text('Pair'),
+            ),
     );
   }
 }
