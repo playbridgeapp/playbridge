@@ -2,6 +2,17 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] — 2026-06-21 (build 4)
+
+### Added
+- **Gated History**: Option to disable casting history under Settings. (#49)
+- **Security-First Cast Connections**: Enforced `wss://` secure websocket connections exclusively and removed plaintext WS fallbacks. (#41)
+
+### Fixed
+- Fixed IPv6 connection wrapping/parsing issues. (#44)
+
+### 
+
 ## [1.0.1] — 2026-06-12 (build 3)
 
 ### Added

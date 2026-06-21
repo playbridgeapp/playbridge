@@ -3,6 +3,18 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.3.0] — 2026-06-21 (versionCode 210)
+
+### Added
+- **Intro Skipping (IntroDB)**: Support to skip intro, recap, and outro segments using IntroDB, featuring interactive skip buttons and automated skips. (#48)
+- **Gated History**: Option to disable casting history under Settings, preventing saving new entries and hiding the history panel. (#49)
+- **Custom Add-on Subtitles**: Support for custom external and add-on subtitles in the player. (#44)
+- **Security-First Cast Connections**: Enforced `wss://` secure websocket connections exclusively and removed plaintext HTTP/WS fallbacks. (#41)
+
+### Fixed
+- Resolved MPV skip segment delays and skip button persistence issues. (#48)
+- Fixed IPv6 connection wrapping/parsing issues. (#44)
+
 ## Player [0.2.9] — 2026-06-17 (versionCode 209)
 
 ### Changed
