@@ -623,6 +623,7 @@ internal fun ActionButtons(
     val trailerReady = trailers.isNotEmpty() && onPlayTrailer != null
     var showTrailerPicker by remember { mutableStateOf(false) }
     val status = tracked?.let { WatchlistStatus.from(it.status) }
+    val context = LocalContext.current
 
     if (showTrailerPicker) {
         ModalBottomSheet(onDismissRequest = { showTrailerPicker = false }) {
@@ -690,21 +691,45 @@ internal fun ActionButtons(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-        if (canWatchlist) {
+        // Watchlist toggle. When the item has no resolved TMDB id we can't key the
+        // watchlist row, so render the button disabled with a hint instead of hiding it
+        // (mirrors the "No Trailer" greyed-out treatment) — keeps it discoverable, and a
+        // tap explains how to enable tracking.
+        run {
+            val tint = when {
+                !canWatchlist  -> Color.White.copy(alpha = 0.3f)
+                isWatchlisted  -> themeColor
+                else           -> Color.White.copy(alpha = 0.7f)
+            }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable { onToggleWatchlist() }
+                modifier = Modifier.clickable {
+                    if (canWatchlist) onToggleWatchlist()
+                    else Toast.makeText(
+                        context,
+                        "Add a TMDB API key in Settings to track this",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             ) {
                 Icon(
                     if (isWatchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                    contentDescription = if (isWatchlisted) "Remove from Watchlist" else "Add to Watchlist",
-                    tint = if (isWatchlisted) themeColor else Color.White.copy(alpha=0.7f)
+                    contentDescription = when {
+                        !canWatchlist -> "Connect TMDB to track"
+                        isWatchlisted -> "Remove from Watchlist"
+                        else          -> "Add to Watchlist"
+                    },
+                    tint = tint
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    if (isWatchlisted) "In Watchlist" else "Add to Watchlist",
+                    when {
+                        !canWatchlist -> "Connect TMDB to track"
+                        isWatchlisted -> "In Watchlist"
+                        else          -> "Add to Watchlist"
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (isWatchlisted) themeColor else Color.White.copy(alpha=0.7f)
+                    color = tint
                 )
             }
             Spacer(modifier = Modifier.width(48.dp))

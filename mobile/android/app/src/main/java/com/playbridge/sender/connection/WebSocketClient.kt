@@ -154,9 +154,16 @@ class WebSocketClient {
         val httpClient = buildPinningClient(conn?.pin)
         Log.i(TAG, "Connecting to $url")
 
-        val request = Request.Builder()
-            .url(url)
-            .build()
+        val request = try {
+            Request.Builder()
+                .url(url)
+                .build()
+        } catch (e: Exception) {
+            // A malformed host (e.g. an un-bracketed IPv6 literal) must never crash the app.
+            Log.e(TAG, "Invalid connection URL '$url'", e)
+            _connectionState.value = ConnectionState.Error("Invalid address: ${e.message}")
+            return
+        }
 
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -443,12 +450,47 @@ internal class LinkLocalDns : Dns {
             val cleanIp = ip.removePrefix("[").removeSuffix("]")
             val rawIp = cleanIp.substringBefore("%")
             val scope = cleanIp.substringAfter("%", "")
+            val hex = ipv6ToHex(rawIp)
+            if (hex != null) {
+                return if (scope.isNotEmpty()) "$hex-$scope.local-ipv6" else "$hex.local-ipv6"
+            }
+            // Could not normalize — return a *valid* URL host rather than the raw literal, so
+            // we never build "wss://fe80::..%zone:port/" (which okhttp rejects, crashing the app).
+            // Bracket the literal and percent-encode the zone delimiter ('%' -> '%25') per RFC 6874.
+            val zoneSuffix = if (scope.isNotEmpty()) "%25$scope" else ""
+            return "[$rawIp$zoneSuffix]"
+        }
+
+        /**
+         * Expands an IPv6 literal (with optional "::" compression) into 32 lowercase hex chars,
+         * or null if it isn't parseable. Pure string math with no name resolution, so — unlike
+         * InetAddress.getByName — it can't throw on a scoped/link-local literal.
+         */
+        private fun ipv6ToHex(addr: String): String? {
+            if (!addr.contains(":")) return null
             return try {
-                val addr = java.net.InetAddress.getByName(rawIp)
-                val hexBytes = addr.address.joinToString("") { "%02x".format(it) }
-                if (scope.isNotEmpty()) "$hexBytes-$scope.local-ipv6" else "$hexBytes.local-ipv6"
+                val groups: List<String> = if (addr.contains("::")) {
+                    val halves = addr.split("::")
+                    if (halves.size != 2) return null
+                    val head = if (halves[0].isEmpty()) emptyList() else halves[0].split(":")
+                    val tail = if (halves[1].isEmpty()) emptyList() else halves[1].split(":")
+                    val missing = 8 - head.size - tail.size
+                    if (missing < 0) return null
+                    head + List(missing) { "0" } + tail
+                } else {
+                    addr.split(":")
+                }
+                if (groups.size != 8) return null
+                buildString {
+                    for (g in groups) {
+                        if (g.isEmpty() || g.length > 4) return null
+                        val v = g.toInt(16) // throws for non-hex groups (e.g. embedded IPv4)
+                        if (v < 0 || v > 0xFFFF) return null
+                        append("%04x".format(v))
+                    }
+                }
             } catch (e: Exception) {
-                cleanIp // fallback
+                null
             }
         }
 

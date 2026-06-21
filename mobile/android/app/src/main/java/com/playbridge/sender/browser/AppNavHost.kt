@@ -897,6 +897,13 @@ fun AppNavHost(
                             onShowVideoSheetChange(true)
                         },
                         onPlayPayloadToTv = onPlayPayload@{ payload ->
+                            // A single (non-series) cast replaces the TV queue with one item, so any
+                            // binge plan still held by the episode coordinators is now stale. Tear it
+                            // down explicitly — otherwise the old plan keeps `queue_add`-ing the
+                            // previous series onto this new video (context never goes "idle" on a
+                            // back-to-back cast, so the coordinators won't self-clear).
+                            tvQueueCoordinator.stop()
+                            dlnaQueueCoordinator.stop()
                             // DLNA renderer is the active target — play via the local proxy, no WS.
                             // (Subtitles/prefs are native-receiver features; skipped on DLNA.)
                             activeDlnaTarget?.let { dlna ->
@@ -1377,14 +1384,19 @@ fun AppNavHost(
             // Hidden on Browser (bottom toolbar), Remote (redundant), and full-bleed screens.
             // Note: excluded on Dashboard (overlays the "Exit" button) and on Connection
             // (the device picker lives there already).
-            val showNowPlayingBar = targetScreen == Screen.Library ||
+            // The Library hosts its Settings (tab 4) and Addon settings (tab 3) inline while
+            // staying on Screen.Library — hide the bar there so it doesn't overlay settings.
+            val libSelectedTab by libraryViewModel.selectedTab.collectAsState()
+            val libraryInSettings = targetScreen == Screen.Library &&
+                (libSelectedTab == 3 || libSelectedTab == 4)
+            val showNowPlayingBar = (targetScreen == Screen.Library ||
                 targetScreen == Screen.PhoneFiles ||
                 targetScreen == Screen.DebridLibrary ||
                 targetScreen is Screen.LibraryDetail ||
                 targetScreen == Screen.Iptv ||
                 targetScreen is Screen.IptvDetail ||
                 targetScreen == Screen.Collections ||
-                targetScreen is Screen.CollectionDetail
+                targetScreen is Screen.CollectionDetail) && !libraryInSettings
             if (showNowPlayingBar) {
                 val dlnaActive = activeDlnaTarget != null
                 // A stopped/ended/errored renderer (incl. after Stop) is not "playing", even

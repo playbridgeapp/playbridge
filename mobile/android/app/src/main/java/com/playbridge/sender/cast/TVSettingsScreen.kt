@@ -265,6 +265,10 @@ private suspend fun downloadTvLogs(context: Context, tvIp: String, tvPort: Int) 
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Logs saved to Downloads/$fileName", Toast.LENGTH_LONG).show()
                 }
+            } else if (response.code == 403) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "TV logging is disabled. Enable it in TV → Settings → Logs.", Toast.LENGTH_LONG).show()
+                }
             } else {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Failed to download logs: ${response.code}", Toast.LENGTH_SHORT).show()

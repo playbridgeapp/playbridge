@@ -7,6 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import playbridge.PlayPayload
+import playbridge.VisualMetadata
 
 class PlaybackCoordinatorTest {
 
@@ -157,6 +158,86 @@ class PlaybackCoordinatorTest {
         val c = PlaybackCoordinator(host)
         c.setPlaylist(listOf(payload(1)), 0)
         c.queueAdd(emptyList())
+        assertEquals(1, c.playlist.size)
+        assertEquals(0, host.playlistChangedCount)
+    }
+
+    /** Episode payload keyed by season/episode (and imdb), with a quality-specific URL. */
+    private fun episode(season: Int, ep: Int, url: String, imdb: String? = "tt0944947") =
+        PlayPayload(
+            url = url,
+            title = "S${season}E$ep",
+            visual_metadata = VisualMetadata(season = season, episode = ep, imdb_id = imdb),
+        )
+
+    @Test
+    fun `queueAdd skips an episode already present by season-episode`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        c.setPlaylist(listOf(episode(2, 5, "https://cdn/720/s2e5.mp4")), 0)
+
+        // Same S2E5 re-resolved at a different quality/URL — must not duplicate.
+        c.queueAdd(listOf(episode(2, 5, "https://cdn/1080/s2e5.mp4")))
+
+        assertEquals(1, c.playlist.size)
+        assertEquals(0, host.playlistChangedCount)
+    }
+
+    @Test
+    fun `queueAdd appends a genuinely new episode`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        c.setPlaylist(listOf(episode(2, 5, "https://cdn/s2e5.mp4")), 0)
+
+        c.queueAdd(listOf(episode(2, 6, "https://cdn/s2e6.mp4")))
+
+        assertEquals(2, c.playlist.size)
+        assertEquals(1, host.playlistChangedCount)
+    }
+
+    @Test
+    fun `queueAdd appends only the new episodes from a mixed batch`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        c.setPlaylist(listOf(episode(2, 5, "https://cdn/s2e5.mp4")), 0)
+
+        // E5 is a duplicate, E6 is new — only E6 should be appended.
+        c.queueAdd(
+            listOf(
+                episode(2, 5, "https://cdn/alt/s2e5.mp4"),
+                episode(2, 6, "https://cdn/s2e6.mp4"),
+            )
+        )
+
+        assertEquals(2, c.playlist.size)
+        assertEquals("S2E6", c.playlist.last().title)
+        assertEquals(1, host.playlistChangedCount)
+    }
+
+    @Test
+    fun `queueAdd dedupes non-episode items by exact url`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        // payload(n) has no visual_metadata — falls back to URL identity.
+        c.setPlaylist(listOf(payload(1)), 0)
+
+        c.queueAdd(listOf(payload(1))) // same URL
+        assertEquals(1, c.playlist.size)
+        assertEquals(0, host.playlistChangedCount)
+
+        c.queueAdd(listOf(payload(2))) // different URL
+        assertEquals(2, c.playlist.size)
+        assertEquals(1, host.playlistChangedCount)
+    }
+
+    @Test
+    fun `queueAdd of an all-duplicate batch does not notify`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        c.setPlaylist(listOf(episode(2, 5, "https://cdn/s2e5.mp4")), 0)
+
+        c.queueAdd(listOf(episode(2, 5, "https://cdn/other/s2e5.mp4")))
+
         assertEquals(1, c.playlist.size)
         assertEquals(0, host.playlistChangedCount)
     }

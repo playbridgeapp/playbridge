@@ -3,6 +3,7 @@ package com.playbridge.sender
 import android.app.Application
 import android.util.Log
 import com.playbridge.sender.data.backup.BackupTrigger
+import com.playbridge.sender.diagnostics.CrashLogger
 import com.playbridge.sender.di.appModule
 import kotlinx.coroutines.MainScope
 import org.koin.android.ext.koin.androidContext
@@ -16,6 +17,9 @@ class PlayBridgeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Log.d("PlayBridgeApplication", "Initializing application")
+
+        // Persist uncaught exceptions so phone crashes survive a restart (logcat is wiped on reboot).
+        CrashLogger.install(this)
 
         com.playbridge.shared.SharedContext.init(this)
 
