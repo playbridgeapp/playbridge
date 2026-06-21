@@ -3,6 +3,18 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] — 2026-06-21 (versionCode 209)
+
+### Added
+- **Subtitle Selection Dialog**: Added a new subtitle grouping and selection bottom sheet on the remote screen, categorizing subtitles into tabs by language (Embedded, Phone Remote, Add-on languages, etc.). (#44)
+- **Security-First Cast Connections**: Enforced `wss://` secure websocket connections exclusively and removed plaintext WS fallbacks. (#41)
+
+### Changed
+- **Lint Cleanup**: Resolved numerous security-sensitive, thread, and general lint issues, and cleaned up baseline XML. (#45)
+
+### Fixed
+- Fixed IPv6 connection wrapping/parsing issues. (#44)
+
 ## [0.2.8] — 2026-06-17 (versionCode 208)
 
 ### Added

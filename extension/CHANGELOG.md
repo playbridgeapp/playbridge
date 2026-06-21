@@ -2,6 +2,15 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — 2026-06-21
+
+### Added
+- **Chrome Extra Headers Support**: Conditionally request `extraHeaders` on Chrome MV3 (and added `"webRequestExtraHeaders"` permission) in the background script to ensure custom headers (Origin, Referer, Cookie) are correctly captured. (#51)
+
+### Fixed
+- **Badge Update Errors**: Catch potential badge update rejection promises to avoid background script crashes. (#51)
+- Fixed IPv6 connection wrapping/parsing issues in the background script. (#44)
+
 ## [0.3.0] — 2026-06-16
 
 ### Added

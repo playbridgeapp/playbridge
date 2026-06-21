@@ -2,6 +2,16 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0+16] — 2026-06-21
+
+### Added
+- **Gated History**: Option to disable saving new items to history under Settings. (#50)
+- **Forget Paired TVs**: Button in the pairing screen to forget paired TV receivers. (#51)
+- **Security-First Cast Connections**: Enforce `wss://` secure websocket connections exclusively and remove plaintext WS fallbacks. (#41)
+
+### Fixed
+- Fixed IPv6 connection wrapping/parsing issues. (#44)
+
 ## [0.3.1+15] — 2026-06-17
 
 ### Added
