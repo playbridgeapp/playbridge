@@ -337,7 +337,7 @@ browser.webRequest.onBeforeSendHeaders.addListener(
     }
   },
   { urls: ["<all_urls>"] },
-  (typeof chrome !== "undefined" ? ["requestHeaders", "extraHeaders"] : ["requestHeaders"]) as any,
+  (typeof (globalThis as any).chrome !== "undefined" ? ["requestHeaders", "extraHeaders"] : ["requestHeaders"]) as any,
 );
 
 // Visibility probe: log every request the extension can see whose URL looks
