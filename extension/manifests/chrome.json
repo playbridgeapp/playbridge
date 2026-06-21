@@ -17,6 +17,7 @@
   },
   "permissions": [
     "webRequest",
+    "webRequestExtraHeaders",
     "webNavigation",
     "storage",
     "tabs",

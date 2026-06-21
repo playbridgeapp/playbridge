@@ -178,7 +178,7 @@ function updateBadge(tabId: number) {
   if (!actionApi || tabId < 0) return;
   const n = tabVideos.get(tabId)?.length ?? 0;
   try {
-    actionApi.setBadgeText({ tabId, text: n > 0 ? String(n) : "" });
+    actionApi.setBadgeText({ tabId, text: n > 0 ? String(n) : "" }).catch(() => {});
   } catch (_) {}
 }
 
@@ -337,7 +337,7 @@ browser.webRequest.onBeforeSendHeaders.addListener(
     }
   },
   { urls: ["<all_urls>"] },
-  ["requestHeaders"],
+  (typeof chrome !== "undefined" ? ["requestHeaders", "extraHeaders"] : ["requestHeaders"]) as any,
 );
 
 // Visibility probe: log every request the extension can see whose URL looks
