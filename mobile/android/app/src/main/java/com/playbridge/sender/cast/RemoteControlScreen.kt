@@ -128,6 +128,7 @@ fun RemoteControlScreen(
     onMouseMove: (dx: Float, dy: Float) -> Unit,
     onMouseClick: () -> Unit,
     onMouseScroll: (dx: Float, dy: Float) -> Unit,
+    onPinchZoom: (factor: Float) -> Unit = {},
     onMouseDown: () -> Unit = {},
     onMouseUp: () -> Unit = {},
     onBrowserControl: (String) -> Unit = {},
@@ -319,6 +320,7 @@ fun RemoteControlScreen(
                                     onMouseMove = onMouseMove,
                                     onMouseClick = onMouseClick,
                                     onMouseScroll = onMouseScroll,
+                                    onPinchZoom = onPinchZoom,
                                     onMouseDown = onMouseDown,
                                     onMouseUp = onMouseUp
                                 )
@@ -1123,6 +1125,7 @@ private fun TouchpadArea(
     onMouseMove: (dx: Float, dy: Float) -> Unit,
     onMouseClick: () -> Unit,
     onMouseScroll: (dx: Float, dy: Float) -> Unit,
+    onPinchZoom: (factor: Float) -> Unit = {},
     onMouseDown: () -> Unit = {},
     onMouseUp: () -> Unit = {}
 ) {
@@ -1147,11 +1150,34 @@ private fun TouchpadArea(
 
                         if (pointerCount >= 2) {
                             isScrolling = true
-                            val change = event.changes.firstOrNull { it.pressed }
-                            if (change != null && change.previousPressed) {
-                                val delta = change.position - change.previousPosition
-                                onMouseScroll(delta.x, delta.y * 2f)
-                                change.consume()
+                            // Two fingers = scroll OR pinch-zoom. Decide per-frame by
+                            // whether the fingers' separation changed more than their
+                            // shared (centroid) translation: distance-dominant → zoom,
+                            // translation-dominant → scroll.
+                            val pressed = event.changes.filter { it.pressed }
+                            val a = pressed.getOrNull(0)
+                            val b = pressed.getOrNull(1)
+                            if (a != null && b != null &&
+                                a.previousPressed && b.previousPressed
+                            ) {
+                                val curDist = (a.position - b.position).getDistance()
+                                val prevDist =
+                                    (a.previousPosition - b.previousPosition).getDistance()
+                                val panX = ((a.position.x + b.position.x) -
+                                    (a.previousPosition.x + b.previousPosition.x)) / 2f
+                                val panY = ((a.position.y + b.position.y) -
+                                    (a.previousPosition.y + b.previousPosition.y)) / 2f
+                                val distDelta = curDist - prevDist
+                                if (prevDist > 0f &&
+                                    kotlin.math.abs(distDelta) > kotlin.math.abs(panY) &&
+                                    kotlin.math.abs(distDelta) > kotlin.math.abs(panX)
+                                ) {
+                                    onPinchZoom(curDist / prevDist)
+                                } else {
+                                    onMouseScroll(panX, panY * 2f)
+                                }
+                                a.consume()
+                                b.consume()
                             }
                         } else if (pointerCount == 1 && !isScrolling) {
                             val change = event.changes.first()
@@ -1208,7 +1234,7 @@ private fun TouchpadArea(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "1 finger: move  •  2 fingers: scroll  •  Tap: click  •  Long-press+drag: drag",
+                "1 finger: move  •  2 fingers: scroll  •  Pinch: zoom  •  Tap: click  •  Long-press+drag: drag",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                 textAlign = TextAlign.Center

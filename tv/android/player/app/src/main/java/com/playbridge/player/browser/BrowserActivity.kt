@@ -481,7 +481,14 @@ class BrowserActivity : ComponentActivity() {
                 cursorView?.animateClick()
             }
             "scroll" -> {
-                engine?.scrollBy(dx, dy)
+                // Scroll the element under the cursor, not just the page — this is what
+                // makes inner overflow regions (and horizontal carousels) respond.
+                showCursorAndResetTimer()
+                engine?.wheelScrollAt(cursorX, cursorY, dx, dy)
+            }
+            "zoom" -> {
+                // Pinch-zoom from the phone touchpad; dx carries the relative scale factor.
+                engine?.zoomBy(dx)
             }
             "down" -> {
                 // Start a click-drag: send ACTION_DOWN and remember the time

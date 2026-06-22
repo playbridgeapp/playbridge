@@ -217,15 +217,71 @@ class SystemWebViewEngine(
     fun scrollBy(dx: Float, dy: Float) {
         scrollAccumulatorX += dx
         scrollAccumulatorY += dy
-        
+
         val scrollX = scrollAccumulatorX.toInt()
         val scrollY = scrollAccumulatorY.toInt()
-        
+
         if (scrollX != 0 || scrollY != 0) {
             webView.scrollBy(scrollX, scrollY)
             scrollAccumulatorX -= scrollX
             scrollAccumulatorY -= scrollY
         }
+    }
+
+    /**
+     * Scroll the element under the cursor rather than the whole document. Plain
+     * [scrollBy] only moves the top-level viewport, so inner `overflow:scroll/auto`
+     * regions (sidebars, modals, chat panes, horizontal carousels) never respond to
+     * the touchpad. Here we hit-test the cursor position, walk up to the nearest
+     * scrollable ancestor, and scroll that; if none is found we fall back to the
+     * window. Handles horizontal (dx) and vertical (dy) together.
+     *
+     * [xDevice]/[yDevice] are cursor coordinates in the WebView's device pixels
+     * (same space as touch dispatch); we convert to CSS px via devicePixelRatio in JS.
+     * Limitation: cross-origin iframes are unreachable from the main frame's JS — the
+     * same boundary that applies to the video-control path.
+     */
+    fun wheelScrollAt(xDevice: Float, yDevice: Float, dx: Float, dy: Float) {
+        if (dx == 0f && dy == 0f) return
+        val js = """
+            (function(){
+              try {
+                var dpr = window.devicePixelRatio || 1;
+                var x = ${xDevice} / dpr, y = ${yDevice} / dpr;
+                var dx = ${dx}, dy = ${dy};
+                function scrollable(node){
+                  while (node && node.nodeType === 1 &&
+                         node !== document.body && node !== document.documentElement){
+                    var s = getComputedStyle(node);
+                    var canY = (s.overflowY === 'auto' || s.overflowY === 'scroll') &&
+                               node.scrollHeight > node.clientHeight + 1;
+                    var canX = (s.overflowX === 'auto' || s.overflowX === 'scroll') &&
+                               node.scrollWidth > node.clientWidth + 1;
+                    if ((dy && canY) || (dx && canX)) return node;
+                    node = node.parentElement;
+                  }
+                  return null;
+                }
+                var el = document.elementFromPoint(x, y);
+                var t = el ? scrollable(el) : null;
+                if (t){ if (dx) t.scrollLeft += dx; if (dy) t.scrollTop += dy; }
+                else { window.scrollBy(dx, dy); }
+              } catch(e) {}
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
+    }
+
+    /**
+     * Relative pinch-zoom of the whole page using the WebView's built-in zoom
+     * (enabled via setSupportZoom/builtInZoomControls). [factor] is a multiplier
+     * applied to the current zoom (e.g. 1.05 = zoom in 5%); clamped per-event so a
+     * single jittery gesture can't jump scale.
+     */
+    fun zoomBy(factor: Float) {
+        if (factor.isNaN() || factor <= 0f) return
+        val clamped = factor.coerceIn(0.8f, 1.25f)
+        webView.zoomBy(clamped)
     }
 
     fun simulateClick(x: Float, y: Float) {

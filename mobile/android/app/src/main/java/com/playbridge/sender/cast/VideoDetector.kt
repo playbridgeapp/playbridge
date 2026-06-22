@@ -62,6 +62,47 @@ data class DetectedVideo(
 }
 
 /**
+ * Ranking score for ordering and auto-picking detected videos (higher = better).
+ * Adaptive streams (HLS **and** DASH) outrank progressive files, and streams whose
+ * variant list has already been parsed outrank ones that haven't. DASH is treated at
+ * full parity with HLS here — its variants live in [DetectedVideo.qualities] (there is
+ * no dash equivalent of [DetectedVideo.hlsPlaylist]), so checking only `hlsPlaylist`
+ * used to bury DASH manifests below plain video files.
+ *
+ * Crucially, a stream that merely *looks* adaptive (by `.mpd`/`.m3u8` URL or
+ * content-type) is ranked as adaptive **immediately** — variant parsing and the
+ * playability probe both run asynchronously, so if scoring waited on `qualities` /
+ * `isPlayable` the stream would sit at the bottom on first open and only jump up once
+ * the sheet was dismissed and reopened (by which point the async work had finished).
+ * We only demote below progressive video when the probe has *verified* it unplayable.
+ *
+ * Kept in one place so the cast sheet and the quick-cast / DLNA auto-pick paths can
+ * never diverge.
+ */
+fun DetectedVideo.castScore(): Int {
+    val isDash = url.contains(".mpd", ignoreCase = true) ||
+                 contentType?.contains("dash", ignoreCase = true) == true
+    val isHlsUrl = url.contains(".m3u8", ignoreCase = true) ||
+                   contentType?.contains("mpegurl", ignoreCase = true) == true
+    val looksAdaptive = isDash || isHlsUrl
+    val base = when {
+        // Score 1: verified unplayable (dead link, 403, etc) — lowest, even if it looked adaptive.
+        isPlayable == false -> 1
+        // Score 5: adaptive stream with parsed variants (HLS master playlist or DASH manifest).
+        hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
+        isDash && qualities.isNotEmpty() -> 5
+        // Score 4: looks like an adaptive stream (HLS/DASH) by URL or content-type. Ranked high
+        // up front, before the async variant/playability check resolves, so it never starts at
+        // the bottom on the first open.
+        looksAdaptive -> 4
+        // Score 2: normal video — unchecked or confirmed-playable rank equally; timestamp breaks ties.
+        else -> 2
+    }
+    // Master playlists (multi-variant entry points) edge out same-tier single renditions.
+    return if (url.contains("master", ignoreCase = true)) base + 1 else base
+}
+
+/**
  * Data class representing an active subtitle period
  */
 data class Cue(val startTime: Long, val endTime: Long, val text: String) : Comparable<Cue> {
@@ -485,6 +526,10 @@ object VideoDetector {
                     video.qualitiesChecked = true
                     if (qualities.isNotEmpty()) video.isPlayable = true
                     Log.d(TAG, "Fetched ${qualities.size} DASH qualities for ${video.url}")
+                    // Bump the version so the cast sheet re-derives and re-ranks live — the
+                    // HLS path below does this, but DASH was returning early without it, so a
+                    // parsed DASH stream only moved up after the sheet was reopened.
+                    withContext(Dispatchers.Main) { notifyVideoUpdated() }
                     return@withContext qualities
                 }
 

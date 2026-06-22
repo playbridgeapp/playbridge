@@ -101,21 +101,8 @@ fun CastSheet(
     val playableVideos = remember(videos) {
         videos.filter { !it.isSubtitle }
               .sortedWith(
-                  compareByDescending<DetectedVideo> { video ->
-                      val hasMaster = video.url.contains("master", ignoreCase = true)
-                      val base = when {
-                          // Score 5: HLS with multiple variants (Master Playlist)
-                          video.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
-                          // Score 4: Playable stream (HLS/DASH)
-                          video.isPlayable == true && (video.url.contains(".m3u8", ignoreCase = true) || video.url.contains(".mpd", ignoreCase = true)) -> 4
-                          // Score 1: Verified unplayable (dead link, 403, etc)
-                          video.isPlayable == false -> 1
-                          // Score 2: Normal video — unchecked or confirmed playable both rank equally,
-                          // so timestamp (thenByDescending below) determines order: newest first.
-                          else -> 2
-                      }
-                      if (hasMaster) base + 1 else base
-                  }.thenByDescending { it.timestamp }
+                  compareByDescending<DetectedVideo> { it.castScore() }
+                      .thenByDescending { it.timestamp }
               )
     }
 
