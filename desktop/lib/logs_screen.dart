@@ -114,7 +114,8 @@ class _LogsScreenState extends State<LogsScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.description_outlined, size: 40, color: Colors.white38),
+            const Icon(Icons.description_outlined,
+                size: 40, color: Colors.white38),
             const SizedBox(height: 16),
             const Text(
               'Logging is disabled. No logs are being saved.',
@@ -221,7 +222,9 @@ class _LogsScreenState extends State<LogsScreen> {
 Color _dotColor(LogLevel level) => switch (level) {
       LogLevel.error => const Color(0xFFFF5A5A),
       LogLevel.warn => const Color(0xFFFFA726),
-      LogLevel.info || LogLevel.debug || LogLevel.verbose =>
+      LogLevel.info ||
+      LogLevel.debug ||
+      LogLevel.verbose =>
         const Color(0xFF7AA2F7),
       LogLevel.unknown => const Color(0xFF8A8A8A),
     };
@@ -317,7 +320,8 @@ class _LogDetailScreen extends StatelessWidget {
               ),
             ],
           ),
-          _ValueBox(child: SelectableText(
+          _ValueBox(
+              child: SelectableText(
             entry.message,
             style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
           )),
