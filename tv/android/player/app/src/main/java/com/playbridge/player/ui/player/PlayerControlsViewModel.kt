@@ -275,6 +275,18 @@ class PlayerControlsViewModel : ViewModel() {
         progressUpdateJob = viewModelScope.launch {
             while (true) {
                 engine?.let {
+                    // Safety net for the (full controls / overlay) ⟺ paused invariant: if
+                    // playback is running but full controls or an overlay are still up (a missed
+                    // play-state callback), dismiss them. Engine callbacks are the primary
+                    // mechanism; this only catches the gap. The lightweight seek UI
+                    // (isVisible && !isFullControlsVisible) is intentionally shown during
+                    // playback and left to its own auto-hide timer, so it's excluded here.
+                    val cs = _controlsState.value
+                    if (it.isPlaying && !isScrubbing &&
+                        (cs.isFullControlsVisible || cs.activeOverlay != ActiveOverlay.NONE)) {
+                        hideControls()
+                    }
+
                     val currentPos = if (isScrubbing) _controlsState.value.currentPosition else it.currentPosition
                     val duration = it.duration
                     

@@ -1051,6 +1051,10 @@ class ExoPlayerActivity : PlayerActivity() {
             FileLogger.d(TAG, "Is playing: $isPlaying")
             if (isPlaying) {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                // Invariant: controls/overlays are only shown while paused. The play→playing
+                // transition must dismiss them — covers the case where controls were left up
+                // during buffering, pre-play, or an engine switch and never got hidden.
+                controlsViewModel.hideControls()
             } else {
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 // Hide spinner if we paused while buffering
