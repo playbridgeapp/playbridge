@@ -240,6 +240,10 @@ class BrowserActivity : ComponentActivity() {
             onDownloadStarted = { id, name -> showDownloadPopup(id, name) }
         )
 
+        // Render native feedback for video-control command results (incl. those from
+        // cross-origin iframe frames, delivered asynchronously over the message channel).
+        engine?.onVideoResult = { kind, value -> renderVideoResult(kind, value) }
+
         // Add engine view at index 0 (behind cursor)
         contentContainer?.addView(engine?.getView(), 0)
     }
@@ -538,10 +542,6 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
-    /** Strip the JSON quoting evaluateJavascript wraps around returned strings. */
-    private fun jsStr(raw: String?): String =
-        raw?.takeIf { it != "null" }?.trim()?.removeSurrounding("\"") ?: ""
-
     private fun fmtTime(totalSec: Double): String {
         if (!totalSec.isFinite() || totalSec < 0) return "0:00"
         val s = totalSec.toInt()
@@ -555,25 +555,33 @@ class BrowserActivity : ComponentActivity() {
         return "█".repeat(filled) + "░".repeat(slots - filled)
     }
 
-    private fun onToggleResult(raw: String?) {
-        when (jsStr(raw)) {
-            "playing" -> showVideoFeedback("▶")   // ▶
-            "paused" -> showVideoFeedback("❙❙") // ❚❚
+    /**
+     * Render native feedback for a command result reported by the engine
+     * ([SystemWebViewEngine.onVideoResult]). value is already unquoted.
+     */
+    private fun renderVideoResult(kind: String, value: String) {
+        when (kind) {
+            "toggle" -> when (value) {
+                "playing" -> showVideoFeedback("▶")
+                "paused" -> showVideoFeedback("❙❙")
+            }
+            "seek" -> {
+                val parts = value.split(",")
+                if (parts.size != 2) return
+                val t = parts[0].toDoubleOrNull() ?: return
+                val d = parts[1].toDoubleOrNull() ?: 0.0
+                val frac = if (d > 0) t / d else 0.0
+                showVideoFeedback("${fmtTime(t)}   /   ${fmtTime(d)}\n${progressBar(frac)}")
+            }
+            "vol" -> {
+                val vol = value.toDoubleOrNull() ?: return
+                showVideoFeedback("🔊  ${Math.round(vol * 100)}%\n${progressBar(vol)}")
+            }
+            "rate" -> {
+                val r = value.toDoubleOrNull() ?: return
+                showVideoFeedback("${r.toString().removeSuffix(".0")}×")
+            }
         }
-    }
-
-    private fun onSeekResult(raw: String?) {
-        val parts = jsStr(raw).split(",")
-        if (parts.size != 2) return
-        val t = parts[0].toDoubleOrNull() ?: return
-        val d = parts[1].toDoubleOrNull() ?: 0.0
-        val frac = if (d > 0) t / d else 0.0
-        showVideoFeedback("${fmtTime(t)}   /   ${fmtTime(d)}\n${progressBar(frac)}")
-    }
-
-    private fun onVolumeResult(raw: String?) {
-        val vol = jsStr(raw).toDoubleOrNull() ?: return
-        showVideoFeedback("🔊  ${Math.round(vol * 100)}%\n${progressBar(vol)}")
     }
 
     private fun handleRemoteCommand(key: String?) {
@@ -589,11 +597,11 @@ class BrowserActivity : ComponentActivity() {
                 // In fullscreen the D-pad drives the playing <video> via the injected
                 // controller (window.__pbvc); feedback is rendered natively over the
                 // WebView. Site chrome (e.g. YouTube) is pointer-driven and won't show.
-                "dpad_center" -> engine?.videoToggle(::onToggleResult)
-                "dpad_left" -> engine?.videoSeek(-SEEK_STEP_SECONDS, ::onSeekResult)
-                "dpad_right" -> engine?.videoSeek(SEEK_STEP_SECONDS, ::onSeekResult)
-                "dpad_up" -> engine?.videoVolume(VOLUME_STEP, ::onVolumeResult)
-                "dpad_down" -> engine?.videoVolume(-VOLUME_STEP, ::onVolumeResult)
+                "dpad_center" -> engine?.videoToggle()
+                "dpad_left" -> engine?.videoSeek(-SEEK_STEP_SECONDS)
+                "dpad_right" -> engine?.videoSeek(SEEK_STEP_SECONDS)
+                "dpad_up" -> engine?.videoVolume(VOLUME_STEP)
+                "dpad_down" -> engine?.videoVolume(-VOLUME_STEP)
             }
             return
         }
@@ -604,11 +612,11 @@ class BrowserActivity : ComponentActivity() {
         // The phone touchpad still drives the cursor via ACTION_MOUSE.
         if (engine?.isVideoControlActive() == true) {
             when (key) {
-                "dpad_center" -> { engine?.videoToggle(::onToggleResult); return }
-                "dpad_left" -> { engine?.videoSeek(-SEEK_STEP_SECONDS, ::onSeekResult); return }
-                "dpad_right" -> { engine?.videoSeek(SEEK_STEP_SECONDS, ::onSeekResult); return }
-                "dpad_up" -> { engine?.videoVolume(VOLUME_STEP, ::onVolumeResult); return }
-                "dpad_down" -> { engine?.videoVolume(-VOLUME_STEP, ::onVolumeResult); return }
+                "dpad_center" -> { engine?.videoToggle(); return }
+                "dpad_left" -> { engine?.videoSeek(-SEEK_STEP_SECONDS); return }
+                "dpad_right" -> { engine?.videoSeek(SEEK_STEP_SECONDS); return }
+                "dpad_up" -> { engine?.videoVolume(VOLUME_STEP); return }
+                "dpad_down" -> { engine?.videoVolume(-VOLUME_STEP); return }
             }
         }
 
@@ -714,6 +722,14 @@ class BrowserActivity : ComponentActivity() {
     private fun handleBrowserControlCommand(action: String?) {
         Log.d(TAG, "Browser control: $action")
         when (action) {
+            "video_target_iframe" -> {
+                engine?.setVideoTarget(true)
+                showVideoFeedback("Controls: iFrame video")
+            }
+            "video_target_main" -> {
+                engine?.setVideoTarget(false)
+                showVideoFeedback("Controls: main video")
+            }
             "refresh" -> engine?.reload()
             "maximize_video" -> {
                 val js = "(function(){" +

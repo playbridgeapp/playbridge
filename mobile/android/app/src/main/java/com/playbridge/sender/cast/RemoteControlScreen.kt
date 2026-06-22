@@ -1322,6 +1322,7 @@ private fun BrowserContextRow(
     onRemoteKey: (String) -> Unit
 ) {
     var isVideoMaximized by remember { mutableStateOf(false) }
+    var iframeMode by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -1361,6 +1362,19 @@ private fun BrowserContextRow(
             onClick = {
                 onBrowserControl(if (isVideoMaximized) "restore_video" else "maximize_video")
                 isVideoMaximized = !isVideoMaximized
+            }
+        )
+        // iFrame — switch D-pad video control to videos inside iframes (embeds).
+        // Most sites need the default (main) target; flip this for embedded players.
+        LabeledIconButton(
+            icon = Icons.Default.Layers,
+            label = if (iframeMode) "Main" else "iFrame",
+            tint = if (iframeMode) MaterialTheme.colorScheme.primary
+                   else MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = {
+                val next = !iframeMode
+                onBrowserControl(if (next) "video_target_iframe" else "video_target_main")
+                iframeMode = next
             }
         )
         // Home — exits the browser

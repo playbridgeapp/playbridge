@@ -16,6 +16,9 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -52,9 +55,9 @@ class SystemWebViewEngine(
     private var scrollAccumulatorX = 0f
     private var scrollAccumulatorY = 0f
 
-    init {
-        setupWebView()
-    }
+    // NOTE: setupWebView() is invoked from an init block at the BOTTOM of the class,
+    // after all property initializers (e.g. the videoControlScript lazy delegate),
+    // because setupWebView() reads them. An init block here would run too early.
 
     fun getView(): View = webView
 
@@ -80,43 +83,114 @@ class SystemWebViewEngine(
     }
 
     // ── Injected video controller bridge (pb-video-control.js) ────────────────
-    // All commands target the active <video> via window.__pbvc. Each returns a
-    // compact result string (via [callback]) so BrowserActivity can render NATIVE
-    // feedback — a DOM overlay would be hidden behind the video surface in
-    // fullscreen. Calls are no-ops (callback "none") if no video is present.
-
-    fun videoToggle(callback: ((String?) -> Unit)? = null) =
-        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.toggle())||'none'", callback)
-
-    fun videoSeek(deltaSeconds: Int, callback: ((String?) -> Unit)? = null) =
-        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.seek($deltaSeconds))||'none'", callback)
-
-    fun videoVolume(delta: Double, callback: ((String?) -> Unit)? = null) =
-        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.volume($delta))||'none'", callback)
-
-    fun videoSetRate(rate: Double, callback: ((String?) -> Unit)? = null) =
-        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.setRate($rate))||'none'", callback)
-
-    /** Returns the controller's JSON state via [callback], e.g. {"hasVideo":true,...}. */
-    fun queryVideoState(callback: (String?) -> Unit) =
-        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.state())||'{\"hasVideo\":false}'", callback)
+    // Commands target the active <video> via the injected controller. In multi-frame
+    // mode they're posted to the owning frame's WebMessageListener channel (reaches
+    // cross-origin iframes); results come back asynchronously and are delivered to
+    // [onVideoResult] as (kind, value). BrowserActivity renders NATIVE feedback from
+    // that — a DOM overlay would be hidden behind the video surface in fullscreen.
 
     /**
-     * True when a screen-dominating <video> is present, as reported by the injected
-     * controller's monitor. Drives D-pad playback control without relying on the HTML5
-     * fullscreen API (sites like m.youtube.com expand the player in-page instead).
-     * Set from the JS bridge thread — volatile so the main thread sees updates.
+     * True when addDocumentStartJavaScript + WebMessageListener are available.
+     * A computed getter (not a lazy/backed val) so it's safe to read from
+     * setupWebView(), which runs from the init block before field initializers.
      */
+    private val multiFrame: Boolean
+        get() = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+
+    /** Callback for command results: (kind in {toggle,seek,vol,rate}, value). */
+    var onVideoResult: ((String, String) -> Unit)? = null
+
+    // Iframe videos currently reporting a screen-dominating video, keyed by their
+    // reply proxy, with the absolute on-screen video area used to pick the largest.
+    // (The main frame never reports here — it uses PBVideoNative.)
+    private data class FrameVideo(val score: Double)
+    private val activeFrames = LinkedHashMap<JavaScriptReplyProxy, FrameVideo>()
+
+    // Which solution the D-pad uses. Default = MAIN frame (the proven
+    // evaluateJavascript + PBVideoNative path; works on the vast majority of sites).
+    // The remote's "iFrame" toggle flips to the channel-based iframe solution. The
+    // two are fully independent so neither can regress the other.
+    private var preferIframe = false
+
+    fun setVideoTarget(iframe: Boolean) { preferIframe = iframe }
+
+    // Main-frame activation flag, set via the PBVideoNative bridge.
     @Volatile
-    private var videoControlActive = false
+    private var videoControlActiveFallback = false
 
-    fun isVideoControlActive(): Boolean = videoControlActive
+    fun isVideoControlActive(): Boolean =
+        if (preferIframe) (multiFrame && activeFrames.isNotEmpty())
+        else videoControlActiveFallback
 
-    /** JS-exposed bridge object; the injected script calls PBVideoNative.setActive(bool). */
+    // Iframe command target: the largest iframe video (absolute on-screen area).
+    private fun currentProxy(): JavaScriptReplyProxy? =
+        activeFrames.maxByOrNull { it.value.score }?.key
+
+    fun videoToggle() = sendVideoCommand("toggle")
+    fun videoSeek(deltaSeconds: Int) = sendVideoCommand("seek,$deltaSeconds")
+    fun videoVolume(delta: Double) = sendVideoCommand("vol,$delta")
+    fun videoSetRate(rate: Double) = sendVideoCommand("rate,$rate")
+
+    private fun sendVideoCommand(cmd: String) {
+        if (preferIframe) {
+            // Iframe solution: post to the owning frame's channel; result comes back
+            // asynchronously via the message listener -> onVideoResult.
+            currentProxy()?.postMessage(cmd)
+            return
+        }
+        // Main-frame solution (proven): evaluateJavascript and map the return value.
+        val arg = cmd.substringAfter(',', "")
+        val kind: String
+        val js: String
+        when (cmd.substringBefore(',')) {
+            "toggle" -> { kind = "toggle"; js = "(window.__pbvc&&window.__pbvc.toggle())||'none'" }
+            "seek" -> { kind = "seek"; js = "(window.__pbvc&&window.__pbvc.seek($arg))||'none'" }
+            "vol" -> { kind = "vol"; js = "(window.__pbvc&&window.__pbvc.volume($arg))||'none'" }
+            "rate" -> { kind = "rate"; js = "(window.__pbvc&&window.__pbvc.setRate($arg))||'none'" }
+            else -> return
+        }
+        webView.evaluateJavascript(js) { raw ->
+            val value = raw?.trim()?.removeSurrounding("\"") ?: "none"
+            if (value != "none") onVideoResult?.invoke(kind, value)
+        }
+    }
+
+    /** Parse an iframe -> native message (activation change or command result). */
+    private fun handleFrameMessage(
+        data: String,
+        proxy: JavaScriptReplyProxy,
+        isMainFrame: Boolean
+    ) {
+        // The channel is the iframe-only solution; ignore any main-frame report
+        // (the main frame uses the PBVideoNative + evaluateJavascript path).
+        if (isMainFrame) return
+        try {
+            val o = org.json.JSONObject(data)
+            when (o.optString("type")) {
+                "active" -> {
+                    if (o.optBoolean("active")) {
+                        activeFrames[proxy] = FrameVideo(score = o.optDouble("score", 0.0))
+                    } else {
+                        activeFrames.remove(proxy)
+                    }
+                }
+                "result" -> {
+                    val kind = o.optString("kind")
+                    val value = o.optString("value")
+                    if (kind != "none" && value != "none") onVideoResult?.invoke(kind, value)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Bad frame message: $data", e)
+        }
+    }
+
+    /** JS-exposed bridge object (fallback mode); script calls PBVideoNative.setActive. */
     private inner class VideoControlBridge {
         @android.webkit.JavascriptInterface
         fun setActive(active: Boolean) {
-            videoControlActive = active
+            videoControlActiveFallback = active
         }
     }
 
@@ -341,8 +415,20 @@ class SystemWebViewEngine(
             // Enable third-party cookies (required for many iframe embeds)
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
-            // Bridge for the injected video controller to report activation state.
+            // Video controller transports — the two solutions run side by side:
+            //  • MAIN frame: PBVideoNative interface (activation) + evaluateJavascript
+            //    (commands). Always available; the proven default path.
+            //  • IFRAMES: a per-frame message channel, added only when the WebView
+            //    supports it. The injected script picks its transport by frame type.
             addJavascriptInterface(VideoControlBridge(), "PBVideoNative")
+            if (multiFrame && videoControlScript.isNotEmpty()) {
+                WebViewCompat.addWebMessageListener(
+                    this, "pbVideoChannel", setOf("*")
+                ) { _, message, _, isMainFrame, replyProxy ->
+                    message.data?.let { handleFrameMessage(it, replyProxy, isMainFrame) }
+                }
+                WebViewCompat.addDocumentStartJavaScript(this, videoControlScript, setOf("*"))
+            }
 
             // Handle Downloads via Android DownloadManager
             setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
@@ -450,7 +536,8 @@ class SystemWebViewEngine(
 
             // Inject the video controller (window.__pbvc) for phone D-pad playback control.
             // Self-guards via window.__pbvcInjected, so re-injection on soft navs is harmless.
-            if (videoControlScript.isNotEmpty()) {
+            // Multi-frame mode injects at document start into all frames instead (see setup).
+            if (!multiFrame && videoControlScript.isNotEmpty()) {
                 view?.evaluateJavascript(videoControlScript, null)
             }
 
@@ -593,5 +680,11 @@ class SystemWebViewEngine(
                 ByteArrayInputStream(ByteArray(0))
             )
         }
+    }
+
+    // Declared last so all property initializers (incl. lazy delegates that
+    // setupWebView() reads) are constructed before it runs.
+    init {
+        setupWebView()
     }
 }
