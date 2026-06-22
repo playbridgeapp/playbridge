@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -545,7 +546,7 @@ private fun ColumnScope.BrowserContextView(
         onVolumeDown = { onRemoteKey("volume_down") }
     )
 
-    // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · Source · Home ──
+    // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · Source · Unmute · Home ──
     BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
 }
 
@@ -1376,6 +1377,7 @@ private fun BrowserContextRow(
     onRemoteKey: (String) -> Unit
 ) {
     var isVideoMaximized by remember { mutableStateOf(false) }
+    var showMoreSheet by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -1386,12 +1388,19 @@ private fun BrowserContextRow(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Back — goes back one page
+        // Back — goes back one page (exits when no history left)
         LabeledIconButton(
             icon = Icons.AutoMirrored.Filled.ArrowBack,
             label = "Back",
             tint = MaterialTheme.colorScheme.onSurface,
             onClick = { onRemoteKey("back") }
+        )
+        // Forward — goes forward one page
+        LabeledIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowForward,
+            label = "Forward",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = { onBrowserControl("forward") }
         )
         // Refresh
         LabeledIconButton(
@@ -1399,13 +1408,6 @@ private fun BrowserContextRow(
             label = "Refresh",
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             onClick = { onBrowserControl("refresh") }
-        )
-        // Ad Blocker
-        LabeledIconButton(
-            icon = Icons.Default.Shield,
-            label = "Ad Block",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            onClick = { onBrowserControl("toggle_ublock") }
         )
         // Maximize / Restore Video
         LabeledIconButton(
@@ -1417,15 +1419,6 @@ private fun BrowserContextRow(
                 isVideoMaximized = !isVideoMaximized
             }
         )
-        // Source — manual override for the D-pad's video target. The TV auto-follows the
-        // largest on-screen video (main page or any embedded iframe); tap to cycle to the
-        // next one when auto-selection picks the wrong player. Momentary, not a mode.
-        LabeledIconButton(
-            icon = Icons.Default.Layers,
-            label = "Source",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            onClick = { onBrowserControl("video_target_cycle") }
-        )
         // Home — exits the browser
         LabeledIconButton(
             icon = Icons.Default.Home,
@@ -1433,6 +1426,70 @@ private fun BrowserContextRow(
             tint = MaterialTheme.colorScheme.onSurface,
             onClick = { onRemoteKey("home") }
         )
+        // More — overflow sheet for the less-frequent page/video controls
+        LabeledIconButton(
+            icon = Icons.Default.MoreHoriz,
+            label = "More",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = { showMoreSheet = true }
+        )
+    }
+
+    if (showMoreSheet) {
+        BrowserMoreSheet(
+            onBrowserControl = onBrowserControl,
+            onDismiss = { showMoreSheet = false }
+        )
+    }
+}
+
+/**
+ * Overflow sheet for the browser controls that don't earn a spot in the main row:
+ * ad-blocker toggle, the D-pad video "source" override, and manual unmute.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BrowserMoreSheet(
+    onBrowserControl: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            "More controls",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 24.dp, bottom = 4.dp)
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Ad Block — toggle uBlock on the TV browser
+            LabeledIconButton(
+                icon = Icons.Default.Shield,
+                label = "Ad Block",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = { onBrowserControl("toggle_ublock"); onDismiss() }
+            )
+            // Source — cycle the D-pad's video target when auto-selection picks the wrong
+            // player (the TV auto-follows the largest on-screen video by default).
+            LabeledIconButton(
+                icon = Icons.Default.Layers,
+                label = "Source",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = { onBrowserControl("video_target_cycle"); onDismiss() }
+            )
+            // Unmute — manual fallback for muted players the TV didn't auto-unmute.
+            LabeledIconButton(
+                icon = Icons.AutoMirrored.Filled.VolumeUp,
+                label = "Unmute",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = { onBrowserControl("video_unmute"); onDismiss() }
+            )
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }
 

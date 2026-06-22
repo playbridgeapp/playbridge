@@ -78,6 +78,12 @@ class SystemWebViewEngine(
 
     fun canGoBack(): Boolean = canGoBack
 
+    fun goForward() {
+        if (webView.canGoForward()) {
+            webView.goForward()
+        }
+    }
+
     fun evaluateJavascript(script: String, callback: ((String?) -> Unit)? = null) {
         webView.evaluateJavascript(script, callback)
     }
@@ -119,6 +125,27 @@ class SystemWebViewEngine(
     private var stickyProxy: JavaScriptReplyProxy? = null
     private var overrideProxy: JavaScriptReplyProxy? = null
 
+    /**
+     * Drop all video-control state. Called on top-level navigation, where the previous
+     * document's frames (and their reply proxies) are destroyed without a final
+     * active:false report — leaving them here would strand the D-pad on a dead frame.
+     */
+    private fun resetVideoControlState() {
+        val hadFrames = activeFrames.isNotEmpty() || videoControlActiveFallback
+        activeFrames.clear()
+        stickyProxy = null
+        overrideProxy = null
+        videoControlActiveFallback = false
+        activeVideoMuted = null
+        autoUnmuteDone = false
+        // The destroyed frames can't send their own final idle status, so the phone's
+        // now-playing strip/scrubber would stay frozen on the old video. Push one idle
+        // status here so the phone clears it on navigation.
+        if (hadFrames) {
+            onVideoStatus?.invoke("""{"type":"status","state":"idle","position":0,"duration":0}""")
+        }
+    }
+
     /** Manual override: pin the D-pad to the next active frame in round-robin order. */
     fun cycleVideoTarget() {
         if (activeFrames.isEmpty()) { overrideProxy = null; return }
@@ -136,11 +163,49 @@ class SystemWebViewEngine(
     fun isVideoControlActive(): Boolean =
         if (multiFrame) activeFrames.isNotEmpty() else videoControlActiveFallback
 
+    // Last-known muted state of the active/target video, parsed from its status pushes.
+    // null = unknown.
+    @Volatile
+    private var activeVideoMuted: Boolean? = null
+
+    /** null = unknown; true/false = last reported muted state of the controlled video. */
+    fun isActiveVideoMuted(): Boolean? = activeVideoMuted
+
+    // Fired (once per active session) when the controlled video is found to be muted, so
+    // native can dispatch a REAL tap — the trusted user gesture that actually unmutes
+    // (injected JS can't). Driven by status, so it works for BOTH native HTML5 fullscreen
+    // AND YouTube-style in-page expand (which never fires onShowCustomView).
+    var onRequestUnmuteTap: (() -> Unit)? = null
+    @Volatile
+    private var autoUnmuteDone = false
+
+    private fun trackMutedFromStatus(json: String) {
+        try {
+            val o = org.json.JSONObject(json)
+            val before = activeVideoMuted
+            if (o.has("muted")) activeVideoMuted = o.optBoolean("muted")
+            val state = o.optString("state")
+            if (state == "idle") { activeVideoMuted = null; autoUnmuteDone = false }
+            if (activeVideoMuted != before) Log.d(TAG, "activeVideoMuted: $before -> $activeVideoMuted")
+            // Auto-unmute ONLY a muted *and actively playing* video — that's the real
+            // autoplay-muted case where a tap is consumed by the "tap to unmute" affordance
+            // instead of toggling playback. Tapping a paused or already-audible video would
+            // just pause/unpause it. Once per session (reset on idle/navigation).
+            if (activeVideoMuted == true && state == "playing" && !autoUnmuteDone) {
+                autoUnmuteDone = true
+                Log.d(TAG, "auto-unmute: muted+playing video active, requesting native tap")
+                onRequestUnmuteTap?.invoke()
+            }
+        } catch (_: Exception) { /* ignore non-status JSON */ }
+    }
+
     /**
      * Which frame the D-pad drives. A manual pin wins while its frame stays active;
-     * otherwise auto-pick: prefer frames whose video is actually playing, then the
-     * largest on-screen area, but keep the incumbent unless a challenger beats it by a
-     * clear margin (hysteresis) so the target doesn't thrash between near-equal frames.
+     * otherwise auto-pick by **on-screen size first** (the big player the user is looking
+     * at), using "playing" only to break ties between comparably-sized frames. Size-first
+     * is deliberate: a tiny autoplaying ad or background clip must NOT steal control from
+     * a large player that happens to be paused (the common iframe-embed case). Hysteresis
+     * keeps the incumbent unless a challenger is clearly bigger or newly starts playing.
      */
     private fun currentProxy(): JavaScriptReplyProxy? {
         if (activeFrames.isEmpty()) { stickyProxy = null; overrideProxy = null; return null }
@@ -152,18 +217,27 @@ class SystemWebViewEngine(
     }
 
     private fun pickBestProxy(incumbent: JavaScriptReplyProxy?): JavaScriptReplyProxy? {
-        val playing = activeFrames.entries.filter { it.value.playing }
-        val pool = if (playing.isNotEmpty()) playing else activeFrames.entries.toList()
-        val top = pool.maxByOrNull { it.value.score } ?: return incumbent
-        if (incumbent != null) {
+        // Largest on-screen video wins by default.
+        val largest = activeFrames.entries.maxByOrNull { it.value.score } ?: return incumbent
+        // Only let a *playing* frame override the largest one if it's comparably big
+        // (≥60% of the top score). This favours real playback without letting a small
+        // playing ad outrank a large paused player.
+        val best = if (!largest.value.playing) {
+            activeFrames.entries
+                .filter { it.value.playing && it.value.score >= largest.value.score * 0.6 }
+                .maxByOrNull { it.value.score } ?: largest
+        } else largest
+        if (incumbent != null && best.key !== incumbent) {
             val inc = activeFrames[incumbent]
-            // Keep the incumbent if it's still in the candidate pool and the challenger
-            // isn't at least 25% larger — avoids bouncing between similar-sized videos.
-            if (inc != null && pool.any { it.key === incumbent } && top.value.score < inc.score * 1.25) {
+            // Keep the incumbent unless the challenger is clearly bigger (≥25%) or it has
+            // started playing while the incumbent hasn't — avoids thrashing on near-ties.
+            val clearlyBigger = inc != null && best.value.score >= inc.score * 1.25
+            val newlyPlaying = inc != null && best.value.playing && !inc.playing
+            if (inc != null && !clearlyBigger && !newlyPlaying) {
                 return incumbent
             }
         }
-        return top.key
+        return best.key
     }
 
     fun videoToggle() = sendVideoCommand("toggle")
@@ -171,12 +245,23 @@ class SystemWebViewEngine(
     fun videoSeekTo(seconds: Double) = sendVideoCommand("seekto,$seconds")
     fun videoVolume(delta: Double) = sendVideoCommand("vol,$delta")
     fun videoSetRate(rate: Double) = sendVideoCommand("rate,$rate")
+    /** JS unmute — only reliable after native has established a user gesture (a real tap). */
+    fun videoUnmute() = sendVideoCommand("unmute")
 
     private fun sendVideoCommand(cmd: String) {
         if (multiFrame) {
             // Unified channel pathway: post to the current target frame (main or iframe);
             // result comes back asynchronously via the message listener -> onVideoResult.
-            currentProxy()?.postMessage(cmd)
+            // Guarded: a frame can be torn down between its last report and this post.
+            val proxy = currentProxy() ?: return
+            try {
+                proxy.postMessage(cmd)
+            } catch (e: Exception) {
+                Log.w(TAG, "postMessage to a stale frame proxy failed; dropping it", e)
+                activeFrames.remove(proxy)
+                if (proxy === overrideProxy) overrideProxy = null
+                if (proxy === stickyProxy) stickyProxy = null
+            }
             return
         }
         // LEGACY fallback (no channel support): evaluateJavascript on the main frame.
@@ -229,7 +314,10 @@ class SystemWebViewEngine(
                 "status" -> {
                     // Forward only the current target frame's status, so a background
                     // frame can't push its scrubber state over the one being controlled.
-                    if (proxy === currentProxy()) onVideoStatus?.invoke(data)
+                    if (proxy === currentProxy()) {
+                        trackMutedFromStatus(data)
+                        onVideoStatus?.invoke(data)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -251,6 +339,7 @@ class SystemWebViewEngine(
         @android.webkit.JavascriptInterface
         fun onStatus(json: String) {
             // Legacy path is main-frame only, so there's no other target to guard against.
+            trackMutedFromStatus(json)
             onVideoStatus?.invoke(json)
         }
     }
@@ -532,11 +621,14 @@ class SystemWebViewEngine(
             // Enable third-party cookies (required for many iframe embeds)
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
-            // Video controller transports — the two solutions run side by side:
-            //  • MAIN frame: PBVideoNative interface (activation) + evaluateJavascript
-            //    (commands). Always available; the proven default path.
-            //  • IFRAMES: a per-frame message channel, added only when the WebView
-            //    supports it. The injected script picks its transport by frame type.
+            // Video controller transport — ONE unified pathway, chosen by the script via
+            // channel presence (not frame type):
+            //  • CHANNEL (preferred): a per-frame WebMessageListener (pbVideoChannel),
+            //    added when the WebView supports it. Every frame — main + iframes alike —
+            //    reports activation/score/status and receives commands over it.
+            //  • LEGACY (fallback): on older WebViews without the features, the script
+            //    falls back to the PBVideoNative interface + evaluateJavascript on the
+            //    main frame only. PBVideoNative is registered solely for that path.
             addJavascriptInterface(VideoControlBridge(), "PBVideoNative")
             if (multiFrame && videoControlScript.isNotEmpty()) {
                 WebViewCompat.addWebMessageListener(
@@ -642,6 +734,11 @@ class SystemWebViewEngine(
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             super.onPageStarted(view, url, favicon)
+            // A new top-level document tears down all previous frames, but their reply
+            // proxies never send a final active:false — so without this the old frames
+            // linger in activeFrames, isVideoControlActive() stays stuck true, and the
+            // D-pad keeps trying to control a phantom video on the new page. Reset here.
+            resetVideoControlState()
         }
 
         override fun onPageFinished(view: WebView?, url: String?) {

@@ -250,6 +250,10 @@ class BrowserActivity : ComponentActivity() {
             com.playbridge.player.server.ServerService.broadcastStatus(json)
         }
 
+        // Auto-unmute: when a muted video becomes the active control target (in-page
+        // expand or native fullscreen), dispatch a real tap to restore audio.
+        engine?.onRequestUnmuteTap = { autoUnmuteActiveVideo() }
+
         // Add engine view at index 0 (behind cursor)
         contentContainer?.addView(engine?.getView(), 0)
     }
@@ -416,6 +420,27 @@ class BrowserActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    /**
+     * Dispatch a real centre tap to unmute the active video — the trusted user gesture
+     * that injected JS can't supply. Driven by the engine's [SystemWebViewEngine.onRequestUnmuteTap]
+     * (fired when a muted video becomes active), so it works for native fullscreen AND
+     * YouTube's in-page expand alike. The video dominates the screen when control is
+     * active, so a centre tap lands on it (and on YouTube takes its "tap to unmute").
+     */
+    private fun autoUnmuteActiveVideo() {
+        runOnUiThread {
+            if (engine?.isActiveVideoMuted() != true) return@runOnUiThread
+            val dm = resources.displayMetrics
+            Log.d(TAG, "auto-unmute: dispatching real centre tap")
+            simulateClickOnActiveView(dm.widthPixels / 2f, dm.heightPixels / 2f)
+            // After the tap establishes activation, a JS unmute covers generic players
+            // that lack YouTube's tap-to-unmute affordance — and resumes playback if the
+            // tap paused it. Delay lets the tap's effect register before that check.
+            cursorHideHandler.postDelayed({ engine?.videoUnmute() }, 150)
+            showVideoFeedback("🔊")
+        }
     }
 
     private fun exitFullscreen() {
@@ -750,6 +775,17 @@ class BrowserActivity : ComponentActivity() {
                 showVideoFeedback("Switched video source")
             }
             "toggle_play" -> engine?.videoToggle()
+            "video_unmute" -> {
+                // Same guarded path as auto-unmute: only taps when the video is actually
+                // muted, so it never pauses an already-audible video. Unmuting needs a
+                // *trusted* gesture (a real tap) that injected JS can't supply.
+                when (engine?.isActiveVideoMuted()) {
+                    true -> autoUnmuteActiveVideo()
+                    false -> showVideoFeedback("Audio is on")
+                    null -> showVideoFeedback("No active video")
+                }
+            }
+            "forward" -> engine?.goForward()
             "refresh" -> engine?.reload()
             "maximize_video" -> {
                 val js = "(function(){" +
@@ -865,6 +901,7 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onDestroy() {
         cursorHideHandler.removeCallbacks(cursorHideRunnable)
+        videoOverlayHideHandler.removeCallbacks(videoOverlayHideRunnable)
         unregisterReceiver(commandReceiver)
         scope.cancel()
         engine?.destroy()

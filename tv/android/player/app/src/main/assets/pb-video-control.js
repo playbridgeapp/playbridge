@@ -87,6 +87,10 @@
     toggle: function () {
       var v = find();
       if (!v) return 'none';
+      // NOTE: we intentionally do NOT touch v.muted here. Unmuting autoplay-muted video
+      // requires a trusted user gesture, which this injected call doesn't carry — setting
+      // muted=false silently fails on YouTube and can even block an unmuted play(). Unmute
+      // is handled natively via a real synthesized tap (see BrowserActivity video_unmute).
       if (v.paused) { v.play(); } else { v.pause(); }
       return v.paused ? 'paused' : 'playing';
     },
@@ -114,6 +118,19 @@
       v.muted = false;
       v.volume = clamp(v.volume + (Number(delta) || 0), 0, 1);
       return String(v.volume);
+    },
+    unmute: function () {
+      var v = find();
+      if (!v) return 'none';
+      // Runs right after native's real tap, inside the user-activation window that tap
+      // grants — so muted=false sticks here even on sites without a "tap to unmute".
+      v.muted = false;
+      if (v.volume === 0) v.volume = 1;
+      // The preceding tap may have toggled playback off on a player that has no unmute
+      // affordance (e.g. a muted background video). Resume so unmuting never leaves it
+      // paused — the symptom on sites whose videos don't start muted.
+      if (v.paused) { try { v.play(); } catch (e) {} }
+      return v.muted ? 'muted' : 'unmuted';
     },
     setRate: function (r) {
       var v = find();
@@ -143,6 +160,7 @@
       case 'seek': return { kind: 'seek', value: api.seek(parts[1]) };
       case 'seekto': return { kind: 'seek', value: api.seekTo(parts[1]) };
       case 'vol': return { kind: 'vol', value: api.volume(parts[1]) };
+      case 'unmute': return { kind: 'vol', value: api.unmute() };
       case 'rate': return { kind: 'rate', value: api.setRate(parts[1]) };
       case 'state': return { kind: 'state', value: api.state() };
       default: return { kind: 'none', value: 'none' };
@@ -199,7 +217,10 @@
       state: !v ? 'idle' : (v.paused ? 'paused' : 'playing'),
       position: v ? Math.round((v.currentTime || 0) * 1000) : 0,
       duration: (v && isFinite(v.duration)) ? Math.round(v.duration * 1000) : 0,
-      title: (document.title || '')
+      title: (document.title || ''),
+      // Lets native auto-unmute on fullscreen only when actually muted (so it never
+      // pauses an already-audible video). Extra field; older phone parsers ignore it.
+      muted: !!(v && v.muted)
     });
   }
 
