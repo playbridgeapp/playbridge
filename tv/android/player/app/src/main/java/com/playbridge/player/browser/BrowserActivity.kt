@@ -743,13 +743,11 @@ class BrowserActivity : ComponentActivity() {
             return
         }
         when (action) {
-            "video_target_iframe" -> {
-                engine?.setVideoTarget(true)
-                showVideoFeedback("Controls: iFrame video")
-            }
-            "video_target_main" -> {
-                engine?.setVideoTarget(false)
-                showVideoFeedback("Controls: main video")
+            "video_target_cycle" -> {
+                // Manual override: pin the D-pad to the next on-screen video (main or
+                // any iframe). Auto-selection resumes when that frame goes inactive.
+                engine?.cycleVideoTarget()
+                showVideoFeedback("Switched video source")
             }
             "toggle_play" -> engine?.videoToggle()
             "refresh" -> engine?.reload()

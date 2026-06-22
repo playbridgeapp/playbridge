@@ -545,7 +545,7 @@ private fun ColumnScope.BrowserContextView(
         onVolumeDown = { onRemoteKey("volume_down") }
     )
 
-    // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · iFrame · Home ──
+    // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · Source · Home ──
     BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
 }
 
@@ -1376,7 +1376,6 @@ private fun BrowserContextRow(
     onRemoteKey: (String) -> Unit
 ) {
     var isVideoMaximized by remember { mutableStateOf(false) }
-    var iframeMode by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -1418,18 +1417,14 @@ private fun BrowserContextRow(
                 isVideoMaximized = !isVideoMaximized
             }
         )
-        // iFrame — switch D-pad video control to videos inside iframes (embeds).
-        // Most sites need the default (main) target; flip this for embedded players.
+        // Source — manual override for the D-pad's video target. The TV auto-follows the
+        // largest on-screen video (main page or any embedded iframe); tap to cycle to the
+        // next one when auto-selection picks the wrong player. Momentary, not a mode.
         LabeledIconButton(
             icon = Icons.Default.Layers,
-            label = if (iframeMode) "Main" else "iFrame",
-            tint = if (iframeMode) MaterialTheme.colorScheme.primary
-                   else MaterialTheme.colorScheme.onSurfaceVariant,
-            onClick = {
-                val next = !iframeMode
-                onBrowserControl(if (next) "video_target_iframe" else "video_target_main")
-                iframeMode = next
-            }
+            label = "Source",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = { onBrowserControl("video_target_cycle") }
         )
         // Home — exits the browser
         LabeledIconButton(

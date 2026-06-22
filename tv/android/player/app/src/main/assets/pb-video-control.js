@@ -3,14 +3,19 @@
  *
  * Injected at document start into EVERY frame (main + cross-origin iframes) via
  * WebViewCompat.addDocumentStartJavaScript, so it can reach videos that the main
- * frame's JS can't (same-origin policy). Each frame talks to native over its own
- * WebMessageListener channel: window.pbVideoChannel.
+ * frame's JS can't (same-origin policy). Each frame — INCLUDING the main frame —
+ * talks to native over its own WebMessageListener channel: window.pbVideoChannel.
  *
- * Transport is auto-detected:
- *   - window.pbVideoChannel present  -> per-frame message channel (multi-frame mode)
- *   - else window.PBVideoNative      -> legacy main-frame fallback (evaluateJavascript
- *                                       drives __pbvc directly; PBVideoNative.setActive
- *                                       reports activation)
+ * Transport is auto-detected by channel presence (NOT by frame type):
+ *   - window.pbVideoChannel present  -> per-frame message channel. Used for the main
+ *                                       frame and every iframe alike, so there is a
+ *                                       single unified pathway. Native picks which
+ *                                       frame the D-pad drives via the per-frame score.
+ *   - else window.PBVideoNative      -> legacy fallback for WebViews lacking the
+ *                                       DOCUMENT_START_SCRIPT / WEB_MESSAGE_LISTENER
+ *                                       features (main frame only; evaluateJavascript
+ *                                       drives __pbvc, PBVideoNative.setActive reports
+ *                                       activation).
  *
  * Native -> frame commands (channel, string): "toggle" | "seek,<s>" | "vol,<d>" |
  *   "rate,<r>" | "state". Frame -> native messages (channel, JSON):
@@ -144,33 +149,31 @@
     }
   }
 
-  // ── Transport: split by frame type ────────────────────────────────────────
-  // MAIN FRAME  -> the proven path: native reports activation via PBVideoNative and
-  //               drives __pbvc directly through evaluateJavascript. No channel.
-  // IFRAME      -> the message channel (window.pbVideoChannel), the only way native
-  //               can reach a cross-origin iframe's video.
-  // This keeps the two solutions independent: main-frame control is untouched by the
-  // iframe work, and vice-versa.
-  var IS_MAIN = true;
-  try { IS_MAIN = (window.top === window.self); } catch (e) { IS_MAIN = true; }
+  // ── Transport: one pathway, chosen by channel presence ────────────────────
+  // CHANNEL (preferred): window.pbVideoChannel, injected by native into EVERY frame
+  //   incl. the main one. All frames report activation/score/status and receive
+  //   commands the same way; native decides which frame the D-pad drives.
+  // LEGACY (fallback): only when no channel exists (old WebView without the webkit
+  //   features) — native reports activation via PBVideoNative and drives __pbvc
+  //   through evaluateJavascript on the main frame.
+  function useChannel() { return !!window.pbVideoChannel; }
 
   var channel = null;
 
   function reportActive(active, score, playing) {
-    if (IS_MAIN) {
-      if (window.PBVideoNative && window.PBVideoNative.setActive) {
-        try { window.PBVideoNative.setActive(active); } catch (e) { /* unbound */ }
-      }
-    } else if (channel) {
-      channel.postMessage(JSON.stringify({
+    if (useChannel()) {
+      bindChannel();
+      if (channel) channel.postMessage(JSON.stringify({
         type: 'active', active: active, score: score, playing: playing
       }));
+    } else if (window.PBVideoNative && window.PBVideoNative.setActive) {
+      try { window.PBVideoNative.setActive(active); } catch (e) { /* unbound */ }
     }
   }
 
-  // Iframes only: bind the channel so native can post commands and read results.
+  // Bind the channel (any frame) so native can post commands and read results.
   function bindChannel() {
-    if (IS_MAIN || channel || !window.pbVideoChannel) return;
+    if (channel || !window.pbVideoChannel) return;
     channel = window.pbVideoChannel;
     channel.onmessage = function (e) {
       var res = execute(e.data);
@@ -181,12 +184,11 @@
   // ── Status push (drives the phone's now-playing scrubber) ─────────────────
   // Same shape the native player emits, so the phone parses it unchanged.
   function sendStatus(json) {
-    if (IS_MAIN) {
-      if (window.PBVideoNative && window.PBVideoNative.onStatus) {
-        try { window.PBVideoNative.onStatus(json); } catch (e) { /* unbound */ }
-      }
-    } else if (channel) {
-      channel.postMessage(json);
+    if (useChannel()) {
+      bindChannel();
+      if (channel) channel.postMessage(json);
+    } else if (window.PBVideoNative && window.PBVideoNative.onStatus) {
+      try { window.PBVideoNative.onStatus(json); } catch (e) { /* unbound */ }
     }
   }
 

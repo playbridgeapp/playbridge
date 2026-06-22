@@ -104,31 +104,67 @@ class SystemWebViewEngine(
     /** Periodic playback status (a `{"type":"status",…}` JSON string) for the phone scrubber. */
     var onVideoStatus: ((String) -> Unit)? = null
 
-    // Iframe videos currently reporting a screen-dominating video, keyed by their
-    // reply proxy, with the absolute on-screen video area used to pick the largest.
-    // (The main frame never reports here — it uses PBVideoNative.)
-    private data class FrameVideo(val score: Double)
+    // Every frame (main + iframes) reporting a screen-dominating video, keyed by its
+    // reply proxy. `score` is the absolute on-screen video area (comparable across
+    // frames); `playing` and `isMain` feed target selection. Unified pathway: the main
+    // frame reports here too now, over the same channel as iframes.
+    private data class FrameVideo(val score: Double, val playing: Boolean, val isMain: Boolean)
     private val activeFrames = LinkedHashMap<JavaScriptReplyProxy, FrameVideo>()
 
-    // Which solution the D-pad uses. Default = MAIN frame (the proven
-    // evaluateJavascript + PBVideoNative path; works on the vast majority of sites).
-    // The remote's "iFrame" toggle flips to the channel-based iframe solution. The
-    // two are fully independent so neither can regress the other.
-    private var preferIframe = false
+    // Target selection. By default the D-pad auto-follows the best frame (see
+    // [pickBestProxy]); [stickyProxy] is the current auto pick, kept across reports
+    // with hysteresis so a flickering score can't bounce the target. The user can pin
+    // a specific frame via [cycleVideoTarget] ("switch source"); [overrideProxy] holds
+    // that pin until its frame goes inactive or the user cycles again.
+    private var stickyProxy: JavaScriptReplyProxy? = null
+    private var overrideProxy: JavaScriptReplyProxy? = null
 
-    fun setVideoTarget(iframe: Boolean) { preferIframe = iframe }
+    /** Manual override: pin the D-pad to the next active frame in round-robin order. */
+    fun cycleVideoTarget() {
+        if (activeFrames.isEmpty()) { overrideProxy = null; return }
+        val keys = activeFrames.keys.toList()
+        val current = overrideProxy ?: currentProxy()
+        val nextIndex = (keys.indexOf(current) + 1).mod(keys.size)
+        overrideProxy = keys[nextIndex]
+    }
 
-    // Main-frame activation flag, set via the PBVideoNative bridge.
+    // Main-frame activation flag for the LEGACY path, set via the PBVideoNative bridge
+    // (only used when multiFrame is unsupported).
     @Volatile
     private var videoControlActiveFallback = false
 
     fun isVideoControlActive(): Boolean =
-        if (preferIframe) (multiFrame && activeFrames.isNotEmpty())
-        else videoControlActiveFallback
+        if (multiFrame) activeFrames.isNotEmpty() else videoControlActiveFallback
 
-    // Iframe command target: the largest iframe video (absolute on-screen area).
-    private fun currentProxy(): JavaScriptReplyProxy? =
-        activeFrames.maxByOrNull { it.value.score }?.key
+    /**
+     * Which frame the D-pad drives. A manual pin wins while its frame stays active;
+     * otherwise auto-pick: prefer frames whose video is actually playing, then the
+     * largest on-screen area, but keep the incumbent unless a challenger beats it by a
+     * clear margin (hysteresis) so the target doesn't thrash between near-equal frames.
+     */
+    private fun currentProxy(): JavaScriptReplyProxy? {
+        if (activeFrames.isEmpty()) { stickyProxy = null; overrideProxy = null; return null }
+        overrideProxy?.let { if (activeFrames.containsKey(it)) return it else overrideProxy = null }
+        val incumbent = stickyProxy?.takeIf { activeFrames.containsKey(it) }
+        val best = pickBestProxy(incumbent)
+        stickyProxy = best
+        return best
+    }
+
+    private fun pickBestProxy(incumbent: JavaScriptReplyProxy?): JavaScriptReplyProxy? {
+        val playing = activeFrames.entries.filter { it.value.playing }
+        val pool = if (playing.isNotEmpty()) playing else activeFrames.entries.toList()
+        val top = pool.maxByOrNull { it.value.score } ?: return incumbent
+        if (incumbent != null) {
+            val inc = activeFrames[incumbent]
+            // Keep the incumbent if it's still in the candidate pool and the challenger
+            // isn't at least 25% larger — avoids bouncing between similar-sized videos.
+            if (inc != null && pool.any { it.key === incumbent } && top.value.score < inc.score * 1.25) {
+                return incumbent
+            }
+        }
+        return top.key
+    }
 
     fun videoToggle() = sendVideoCommand("toggle")
     fun videoSeek(deltaSeconds: Int) = sendVideoCommand("seek,$deltaSeconds")
@@ -137,13 +173,13 @@ class SystemWebViewEngine(
     fun videoSetRate(rate: Double) = sendVideoCommand("rate,$rate")
 
     private fun sendVideoCommand(cmd: String) {
-        if (preferIframe) {
-            // Iframe solution: post to the owning frame's channel; result comes back
-            // asynchronously via the message listener -> onVideoResult.
+        if (multiFrame) {
+            // Unified channel pathway: post to the current target frame (main or iframe);
+            // result comes back asynchronously via the message listener -> onVideoResult.
             currentProxy()?.postMessage(cmd)
             return
         }
-        // Main-frame solution (proven): evaluateJavascript and map the return value.
+        // LEGACY fallback (no channel support): evaluateJavascript on the main frame.
         val arg = cmd.substringAfter(',', "")
         val kind: String
         val js: String
@@ -161,23 +197,28 @@ class SystemWebViewEngine(
         }
     }
 
-    /** Parse an iframe -> native message (activation change or command result). */
+    /** Parse a frame -> native message (activation change, command result, or status). */
     private fun handleFrameMessage(
         data: String,
         proxy: JavaScriptReplyProxy,
         isMainFrame: Boolean
     ) {
-        // The channel is the iframe-only solution; ignore any main-frame report
-        // (the main frame uses the PBVideoNative + evaluateJavascript path).
-        if (isMainFrame) return
+        // Unified pathway: the main frame reports over the channel too now, so we no
+        // longer ignore it — every frame is a candidate target.
         try {
             val o = org.json.JSONObject(data)
             when (o.optString("type")) {
                 "active" -> {
                     if (o.optBoolean("active")) {
-                        activeFrames[proxy] = FrameVideo(score = o.optDouble("score", 0.0))
+                        activeFrames[proxy] = FrameVideo(
+                            score = o.optDouble("score", 0.0),
+                            playing = o.optBoolean("playing"),
+                            isMain = isMainFrame
+                        )
                     } else {
                         activeFrames.remove(proxy)
+                        if (proxy === overrideProxy) overrideProxy = null
+                        if (proxy === stickyProxy) stickyProxy = null
                     }
                 }
                 "result" -> {
@@ -186,9 +227,9 @@ class SystemWebViewEngine(
                     if (kind != "none" && value != "none") onVideoResult?.invoke(kind, value)
                 }
                 "status" -> {
-                    // Forward only when iframes are the active target, so we don't push
-                    // an iframe's status while the main frame is being controlled.
-                    if (preferIframe) onVideoStatus?.invoke(data)
+                    // Forward only the current target frame's status, so a background
+                    // frame can't push its scrubber state over the one being controlled.
+                    if (proxy === currentProxy()) onVideoStatus?.invoke(data)
                 }
             }
         } catch (e: Exception) {
@@ -196,7 +237,11 @@ class SystemWebViewEngine(
         }
     }
 
-    /** JS-exposed bridge object (fallback mode); script calls PBVideoNative.setActive. */
+    /**
+     * JS-exposed bridge object for the LEGACY path only (WebViews without channel
+     * support). The script calls these instead of posting to pbVideoChannel. In
+     * multiFrame mode the script uses the channel and these are never called.
+     */
     private inner class VideoControlBridge {
         @android.webkit.JavascriptInterface
         fun setActive(active: Boolean) {
@@ -205,8 +250,8 @@ class SystemWebViewEngine(
 
         @android.webkit.JavascriptInterface
         fun onStatus(json: String) {
-            // Main-frame status; forward only when the main frame is the active target.
-            if (!preferIframe) onVideoStatus?.invoke(json)
+            // Legacy path is main-frame only, so there's no other target to guard against.
+            onVideoStatus?.invoke(json)
         }
     }
 
