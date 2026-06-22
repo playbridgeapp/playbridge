@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
 
 /**
@@ -455,15 +456,57 @@ fun TabsScreen(
             val playingTabIds = Components.tabManager.playingTabIds
             val scope = rememberCoroutineScope()
 
-            val showScrollToTop by remember {
+            // Whether the list can scroll in either direction (big enough to scroll)
+            val isScrollable by remember {
                 derivedStateOf {
-                    listState.firstVisibleItemIndex > 2
+                    listState.canScrollForward || listState.canScrollBackward
                 }
             }
-            val showScrollToBottom by remember {
+            // Whether we've reached the bottom of the list
+            val isAtBottom by remember {
                 derivedStateOf {
                     val lastVisibleItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-                    lastVisibleItem != null && lastVisibleItem.index < filteredTabs.size - 1
+                    lastVisibleItem == null || lastVisibleItem.index >= filteredTabs.size - 1
+                }
+            }
+            // Whether we're at the very top of the list
+            val isAtTop by remember {
+                derivedStateOf {
+                    listState.firstVisibleItemIndex == 0 &&
+                        listState.firstVisibleItemScrollOffset == 0
+                }
+            }
+            // Track the last scroll direction (true = scrolling down)
+            var isScrollingDown by remember { mutableStateOf(true) }
+            val prevIndex = remember { mutableStateOf(0) }
+            val prevOffset = remember { mutableStateOf(0) }
+            LaunchedEffect(listState) {
+                snapshotFlow {
+                    listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                }.collect { (index, offset) ->
+                    if (index != prevIndex.value || offset != prevOffset.value) {
+                        isScrollingDown = if (index != prevIndex.value) {
+                            index > prevIndex.value
+                        } else {
+                            offset > prevOffset.value
+                        }
+                        prevIndex.value = index
+                        prevOffset.value = offset
+                    }
+                }
+            }
+            // Point up at the bottom, down at the top, otherwise follow scroll direction
+            val pointUp = isAtBottom || (!isAtTop && !isScrollingDown)
+
+            // Only show the button while scrolling; hide shortly after it stops
+            // (the grace period keeps it tappable for a moment once you stop).
+            var showScrollButton by remember { mutableStateOf(false) }
+            LaunchedEffect(listState.isScrollInProgress) {
+                if (listState.isScrollInProgress) {
+                    showScrollButton = true
+                } else {
+                    delay(1500)
+                    showScrollButton = false
                 }
             }
 
@@ -510,62 +553,35 @@ fun TabsScreen(
                     }
                 }
 
-                // Floating Action Buttons for quick scroll all the way up or down
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(bottom = 24.dp, end = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    AnimatedVisibility(
-                        visible = showScrollToTop,
-                        enter = fadeIn() + scaleIn(),
-                        exit = fadeOut() + scaleOut()
-                    ) {
-                        SmallFloatingActionButton(
-                            onClick = {
-                                scope.launch {
+                // Single Floating Action Button that flips direction based on the
+                // scroll direction, while still pointing up at the absolute bottom
+                // and down at the absolute top.
+                if (isScrollable && showScrollButton) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                if (pointUp) {
                                     listState.scrollToItem(0)
+                                } else if (filteredTabs.isNotEmpty()) {
+                                    listState.scrollToItem(filteredTabs.size - 1)
                                 }
-                            },
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
-                            shape = RoundedCornerShape(percent = 50)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ArrowUpward,
-                                contentDescription = "Scroll to top",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-
-                    AnimatedVisibility(
-                        visible = showScrollToBottom,
-                        enter = fadeIn() + scaleIn(),
-                        exit = fadeOut() + scaleOut()
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(bottom = 24.dp, end = 24.dp),
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+                        shape = RoundedCornerShape(percent = 50)
                     ) {
-                        SmallFloatingActionButton(
-                            onClick = {
-                                scope.launch {
-                                    if (filteredTabs.isNotEmpty()) {
-                                        listState.scrollToItem(filteredTabs.size - 1)
-                                    }
-                                }
-                            },
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
-                            shape = RoundedCornerShape(percent = 50)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ArrowDownward,
-                                contentDescription = "Scroll to bottom",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                        Icon(
+                            imageVector = if (pointUp) Icons.Default.ArrowUpward
+                                          else Icons.Default.ArrowDownward,
+                            contentDescription = if (pointUp) "Scroll to top"
+                                                 else "Scroll to bottom",
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }

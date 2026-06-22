@@ -534,6 +534,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             // Must post to the UI thread: this callback fires on MPV's native event thread.
             runOnUiThread {
                 controlsViewModel.setPlaying(!value)
+                // Invariant: controls/overlays are only shown while paused. On the
+                // play→playing transition (pause property false) dismiss any leftover overlay.
+                if (!value) controlsViewModel.hideControls()
             }
         }
     }
