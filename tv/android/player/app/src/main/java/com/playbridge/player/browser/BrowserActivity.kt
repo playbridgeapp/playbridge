@@ -828,6 +828,14 @@ class BrowserActivity : ComponentActivity() {
         cursorHideHandler.postDelayed(cursorHideRunnable, cursorHideDelayMs)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Claim the server context for the browser whenever we're foregrounded — so a
+        // context_query reports "browser" regardless of how this activity was launched,
+        // and we reclaim it after returning from a player launched on top of us.
+        com.playbridge.player.server.ServerService.notifyContextBrowser()
+    }
+
     override fun onStop() {
         super.onStop()
         if (!isFinishing && !isChangingConfigurations) {

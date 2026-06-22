@@ -318,6 +318,13 @@ abstract class PlayerActivity : ComponentActivity() {
         adapter?.setLoudnessEnhancer(enabled)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Reclaim the server context for the player whenever we're foregrounded (e.g.
+        // after returning from a browser launched on top), so context_query is correct.
+        ServerService.notifyContextPlayer()
+    }
+
     override fun onDestroy() {
         if (current?.get() === this) {
             current = null
