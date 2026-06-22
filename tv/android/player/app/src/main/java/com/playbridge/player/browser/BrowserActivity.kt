@@ -46,6 +46,10 @@ class BrowserActivity : ComponentActivity() {
         const val EXTRA_MOUSE_DY = "mouse_dy"
         const val EXTRA_REMOTE_KEY = "remote_key"
         const val EXTRA_BROWSER_ACTION = "browser_action"
+
+        // Fullscreen video-control D-pad steps
+        private const val SEEK_STEP_SECONDS = 10
+        private const val VOLUME_STEP = 0.1
     }
 
     private var engine: SystemWebViewEngine? = null
@@ -77,6 +81,12 @@ class BrowserActivity : ComponentActivity() {
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
+
+    // Native video-control feedback overlay (rendered over the WebView, because a DOM
+    // overlay is hidden behind the video surface in fullscreen).
+    private var videoOverlayView: android.widget.TextView? = null
+    private val videoOverlayHideHandler = Handler(Looper.getMainLooper())
+    private val videoOverlayHideRunnable = Runnable { videoOverlayView?.visibility = View.GONE }
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -489,6 +499,83 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
+    // ── Native video-control feedback overlay ────────────────────────────────
+
+    private fun showVideoFeedback(text: String) {
+        runOnUiThread {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int) = (v * density).toInt()
+            var ov = videoOverlayView
+            if (ov == null) {
+                ov = android.widget.TextView(this).apply {
+                    setTextColor(Color.WHITE)
+                    textSize = 24f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    gravity = android.view.Gravity.CENTER
+                    setLineSpacing(dp(4).toFloat(), 1f)
+                    setPadding(dp(30), dp(22), dp(30), dp(22))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(18).toFloat()
+                        setColor(Color.parseColor("#D2141618"))
+                    }
+                    elevation = dp(48).toFloat()
+                    visibility = View.GONE
+                }
+                rootContainer.addView(
+                    ov,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { gravity = android.view.Gravity.CENTER }
+                )
+                videoOverlayView = ov
+            }
+            ov.text = text
+            ov.visibility = View.VISIBLE
+            ov.bringToFront()
+            videoOverlayHideHandler.removeCallbacks(videoOverlayHideRunnable)
+            videoOverlayHideHandler.postDelayed(videoOverlayHideRunnable, 1500)
+        }
+    }
+
+    /** Strip the JSON quoting evaluateJavascript wraps around returned strings. */
+    private fun jsStr(raw: String?): String =
+        raw?.takeIf { it != "null" }?.trim()?.removeSurrounding("\"") ?: ""
+
+    private fun fmtTime(totalSec: Double): String {
+        if (!totalSec.isFinite() || totalSec < 0) return "0:00"
+        val s = totalSec.toInt()
+        val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, sec)
+        else String.format("%d:%02d", m, sec)
+    }
+
+    private fun progressBar(frac: Double, slots: Int = 16): String {
+        val filled = Math.round(frac.coerceIn(0.0, 1.0) * slots).toInt()
+        return "█".repeat(filled) + "░".repeat(slots - filled)
+    }
+
+    private fun onToggleResult(raw: String?) {
+        when (jsStr(raw)) {
+            "playing" -> showVideoFeedback("▶")   // ▶
+            "paused" -> showVideoFeedback("❙❙") // ❚❚
+        }
+    }
+
+    private fun onSeekResult(raw: String?) {
+        val parts = jsStr(raw).split(",")
+        if (parts.size != 2) return
+        val t = parts[0].toDoubleOrNull() ?: return
+        val d = parts[1].toDoubleOrNull() ?: 0.0
+        val frac = if (d > 0) t / d else 0.0
+        showVideoFeedback("${fmtTime(t)}   /   ${fmtTime(d)}\n${progressBar(frac)}")
+    }
+
+    private fun onVolumeResult(raw: String?) {
+        val vol = jsStr(raw).toDoubleOrNull() ?: return
+        showVideoFeedback("🔊  ${Math.round(vol * 100)}%\n${progressBar(vol)}")
+    }
+
     private fun handleRemoteCommand(key: String?) {
         Log.d(TAG, "Remote command: $key")
 
@@ -499,26 +586,30 @@ class BrowserActivity : ComponentActivity() {
                         exitFullscreen()
                     }
                 }
-                "dpad_center" -> {
-                    showCursorAndResetTimer()
-                    simulateClickOnActiveView(cursorX, cursorY)
-                    cursorView?.animateClick()
-                }
-                "dpad_up", "dpad_down", "dpad_left", "dpad_right" -> {
-                    // Allow cursor movement during fullscreen
-                    showCursorAndResetTimer()
-                    val cursorStep = 15f
-                    val displayMetrics = resources.displayMetrics
-                    when (key) {
-                        "dpad_up" -> cursorY = (cursorY - cursorStep).coerceAtLeast(0f)
-                        "dpad_down" -> cursorY = (cursorY + cursorStep).coerceAtMost(displayMetrics.heightPixels.toFloat())
-                        "dpad_left" -> cursorX = (cursorX - cursorStep).coerceAtLeast(0f)
-                        "dpad_right" -> cursorX = (cursorX + cursorStep).coerceAtMost(displayMetrics.widthPixels.toFloat())
-                    }
-                    cursorView?.updatePosition(cursorX, cursorY)
-                }
+                // In fullscreen the D-pad drives the playing <video> via the injected
+                // controller (window.__pbvc); feedback is rendered natively over the
+                // WebView. Site chrome (e.g. YouTube) is pointer-driven and won't show.
+                "dpad_center" -> engine?.videoToggle(::onToggleResult)
+                "dpad_left" -> engine?.videoSeek(-SEEK_STEP_SECONDS, ::onSeekResult)
+                "dpad_right" -> engine?.videoSeek(SEEK_STEP_SECONDS, ::onSeekResult)
+                "dpad_up" -> engine?.videoVolume(VOLUME_STEP, ::onVolumeResult)
+                "dpad_down" -> engine?.videoVolume(-VOLUME_STEP, ::onVolumeResult)
             }
             return
+        }
+
+        // Not in native (HTML5) fullscreen, but a screen-dominating video is on
+        // screen (e.g. m.youtube.com's in-page expand). Intercept the playback keys
+        // for video control; let everything else (back, etc.) navigate normally.
+        // The phone touchpad still drives the cursor via ACTION_MOUSE.
+        if (engine?.isVideoControlActive() == true) {
+            when (key) {
+                "dpad_center" -> { engine?.videoToggle(::onToggleResult); return }
+                "dpad_left" -> { engine?.videoSeek(-SEEK_STEP_SECONDS, ::onSeekResult); return }
+                "dpad_right" -> { engine?.videoSeek(SEEK_STEP_SECONDS, ::onSeekResult); return }
+                "dpad_up" -> { engine?.videoVolume(VOLUME_STEP, ::onVolumeResult); return }
+                "dpad_down" -> { engine?.videoVolume(-VOLUME_STEP, ::onVolumeResult); return }
+            }
         }
 
         // Keyboard input streamed from the phone (browser keyboard mode).

@@ -79,6 +79,47 @@ class SystemWebViewEngine(
         webView.evaluateJavascript(script, callback)
     }
 
+    // ── Injected video controller bridge (pb-video-control.js) ────────────────
+    // All commands target the active <video> via window.__pbvc. Each returns a
+    // compact result string (via [callback]) so BrowserActivity can render NATIVE
+    // feedback — a DOM overlay would be hidden behind the video surface in
+    // fullscreen. Calls are no-ops (callback "none") if no video is present.
+
+    fun videoToggle(callback: ((String?) -> Unit)? = null) =
+        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.toggle())||'none'", callback)
+
+    fun videoSeek(deltaSeconds: Int, callback: ((String?) -> Unit)? = null) =
+        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.seek($deltaSeconds))||'none'", callback)
+
+    fun videoVolume(delta: Double, callback: ((String?) -> Unit)? = null) =
+        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.volume($delta))||'none'", callback)
+
+    fun videoSetRate(rate: Double, callback: ((String?) -> Unit)? = null) =
+        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.setRate($rate))||'none'", callback)
+
+    /** Returns the controller's JSON state via [callback], e.g. {"hasVideo":true,...}. */
+    fun queryVideoState(callback: (String?) -> Unit) =
+        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.state())||'{\"hasVideo\":false}'", callback)
+
+    /**
+     * True when a screen-dominating <video> is present, as reported by the injected
+     * controller's monitor. Drives D-pad playback control without relying on the HTML5
+     * fullscreen API (sites like m.youtube.com expand the player in-page instead).
+     * Set from the JS bridge thread — volatile so the main thread sees updates.
+     */
+    @Volatile
+    private var videoControlActive = false
+
+    fun isVideoControlActive(): Boolean = videoControlActive
+
+    /** JS-exposed bridge object; the injected script calls PBVideoNative.setActive(bool). */
+    private inner class VideoControlBridge {
+        @android.webkit.JavascriptInterface
+        fun setActive(active: Boolean) {
+            videoControlActive = active
+        }
+    }
+
     fun destroy() {
         webView.destroy()
     }
@@ -225,6 +266,19 @@ class SystemWebViewEngine(
         })();
     """.trimIndent()
 
+    /**
+     * The injected video controller (assets/pb-video-control.js). Read once; re-injected
+     * on every page load. Idempotent — the script self-guards via window.__pbvcInjected.
+     */
+    private val videoControlScript: String by lazy {
+        try {
+            context.assets.open("pb-video-control.js").bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load pb-video-control.js", e)
+            ""
+        }
+    }
+
     private fun setupWebView() {
         webView.apply {
             isFocusable = true
@@ -286,6 +340,9 @@ class SystemWebViewEngine(
 
             // Enable third-party cookies (required for many iframe embeds)
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+            // Bridge for the injected video controller to report activation state.
+            addJavascriptInterface(VideoControlBridge(), "PBVideoNative")
 
             // Handle Downloads via Android DownloadManager
             setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
@@ -390,6 +447,12 @@ class SystemWebViewEngine(
             // Inject anti-popup script once the new document's JS context is ready.
             // The __pbAdblockInjected guard prevents double-injection on soft navigations.
             view?.evaluateJavascript(antiPopupScript, null)
+
+            // Inject the video controller (window.__pbvc) for phone D-pad playback control.
+            // Self-guards via window.__pbvcInjected, so re-injection on soft navs is harmless.
+            if (videoControlScript.isNotEmpty()) {
+                view?.evaluateJavascript(videoControlScript, null)
+            }
 
             // Inject cosmetic filters (element hiding CSS)
             val cosmeticCss = adBlocker.getCosmeticFilterCss()
