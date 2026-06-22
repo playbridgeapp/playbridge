@@ -3,6 +3,19 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — 2026-06-22 (versionCode 210)
+
+### Added
+- **Diagnostics Logs Viewer**: Added diagnostics logs screen with real-time logcat reader and email/share attachments. (#54)
+- **Crash Logger**: Automatically captures and stores uncaught exceptions locally for diagnostic analysis. (#54)
+
+### Changed
+- **Tabs Screen UI**: Refactored the web browser tabs screen interface and navigation logic for improved tab lifecycle. (#56)
+- **Player Control Overlays**: Enhanced player control overlay states and TV connection logic. (#56)
+
+### Fixed
+- Fixed keystore path signing failure by converting `storeFile` to an absolute path. (#53)
+
 ## [0.3.0] — 2026-06-21 (versionCode 209)
 
 ### Added

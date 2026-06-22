@@ -3,6 +3,20 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.4.0] — 2026-06-22 (versionCode 211)
+
+### Added
+- **Diagnostics Logger**: Support for in-app diagnostics logs and `FileLogger` writing to disk. (#54)
+- **Diagnostics Setting**: Added toggle to enable/disable file logging in Settings. (#54)
+
+### Changed
+- Improved player activity and playback coordinator state management. (#56)
+
+## GeckoView Plugin [0.2.7] — 2026-06-22 (versionCode 207)
+
+### Fixed
+- Fixed keystore path signing failure by converting `storeFile` to an absolute path. (#53)
+
 ## Player [0.3.0] — 2026-06-21 (versionCode 210)
 
 ### Added

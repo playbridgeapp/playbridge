@@ -123,8 +123,8 @@ class LogStore {
           .whereType<File>()
           .where((f) => _isLogFile(f))
           .toList()
-        ..sort((a, b) =>
-            a.statSync().modified.compareTo(b.statSync().modified));
+        ..sort(
+            (a, b) => a.statSync().modified.compareTo(b.statSync().modified));
       return files.map((f) => f.readAsStringSync()).join('\n');
     } catch (_) {
       return '';
@@ -204,7 +204,6 @@ class LogStore {
         : lower.contains('warn')
             ? LogLevel.warn
             : LogLevel.debug;
-    return LogEntry(
-        time: DateTime.now(), level: level, tag: tag, message: msg);
+    return LogEntry(time: DateTime.now(), level: level, tag: tag, message: msg);
   }
 }
