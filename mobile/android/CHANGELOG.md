@@ -3,6 +3,13 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] — 2026-06-22 (versionCode 211)
+
+### Added
+- **Remote Control Redesign**: New interface supporting toggleable TV control modes: Media Player mode (gestures / playback chips) and Web Navigation mode (D-pad / web controls). (#59)
+- **Binary Protocol Updates**: Updated shared binary protocols for remote interactions. (#59)
+- **Cast Sheet Updates**: Improved remote status and cast session handling in `CastSheet`. (#59)
+
 ## [0.4.0] — 2026-06-22 (versionCode 210)
 
 ### Added
