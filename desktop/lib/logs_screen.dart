@@ -67,13 +67,12 @@ class _LogsScreenState extends State<LogsScreen> {
                   await LogStore.instance.clear();
                   break;
                 case 'copy':
+                  final messenger = ScaffoldMessenger.of(context);
                   await Clipboard.setData(
                       ClipboardData(text: LogStore.instance.combinedText()));
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Copied all logs')),
-                    );
-                  }
+                  messenger.showSnackBar(
+                    const SnackBar(content: Text('Copied all logs')),
+                  );
                   break;
               }
             },
