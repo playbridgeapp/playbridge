@@ -2,6 +2,14 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0+17] — 2026-06-22
+
+### Added
+- **Logs Screen**: Added an in-app Logs viewer screen and log store to track app operations and assist in debugging. (#55)
+
+### Changed
+- Overhauled the Remote Control UI, volume handlers, and Now Playing card. (#55)
+
 ## [0.4.0+16] — 2026-06-21
 
 ### Added
