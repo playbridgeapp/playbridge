@@ -101,6 +101,9 @@ class SystemWebViewEngine(
     /** Callback for command results: (kind in {toggle,seek,vol,rate}, value). */
     var onVideoResult: ((String, String) -> Unit)? = null
 
+    /** Periodic playback status (a `{"type":"status",…}` JSON string) for the phone scrubber. */
+    var onVideoStatus: ((String) -> Unit)? = null
+
     // Iframe videos currently reporting a screen-dominating video, keyed by their
     // reply proxy, with the absolute on-screen video area used to pick the largest.
     // (The main frame never reports here — it uses PBVideoNative.)
@@ -129,6 +132,7 @@ class SystemWebViewEngine(
 
     fun videoToggle() = sendVideoCommand("toggle")
     fun videoSeek(deltaSeconds: Int) = sendVideoCommand("seek,$deltaSeconds")
+    fun videoSeekTo(seconds: Double) = sendVideoCommand("seekto,$seconds")
     fun videoVolume(delta: Double) = sendVideoCommand("vol,$delta")
     fun videoSetRate(rate: Double) = sendVideoCommand("rate,$rate")
 
@@ -146,6 +150,7 @@ class SystemWebViewEngine(
         when (cmd.substringBefore(',')) {
             "toggle" -> { kind = "toggle"; js = "(window.__pbvc&&window.__pbvc.toggle())||'none'" }
             "seek" -> { kind = "seek"; js = "(window.__pbvc&&window.__pbvc.seek($arg))||'none'" }
+            "seekto" -> { kind = "seek"; js = "(window.__pbvc&&window.__pbvc.seekTo($arg))||'none'" }
             "vol" -> { kind = "vol"; js = "(window.__pbvc&&window.__pbvc.volume($arg))||'none'" }
             "rate" -> { kind = "rate"; js = "(window.__pbvc&&window.__pbvc.setRate($arg))||'none'" }
             else -> return
@@ -180,6 +185,11 @@ class SystemWebViewEngine(
                     val value = o.optString("value")
                     if (kind != "none" && value != "none") onVideoResult?.invoke(kind, value)
                 }
+                "status" -> {
+                    // Forward only when iframes are the active target, so we don't push
+                    // an iframe's status while the main frame is being controlled.
+                    if (preferIframe) onVideoStatus?.invoke(data)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Bad frame message: $data", e)
@@ -191,6 +201,12 @@ class SystemWebViewEngine(
         @android.webkit.JavascriptInterface
         fun setActive(active: Boolean) {
             videoControlActiveFallback = active
+        }
+
+        @android.webkit.JavascriptInterface
+        fun onStatus(json: String) {
+            // Main-frame status; forward only when the main frame is the active target.
+            if (!preferIframe) onVideoStatus?.invoke(json)
         }
     }
 

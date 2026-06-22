@@ -96,6 +96,13 @@
       }
       return v.currentTime + ',' + (isFinite(v.duration) ? v.duration : 0);
     },
+    seekTo: function (seconds) {
+      var v = find();
+      if (!v) return 'none';
+      var t = Number(seconds) || 0;
+      v.currentTime = isFinite(v.duration) && v.duration > 0 ? clamp(t, 0, v.duration) : Math.max(0, t);
+      return v.currentTime + ',' + (isFinite(v.duration) ? v.duration : 0);
+    },
     volume: function (delta) {
       var v = find();
       if (!v) return 'none';
@@ -129,6 +136,7 @@
     switch (op) {
       case 'toggle': return { kind: 'toggle', value: api.toggle() };
       case 'seek': return { kind: 'seek', value: api.seek(parts[1]) };
+      case 'seekto': return { kind: 'seek', value: api.seekTo(parts[1]) };
       case 'vol': return { kind: 'vol', value: api.volume(parts[1]) };
       case 'rate': return { kind: 'rate', value: api.setRate(parts[1]) };
       case 'state': return { kind: 'state', value: api.state() };
@@ -170,6 +178,33 @@
     };
   }
 
+  // ── Status push (drives the phone's now-playing scrubber) ─────────────────
+  // Same shape the native player emits, so the phone parses it unchanged.
+  function sendStatus(json) {
+    if (IS_MAIN) {
+      if (window.PBVideoNative && window.PBVideoNative.onStatus) {
+        try { window.PBVideoNative.onStatus(json); } catch (e) { /* unbound */ }
+      }
+    } else if (channel) {
+      channel.postMessage(json);
+    }
+  }
+
+  function activeStatusJson() {
+    var v = find();
+    return JSON.stringify({
+      type: 'status',
+      state: !v ? 'idle' : (v.paused ? 'paused' : 'playing'),
+      position: v ? Math.round((v.currentTime || 0) * 1000) : 0,
+      duration: (v && isFinite(v.duration)) ? Math.round(v.duration * 1000) : 0,
+      title: (document.title || '')
+    });
+  }
+
+  function idleStatusJson() {
+    return JSON.stringify({ type: 'status', state: 'idle', position: 0, duration: 0 });
+  }
+
   // ── Activation monitor ────────────────────────────────────────────────────
   var lastActive = null, lastScore = -1, lastPlaying = null;
   function report() {
@@ -182,11 +217,18 @@
     // so native's cross-frame "which frame wins" pick stays current.
     if (active !== lastActive || playing !== lastPlaying ||
         (active && Math.abs(score - lastScore) > score * 0.2)) {
+      var becameInactive = (lastActive === true && !active);
       lastActive = active; lastScore = score; lastPlaying = playing;
       reportActive(active, score, playing);
+      // Push status immediately on change; one idle status when the video goes away
+      // so the phone clears its scrubber.
+      if (active) sendStatus(activeStatusJson());
+      else if (becameInactive) sendStatus(idleStatusJson());
     }
   }
 
+  // Periodic status while active, for the live scrubber.
+  setInterval(function () { if (lastActive) sendStatus(activeStatusJson()); }, 1000);
   setInterval(report, 600);
   document.addEventListener('play', report, true);
   document.addEventListener('pause', report, true);

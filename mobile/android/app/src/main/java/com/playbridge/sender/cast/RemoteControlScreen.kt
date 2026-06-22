@@ -162,14 +162,21 @@ fun RemoteControlScreen(
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showAddSubtitle by remember { mutableStateOf(false) }
     var showSubtitlesSheet by remember { mutableStateOf(false) }
-    // Input mode for the non-player (browser) hero area. Defaults to the touchpad.
-    var inputMode by remember { mutableStateOf(RemoteInputMode.TOUCHPAD) }
-    // When idle (e.g. right after Stop), the calm empty state can reveal the input surface on demand.
-    var idleShowingInput by remember { mutableStateOf(false) }
-
     val remoteContext = remoteContextOf(activeContext)
-    // Leaving idle (TV started playing or opened the browser) collapses the on-demand input surface.
-    LaunchedEffect(remoteContext) { if (remoteContext != RemoteContext.IDLE) idleShowingInput = false }
+    // The interaction surface is chosen via the mode chip (Context / D-Pad / Touchpad /
+    // Keyboard) and remembered separately per context: player defaults to Context (its
+    // scrubber + controls), browser to Touchpad. Picking a mode sticks for that context.
+    var modeByContext by remember {
+        mutableStateOf(
+            mapOf(
+                RemoteContext.PLAYER to RemoteMode.CONTEXT,
+                RemoteContext.BROWSER to RemoteMode.TOUCHPAD,
+                RemoteContext.IDLE to RemoteMode.CONTEXT
+            )
+        )
+    }
+    val selectedMode = modeByContext[remoteContext] ?: RemoteMode.CONTEXT
+    fun selectMode(mode: RemoteMode) { modeByContext = modeByContext + (remoteContext to mode) }
 
     Scaffold(
         topBar = {
@@ -179,6 +186,9 @@ fun RemoteControlScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
+                },
+                actions = {
+                    RemoteModeChip(selected = selectedMode, onSelect = { selectMode(it) })
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent
@@ -206,7 +216,7 @@ fun RemoteControlScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             AnimatedContent(
-                targetState = remoteContext,
+                targetState = selectedMode to remoteContext,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -214,99 +224,113 @@ fun RemoteControlScreen(
                     fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(220))
                 },
                 label = "RemoteBody"
-            ) { ctx ->
+            ) { (mode, ctx) ->
                 Column(
                     modifier = Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    when (ctx) {
-                        RemoteContext.PLAYER -> {
-                            // ── Now Playing: title only — the seek control lives down in the
-                            //    SeekVolumeBar (swipe ◄► to seek, ▲▼ for volume). ──
-                            NowPlayingPanel(
-                                title = mediaTitle,
-                                episodeLabel = null,
-                                positionMs = positionMs,
-                                durationMs = durationMs,
-                                isLive = isLive,
-                                onSeekTo = onSeekTo,
-                                showProgress = false
-                            )
+                    when (mode) {
+                        // Adaptive view: player controls, browser now-playing, or idle.
+                        RemoteMode.CONTEXT -> when (ctx) {
+                            RemoteContext.PLAYER -> {
+                                // ── Now Playing: title only — the seek control lives down in the
+                                //    SeekVolumeBar (swipe ◄► to seek, ▲▼ for volume). ──
+                                NowPlayingPanel(
+                                    title = mediaTitle,
+                                    episodeLabel = null,
+                                    positionMs = positionMs,
+                                    durationMs = durationMs,
+                                    isLive = isLive,
+                                    onSeekTo = onSeekTo,
+                                    showProgress = false
+                                )
 
-                            // Native-only: track pickers/settings — hidden for DLNA renderers.
-                            if (!dlnaMode) {
-                                TrackChipsRow(
-                                    audioTracks = audioTracks,
-                                    subtitleTracks = subtitleTracks,
-                                    onSelectAudio = onSelectAudio,
-                                    onSubtitlesClick = { showSubtitlesSheet = true },
-                                    onMore = { showSettingsSheet = true }
+                                // Native-only: track pickers/settings — hidden for DLNA renderers.
+                                if (!dlnaMode) {
+                                    TrackChipsRow(
+                                        audioTracks = audioTracks,
+                                        subtitleTracks = subtitleTracks,
+                                        onSelectAudio = onSelectAudio,
+                                        onSubtitlesClick = { showSubtitlesSheet = true },
+                                        onMore = { showSettingsSheet = true }
+                                    )
+                                }
+
+                                // ── Episode list (fills available space) ──
+                                EpisodesList(
+                                    episodes = episodes,
+                                    currentIndex = currentEpisodeIndex,
+                                    onJumpToEpisode = onJumpToEpisode,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                // ── Combined seek + volume bar ──
+                                // Swipe left/right to scrub, up/down for volume (volume native-only).
+                                SeekVolumeBar(
+                                    positionMs = positionMs,
+                                    durationMs = durationMs,
+                                    isLive = isLive,
+                                    enableVolume = !dlnaMode,
+                                    onSeekTo = onSeekTo,
+                                    onVolumeUp = { onRemoteKey("volume_up") },
+                                    onVolumeDown = { onRemoteKey("volume_down") }
+                                )
+                                MediaControlRow(
+                                    isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
+                                    onPlayerControl = onPlayerControl,
+                                    showLoop = !dlnaMode,
+                                    showSeek = !isLive
                                 )
                             }
 
-                            // ── Episode list (fills available space) ──
-                            EpisodesList(
-                                episodes = episodes,
-                                currentIndex = currentEpisodeIndex,
-                                onJumpToEpisode = onJumpToEpisode,
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            // ── Combined seek + volume bar ──
-                            // Swipe left/right to scrub, up/down for volume (volume is native-only).
-                            SeekVolumeBar(
+                            RemoteContext.BROWSER -> BrowserContextView(
+                                playbackState = playbackState,
                                 positionMs = positionMs,
                                 durationMs = durationMs,
-                                isLive = isLive,
-                                enableVolume = !dlnaMode,
-                                onSeekTo = onSeekTo,
-                                onVolumeUp = { onRemoteKey("volume_up") },
-                                onVolumeDown = { onRemoteKey("volume_down") }
+                                mediaTitle = mediaTitle,
+                                onBrowserControl = onBrowserControl,
+                                onRemoteKey = onRemoteKey
                             )
-                            // No Back/Home here — Stop already exits playback, so they'd be redundant.
-                            MediaControlRow(
-                                isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
-                                onPlayerControl = onPlayerControl,
-                                showLoop = !dlnaMode,
-                                showSeek = !isLive
+
+                            RemoteContext.IDLE -> IdleEmptyState(
+                                tvName = tvName,
+                                onShowControls = { selectMode(RemoteMode.TOUCHPAD) },
+                                modifier = Modifier.weight(1f)
                             )
                         }
 
-                        RemoteContext.BROWSER -> BrowserInputSurface(
-                            inputMode = inputMode,
-                            onSelectMode = { inputMode = it },
-                            onRemoteKey = onRemoteKey,
-                            onMouseMove = onMouseMove,
-                            onMouseClick = onMouseClick,
-                            onMouseScroll = onMouseScroll,
-                            onMouseDown = onMouseDown,
-                            onMouseUp = onMouseUp,
-                            onBrowserControl = onBrowserControl
-                        )
-
-                        RemoteContext.IDLE -> {
-                            if (idleShowingInput) {
-                                BrowserInputSurface(
-                                    inputMode = inputMode,
-                                    onSelectMode = { inputMode = it },
-                                    onRemoteKey = onRemoteKey,
+                        // Explicit input surfaces — work in any context (the TV routes by
+                        // its own context). The surface fills the space, with the current
+                        // context's bottom controls kept below it for quick access.
+                        RemoteMode.DPAD -> {
+                            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                                DpadArea(onRemoteKey = onRemoteKey)
+                            }
+                            ModeBottomBar(
+                                ctx = ctx, dlnaMode = dlnaMode, isLive = isLive,
+                                playbackState = playbackState, onRemoteKey = onRemoteKey,
+                                onBrowserControl = onBrowserControl, onPlayerControl = onPlayerControl
+                            )
+                        }
+                        RemoteMode.TOUCHPAD -> {
+                            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                                TouchpadArea(
                                     onMouseMove = onMouseMove,
                                     onMouseClick = onMouseClick,
                                     onMouseScroll = onMouseScroll,
                                     onMouseDown = onMouseDown,
-                                    onMouseUp = onMouseUp,
-                                    onBrowserControl = onBrowserControl
-                                )
-                            } else {
-                                // Calm "nothing playing" state — Stop lands here instead of dumping
-                                // the user straight onto a touchpad.
-                                IdleEmptyState(
-                                    tvName = tvName,
-                                    onShowControls = { idleShowingInput = true },
-                                    modifier = Modifier.weight(1f)
+                                    onMouseUp = onMouseUp
                                 )
                             }
+                            ModeBottomBar(
+                                ctx = ctx, dlnaMode = dlnaMode, isLive = isLive,
+                                playbackState = playbackState, onRemoteKey = onRemoteKey,
+                                onBrowserControl = onBrowserControl, onPlayerControl = onPlayerControl
+                            )
+                        }
+                        RemoteMode.KEYBOARD -> Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            KeyboardArea(onRemoteKey = onRemoteKey)
                         }
                     }
                 }
@@ -347,11 +371,41 @@ fun RemoteControlScreen(
 }
 
 
-/** Which input surface the non-player ("browser") remote shows. */
-private enum class RemoteInputMode { TOUCHPAD, DPAD, KEYBOARD }
+/**
+ * The interaction surface the user picks from the mode chip. CONTEXT is the adaptive
+ * view (player controls / browser now-playing); the others are explicit input surfaces
+ * that work regardless of the TV's context (the TV routes the keys/mouse by context).
+ */
+private enum class RemoteMode(val label: String) {
+    CONTEXT("Context"), DPAD("D-Pad"), TOUCHPAD("Touchpad"), KEYBOARD("Keyboard")
+}
 
 /** Which TV surface the remote is controlling, derived from the TV's reported context. */
 private enum class RemoteContext { PLAYER, BROWSER, IDLE }
+
+/** Dropdown chip in the app bar that selects the interaction mode. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RemoteModeChip(selected: RemoteMode, onSelect: (RemoteMode) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.padding(end = 8.dp)) {
+        AssistChip(
+            onClick = { expanded = true },
+            label = { Text(selected.label) },
+            trailingIcon = {
+                Icon(Icons.Default.ArrowDropDown, contentDescription = "Change mode")
+            }
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            RemoteMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(mode.label) },
+                    onClick = { onSelect(mode); expanded = false }
+                )
+            }
+        }
+    }
+}
 
 private fun remoteContextOf(active: String): RemoteContext = when (active) {
     "player" -> RemoteContext.PLAYER
@@ -441,47 +495,88 @@ private fun ProtocolBadge(text: String, accent: Color) {
 }
 
 /**
- * The browser/input hero shared by the **browser** context and the on-demand reveal from the
- * **idle** empty state: the Touchpad/D-Pad/Keyboard switcher + hero, volume, and browser controls.
+ * The browser CONTEXT view: a now-playing strip (title + scrubber + play/pause) when the
+ * WebView reports a controllable video, then volume and the browser controls. The raw input
+ * surfaces (touchpad/d-pad/keyboard) are now separate modes chosen from the mode chip.
  */
 @Composable
-private fun ColumnScope.BrowserInputSurface(
-    inputMode: RemoteInputMode,
-    onSelectMode: (RemoteInputMode) -> Unit,
-    onRemoteKey: (String) -> Unit,
-    onMouseMove: (dx: Float, dy: Float) -> Unit,
-    onMouseClick: () -> Unit,
-    onMouseScroll: (dx: Float, dy: Float) -> Unit,
-    onMouseDown: () -> Unit,
-    onMouseUp: () -> Unit,
-    onBrowserControl: (String) -> Unit
+private fun ColumnScope.BrowserContextView(
+    playbackState: String?,
+    positionMs: Long,
+    durationMs: Long,
+    mediaTitle: String?,
+    onBrowserControl: (String) -> Unit,
+    onRemoteKey: (String) -> Unit
 ) {
-    // ── Input mode switcher: Touchpad / D-Pad / Keyboard ──
-    InputModeSwitcher(mode = inputMode, onSelect = onSelectMode)
-
-    // ── Hero Area (fills available space) ──
-    Box(modifier = Modifier.weight(1f)) {
-        when (inputMode) {
-            RemoteInputMode.TOUCHPAD -> TouchpadArea(
-                onMouseMove = onMouseMove,
-                onMouseClick = onMouseClick,
-                onMouseScroll = onMouseScroll,
-                onMouseDown = onMouseDown,
-                onMouseUp = onMouseUp
+    val videoActive = playbackState == "playing" || playbackState == "paused" ||
+        playbackState == "buffering"
+    if (videoActive) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            NowPlayingPanel(
+                title = mediaTitle,
+                episodeLabel = null,
+                positionMs = positionMs,
+                durationMs = durationMs,
+                onSeekTo = { ms -> onBrowserControl("seek_to:$ms") }
             )
-            RemoteInputMode.DPAD -> DpadArea(onRemoteKey = onRemoteKey)
-            RemoteInputMode.KEYBOARD -> KeyboardArea(onRemoteKey = onRemoteKey)
+            IconButton(onClick = { onBrowserControl("toggle_play") }) {
+                Icon(
+                    imageVector = if (playbackState == "playing") Icons.Default.Pause
+                                  else Icons.Default.PlayArrow,
+                    contentDescription = "Play/Pause",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
     }
 
-    // ── Volume (sits where Back/Home used to be) ──
+    // Push the controls to the bottom; the top stays calm when nothing's playing.
+    Spacer(modifier = Modifier.weight(1f))
+
     VolumeRow(
         onVolumeUp = { onRemoteKey("volume_up") },
         onVolumeDown = { onRemoteKey("volume_down") }
     )
 
-    // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · Home ──
+    // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · iFrame · Home ──
     BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
+}
+
+/**
+ * Context-appropriate bottom controls kept beneath the D-Pad / Touchpad surfaces:
+ * browser nav + volume in browser context, media transport in player context.
+ */
+@Composable
+private fun ColumnScope.ModeBottomBar(
+    ctx: RemoteContext,
+    dlnaMode: Boolean,
+    isLive: Boolean,
+    playbackState: String?,
+    onRemoteKey: (String) -> Unit,
+    onBrowserControl: (String) -> Unit,
+    onPlayerControl: (String) -> Unit
+) {
+    when (ctx) {
+        RemoteContext.BROWSER -> {
+            VolumeRow(
+                onVolumeUp = { onRemoteKey("volume_up") },
+                onVolumeDown = { onRemoteKey("volume_down") }
+            )
+            BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
+        }
+        RemoteContext.PLAYER -> MediaControlRow(
+            isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
+            onPlayerControl = onPlayerControl,
+            showLoop = !dlnaMode,
+            showSeek = !isLive
+        )
+        RemoteContext.IDLE -> { /* nothing to control */ }
+    }
 }
 
 /**
@@ -521,73 +616,6 @@ private fun IdleEmptyState(
             Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text("Show touchpad & controls")
-        }
-    }
-}
-
-@Composable
-private fun InputModeSwitcher(mode: RemoteInputMode, onSelect: (RemoteInputMode) -> Unit) {
-    val shape = RoundedCornerShape(20.dp)
-    Row(
-        modifier = Modifier
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.Center
-    ) {
-        PillOption(
-            label = "Touchpad",
-            icon = Icons.Default.TouchApp,
-            selected = mode == RemoteInputMode.TOUCHPAD,
-            onClick = { onSelect(RemoteInputMode.TOUCHPAD) }
-        )
-        PillOption(
-            label = "D-Pad",
-            icon = Icons.Default.Gamepad,
-            selected = mode == RemoteInputMode.DPAD,
-            onClick = { onSelect(RemoteInputMode.DPAD) }
-        )
-        PillOption(
-            label = "Keyboard",
-            icon = Icons.Default.Keyboard,
-            selected = mode == RemoteInputMode.KEYBOARD,
-            onClick = { onSelect(RemoteInputMode.KEYBOARD) }
-        )
-    }
-}
-
-@Composable
-private fun PillOption(
-    label: String,
-    icon: ImageVector,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val bg by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.primary
-        else Color.Transparent,
-        label = "pillBg"
-    )
-    val fg by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.onPrimary
-        else MaterialTheme.colorScheme.onSurfaceVariant,
-        label = "pillFg"
-    )
-
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(20.dp),
-        color = bg,
-        contentColor = fg,
-        modifier = Modifier.height(40.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
         }
     }
 }

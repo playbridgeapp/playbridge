@@ -244,6 +244,12 @@ class BrowserActivity : ComponentActivity() {
         // cross-origin iframe frames, delivered asynchronously over the message channel).
         engine?.onVideoResult = { kind, value -> renderVideoResult(kind, value) }
 
+        // Forward the controller's playback status to the phone (drives its scrubber).
+        // Same "status" message the native player emits, so the phone parses it as-is.
+        engine?.onVideoStatus = { json ->
+            com.playbridge.player.server.ServerService.broadcastStatus(json)
+        }
+
         // Add engine view at index 0 (behind cursor)
         contentContainer?.addView(engine?.getView(), 0)
     }
@@ -721,6 +727,14 @@ class BrowserActivity : ComponentActivity() {
 
     private fun handleBrowserControlCommand(action: String?) {
         Log.d(TAG, "Browser control: $action")
+        // Absolute seek from the phone scrubber (value in ms) — prefix, so handled
+        // before the exact-match when below.
+        if (action != null && action.startsWith("seek_to:")) {
+            action.removePrefix("seek_to:").toLongOrNull()?.let { ms ->
+                engine?.videoSeekTo(ms / 1000.0)
+            }
+            return
+        }
         when (action) {
             "video_target_iframe" -> {
                 engine?.setVideoTarget(true)
@@ -730,6 +744,7 @@ class BrowserActivity : ComponentActivity() {
                 engine?.setVideoTarget(false)
                 showVideoFeedback("Controls: main video")
             }
+            "toggle_play" -> engine?.videoToggle()
             "refresh" -> engine?.reload()
             "maximize_video" -> {
                 val js = "(function(){" +
