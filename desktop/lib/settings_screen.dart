@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'auto_launch.dart';
+import 'logging/log_store.dart';
+import 'logs_screen.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'server.dart';
@@ -33,6 +35,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool? _autoLaunchEnabled;
   bool _isSandboxed = false;
   AutoLaunch? _autoLaunch;
+  late bool _loggingEnabled = LogStore.instance.enabled;
 
   @override
   void initState() {
@@ -187,6 +190,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         onChanged: _isSandboxed ? null : _toggleAutoLaunch,
                       ),
               ),
+
+            // — Diagnostics ————————————————————————
+            _Section('Diagnostics'),
+            _Tile(
+              icon: Icons.bug_report_outlined,
+              title: 'Enable logging',
+              subtitle:
+                  'Save app logs to this device for troubleshooting. Off by default — '
+                  'logs can contain stream URLs and request headers (including '
+                  'Debrid tokens), so only enable when needed.',
+              trailing: Switch(
+                value: _loggingEnabled,
+                onChanged: (v) async {
+                  await LogStore.instance.setEnabled(v);
+                  if (mounted) setState(() => _loggingEnabled = v);
+                },
+              ),
+            ),
+            _Tile(
+              icon: Icons.article_outlined,
+              title: 'View logs',
+              subtitle: 'Open the in-app log viewer',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const LogsScreen()),
+              ),
+            ),
 
             // — About ———————————————————————————————
             _Section('About'),

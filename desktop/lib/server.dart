@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'cert_manager.dart';
+import 'logging/log_store.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
@@ -106,7 +108,7 @@ class ReceiverServer extends ChangeNotifier {
   /// (Re)binds the wss:// (always) and ws:// (opt-in) listeners. Re-runnable
   /// after [reloadListeners] closes the previous sockets.
   Future<void> _bindListeners() async {
-    final handler = webSocketHandler(_onClient);
+    final handler = _withLogsRoute(webSocketHandler(_onClient));
 
     // Encrypted wss:// on port+1 — the default, preferred transport.
     var wssUp = false;
@@ -134,6 +136,36 @@ class ReceiverServer extends ChangeNotifier {
 
     // Notify so UI (e.g. the Cast screen address) reflects the bound wss port.
     notifyListeners();
+  }
+
+  /// Wraps the WebSocket handler so `GET /logs` (download) and `DELETE /logs`
+  /// (clear) are served as plain HTTP, falling through to the ws upgrade for
+  /// every other request. Gated: returns 403 when logging is disabled so a device
+  /// on the LAN can't pull logs (which may contain stream URLs and headers).
+  Handler _withLogsRoute(Handler wsHandler) {
+    return (Request request) {
+      if (request.url.path == 'logs') {
+        if (request.method == 'GET') {
+          if (!LogStore.instance.enabled) {
+            return Response.forbidden('Logging is disabled on this device.');
+          }
+          final text = LogStore.instance.combinedText();
+          return Response.ok(
+            text.isEmpty ? 'No log entries.' : text,
+            headers: {
+              'content-type': 'text/plain',
+              'content-disposition':
+                  'attachment; filename="playbridge_desktop_logs.txt"',
+            },
+          );
+        }
+        if (request.method == 'DELETE') {
+          LogStore.instance.clear();
+          return Response.ok('Logs cleared.');
+        }
+      }
+      return wsHandler(request);
+    };
   }
 
   Future<void> stop() async {

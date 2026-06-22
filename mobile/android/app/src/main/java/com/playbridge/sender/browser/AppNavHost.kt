@@ -1451,6 +1451,7 @@ fun AppNavHost(
                             showDevicePicker = true
                         }
                     },
+                    isPlaying = playing,
                     showTvIcon = playing,
                     onTvIconClick = {
                         showDevicePicker = true

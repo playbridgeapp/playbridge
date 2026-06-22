@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show ImageFilter;
+import 'dart:ui' show ImageFilter, PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'logging/log_store.dart';
 import 'context_menu_installer.dart';
 import 'discovery.dart';
 import 'engines/mpv_engine.dart';
@@ -35,6 +36,28 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await windowManager.ensureInitialized();
+
+  // Diagnostics: opt-in persistent logging (off by default). Tee debugPrint into the
+  // store so existing logs are captured with no call-site changes, and record crashes.
+  await LogStore.instance.init();
+  final originalDebugPrint = debugPrint;
+  debugPrint = (String? message, {int? wrapWidth}) {
+    originalDebugPrint(message, wrapWidth: wrapWidth);
+    if (message != null) LogStore.instance.appendRaw(message);
+  };
+  final priorOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    priorOnError?.call(details);
+    LogStore.instance.logCrash(
+      details.exception,
+      details.stack ?? StackTrace.current,
+      context: 'FlutterError',
+    );
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    LogStore.instance.logCrash(error, stack, context: 'PlatformDispatcher');
+    return false; // not handled — preserve default reporting
+  };
 
   windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
     await windowManager.setPreventClose(true);

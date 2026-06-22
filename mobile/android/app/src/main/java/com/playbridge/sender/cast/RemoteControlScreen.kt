@@ -8,8 +8,10 @@ import com.playbridge.sender.library.*
 import com.playbridge.sender.browser.*
 import com.playbridge.sender.connection.WebSocketClient
 
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -44,6 +46,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -53,6 +56,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -222,7 +226,7 @@ fun RemoteControlScreen(
                             //    SeekVolumeBar (swipe ◄► to seek, ▲▼ for volume). ──
                             NowPlayingPanel(
                                 title = mediaTitle,
-                                episodeLabel = episodeLabelFor(currentEpisodeIndex, episodes),
+                                episodeLabel = null,
                                 positionMs = positionMs,
                                 durationMs = durationMs,
                                 isLive = isLive,
@@ -706,6 +710,22 @@ private fun SeekVolumeBar(
 
     // Vertical travel required for one volume step.
     val volumeStepPx = with(LocalDensity.current) { 28.dp.toPx() }
+    // Horizontal travel between seek "ticks" — keeps the scrub haptic tied to finger
+    // movement so normal and fast seeking feel consistent.
+    val seekStepPx = with(LocalDensity.current) { 16.dp.toPx() }
+
+    // Haptics: a tick when an axis engages / on each volume step, and a firmer buzz
+    // when "fast" (hold-then-drag) mode kicks in.
+    val view = LocalView.current
+    val tick: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) }
+    val thud: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) }
+
+    // The whole bar lifts (and gains a shadow) while actively seeking / adjusting volume.
+    val lift by animateDpAsState(
+        targetValue = if (activeAxis != null) 10.dp else 0.dp,
+        animationSpec = tween(durationMillis = 160),
+        label = "seekBarLift",
+    )
 
     val displayMs = if (dragging && hasDuration) dragMs else currentPosition.toFloat()
     val fraction = if (hasDuration && durationMs > 0L)
@@ -721,6 +741,8 @@ private fun SeekVolumeBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .offset(y = -lift)
+            .shadow(elevation = lift, shape = RoundedCornerShape(24.dp), clip = false)
             .height(76.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
@@ -735,13 +757,17 @@ private fun SeekVolumeBar(
             .pointerInput(hasDuration, enableVolume, durationMs) {
                 var axis: DragAxis? = null
                 var volAccum = 0f
+                var seekAccum = 0f
                 detectDragGestures(
                     onDragStart = {
                         val dragStartTime = System.currentTimeMillis()
                         isAggressive = (dragStartTime - touchDownTime) >= 400L
+                        // Firmer buzz to confirm the user held long enough for fast mode.
+                        if (isAggressive) thud()
 
                         axis = null
                         volAccum = 0f
+                        seekAccum = 0f
                         dragMs = currentPosition.toFloat()
                         volumeDirection = null
                     },
@@ -751,6 +777,8 @@ private fun SeekVolumeBar(
                             axis = if (abs(drag.x) >= abs(drag.y)) DragAxis.HORIZONTAL else DragAxis.VERTICAL
                             activeAxis = axis
                             if (axis == DragAxis.HORIZONTAL && hasDuration) dragging = true
+                            // Light tick the moment a seek/volume gesture locks in.
+                            tick()
                         }
                         when (axis) {
                             DragAxis.HORIZONTAL -> if (hasDuration && widthPx > 0f) {
@@ -761,6 +789,12 @@ private fun SeekVolumeBar(
                                 }
                                 val deltaMs = (drag.x / widthPx) * rangeMs
                                 dragMs = (dragMs + deltaMs).coerceIn(0f, durationMs.toFloat())
+                                // Tick steadily as the finger scrubs (normal and fast alike).
+                                seekAccum += abs(drag.x)
+                                while (seekAccum >= seekStepPx) {
+                                    tick()
+                                    seekAccum -= seekStepPx
+                                }
                             }
                             DragAxis.VERTICAL -> if (enableVolume) {
                                 if (volumeDirection == null) {
@@ -770,11 +804,13 @@ private fun SeekVolumeBar(
                                 val stepPx = if (isAggressive) volumeStepPx / 2.5f else volumeStepPx
                                 while (volAccum >= stepPx) {
                                     onVolumeUp()
+                                    tick()
                                     volAccum -= stepPx
                                     volumeDirection = "up"
                                 }
                                 while (volAccum <= -stepPx) {
                                     onVolumeDown()
+                                    tick()
                                     volAccum += stepPx
                                     volumeDirection = "down"
                                 }
@@ -1458,7 +1494,7 @@ private fun EpisodesList(
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = "Episodes",
+            text = "Up Next",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 8.dp)
@@ -1659,12 +1695,6 @@ private val EPISODE_MARKER = Regex("""S\d+\s*E\d+.*""", RegexOption.IGNORE_CASE)
  */
 private fun shortEpisodeLabel(title: String): String =
     EPISODE_MARKER.find(title)?.value ?: title
-
-/** "Episode X of N" when the playlist has more than one item. */
-private fun episodeLabelFor(currentIndex: Int, episodes: List<PlaylistEpisode>): String? {
-    if (episodes.size <= 1) return null
-    return "Episode ${currentIndex + 1} of ${episodes.size}"
-}
 
 /** Format milliseconds as m:ss (or h:mm:ss past an hour). */
 private fun formatTime(ms: Long): String {
