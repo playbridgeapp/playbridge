@@ -27,8 +27,8 @@ android {
         applicationId = "com.playbridge.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 211
-        versionName = "0.4.0"
+        versionCode = 212
+        versionName = "0.5.0"
 
         ndk {
             abiFilters.add("armeabi-v7a")

@@ -3,6 +3,12 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.5.0] — 2026-06-22 (versionCode 212)
+
+### Added
+- **WebView Video Controls**: Injects a custom video control script (`pb-video-control.js`) into the System WebView to enable remote control commands over web playback. (#59)
+- **Browser Integration**: Integrated navigation controls and remote key event translation into `BrowserActivity`. (#59)
+
 ## Player [0.4.0] — 2026-06-22 (versionCode 211)
 
 ### Added
