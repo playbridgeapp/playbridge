@@ -16,6 +16,9 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -52,9 +55,9 @@ class SystemWebViewEngine(
     private var scrollAccumulatorX = 0f
     private var scrollAccumulatorY = 0f
 
-    init {
-        setupWebView()
-    }
+    // NOTE: setupWebView() is invoked from an init block at the BOTTOM of the class,
+    // after all property initializers (e.g. the videoControlScript lazy delegate),
+    // because setupWebView() reads them. An init block here would run too early.
 
     fun getView(): View = webView
 
@@ -75,8 +78,270 @@ class SystemWebViewEngine(
 
     fun canGoBack(): Boolean = canGoBack
 
+    fun goForward() {
+        if (webView.canGoForward()) {
+            webView.goForward()
+        }
+    }
+
     fun evaluateJavascript(script: String, callback: ((String?) -> Unit)? = null) {
         webView.evaluateJavascript(script, callback)
+    }
+
+    // ── Injected video controller bridge (pb-video-control.js) ────────────────
+    // Commands target the active <video> via the injected controller. In multi-frame
+    // mode they're posted to the owning frame's WebMessageListener channel (reaches
+    // cross-origin iframes); results come back asynchronously and are delivered to
+    // [onVideoResult] as (kind, value). BrowserActivity renders NATIVE feedback from
+    // that — a DOM overlay would be hidden behind the video surface in fullscreen.
+
+    /**
+     * True when addDocumentStartJavaScript + WebMessageListener are available.
+     * A computed getter (not a lazy/backed val) so it's safe to read from
+     * setupWebView(), which runs from the init block before field initializers.
+     */
+    private val multiFrame: Boolean
+        get() = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+
+    /** Callback for command results: (kind in {toggle,seek,vol,rate}, value). */
+    var onVideoResult: ((String, String) -> Unit)? = null
+
+    /** Periodic playback status (a `{"type":"status",…}` JSON string) for the phone scrubber. */
+    var onVideoStatus: ((String) -> Unit)? = null
+
+    // Every frame (main + iframes) reporting a screen-dominating video, keyed by its
+    // reply proxy. `score` is the absolute on-screen video area (comparable across
+    // frames); `playing` and `isMain` feed target selection. Unified pathway: the main
+    // frame reports here too now, over the same channel as iframes.
+    private data class FrameVideo(val score: Double, val playing: Boolean, val isMain: Boolean)
+    private val activeFrames = LinkedHashMap<JavaScriptReplyProxy, FrameVideo>()
+
+    // Target selection. By default the D-pad auto-follows the best frame (see
+    // [pickBestProxy]); [stickyProxy] is the current auto pick, kept across reports
+    // with hysteresis so a flickering score can't bounce the target. The user can pin
+    // a specific frame via [cycleVideoTarget] ("switch source"); [overrideProxy] holds
+    // that pin until its frame goes inactive or the user cycles again.
+    private var stickyProxy: JavaScriptReplyProxy? = null
+    private var overrideProxy: JavaScriptReplyProxy? = null
+
+    /**
+     * Drop all video-control state. Called on top-level navigation, where the previous
+     * document's frames (and their reply proxies) are destroyed without a final
+     * active:false report — leaving them here would strand the D-pad on a dead frame.
+     */
+    private fun resetVideoControlState() {
+        val hadFrames = activeFrames.isNotEmpty() || videoControlActiveFallback
+        activeFrames.clear()
+        stickyProxy = null
+        overrideProxy = null
+        videoControlActiveFallback = false
+        activeVideoMuted = null
+        autoUnmuteDone = false
+        // The destroyed frames can't send their own final idle status, so the phone's
+        // now-playing strip/scrubber would stay frozen on the old video. Push one idle
+        // status here so the phone clears it on navigation.
+        if (hadFrames) {
+            onVideoStatus?.invoke("""{"type":"status","state":"idle","position":0,"duration":0}""")
+        }
+    }
+
+    /** Manual override: pin the D-pad to the next active frame in round-robin order. */
+    fun cycleVideoTarget() {
+        if (activeFrames.isEmpty()) { overrideProxy = null; return }
+        val keys = activeFrames.keys.toList()
+        val current = overrideProxy ?: currentProxy()
+        val nextIndex = (keys.indexOf(current) + 1).mod(keys.size)
+        overrideProxy = keys[nextIndex]
+    }
+
+    // Main-frame activation flag for the LEGACY path, set via the PBVideoNative bridge
+    // (only used when multiFrame is unsupported).
+    @Volatile
+    private var videoControlActiveFallback = false
+
+    fun isVideoControlActive(): Boolean =
+        if (multiFrame) activeFrames.isNotEmpty() else videoControlActiveFallback
+
+    // Last-known muted state of the active/target video, parsed from its status pushes.
+    // null = unknown.
+    @Volatile
+    private var activeVideoMuted: Boolean? = null
+
+    /** null = unknown; true/false = last reported muted state of the controlled video. */
+    fun isActiveVideoMuted(): Boolean? = activeVideoMuted
+
+    // Fired (once per active session) when the controlled video is found to be muted, so
+    // native can dispatch a REAL tap — the trusted user gesture that actually unmutes
+    // (injected JS can't). Driven by status, so it works for BOTH native HTML5 fullscreen
+    // AND YouTube-style in-page expand (which never fires onShowCustomView).
+    var onRequestUnmuteTap: (() -> Unit)? = null
+    @Volatile
+    private var autoUnmuteDone = false
+
+    private fun trackMutedFromStatus(json: String) {
+        try {
+            val o = org.json.JSONObject(json)
+            val before = activeVideoMuted
+            if (o.has("muted")) activeVideoMuted = o.optBoolean("muted")
+            val state = o.optString("state")
+            if (state == "idle") { activeVideoMuted = null; autoUnmuteDone = false }
+            if (activeVideoMuted != before) Log.d(TAG, "activeVideoMuted: $before -> $activeVideoMuted")
+            // Auto-unmute ONLY a muted *and actively playing* video — that's the real
+            // autoplay-muted case where a tap is consumed by the "tap to unmute" affordance
+            // instead of toggling playback. Tapping a paused or already-audible video would
+            // just pause/unpause it. Once per session (reset on idle/navigation).
+            if (activeVideoMuted == true && state == "playing" && !autoUnmuteDone) {
+                autoUnmuteDone = true
+                Log.d(TAG, "auto-unmute: muted+playing video active, requesting native tap")
+                onRequestUnmuteTap?.invoke()
+            }
+        } catch (_: Exception) { /* ignore non-status JSON */ }
+    }
+
+    /**
+     * Which frame the D-pad drives. A manual pin wins while its frame stays active;
+     * otherwise auto-pick by **on-screen size first** (the big player the user is looking
+     * at), using "playing" only to break ties between comparably-sized frames. Size-first
+     * is deliberate: a tiny autoplaying ad or background clip must NOT steal control from
+     * a large player that happens to be paused (the common iframe-embed case). Hysteresis
+     * keeps the incumbent unless a challenger is clearly bigger or newly starts playing.
+     */
+    private fun currentProxy(): JavaScriptReplyProxy? {
+        if (activeFrames.isEmpty()) { stickyProxy = null; overrideProxy = null; return null }
+        overrideProxy?.let { if (activeFrames.containsKey(it)) return it else overrideProxy = null }
+        val incumbent = stickyProxy?.takeIf { activeFrames.containsKey(it) }
+        val best = pickBestProxy(incumbent)
+        stickyProxy = best
+        return best
+    }
+
+    private fun pickBestProxy(incumbent: JavaScriptReplyProxy?): JavaScriptReplyProxy? {
+        // Largest on-screen video wins by default.
+        val largest = activeFrames.entries.maxByOrNull { it.value.score } ?: return incumbent
+        // Only let a *playing* frame override the largest one if it's comparably big
+        // (≥60% of the top score). This favours real playback without letting a small
+        // playing ad outrank a large paused player.
+        val best = if (!largest.value.playing) {
+            activeFrames.entries
+                .filter { it.value.playing && it.value.score >= largest.value.score * 0.6 }
+                .maxByOrNull { it.value.score } ?: largest
+        } else largest
+        if (incumbent != null && best.key !== incumbent) {
+            val inc = activeFrames[incumbent]
+            // Keep the incumbent unless the challenger is clearly bigger (≥25%) or it has
+            // started playing while the incumbent hasn't — avoids thrashing on near-ties.
+            val clearlyBigger = inc != null && best.value.score >= inc.score * 1.25
+            val newlyPlaying = inc != null && best.value.playing && !inc.playing
+            if (inc != null && !clearlyBigger && !newlyPlaying) {
+                return incumbent
+            }
+        }
+        return best.key
+    }
+
+    fun videoToggle() = sendVideoCommand("toggle")
+    fun videoSeek(deltaSeconds: Int) = sendVideoCommand("seek,$deltaSeconds")
+    fun videoSeekTo(seconds: Double) = sendVideoCommand("seekto,$seconds")
+    fun videoVolume(delta: Double) = sendVideoCommand("vol,$delta")
+    fun videoSetRate(rate: Double) = sendVideoCommand("rate,$rate")
+    /** JS unmute — only reliable after native has established a user gesture (a real tap). */
+    fun videoUnmute() = sendVideoCommand("unmute")
+
+    private fun sendVideoCommand(cmd: String) {
+        if (multiFrame) {
+            // Unified channel pathway: post to the current target frame (main or iframe);
+            // result comes back asynchronously via the message listener -> onVideoResult.
+            // Guarded: a frame can be torn down between its last report and this post.
+            val proxy = currentProxy() ?: return
+            try {
+                proxy.postMessage(cmd)
+            } catch (e: Exception) {
+                Log.w(TAG, "postMessage to a stale frame proxy failed; dropping it", e)
+                activeFrames.remove(proxy)
+                if (proxy === overrideProxy) overrideProxy = null
+                if (proxy === stickyProxy) stickyProxy = null
+            }
+            return
+        }
+        // LEGACY fallback (no channel support): evaluateJavascript on the main frame.
+        val arg = cmd.substringAfter(',', "")
+        val kind: String
+        val js: String
+        when (cmd.substringBefore(',')) {
+            "toggle" -> { kind = "toggle"; js = "(window.__pbvc&&window.__pbvc.toggle())||'none'" }
+            "seek" -> { kind = "seek"; js = "(window.__pbvc&&window.__pbvc.seek($arg))||'none'" }
+            "seekto" -> { kind = "seek"; js = "(window.__pbvc&&window.__pbvc.seekTo($arg))||'none'" }
+            "vol" -> { kind = "vol"; js = "(window.__pbvc&&window.__pbvc.volume($arg))||'none'" }
+            "rate" -> { kind = "rate"; js = "(window.__pbvc&&window.__pbvc.setRate($arg))||'none'" }
+            else -> return
+        }
+        webView.evaluateJavascript(js) { raw ->
+            val value = raw?.trim()?.removeSurrounding("\"") ?: "none"
+            if (value != "none") onVideoResult?.invoke(kind, value)
+        }
+    }
+
+    /** Parse a frame -> native message (activation change, command result, or status). */
+    private fun handleFrameMessage(
+        data: String,
+        proxy: JavaScriptReplyProxy,
+        isMainFrame: Boolean
+    ) {
+        // Unified pathway: the main frame reports over the channel too now, so we no
+        // longer ignore it — every frame is a candidate target.
+        try {
+            val o = org.json.JSONObject(data)
+            when (o.optString("type")) {
+                "active" -> {
+                    if (o.optBoolean("active")) {
+                        activeFrames[proxy] = FrameVideo(
+                            score = o.optDouble("score", 0.0),
+                            playing = o.optBoolean("playing"),
+                            isMain = isMainFrame
+                        )
+                    } else {
+                        activeFrames.remove(proxy)
+                        if (proxy === overrideProxy) overrideProxy = null
+                        if (proxy === stickyProxy) stickyProxy = null
+                    }
+                }
+                "result" -> {
+                    val kind = o.optString("kind")
+                    val value = o.optString("value")
+                    if (kind != "none" && value != "none") onVideoResult?.invoke(kind, value)
+                }
+                "status" -> {
+                    // Forward only the current target frame's status, so a background
+                    // frame can't push its scrubber state over the one being controlled.
+                    if (proxy === currentProxy()) {
+                        trackMutedFromStatus(data)
+                        onVideoStatus?.invoke(data)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Bad frame message: $data", e)
+        }
+    }
+
+    /**
+     * JS-exposed bridge object for the LEGACY path only (WebViews without channel
+     * support). The script calls these instead of posting to pbVideoChannel. In
+     * multiFrame mode the script uses the channel and these are never called.
+     */
+    private inner class VideoControlBridge {
+        @android.webkit.JavascriptInterface
+        fun setActive(active: Boolean) {
+            videoControlActiveFallback = active
+        }
+
+        @android.webkit.JavascriptInterface
+        fun onStatus(json: String) {
+            // Legacy path is main-frame only, so there's no other target to guard against.
+            trackMutedFromStatus(json)
+            onVideoStatus?.invoke(json)
+        }
     }
 
     fun destroy() {
@@ -86,15 +351,71 @@ class SystemWebViewEngine(
     fun scrollBy(dx: Float, dy: Float) {
         scrollAccumulatorX += dx
         scrollAccumulatorY += dy
-        
+
         val scrollX = scrollAccumulatorX.toInt()
         val scrollY = scrollAccumulatorY.toInt()
-        
+
         if (scrollX != 0 || scrollY != 0) {
             webView.scrollBy(scrollX, scrollY)
             scrollAccumulatorX -= scrollX
             scrollAccumulatorY -= scrollY
         }
+    }
+
+    /**
+     * Scroll the element under the cursor rather than the whole document. Plain
+     * [scrollBy] only moves the top-level viewport, so inner `overflow:scroll/auto`
+     * regions (sidebars, modals, chat panes, horizontal carousels) never respond to
+     * the touchpad. Here we hit-test the cursor position, walk up to the nearest
+     * scrollable ancestor, and scroll that; if none is found we fall back to the
+     * window. Handles horizontal (dx) and vertical (dy) together.
+     *
+     * [xDevice]/[yDevice] are cursor coordinates in the WebView's device pixels
+     * (same space as touch dispatch); we convert to CSS px via devicePixelRatio in JS.
+     * Limitation: cross-origin iframes are unreachable from the main frame's JS — the
+     * same boundary that applies to the video-control path.
+     */
+    fun wheelScrollAt(xDevice: Float, yDevice: Float, dx: Float, dy: Float) {
+        if (dx == 0f && dy == 0f) return
+        val js = """
+            (function(){
+              try {
+                var dpr = window.devicePixelRatio || 1;
+                var x = ${xDevice} / dpr, y = ${yDevice} / dpr;
+                var dx = ${dx}, dy = ${dy};
+                function scrollable(node){
+                  while (node && node.nodeType === 1 &&
+                         node !== document.body && node !== document.documentElement){
+                    var s = getComputedStyle(node);
+                    var canY = (s.overflowY === 'auto' || s.overflowY === 'scroll') &&
+                               node.scrollHeight > node.clientHeight + 1;
+                    var canX = (s.overflowX === 'auto' || s.overflowX === 'scroll') &&
+                               node.scrollWidth > node.clientWidth + 1;
+                    if ((dy && canY) || (dx && canX)) return node;
+                    node = node.parentElement;
+                  }
+                  return null;
+                }
+                var el = document.elementFromPoint(x, y);
+                var t = el ? scrollable(el) : null;
+                if (t){ if (dx) t.scrollLeft += dx; if (dy) t.scrollTop += dy; }
+                else { window.scrollBy(dx, dy); }
+              } catch(e) {}
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
+    }
+
+    /**
+     * Relative pinch-zoom of the whole page using the WebView's built-in zoom
+     * (enabled via setSupportZoom/builtInZoomControls). [factor] is a multiplier
+     * applied to the current zoom (e.g. 1.05 = zoom in 5%); clamped per-event so a
+     * single jittery gesture can't jump scale.
+     */
+    fun zoomBy(factor: Float) {
+        if (factor.isNaN() || factor <= 0f) return
+        val clamped = factor.coerceIn(0.8f, 1.25f)
+        webView.zoomBy(clamped)
     }
 
     fun simulateClick(x: Float, y: Float) {
@@ -225,6 +546,19 @@ class SystemWebViewEngine(
         })();
     """.trimIndent()
 
+    /**
+     * The injected video controller (assets/pb-video-control.js). Read once; re-injected
+     * on every page load. Idempotent — the script self-guards via window.__pbvcInjected.
+     */
+    private val videoControlScript: String by lazy {
+        try {
+            context.assets.open("pb-video-control.js").bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load pb-video-control.js", e)
+            ""
+        }
+    }
+
     private fun setupWebView() {
         webView.apply {
             isFocusable = true
@@ -286,6 +620,24 @@ class SystemWebViewEngine(
 
             // Enable third-party cookies (required for many iframe embeds)
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+            // Video controller transport — ONE unified pathway, chosen by the script via
+            // channel presence (not frame type):
+            //  • CHANNEL (preferred): a per-frame WebMessageListener (pbVideoChannel),
+            //    added when the WebView supports it. Every frame — main + iframes alike —
+            //    reports activation/score/status and receives commands over it.
+            //  • LEGACY (fallback): on older WebViews without the features, the script
+            //    falls back to the PBVideoNative interface + evaluateJavascript on the
+            //    main frame only. PBVideoNative is registered solely for that path.
+            addJavascriptInterface(VideoControlBridge(), "PBVideoNative")
+            if (multiFrame && videoControlScript.isNotEmpty()) {
+                WebViewCompat.addWebMessageListener(
+                    this, "pbVideoChannel", setOf("*")
+                ) { _, message, _, isMainFrame, replyProxy ->
+                    message.data?.let { handleFrameMessage(it, replyProxy, isMainFrame) }
+                }
+                WebViewCompat.addDocumentStartJavaScript(this, videoControlScript, setOf("*"))
+            }
 
             // Handle Downloads via Android DownloadManager
             setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
@@ -382,6 +734,11 @@ class SystemWebViewEngine(
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             super.onPageStarted(view, url, favicon)
+            // A new top-level document tears down all previous frames, but their reply
+            // proxies never send a final active:false — so without this the old frames
+            // linger in activeFrames, isVideoControlActive() stays stuck true, and the
+            // D-pad keeps trying to control a phantom video on the new page. Reset here.
+            resetVideoControlState()
         }
 
         override fun onPageFinished(view: WebView?, url: String?) {
@@ -390,6 +747,13 @@ class SystemWebViewEngine(
             // Inject anti-popup script once the new document's JS context is ready.
             // The __pbAdblockInjected guard prevents double-injection on soft navigations.
             view?.evaluateJavascript(antiPopupScript, null)
+
+            // Inject the video controller (window.__pbvc) for phone D-pad playback control.
+            // Self-guards via window.__pbvcInjected, so re-injection on soft navs is harmless.
+            // Multi-frame mode injects at document start into all frames instead (see setup).
+            if (!multiFrame && videoControlScript.isNotEmpty()) {
+                view?.evaluateJavascript(videoControlScript, null)
+            }
 
             // Inject cosmetic filters (element hiding CSS)
             val cosmeticCss = adBlocker.getCosmeticFilterCss()
@@ -530,5 +894,11 @@ class SystemWebViewEngine(
                 ByteArrayInputStream(ByteArray(0))
             )
         }
+    }
+
+    // Declared last so all property initializers (incl. lazy delegates that
+    // setupWebView() reads) are constructed before it runs.
+    init {
+        setupWebView()
     }
 }

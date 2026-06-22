@@ -800,6 +800,9 @@ fun AppNavHost(
                         onMouseScroll = { dx, dy ->
                             connectionViewModel.webSocketClient.sendMouseCommand("scroll", dx, dy)
                         },
+                        onPinchZoom = { factor ->
+                            connectionViewModel.webSocketClient.sendMouseCommand("zoom", factor, 0f)
+                        },
                         onMouseDown = {
                             connectionViewModel.webSocketClient.sendMouseCommand("down", 0f, 0f)
                         },

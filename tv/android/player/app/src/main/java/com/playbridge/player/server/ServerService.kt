@@ -59,7 +59,9 @@ class ServerService : Service() {
     private val contextIdleReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
             if (intent.action == ACTION_CONTEXT_IDLE) {
-                setContextIdleInternal()
+                // Only clear if a browser still owns the context — a player launched on
+                // top of the browser must not be reset to idle by the browser teardown.
+                setContextIdleInternal(setOf("browser", "browser_external"))
             }
         }
     }
@@ -550,7 +552,23 @@ class ServerService : Service() {
         FileLogger.d(TAG, "activeContext set to player by activity lifecycle")
     }
 
-    internal fun setContextIdleInternal() {
+    internal fun setContextBrowserInternal() {
+        activeContext = "browser"
+        broadcastContext()
+        FileLogger.d(TAG, "activeContext set to browser by activity lifecycle")
+    }
+
+    /**
+     * Reset to idle, but only if the current context is one the caller owns. This
+     * prevents a torn-down activity from clobbering the context of whatever took its
+     * place (e.g. browser->player handoff: the browser's onDestroy must not flip the
+     * now-playing context back to idle). Pass null to force-reset unconditionally.
+     */
+    internal fun setContextIdleInternal(onlyIfOneOf: Set<String>? = null) {
+        if (onlyIfOneOf != null && activeContext !in onlyIfOneOf) {
+            FileLogger.d(TAG, "idle reset skipped; activeContext=$activeContext not owned by caller")
+            return
+        }
         activeContext = "idle"
         broadcastContext()
         FileLogger.d(TAG, "activeContext reset to idle by activity lifecycle")
@@ -832,6 +850,11 @@ class ServerService : Service() {
             _staticInstance?.setContextPlayerInternal()
         }
 
+        /** Mark activeContext as "browser" — called from the internal WebView's onResume. */
+        fun notifyContextBrowser() {
+            _staticInstance?.setContextBrowserInternal()
+        }
+
         /**
          * Reset activeContext to "idle" from a player or browser activity when it finishes.
          * Called from PlayerActivity.onDestroy() and (via broadcast) from the TV browser app.
@@ -839,7 +862,9 @@ class ServerService : Service() {
          * the PairingScreen after the first playback session ends.
          */
         fun notifyContextIdle() {
-            _staticInstance?.setContextIdleInternal()
+            // Player-side callers (PlayerActivity/PrePlay teardown): only clear if a
+            // player still owns the context, so a browser opened afterwards survives.
+            _staticInstance?.setContextIdleInternal(setOf("player"))
         }
 
         @Volatile

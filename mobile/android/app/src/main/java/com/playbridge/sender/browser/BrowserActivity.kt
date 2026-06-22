@@ -833,16 +833,8 @@ class BrowserActivity : ComponentActivity() {
                     if (dlnaTarget != null) {
                         val video = detectedVideos.filter { !it.isSubtitle }
                             .sortedWith(
-                                compareByDescending<DetectedVideo> { v ->
-                                    val hasMaster = v.url.contains("master", ignoreCase = true)
-                                    val base = when {
-                                        v.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
-                                        v.isPlayable == true && (v.url.contains(".m3u8", ignoreCase = true) || v.url.contains(".mpd", ignoreCase = true)) -> 4
-                                        v.isPlayable == false -> 1
-                                        else -> 2
-                                    }
-                                    if (hasMaster) base + 1 else base
-                                }.thenByDescending { it.timestamp }
+                                compareByDescending<DetectedVideo> { it.castScore() }
+                                    .thenByDescending { it.timestamp }
                             )
                             .firstOrNull()
                         if (video == null) {
@@ -923,16 +915,8 @@ class BrowserActivity : ComponentActivity() {
                     // 2. Check detected videos
                     val playable = detectedVideos.filter { !it.isSubtitle }
                         .sortedWith(
-                            compareByDescending<DetectedVideo> { video ->
-                                val hasMaster = video.url.contains("master", ignoreCase = true)
-                                val base = when {
-                                    video.hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
-                                    video.isPlayable == true && (video.url.contains(".m3u8", ignoreCase = true) || video.url.contains(".mpd", ignoreCase = true)) -> 4
-                                    video.isPlayable == false -> 1
-                                    else -> 2
-                                }
-                                if (hasMaster) base + 1 else base
-                            }.thenByDescending { it.timestamp }
+                            compareByDescending<DetectedVideo> { it.castScore() }
+                                .thenByDescending { it.timestamp }
                         )
 
                     if (playable.isNotEmpty()) {

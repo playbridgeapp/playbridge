@@ -13,6 +13,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -193,20 +194,38 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                     (payload.content_type == MimeTypes.APPLICATION_M3U8) ||
                     (payload.content_type.isNullOrEmpty() && (payload.url.contains(".m3u8") || payload.url.contains(".jpg")))
 
-        logger.i(TAG, "Content detection: isHls=$isHls (detectedBy=${payload.detected_by}, contentType=${payload.content_type})")
+        // DASH gets the same explicit treatment as HLS. DefaultMediaSourceFactory can
+        // only infer DASH from a `.mpd` URL extension; manifests served from query-style
+        // URLs with no extension would otherwise fall through to the progressive
+        // extractor and fail. Detect via content-type or `.mpd` in the URL and force
+        // the DASH source + MIME. (HLS is checked first so it always wins a tie.)
+        val isDash = !isHls && (
+                    (payload.content_type == MimeTypes.APPLICATION_MPD) ||
+                    (payload.content_type?.contains("dash", ignoreCase = true) == true) ||
+                    (payload.url.substringBefore('?').contains(".mpd", ignoreCase = true)))
 
-        val mediaSourceFactory = if (isHls) {
-            logger.i(TAG, "Using HlsMediaSource.Factory")
-            HlsMediaSource.Factory(httpDataSourceFactory)
-                .setAllowChunklessPreparation(true)
-                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
-        } else {
-            logger.i(TAG, "Using DefaultMediaSourceFactory")
-            val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
-                .setConstantBitrateSeekingEnabled(true)
-                .setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
-            DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
-                .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
+        logger.i(TAG, "Content detection: isHls=$isHls, isDash=$isDash (detectedBy=${payload.detected_by}, contentType=${payload.content_type})")
+
+        val mediaSourceFactory = when {
+            isHls -> {
+                logger.i(TAG, "Using HlsMediaSource.Factory")
+                HlsMediaSource.Factory(httpDataSourceFactory)
+                    .setAllowChunklessPreparation(true)
+                    .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
+            }
+            isDash -> {
+                logger.i(TAG, "Using DashMediaSource.Factory")
+                DashMediaSource.Factory(httpDataSourceFactory)
+                    .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
+            }
+            else -> {
+                logger.i(TAG, "Using DefaultMediaSourceFactory")
+                val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
+                    .setConstantBitrateSeekingEnabled(true)
+                    .setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
+                DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
+                    .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
+            }
         }
 
         val builder = MediaItem.Builder().setUri(finalUrl)
@@ -215,6 +234,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         }
         if (isHls) {
             builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        } else if (isDash) {
+            builder.setMimeType(MimeTypes.APPLICATION_MPD)
         } else if (!payload.content_type.isNullOrEmpty()) {
             builder.setMimeType(payload.content_type)
         }

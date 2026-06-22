@@ -106,6 +106,10 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
 
+    // AndroidX WebKit — addDocumentStartJavaScript + WebMessageListener, so the video
+    // controller can be injected into (and message) cross-origin iframes too.
+    implementation("androidx.webkit:webkit:1.12.1")
+
     // Ktor WebSocket Server (plaintext ws:// — loopback + opt-in external)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.cio)

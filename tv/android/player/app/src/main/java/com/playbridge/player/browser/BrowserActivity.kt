@@ -46,6 +46,10 @@ class BrowserActivity : ComponentActivity() {
         const val EXTRA_MOUSE_DY = "mouse_dy"
         const val EXTRA_REMOTE_KEY = "remote_key"
         const val EXTRA_BROWSER_ACTION = "browser_action"
+
+        // Fullscreen video-control D-pad steps
+        private const val SEEK_STEP_SECONDS = 10
+        private const val VOLUME_STEP = 0.1
     }
 
     private var engine: SystemWebViewEngine? = null
@@ -77,6 +81,12 @@ class BrowserActivity : ComponentActivity() {
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
+
+    // Native video-control feedback overlay (rendered over the WebView, because a DOM
+    // overlay is hidden behind the video surface in fullscreen).
+    private var videoOverlayView: android.widget.TextView? = null
+    private val videoOverlayHideHandler = Handler(Looper.getMainLooper())
+    private val videoOverlayHideRunnable = Runnable { videoOverlayView?.visibility = View.GONE }
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -229,6 +239,20 @@ class BrowserActivity : ComponentActivity() {
             },
             onDownloadStarted = { id, name -> showDownloadPopup(id, name) }
         )
+
+        // Render native feedback for video-control command results (incl. those from
+        // cross-origin iframe frames, delivered asynchronously over the message channel).
+        engine?.onVideoResult = { kind, value -> renderVideoResult(kind, value) }
+
+        // Forward the controller's playback status to the phone (drives its scrubber).
+        // Same "status" message the native player emits, so the phone parses it as-is.
+        engine?.onVideoStatus = { json ->
+            com.playbridge.player.server.ServerService.broadcastStatus(json)
+        }
+
+        // Auto-unmute: when a muted video becomes the active control target (in-page
+        // expand or native fullscreen), dispatch a real tap to restore audio.
+        engine?.onRequestUnmuteTap = { autoUnmuteActiveVideo() }
 
         // Add engine view at index 0 (behind cursor)
         contentContainer?.addView(engine?.getView(), 0)
@@ -398,6 +422,27 @@ class BrowserActivity : ComponentActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
+    /**
+     * Dispatch a real centre tap to unmute the active video — the trusted user gesture
+     * that injected JS can't supply. Driven by the engine's [SystemWebViewEngine.onRequestUnmuteTap]
+     * (fired when a muted video becomes active), so it works for native fullscreen AND
+     * YouTube's in-page expand alike. The video dominates the screen when control is
+     * active, so a centre tap lands on it (and on YouTube takes its "tap to unmute").
+     */
+    private fun autoUnmuteActiveVideo() {
+        runOnUiThread {
+            if (engine?.isActiveVideoMuted() != true) return@runOnUiThread
+            val dm = resources.displayMetrics
+            Log.d(TAG, "auto-unmute: dispatching real centre tap")
+            simulateClickOnActiveView(dm.widthPixels / 2f, dm.heightPixels / 2f)
+            // After the tap establishes activation, a JS unmute covers generic players
+            // that lack YouTube's tap-to-unmute affordance — and resumes playback if the
+            // tap paused it. Delay lets the tap's effect register before that check.
+            cursorHideHandler.postDelayed({ engine?.videoUnmute() }, 150)
+            showVideoFeedback("🔊")
+        }
+    }
+
     private fun exitFullscreen() {
         if (fullscreenView == null) return
 
@@ -461,7 +506,14 @@ class BrowserActivity : ComponentActivity() {
                 cursorView?.animateClick()
             }
             "scroll" -> {
-                engine?.scrollBy(dx, dy)
+                // Scroll the element under the cursor, not just the page — this is what
+                // makes inner overflow regions (and horizontal carousels) respond.
+                showCursorAndResetTimer()
+                engine?.wheelScrollAt(cursorX, cursorY, dx, dy)
+            }
+            "zoom" -> {
+                // Pinch-zoom from the phone touchpad; dx carries the relative scale factor.
+                engine?.zoomBy(dx)
             }
             "down" -> {
                 // Start a click-drag: send ACTION_DOWN and remember the time
@@ -489,6 +541,87 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
+    // ── Native video-control feedback overlay ────────────────────────────────
+
+    private fun showVideoFeedback(text: String) {
+        runOnUiThread {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int) = (v * density).toInt()
+            var ov = videoOverlayView
+            if (ov == null) {
+                ov = android.widget.TextView(this).apply {
+                    setTextColor(Color.WHITE)
+                    textSize = 24f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    gravity = android.view.Gravity.CENTER
+                    setLineSpacing(dp(4).toFloat(), 1f)
+                    setPadding(dp(30), dp(22), dp(30), dp(22))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(18).toFloat()
+                        setColor(Color.parseColor("#D2141618"))
+                    }
+                    elevation = dp(48).toFloat()
+                    visibility = View.GONE
+                }
+                rootContainer.addView(
+                    ov,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { gravity = android.view.Gravity.CENTER }
+                )
+                videoOverlayView = ov
+            }
+            ov.text = text
+            ov.visibility = View.VISIBLE
+            ov.bringToFront()
+            videoOverlayHideHandler.removeCallbacks(videoOverlayHideRunnable)
+            videoOverlayHideHandler.postDelayed(videoOverlayHideRunnable, 1500)
+        }
+    }
+
+    private fun fmtTime(totalSec: Double): String {
+        if (!totalSec.isFinite() || totalSec < 0) return "0:00"
+        val s = totalSec.toInt()
+        val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, sec)
+        else String.format("%d:%02d", m, sec)
+    }
+
+    private fun progressBar(frac: Double, slots: Int = 16): String {
+        val filled = Math.round(frac.coerceIn(0.0, 1.0) * slots).toInt()
+        return "█".repeat(filled) + "░".repeat(slots - filled)
+    }
+
+    /**
+     * Render native feedback for a command result reported by the engine
+     * ([SystemWebViewEngine.onVideoResult]). value is already unquoted.
+     */
+    private fun renderVideoResult(kind: String, value: String) {
+        when (kind) {
+            "toggle" -> when (value) {
+                "playing" -> showVideoFeedback("▶")
+                "paused" -> showVideoFeedback("❙❙")
+            }
+            "seek" -> {
+                val parts = value.split(",")
+                if (parts.size != 2) return
+                val t = parts[0].toDoubleOrNull() ?: return
+                val d = parts[1].toDoubleOrNull() ?: 0.0
+                val frac = if (d > 0) t / d else 0.0
+                showVideoFeedback("${fmtTime(t)}   /   ${fmtTime(d)}\n${progressBar(frac)}")
+            }
+            "vol" -> {
+                val vol = value.toDoubleOrNull() ?: return
+                showVideoFeedback("🔊  ${Math.round(vol * 100)}%\n${progressBar(vol)}")
+            }
+            "rate" -> {
+                val r = value.toDoubleOrNull() ?: return
+                showVideoFeedback("${r.toString().removeSuffix(".0")}×")
+            }
+        }
+    }
+
     private fun handleRemoteCommand(key: String?) {
         Log.d(TAG, "Remote command: $key")
 
@@ -499,26 +632,30 @@ class BrowserActivity : ComponentActivity() {
                         exitFullscreen()
                     }
                 }
-                "dpad_center" -> {
-                    showCursorAndResetTimer()
-                    simulateClickOnActiveView(cursorX, cursorY)
-                    cursorView?.animateClick()
-                }
-                "dpad_up", "dpad_down", "dpad_left", "dpad_right" -> {
-                    // Allow cursor movement during fullscreen
-                    showCursorAndResetTimer()
-                    val cursorStep = 15f
-                    val displayMetrics = resources.displayMetrics
-                    when (key) {
-                        "dpad_up" -> cursorY = (cursorY - cursorStep).coerceAtLeast(0f)
-                        "dpad_down" -> cursorY = (cursorY + cursorStep).coerceAtMost(displayMetrics.heightPixels.toFloat())
-                        "dpad_left" -> cursorX = (cursorX - cursorStep).coerceAtLeast(0f)
-                        "dpad_right" -> cursorX = (cursorX + cursorStep).coerceAtMost(displayMetrics.widthPixels.toFloat())
-                    }
-                    cursorView?.updatePosition(cursorX, cursorY)
-                }
+                // In fullscreen the D-pad drives the playing <video> via the injected
+                // controller (window.__pbvc); feedback is rendered natively over the
+                // WebView. Site chrome (e.g. YouTube) is pointer-driven and won't show.
+                "dpad_center" -> engine?.videoToggle()
+                "dpad_left" -> engine?.videoSeek(-SEEK_STEP_SECONDS)
+                "dpad_right" -> engine?.videoSeek(SEEK_STEP_SECONDS)
+                "dpad_up" -> engine?.videoVolume(VOLUME_STEP)
+                "dpad_down" -> engine?.videoVolume(-VOLUME_STEP)
             }
             return
+        }
+
+        // Not in native (HTML5) fullscreen, but a screen-dominating video is on
+        // screen (e.g. m.youtube.com's in-page expand). Intercept the playback keys
+        // for video control; let everything else (back, etc.) navigate normally.
+        // The phone touchpad still drives the cursor via ACTION_MOUSE.
+        if (engine?.isVideoControlActive() == true) {
+            when (key) {
+                "dpad_center" -> { engine?.videoToggle(); return }
+                "dpad_left" -> { engine?.videoSeek(-SEEK_STEP_SECONDS); return }
+                "dpad_right" -> { engine?.videoSeek(SEEK_STEP_SECONDS); return }
+                "dpad_up" -> { engine?.videoVolume(VOLUME_STEP); return }
+                "dpad_down" -> { engine?.videoVolume(-VOLUME_STEP); return }
+            }
         }
 
         // Keyboard input streamed from the phone (browser keyboard mode).
@@ -622,7 +759,33 @@ class BrowserActivity : ComponentActivity() {
 
     private fun handleBrowserControlCommand(action: String?) {
         Log.d(TAG, "Browser control: $action")
+        // Absolute seek from the phone scrubber (value in ms) — prefix, so handled
+        // before the exact-match when below.
+        if (action != null && action.startsWith("seek_to:")) {
+            action.removePrefix("seek_to:").toLongOrNull()?.let { ms ->
+                engine?.videoSeekTo(ms / 1000.0)
+            }
+            return
+        }
         when (action) {
+            "video_target_cycle" -> {
+                // Manual override: pin the D-pad to the next on-screen video (main or
+                // any iframe). Auto-selection resumes when that frame goes inactive.
+                engine?.cycleVideoTarget()
+                showVideoFeedback("Switched video source")
+            }
+            "toggle_play" -> engine?.videoToggle()
+            "video_unmute" -> {
+                // Same guarded path as auto-unmute: only taps when the video is actually
+                // muted, so it never pauses an already-audible video. Unmuting needs a
+                // *trusted* gesture (a real tap) that injected JS can't supply.
+                when (engine?.isActiveVideoMuted()) {
+                    true -> autoUnmuteActiveVideo()
+                    false -> showVideoFeedback("Audio is on")
+                    null -> showVideoFeedback("No active video")
+                }
+            }
+            "forward" -> engine?.goForward()
             "refresh" -> engine?.reload()
             "maximize_video" -> {
                 val js = "(function(){" +
@@ -721,6 +884,14 @@ class BrowserActivity : ComponentActivity() {
         cursorHideHandler.postDelayed(cursorHideRunnable, cursorHideDelayMs)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Claim the server context for the browser whenever we're foregrounded — so a
+        // context_query reports "browser" regardless of how this activity was launched,
+        // and we reclaim it after returning from a player launched on top of us.
+        com.playbridge.player.server.ServerService.notifyContextBrowser()
+    }
+
     override fun onStop() {
         super.onStop()
         if (!isFinishing && !isChangingConfigurations) {
@@ -730,6 +901,7 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onDestroy() {
         cursorHideHandler.removeCallbacks(cursorHideRunnable)
+        videoOverlayHideHandler.removeCallbacks(videoOverlayHideRunnable)
         unregisterReceiver(commandReceiver)
         scope.cancel()
         engine?.destroy()
