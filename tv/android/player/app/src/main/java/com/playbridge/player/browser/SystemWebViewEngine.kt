@@ -185,13 +185,14 @@ class SystemWebViewEngine(
             val before = activeVideoMuted
             if (o.has("muted")) activeVideoMuted = o.optBoolean("muted")
             val state = o.optString("state")
+            val suppressUnmute = o.optBoolean("suppressUnmute", false)
             if (state == "idle") { activeVideoMuted = null; autoUnmuteDone = false }
             if (activeVideoMuted != before) Log.d(TAG, "activeVideoMuted: $before -> $activeVideoMuted")
-            // Auto-unmute ONLY a muted *and actively playing* video — that's the real
-            // autoplay-muted case where a tap is consumed by the "tap to unmute" affordance
-            // instead of toggling playback. Tapping a paused or already-audible video would
-            // just pause/unpause it. Once per session (reset on idle/navigation).
-            if (activeVideoMuted == true && state == "playing" && !autoUnmuteDone) {
+            // Auto-unmute ONLY a muted *and actively playing* video, and never while an
+            // optional script asks us to hold off (a transient overlay is up — the tap would
+            // land on it). That leaves the real autoplay-muted case where a tap is consumed by
+            // the "tap to unmute" affordance instead of toggling playback. Once per session.
+            if (activeVideoMuted == true && state == "playing" && !suppressUnmute && !autoUnmuteDone) {
                 autoUnmuteDone = true
                 Log.d(TAG, "auto-unmute: muted+playing video active, requesting native tap")
                 onRequestUnmuteTap?.invoke()
@@ -559,6 +560,28 @@ class SystemWebViewEngine(
         }
     }
 
+    /**
+     * Read every OPTIONAL user-supplied *.js from the app's external files dir
+     * (Android/data/<pkg>/files/). NOT shipped in the APK — these are scripts the user
+     * installs themselves (via `adb push`, a file manager, or "Install script" from the
+     * phone, which writes here). Lets a user run their own scripts (e.g. a YouTube
+     * ad-skipper we deliberately don't distribute). Read fresh each call so installing or
+     * removing one takes effect on the next page load. Each script must self-guard against
+     * double injection.
+     */
+    private fun externalUserScripts(): List<String> {
+        return try {
+            val dir = context.getExternalFilesDir(null) ?: return emptyList()
+            dir.listFiles { f -> f.isFile && f.name.endsWith(".js") }
+                ?.sortedBy { it.name }
+                ?.mapNotNull { if (it.canRead()) it.readText() else null }
+                ?: emptyList()
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not read external user scripts", e)
+            emptyList()
+        }
+    }
+
     private fun setupWebView() {
         webView.apply {
             isFocusable = true
@@ -754,6 +777,13 @@ class SystemWebViewEngine(
             if (!multiFrame && videoControlScript.isNotEmpty()) {
                 view?.evaluateJavascript(videoControlScript, null)
             }
+
+            // Optional, user-supplied scripts (e.g. the YouTube "Continue watching?" guard
+            // or an ad-skipper). NOT shipped in the APK — loaded only from the app's
+            // external files dir, where the user (or the phone's script manager) puts them.
+            // Read fresh each page load so installing/removing one takes effect without a
+            // reinstall. Each script self-guards against double injection.
+            externalUserScripts().forEach { view?.evaluateJavascript(it, null) }
 
             // Inject cosmetic filters (element hiding CSS)
             val cosmeticCss = adBlocker.getCosmeticFilterCss()

@@ -91,7 +91,16 @@
       // requires a trusted user gesture, which this injected call doesn't carry — setting
       // muted=false silently fails on YouTube and can even block an unmuted play(). Unmute
       // is handled natively via a real synthesized tap (see BrowserActivity video_unmute).
-      if (v.paused) { v.play(); } else { v.pause(); }
+      if (v.paused) {
+        v.play();
+      } else {
+        // Mark interaction ONLY for an explicit pause, so a user script can tell this
+        // deliberate pause apart from an automatic/idle one and honour it. Other commands
+        // (seek/volume) must NOT mark — otherwise repeated seeking looks like activity and
+        // the idle guard would wrongly honour YouTube's "Continue watching?" pause.
+        markInteraction();
+        v.pause();
+      }
       return v.paused ? 'paused' : 'playing';
     },
     seek: function (delta) {
@@ -153,6 +162,9 @@
   // ── Command execution (shared by channel + fallback) ──────────────────────
   // Returns {kind, value} so native can render the right overlay.
   function execute(cmd) {
+    // NOTE: do NOT mark interaction for every command — only an explicit pause does
+    // (see api.toggle). Marking on seek/volume would make repeated seeking look like
+    // activity, and the idle guard would then honour YouTube's "Continue watching?" pause.
     var parts = String(cmd).split(',');
     var op = parts[0];
     switch (op) {
@@ -210,6 +222,16 @@
     }
   }
 
+  // Optional bridge: a user script (e.g. pb-youtube-keepalive.js) may expose
+  // window.__pbMarkInteraction to learn when the viewer deliberately acts, so it can tell a
+  // genuine action apart from idleness. A remote command is a deliberate action, so we call
+  // it here. No-op if no such script is loaded.
+  function markInteraction() {
+    if (typeof window.__pbMarkInteraction === 'function') {
+      try { window.__pbMarkInteraction(); } catch (e) { /* ignore */ }
+    }
+  }
+
   function activeStatusJson() {
     var v = find();
     return JSON.stringify({
@@ -218,9 +240,13 @@
       position: v ? Math.round((v.currentTime || 0) * 1000) : 0,
       duration: (v && isFinite(v.duration)) ? Math.round(v.duration * 1000) : 0,
       title: (document.title || ''),
-      // Lets native auto-unmute on fullscreen only when actually muted (so it never
-      // pauses an already-audible video). Extra field; older phone parsers ignore it.
-      muted: !!(v && v.muted)
+      // Lets native auto-unmute only when actually muted (so it never taps an already-
+      // audible video). Extra field; older phone parsers ignore it.
+      muted: !!(v && v.muted),
+      // Optional user scripts may set window.__pbSuppressUnmute to tell native to hold off
+      // its auto-unmute tap while a transient overlay/interstitial is on screen (the tap
+      // would land on that instead of the player). Undefined (=> false) when none set it.
+      suppressUnmute: !!window.__pbSuppressUnmute
     });
   }
 

@@ -1488,6 +1488,15 @@ private fun BrowserMoreSheet(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = { onBrowserControl("video_unmute"); onDismiss() }
             )
+            // Scripts — manage user scripts installed on the TV (install from a file,
+            // list, remove). The app ships none; you supply the .js. Handled phone-side
+            // in AppNavHost (opens the manager + queries the TV).
+            LabeledIconButton(
+                icon = Icons.Default.Code,
+                label = "Scripts",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = { onBrowserControl("manage_user_scripts"); onDismiss() }
+            )
         }
         Spacer(Modifier.height(16.dp))
     }

@@ -5,6 +5,8 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.core.net.toUri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -195,6 +197,55 @@ fun AppNavHost(
     val nowPlayingEpisodeStart by connectionCoordinator.nowPlayingEpisodeStart.collectAsState()
 
     val context = LocalContext.current
+
+    val installedUserScripts by connectionCoordinator.installedUserScripts.collectAsState()
+    var showUserScripts by remember { mutableStateOf(false) }
+
+    // Picks any .js file from the phone and ships it to the TV as a user script (e.g. the
+    // opt-in ad-skipper). Neither app bundles such scripts; the user supplies the file. The
+    // file's own name is used so scripts can be listed/removed by name on the TV.
+    val userScriptPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                var name = "user.js"
+                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) {
+                        val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (idx >= 0) c.getString(idx)?.let { name = it }
+                    }
+                }
+                val content = context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader()?.use { it.readText() }
+                if (!content.isNullOrBlank()) {
+                    connectionViewModel.webSocketClient.send(
+                        com.playbridge.shared.protocol.createUserScriptJson(name, content)
+                    )
+                    android.widget.Toast.makeText(context, "Sent $name to TV", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    android.widget.Toast.makeText(context, "Script file was empty", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(context, "Couldn't read script: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    if (showUserScripts) {
+        UserScriptsSheet(
+            scripts = installedUserScripts,
+            onInstall = { userScriptPicker.launch("*/*") },
+            onRemove = { name ->
+                // Empty content tells the TV to delete that script.
+                connectionViewModel.webSocketClient.send(
+                    com.playbridge.shared.protocol.createUserScriptJson(name, "")
+                )
+            },
+            onDismiss = { showUserScripts = false }
+        )
+    }
+
     val clipboardManager = LocalClipboardManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -810,7 +861,14 @@ fun AppNavHost(
                             connectionViewModel.webSocketClient.sendMouseCommand("up", 0f, 0f)
                         },
                         onBrowserControl = { action ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createBrowserControlCommandJson(action))
+                            if (action == "manage_user_scripts") {
+                                // Phone-side action: open the user-script manager and ask the
+                                // TV for its current list — not a browser command.
+                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createUserScriptQueryJson())
+                                showUserScripts = true
+                            } else {
+                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createBrowserControlCommandJson(action))
+                            }
                         },
                         onPlayerControl = { command ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson(command))
@@ -1490,6 +1548,56 @@ fun AppNavHost(
                 ).show()
             },
         )
+    }
+}
+
+/**
+ * Manage the user scripts installed on the TV: list them, remove one, or install another
+ * from a file on the phone. The app ships no scripts — the user supplies the .js files.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun UserScriptsSheet(
+    scripts: List<String>,
+    onInstall: () -> Unit,
+    onRemove: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            "User scripts on TV",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+        )
+        if (scripts.isEmpty()) {
+            Text(
+                "None installed.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+            )
+        } else {
+            scripts.forEach { name ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 24.dp, end = 12.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { onRemove(name) }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Remove $name", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        TextButton(onClick = onInstall, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Install from file…")
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }
 
