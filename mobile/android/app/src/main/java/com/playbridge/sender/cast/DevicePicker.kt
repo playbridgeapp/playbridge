@@ -285,6 +285,8 @@ fun DeviceConnectionSheet(
                 ThisDeviceRow(
                     selected = onPhone,
                     onClick = {
+                        // Authoritative routing intent (see CONNECTION_ROUTING_PLAN.md).
+                        viewModel.selectThisDevice()
                         viewModel.disconnect()
                         browserPrefs.edit { putBoolean("watch_on_tv", false) }
                         onPickedThisDevice?.invoke()
@@ -341,8 +343,10 @@ fun DeviceConnectionSheet(
                         device = device,
                         onClick = {
                             if (device.connectDevice.isDlna) {
+                                // selectDlnaTarget also sets the authoritative Dlna route.
                                 viewModel.selectDlnaTarget(device.connectDevice)
                             } else {
+                                viewModel.selectNativeRoute()
                                 connectKnownOrPair(
                                     viewModel,
                                     history,

@@ -175,12 +175,11 @@ fun LibraryDetailScreen(
         )
     }
 
-    // Reactively update watchOnTv mode when TV connection status changes live
-    LaunchedEffect(isTvConnected) {
-        if (isTvConnected) {
-            watchOnTv = true
-        }
-    }
+    // NOTE: routing intent is authoritative and user-controlled (see
+    // CONNECTION_ROUTING_PLAN.md). We deliberately do NOT flip watchOnTv just because a
+    // connection exists — that conflation caused "This Device" plays to jump to the TV.
+    // watchOnTv changes only via the user's explicit Watch-on-TV / This-Device choice,
+    // which the device picker mirrors into the persisted `watch_on_tv` pref + Route.
 
     // Player mode (mirrors CastSheet; persisted to browser_prefs/tv_player_mode)
     val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
@@ -193,14 +192,10 @@ fun LibraryDetailScreen(
     val proxyAvailable = mediaflowProxyUrl.isNotBlank()
     var proxyMode by remember { mutableStateOf(MediaflowProxy.Mode.OFF) }
 
-    // Auto-connect to TV when landing on this screen if we're in TV mode but not connected.
-    // Only attempt once per screen entry — subsequent reconnect attempts are triggered by
-    // the Watch click/long-click handlers.
-    LaunchedEffect(Unit) {
-        if (watchOnTv && !isTvConnected && selectedTvDevice != null) {
-            onTvDeviceSelect?.invoke(selectedTvDevice)
-        }
-    }
+    // Intentionally NO auto-connect on screen entry. Silently connecting when merely
+    // opening a title was a source of "connects to the TV out of nowhere". The connection
+    // is established lazily only when the user actually sends to the TV — see the reconnect
+    // guard inside triggerWatch (forPhone == false).
 
     val episodeListState = rememberLazyListState()
     var episodesAscending by remember { mutableStateOf(true) }

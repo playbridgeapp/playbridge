@@ -409,6 +409,28 @@ class WebSocketClient {
         send(com.playbridge.shared.protocol.MousePacket.pack(event, dx, dy))
     }
     
+    /**
+     * Re-establish the last connection using the retained [targetConnection]. Used by the
+     * cast-session reconnect supervisor when a live native link drops unexpectedly. No-op if
+     * the user explicitly disconnected, if there's no prior target, or if a connection is
+     * already in progress / established. Reuses the saved token (no re-pairing).
+     */
+    fun reconnect() {
+        val conn = targetConnection
+        if (conn == null) {
+            Log.d(TAG, "reconnect(): no prior target — ignoring")
+            return
+        }
+        if (isUserDisconnect) {
+            Log.d(TAG, "reconnect(): last disconnect was user-initiated — ignoring")
+            return
+        }
+        val state = _connectionState.value
+        if (state is ConnectionState.Connected || state is ConnectionState.Connecting) return
+        Log.i(TAG, "reconnect(): re-attempting ${conn.serverName} at ${conn.ip}:${conn.port}")
+        attemptConnection(conn.ip, conn.port, conn.serverName)
+    }
+
     fun disconnect() {
         mainHandler.removeCallbacks(mouseFlushRunnable)
         mouseFlushScheduled = false
