@@ -33,16 +33,20 @@ fun MediaflowSettingsScreen(onBack: () -> Unit) {
         mutableStateOf(prefs.getString(MediaflowProxy.PREFS_KEY_PASSWORD, "") ?: "")
     }
     var passwordVisible by remember { mutableStateOf(false) }
+    var proxyEnabled by remember {
+        mutableStateOf(prefs.getBoolean(MediaflowProxy.PREFS_KEY_ENABLED, true))
+    }
     var autoSelect by remember {
         mutableStateOf(prefs.getBoolean(MediaflowProxy.PREFS_KEY_AUTO_SELECT, true))
     }
 
     // Persist on every change, exactly like DebridSettingsScreen
-    LaunchedEffect(proxyUrl, proxyPassword, autoSelect) {
+    LaunchedEffect(proxyUrl, proxyPassword, autoSelect, proxyEnabled) {
         prefs.edit {
             putString(MediaflowProxy.PREFS_KEY_URL, proxyUrl.trim())
             putString(MediaflowProxy.PREFS_KEY_PASSWORD, proxyPassword)
             putBoolean(MediaflowProxy.PREFS_KEY_AUTO_SELECT, autoSelect)
+            putBoolean(MediaflowProxy.PREFS_KEY_ENABLED, proxyEnabled)
         }
     }
 
@@ -74,12 +78,41 @@ fun MediaflowSettingsScreen(onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            // Master enable/disable. When off, the proxy is ignored everywhere but the
+            // saved URL/password are retained so it can be re-enabled without re-entering them.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Enable proxy",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Turn the mediaflow-proxy on or off without losing your saved " +
+                               "URL and password.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(
+                    checked = proxyEnabled,
+                    onCheckedChange = { proxyEnabled = it }
+                )
+            }
+
+            HorizontalDivider()
+
             OutlinedTextField(
                 value = proxyUrl,
                 onValueChange = { proxyUrl = it },
                 label = { Text("Proxy base URL") },
                 placeholder = { Text("http://192.168.1.x:8888") },
                 singleLine = true,
+                enabled = proxyEnabled,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth()
             )
@@ -89,6 +122,7 @@ fun MediaflowSettingsScreen(onBack: () -> Unit) {
                 onValueChange = { proxyPassword = it },
                 label = { Text("API password") },
                 singleLine = true,
+                enabled = proxyEnabled,
                 visualTransformation = if (passwordVisible)
                     VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -128,11 +162,11 @@ fun MediaflowSettingsScreen(onBack: () -> Unit) {
                 Switch(
                     checked = autoSelect,
                     onCheckedChange = { autoSelect = it },
-                    enabled = proxyUrl.isNotBlank()
+                    enabled = proxyEnabled && proxyUrl.isNotBlank()
                 )
             }
 
-            if (proxyUrl.isNotBlank()) {
+            if (proxyEnabled && proxyUrl.isNotBlank()) {
                 Card(colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer
                 )) {

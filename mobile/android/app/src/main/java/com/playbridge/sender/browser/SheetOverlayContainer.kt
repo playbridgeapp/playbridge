@@ -71,6 +71,7 @@ fun SheetOverlayContainer(
     mediaflowProxyUrl: String = "",
     mediaflowProxyPassword: String = "",
     mediaflowAutoSelect: Boolean = true,
+    mediaflowProxyEnabled: Boolean = true,
     onContentClick: (PlayPayload) -> Unit = {},
     onQueueContent: (PlayPayload) -> Unit = {},
 
@@ -155,6 +156,7 @@ fun SheetOverlayContainer(
                 mediaflowProxyUrl = mediaflowProxyUrl,
                 mediaflowProxyPassword = mediaflowProxyPassword,
                 mediaflowAutoSelect = mediaflowAutoSelect,
+                mediaflowProxyEnabled = mediaflowProxyEnabled,
                 subtitleService = subtitleService,
                 contentPayload = pendingContentPayload,
                 onContentClick = onContentClick,

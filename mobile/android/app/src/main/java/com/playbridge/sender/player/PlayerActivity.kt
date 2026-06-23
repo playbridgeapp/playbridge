@@ -164,6 +164,10 @@ class PlayerActivity : ComponentActivity() {
     private var isBackgroundModeEnabled = false
     private val isInPipModeState = mutableStateOf(false)
     private val addonRepository: AddonRepository by inject()
+    private val progressTracker: com.playbridge.sender.connection.PlaybackProgressTracker by inject()
+
+    /** True when this playback carries TMDB identity, so onDestroy flushes a final resume. */
+    private var tracksProgress = false
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
@@ -213,6 +217,16 @@ class PlayerActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
+        // ── Watch-progress identity (only library-launched playback carries it) ──
+        val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, 0)
+        val mediaType = intent.getStringExtra(EXTRA_MEDIA_TYPE) ?: "movie"
+        val singleSeason = intent.getIntExtra(EXTRA_SEASON, -1).takeIf { it > 0 }
+        val singleEpisode = intent.getIntExtra(EXTRA_EPISODE, -1).takeIf { it > 0 }
+        val plSeasons = intent.getIntArrayExtra(EXTRA_PLAYLIST_SEASONS)
+        val plEpisodes = intent.getIntArrayExtra(EXTRA_PLAYLIST_EPISODES)
+        val startPositionMs = intent.getLongExtra(EXTRA_START_POSITION_MS, 0L)
+        tracksProgress = tmdbId > 0
+
         val exo = buildPlayer(this, headers)
         this.player = exo
 
@@ -225,7 +239,7 @@ class PlayerActivity : ComponentActivity() {
             val titles = intent.getStringArrayListExtra(EXTRA_PLAYLIST_TITLES).orEmpty()
             val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0)
                 .coerceIn(0, lazyStreamIds!!.lastIndex.coerceAtLeast(0))
-            exo.setMediaItem(buildMediaItem(url!!, contentType, titles.getOrNull(startIndex), subtitles))
+            exo.setMediaItem(buildMediaItem(url!!, contentType, titles.getOrNull(startIndex), subtitles), startPositionMs)
             val ctrl = LazyEpisodeController(
                 player = exo,
                 scope = lifecycleScope,
@@ -249,14 +263,45 @@ class PlayerActivity : ComponentActivity() {
                 buildMediaItem(u, null, titles.getOrNull(i), emptyList())
             }
             val safeStart = startIndex.coerceIn(0, items.lastIndex.coerceAtLeast(0))
-            exo.setMediaItems(items, safeStart, 0L)
+            exo.setMediaItems(items, safeStart, startPositionMs)
             initialTitle = titles.getOrNull(safeStart)
         } else {
-            exo.setMediaItem(buildMediaItem(url!!, contentType, title, subtitles))
+            exo.setMediaItem(buildMediaItem(url!!, contentType, title, subtitles), startPositionMs)
             initialTitle = title
         }
         exo.prepare()
         exo.playWhenReady = true
+
+        // ── Report playback to the watch-progress tracker (library content only) ──
+        // The in-app player is a third transport; it pushes ticks here exactly like the
+        // TV/DLNA legs feed the tracker via flows. Identity per playlist slot comes from
+        // the season/episode arrays the library screen supplied.
+        if (tracksProgress) {
+            val controller = episodeController
+            lifecycleScope.launch {
+                while (true) {
+                    val idx = controller?.currentIndex?.intValue ?: exo.currentMediaItemIndex
+                    val season = plSeasons?.getOrNull(idx)?.takeIf { it > 0 } ?: singleSeason
+                    val episode = plEpisodes?.getOrNull(idx)?.takeIf { it > 0 } ?: singleEpisode
+                    val dur = exo.duration
+                    if (dur > 0) {
+                        progressTracker.reportInAppProgress(
+                            com.playbridge.sender.connection.InAppContent(
+                                tmdbId = tmdbId,
+                                mediaType = mediaType,
+                                season = season,
+                                episode = episode,
+                                title = exo.currentMediaItem?.mediaMetadata?.title?.toString(),
+                            ),
+                            positionMs = exo.currentPosition,
+                            durationMs = dur,
+                            isPlaying = exo.isPlaying,
+                        )
+                    }
+                    delay(PROGRESS_REPORT_INTERVAL_MS)
+                }
+            }
+        }
 
         setContent {
             PlayBridgeTheme {
@@ -286,6 +331,10 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Flush a final resume point and clear the in-app leg (the polling loop is already
+        // cancelled with lifecycleScope). Only fires on real close, not on rotation — the
+        // activity handles orientation config changes itself.
+        if (tracksProgress) progressTracker.reportInAppStopped()
         player?.release()
         player = null
     }
@@ -305,6 +354,18 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_LAZY_STREAM_TYPE = "lazy_stream_type"
         const val EXTRA_FORCED_SOURCE = "forced_source"
         const val EXTRA_BINGE_GROUP = "binge_group"
+
+        // Watch-progress identity (set only by library-launched playback).
+        const val EXTRA_TMDB_ID = "tmdb_id"
+        const val EXTRA_MEDIA_TYPE = "media_type"
+        const val EXTRA_SEASON = "season"
+        const val EXTRA_EPISODE = "episode"
+        const val EXTRA_PLAYLIST_SEASONS = "playlist_seasons"
+        const val EXTRA_PLAYLIST_EPISODES = "playlist_episodes"
+        const val EXTRA_START_POSITION_MS = "start_position_ms"
+
+        /** How often the in-app player reports position to the progress tracker. */
+        private const val PROGRESS_REPORT_INTERVAL_MS = 5_000L
 
         private const val DEFAULT_UA =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -401,7 +462,13 @@ object PlayerLauncher {
         title: String? = null,
         contentType: String? = null,
         headers: Map<String, String>? = null,
-        subtitles: List<SubtitleTrack> = emptyList()
+        subtitles: List<SubtitleTrack> = emptyList(),
+        // Watch-progress identity (movies / single episodes). Omit for untracked playback.
+        tmdbId: Int = 0,
+        mediaType: String? = null,
+        season: Int? = null,
+        episode: Int? = null,
+        startPositionMs: Long = 0L,
     ) {
         val intent = Intent(context, PlayerActivity::class.java).apply {
             putExtra(PlayerActivity.EXTRA_URL, url)
@@ -412,6 +479,13 @@ object PlayerLauncher {
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_URLS, ArrayList(subtitles.map { it.url }))
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LABELS, ArrayList(subtitles.map { it.label ?: "" }))
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LANGS, ArrayList(subtitles.map { it.language ?: "" }))
+            }
+            if (tmdbId > 0) {
+                putExtra(PlayerActivity.EXTRA_TMDB_ID, tmdbId)
+                putExtra(PlayerActivity.EXTRA_MEDIA_TYPE, mediaType ?: "movie")
+                if (season != null) putExtra(PlayerActivity.EXTRA_SEASON, season)
+                if (episode != null) putExtra(PlayerActivity.EXTRA_EPISODE, episode)
+                if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
             }
         }
         context.startActivity(intent)
@@ -425,13 +499,25 @@ object PlayerLauncher {
         context: Context,
         urls: List<String>,
         titles: List<String>,
-        startIndex: Int
+        startIndex: Int,
+        // Watch-progress identity (series). seasons/episodes are parallel to urls.
+        tmdbId: Int = 0,
+        seasons: List<Int> = emptyList(),
+        episodes: List<Int> = emptyList(),
+        startPositionMs: Long = 0L,
     ) {
         if (urls.isEmpty()) return
         val intent = Intent(context, PlayerActivity::class.java).apply {
             putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_URLS, ArrayList(urls))
             putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_TITLES, ArrayList(titles))
             putExtra(PlayerActivity.EXTRA_START_INDEX, startIndex)
+            if (tmdbId > 0) {
+                putExtra(PlayerActivity.EXTRA_TMDB_ID, tmdbId)
+                putExtra(PlayerActivity.EXTRA_MEDIA_TYPE, "tv")
+                if (seasons.isNotEmpty()) putExtra(PlayerActivity.EXTRA_PLAYLIST_SEASONS, seasons.toIntArray())
+                if (episodes.isNotEmpty()) putExtra(PlayerActivity.EXTRA_PLAYLIST_EPISODES, episodes.toIntArray())
+                if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
+            }
         }
         context.startActivity(intent)
     }
@@ -450,12 +536,22 @@ object PlayerLauncher {
         streamType: String,
         startIndex: Int,
         forcedSource: String? = null,
-        bingeGroup: String? = null
+        bingeGroup: String? = null,
+        // Watch-progress identity (series). seasons/episodes are parallel to streamIds.
+        tmdbId: Int = 0,
+        seasons: List<Int> = emptyList(),
+        episodes: List<Int> = emptyList(),
+        startPositionMs: Long = 0L,
     ) {
         if (firstUrl.isBlank()) return
         // Single episode (or missing list): no point in lazy mode.
         if (streamIds.size <= 1) {
-            start(context, firstUrl, titles.getOrNull(startIndex))
+            start(
+                context, firstUrl, titles.getOrNull(startIndex),
+                tmdbId = tmdbId, mediaType = if (tmdbId > 0) "tv" else null,
+                season = seasons.getOrNull(startIndex), episode = episodes.getOrNull(startIndex),
+                startPositionMs = startPositionMs,
+            )
             return
         }
         val intent = Intent(context, PlayerActivity::class.java).apply {
@@ -467,6 +563,13 @@ object PlayerLauncher {
             putExtra(PlayerActivity.EXTRA_START_INDEX, startIndex)
             if (!forcedSource.isNullOrBlank()) putExtra(PlayerActivity.EXTRA_FORCED_SOURCE, forcedSource)
             if (!bingeGroup.isNullOrBlank()) putExtra(PlayerActivity.EXTRA_BINGE_GROUP, bingeGroup)
+            if (tmdbId > 0) {
+                putExtra(PlayerActivity.EXTRA_TMDB_ID, tmdbId)
+                putExtra(PlayerActivity.EXTRA_MEDIA_TYPE, "tv")
+                if (seasons.isNotEmpty()) putExtra(PlayerActivity.EXTRA_PLAYLIST_SEASONS, seasons.toIntArray())
+                if (episodes.isNotEmpty()) putExtra(PlayerActivity.EXTRA_PLAYLIST_EPISODES, episodes.toIntArray())
+                if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
+            }
         }
         context.startActivity(intent)
     }

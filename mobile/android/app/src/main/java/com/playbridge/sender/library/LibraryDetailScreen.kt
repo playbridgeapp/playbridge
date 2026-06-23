@@ -189,7 +189,8 @@ fun LibraryDetailScreen(
     // Mediaflow proxy config (read once — user reopens the screen to pick up changes)
     val mediaflowProxyUrl by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_URL, "") ?: "") }
     val mediaflowProxyPassword by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_PASSWORD, "") ?: "") }
-    val proxyAvailable = mediaflowProxyUrl.isNotBlank()
+    val mediaflowProxyEnabled by remember { mutableStateOf(browserSettings.getBoolean(MediaflowProxy.PREFS_KEY_ENABLED, true)) }
+    val proxyAvailable = mediaflowProxyEnabled && mediaflowProxyUrl.isNotBlank()
     var proxyMode by remember { mutableStateOf(MediaflowProxy.Mode.OFF) }
 
     // Intentionally NO auto-connect on screen entry. Silently connecting when merely
@@ -428,10 +429,21 @@ fun LibraryDetailScreen(
                 streamType = streamType,
                 startIndex = startIdx,
                 forcedSource = forcedSource,
-                bingeGroup = bingeGroup
+                bingeGroup = bingeGroup,
+                tmdbId = resolvedTmdbId ?: 0,
+                seasons = videos.map { it.season ?: 0 },
+                episodes = videos.map { it.episode ?: 0 },
+                startPositionMs = resumePositionFor(episode) ?: 0L,
             )
         } else {
-            com.playbridge.sender.player.PlayerLauncher.start(context, streamUrl, resTitle)
+            com.playbridge.sender.player.PlayerLauncher.start(
+                context, streamUrl, resTitle,
+                tmdbId = resolvedTmdbId ?: 0,
+                mediaType = if (isSeries) "tv" else "movie",
+                season = if (isSeries) episode?.season else null,
+                episode = if (isSeries) episode?.episode else null,
+                startPositionMs = resumePositionFor(episode) ?: 0L,
+            )
         }
     }
 
@@ -636,7 +648,12 @@ fun LibraryDetailScreen(
                             context = context,
                             urls = playlist.items.map { it.url },
                             titles = playlist.items.map { it.title ?: resTitle },
-                            startIndex = playlist.start_index
+                            startIndex = playlist.start_index,
+                            tmdbId = resolvedTmdbId ?: 0,
+                            // visual_metadata carries per-item season/episode, parallel to items.
+                            seasons = playlist.items.map { it.visual_metadata?.season ?: 0 },
+                            episodes = playlist.items.map { it.visual_metadata?.episode ?: 0 },
+                            startPositionMs = playlist.items.getOrNull(playlist.start_index)?.start_position_ms ?: 0L,
                         )
                     } else {
                         onPlayPlaylistToTv(playlist)
@@ -647,7 +664,12 @@ fun LibraryDetailScreen(
                 // Movie: Send single play
                 val hubUrl = StreamingUtils.buildPlayUrl(hubAddon!!, streamType, streamId, context)
                 if (forPhone) {
-                    com.playbridge.sender.player.PlayerLauncher.start(context, hubUrl, resTitle)
+                    com.playbridge.sender.player.PlayerLauncher.start(
+                        context, hubUrl, resTitle,
+                        tmdbId = resolvedTmdbId ?: 0,
+                        mediaType = "movie",
+                        startPositionMs = resumePositionFor(null) ?: 0L,
+                    )
                 } else {
                     onPlayPayloadToTv(playbridge.PlayPayload(
                         url = hubUrl,

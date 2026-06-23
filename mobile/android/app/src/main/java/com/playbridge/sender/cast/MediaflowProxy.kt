@@ -18,6 +18,9 @@ object MediaflowProxy {
     const val PREFS_KEY_URL         = "mediaflow_proxy_url"
     const val PREFS_KEY_PASSWORD    = "mediaflow_proxy_password"
     const val PREFS_KEY_AUTO_SELECT = "mediaflow_proxy_auto_select"
+    /** Master on/off switch. When false the proxy is treated as unconfigured everywhere
+     *  (no chip, no URL rewriting) while keeping the saved URL/password for later re-enable. */
+    const val PREFS_KEY_ENABLED     = "mediaflow_proxy_enabled"
 
     enum class Mode(val label: String) {
         OFF("No Proxy"),

@@ -28,6 +28,12 @@ data class PlaybackResumeEntity(
     val updatedAt: Long = System.currentTimeMillis(),
 )
 
+/** Projection: the most recent watch timestamp for a single title. */
+data class TitleLastWatched(
+    val tmdbId: Int,
+    val lastWatchedAt: Long,
+)
+
 @Dao
 interface PlaybackResumeDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -36,6 +42,10 @@ interface PlaybackResumeDao {
     @Query("SELECT * FROM playback_resume WHERE contentKey = :key")
     suspend fun getByKey(key: String): PlaybackResumeEntity?
 
+    /** Full table snapshot for backup/export. */
+    @Query("SELECT * FROM playback_resume")
+    suspend fun getAllSync(): List<PlaybackResumeEntity>
+
     /** All resume points for one show/movie, newest first (drives the detail screen). */
     @Query("SELECT * FROM playback_resume WHERE tmdbId = :tmdbId ORDER BY updatedAt DESC")
     fun observeForTmdb(tmdbId: Int): Flow<List<PlaybackResumeEntity>>
@@ -43,6 +53,10 @@ interface PlaybackResumeDao {
     /** Most recent resume points overall (drives Continue Watching annotations). */
     @Query("SELECT * FROM playback_resume ORDER BY updatedAt DESC LIMIT :limit")
     fun observeLatest(limit: Int): Flow<List<PlaybackResumeEntity>>
+
+    /** Latest watch time per title — drives Continue Watching ordering (newest first). */
+    @Query("SELECT tmdbId, MAX(updatedAt) AS lastWatchedAt FROM playback_resume GROUP BY tmdbId")
+    fun observeLastWatchedPerTitle(): Flow<List<TitleLastWatched>>
 
     @Query("DELETE FROM playback_resume WHERE contentKey = :key")
     suspend fun deleteByKey(key: String)

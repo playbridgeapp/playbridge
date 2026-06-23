@@ -74,19 +74,6 @@
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
         <service
-            android:name=".downloads.MediaDownloadService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync">
-            <intent-filter>
-                <action android:name="androidx.media3.exoplayer.downloadService.action.RESTART" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </service>
-        <service
-            android:name=".cast.HlsExportService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-        <service
             android:name=".cast.MediaPlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
@@ -95,6 +82,13 @@
             android:name=".cast.CastSessionService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback|connectedDevice" />
+
+        <!-- Phase-1 download engine: give WorkManager's foreground service the dataSync
+             type so DownloadWorker.setForeground() is allowed on Android 14+ (targetSdk 36). -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <!-- FileProvider for sharing downloaded files with external players -->
         <provider

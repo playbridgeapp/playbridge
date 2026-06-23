@@ -176,6 +176,29 @@ object DatabaseProvider {
         }
     }
 
+    private val MIGRATION_19_20 = object : Migration(19, 20) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Phase-1 download engine state (DOWNLOAD_REWRITE_PLAN.md §3.4).
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `downloads` (" +
+                    "`id` TEXT NOT NULL, " +
+                    "`url` TEXT NOT NULL, " +
+                    "`title` TEXT NOT NULL, " +
+                    "`kind` TEXT NOT NULL, " +
+                    "`status` TEXT NOT NULL, " +
+                    "`mimeType` TEXT, " +
+                    "`headersJson` TEXT, " +
+                    "`bytesDownloaded` INTEGER NOT NULL, " +
+                    "`totalBytes` INTEGER NOT NULL, " +
+                    "`filePath` TEXT, " +
+                    "`errorReason` TEXT, " +
+                    "`createdAt` INTEGER NOT NULL, " +
+                    "`updatedAt` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`id`))"
+            )
+        }
+    }
+
     @Volatile
     private var INSTANCE: HistoryDatabase? = null
 
@@ -186,7 +209,7 @@ object DatabaseProvider {
                 HistoryDatabase::class.java,
                 "history_database"
             )
-            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
+            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
             .fallbackToDestructiveMigration()
             .build()
             INSTANCE = instance

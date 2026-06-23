@@ -19,6 +19,19 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
+ * Identity of what the in-app phone player is currently showing, supplied by
+ * [com.playbridge.sender.player.PlayerActivity]. Mirrors the visual_metadata the cast
+ * paths attach, but sourced from the library screen that launched playback.
+ */
+data class InAppContent(
+    val tmdbId: Int,
+    val mediaType: String, // "movie" | "tv"
+    val season: Int?,
+    val episode: Int?,
+    val title: String?,
+)
+
+/**
  * Automatic watch-progress tracking (PROGRESS_TRACKING_PLAN.md, P1).
  *
  * Consumes the playback signals the TV already pushes — `status` (position/duration),
@@ -269,6 +282,84 @@ class PlaybackProgressTracker(
                 else -> st.state.name.lowercase()
             }
             maybeSaveResume(item, st.positionMs, st.durationMs, stateKey)
+        }
+    }
+
+    // ── In-app phone player leg ─────────────────────────────────────────────
+    //
+    // The in-app player ([PlayerActivity]) is a third, mutually-exclusive transport.
+    // It can't be observed via a flow (separate Activity), so it pushes ticks here.
+    // The rules are identical to the DLNA leg: per-item state, advance judging,
+    // threshold arming, and throttled resume writes.
+
+    private var inAppItem: PlayingItem? = null
+    private var inAppLastObservedPosMs = 0L
+    private var inAppLastObservedDurMs = 0L
+    private var inAppThresholdArmed = false
+
+    /** Feed a position update from the in-app phone player. */
+    fun reportInAppProgress(content: InAppContent, positionMs: Long, durationMs: Long, isPlaying: Boolean) {
+        scope.launch { onInAppTick(content, positionMs, durationMs, isPlaying) }
+    }
+
+    /** The in-app player closed — flush a final resume point and clear the leg. */
+    fun reportInAppStopped() {
+        scope.launch {
+            val item = inAppItem
+            if (item != null &&
+                inAppLastObservedPosMs >= MIN_RESUME_POSITION_MS && inAppLastObservedDurMs > 0 &&
+                !ProgressRules.isWatched(inAppLastObservedPosMs, inAppLastObservedDurMs)
+            ) {
+                saveResume(item, inAppLastObservedPosMs, inAppLastObservedDurMs)
+            }
+            inAppItem = null
+            inAppLastObservedPosMs = 0L
+            inAppLastObservedDurMs = 0L
+            inAppThresholdArmed = false
+        }
+    }
+
+    private suspend fun onInAppTick(
+        content: InAppContent,
+        positionMs: Long,
+        durationMs: Long,
+        isPlaying: Boolean,
+    ) {
+        if (!enabled.value) return
+        val tmdbId = content.tmdbId.takeIf { it > 0 } ?: return
+        // TV item with no season/episode can't be keyed — skip rather than fabricate.
+        if (content.mediaType == "tv" && (content.season == null || content.episode == null)) return
+        val item = PlayingItem(tmdbId, content.mediaType, content.season, content.episode, content.title)
+
+        // Item changed (episode advance or a new launch) — judge the previous one exactly
+        // like the native playlist-advance / DLNA item-change rule.
+        val prevItem = inAppItem
+        if (prevItem != null && prevItem.key != item.key) {
+            if (prevItem.mediaType == "tv" &&
+                ProgressRules.finishedOnAdvance(inAppLastObservedPosMs, inAppLastObservedDurMs)
+            ) {
+                markEpisodeWatched(prevItem.tmdbId, prevItem.season!!, prevItem.episode!!)
+            } else if (inAppLastObservedPosMs >= MIN_RESUME_POSITION_MS && inAppLastObservedDurMs > 0) {
+                saveResume(prevItem, inAppLastObservedPosMs, inAppLastObservedDurMs)
+            }
+            inAppLastObservedPosMs = 0L
+            inAppLastObservedDurMs = 0L
+            inAppThresholdArmed = false // new item — must see it unwatched before marking
+        }
+        inAppItem = item
+
+        if (positionMs > 0) inAppLastObservedPosMs = positionMs
+        if (durationMs > 0) inAppLastObservedDurMs = durationMs
+
+        ensureTracked(item)
+
+        if (ProgressRules.isWatched(positionMs, durationMs)) {
+            if (!inAppThresholdArmed) return // stale near-end position before this session armed
+            if (item.mediaType == "tv") markEpisodeWatched(item.tmdbId, item.season!!, item.episode!!)
+            else markMovieWatched(item.tmdbId)
+        } else {
+            inAppThresholdArmed = true
+            maybeSaveResume(item, positionMs, durationMs, if (isPlaying) "playing" else "paused")
         }
     }
 

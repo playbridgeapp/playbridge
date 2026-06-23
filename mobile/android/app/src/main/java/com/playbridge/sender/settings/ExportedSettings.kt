@@ -24,7 +24,51 @@ data class ExportedWatchlist(
     val posterUrl: String?,
     val year: String,
     val rating: String,
-    val addedAt: Long
+    val addedAt: Long,
+    // Tracking / progress state — new fields default to null so older backups still parse.
+    val status: String? = null,
+    val userRating: Int? = null,
+    val seasonProgress: Int? = null,
+    val episodeProgress: Int? = null,
+    val notes: String? = null,
+    val startedAt: Long? = null,
+    val completedAt: Long? = null,
+)
+
+/** A cross-session resume position (drives "Resume · mm:ss" and progress bars). */
+@Serializable
+data class ExportedResume(
+    val contentKey: String,
+    val tmdbId: Int,
+    val mediaType: String,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val title: String? = null,
+    val positionMs: Long,
+    val durationMs: Long,
+    val updatedAt: Long,
+)
+
+/** App-level preferences stored in DataStore (toggles, defaults, popup lists). */
+@Serializable
+data class ExportedAppSettings(
+    val autoSwitchToRemote: Boolean? = null,
+    val maxAliveTabs: Int? = null,
+    val preferredAudioLang: String? = null,
+    val preferredSubtitleLang: String? = null,
+    val defaultVideoQuality: String? = null,
+    val maxBitrateCapMbps: Double? = null,
+    val tvPrefetchWindow: Int? = null,
+    val detectVideos: Boolean? = null,
+    val trackWatchProgress: Boolean? = null,
+    val autoAddToWatching: Boolean? = null,
+    val blockPopups: Boolean? = null,
+    val popupWhitelist: List<String>? = null,
+    val popupBlacklist: List<String>? = null,
+    val iptvSort: String? = null,
+    val iptvSortAscending: Boolean? = null,
+    val iptvActiveFirst: Boolean? = null,
+    val sendSubtitlesToTv: Boolean? = null,
 )
 
 @Serializable
@@ -40,6 +84,10 @@ data class ExportedSettings(
     val tabs: List<ExportedTab>? = null,
     val bookmarks: List<ExportedBookmark>? = null,
     val watchlist: List<ExportedWatchlist>? = null,
+    val resume: List<ExportedResume>? = null,
+    val appSettings: ExportedAppSettings? = null,
     val mediaflowProxyUrl: String? = null,
     val mediaflowProxyPassword: String? = null,
+    val mediaflowAutoSelect: Boolean? = null,
+    val mediaflowProxyEnabled: Boolean? = null,
 )

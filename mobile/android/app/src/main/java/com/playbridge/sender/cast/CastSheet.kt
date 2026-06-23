@@ -86,6 +86,7 @@ fun CastSheet(
     mediaflowProxyUrl: String = "",
     mediaflowProxyPassword: String = "",
     mediaflowAutoSelect: Boolean = true,
+    mediaflowProxyEnabled: Boolean = true,
     subtitleService: StremioSubtitleService = StremioSubtitleService(),
     contentPayload: playbridge.PlayPayload? = null,
     onContentClick: (playbridge.PlayPayload) -> Unit = {},
@@ -164,8 +165,8 @@ fun CastSheet(
     // Browse-mode desktop/mobile toggle
     var browseDesktopMode by remember { mutableStateOf(false) }
 
-    // Proxy mode — only relevant in play mode, only shown when proxy is configured
-    val proxyAvailable = mediaflowProxyUrl.isNotBlank()
+    // Proxy mode — only relevant in play mode, only shown when proxy is configured AND enabled
+    val proxyAvailable = mediaflowProxyEnabled && mediaflowProxyUrl.isNotBlank()
     var proxyMode by remember { mutableStateOf(MediaflowProxy.Mode.OFF) }
 
     // Auto-select proxy mode whenever the selected video changes (not on proxyMode changes,

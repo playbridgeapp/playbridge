@@ -203,7 +203,61 @@ class BrowserActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModel()
     private val connectionCoordinator: ConnectionCoordinator by inject()
     private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
+    private val downloadRepository: com.playbridge.sender.downloads.engine.DownloadRepository by inject()
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
+
+    /**
+     * Phase-2 cutover: route browser/cast-sheet downloads through the new WorkManager
+     * engine ([downloadRepository]) instead of the legacy `DownloadUtils`. HLS auto-picks
+     * the top variant for now (quality-picker dialog can return in a later slice).
+     */
+    private fun enqueueEngineDownload(
+        url: String,
+        fileName: String?,
+        contentType: String?,
+        userAgent: String?,
+        cookie: String?,
+        referer: String?,
+        pageTitle: String?,
+    ) {
+        val headers = buildMap {
+            userAgent?.let { put("User-Agent", it) }
+            cookie?.let { put("Cookie", it) }
+            referer?.let { put("Referer", it) }
+        }
+        val isHls = url.contains(".m3u8") || contentType?.contains("mpegurl", ignoreCase = true) == true
+        val title = deriveDownloadTitle(fileName, pageTitle, url)
+        val request = com.playbridge.sender.downloads.engine.DownloadRequest(
+            id = java.util.UUID.randomUUID().toString(),
+            url = url,
+            title = title,
+            kind = if (isHls) com.playbridge.sender.downloads.engine.DownloadKind.HLS
+                   else com.playbridge.sender.downloads.engine.DownloadKind.FILE,
+            mimeType = contentType,
+            headers = headers,
+        )
+        lifecycleScope.launch { downloadRepository.enqueue(request) }
+        Toast.makeText(this, "Download started", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Best filename we can get: an explicit download filename, else a filename embedded in the
+     * page title (e.g. pixeldrain's "Movie.mp4 ~ collection ~ pixeldrain"), else the page title
+     * trimmed at its separator, else the URL tail. The extension is finalised in DownloadWorker.
+     */
+    private fun deriveDownloadTitle(fileName: String?, pageTitle: String?, url: String): String {
+        fileName?.takeIf { it.isNotBlank() }?.let { return it }
+        pageTitle?.let { pt ->
+            val embedded = Regex(
+                """[^~|/\\\n]+\.(mp4|mkv|m4v|webm|avi|mov|ts|m2ts|flv|wmv|mp3|m4a|aac|flac|wav|ogg|opus)""",
+                RegexOption.IGNORE_CASE,
+            ).find(pt)?.value?.trim()
+            if (!embedded.isNullOrBlank()) return embedded
+            val trimmed = pt.split(" ~ ", " | ", " — ", " - ").firstOrNull()?.trim()
+            if (!trimmed.isNullOrBlank()) return trimmed
+        }
+        return url.substringAfterLast('/').substringBefore('?').ifBlank { "download" }
+    }
 
     /**
      * Process-wide singleton — live EngineSessions survive Activity recreation
@@ -660,6 +714,7 @@ class BrowserActivity : ComponentActivity() {
             val mediaflowProxyUrl      by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_URL, "") ?: "") }
             val mediaflowProxyPassword by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_PASSWORD, "") ?: "") }
             val mediaflowAutoSelect    by remember { mutableStateOf(browserSettings.getBoolean(MediaflowProxy.PREFS_KEY_AUTO_SELECT, true)) }
+            val mediaflowProxyEnabled  by remember { mutableStateOf(browserSettings.getBoolean(MediaflowProxy.PREFS_KEY_ENABLED, true)) }
 
             // Persist the active main screen so it survives app restarts and Settings navigation
             LaunchedEffect(currentScreen) {
@@ -750,6 +805,7 @@ class BrowserActivity : ComponentActivity() {
             var isSecureConnection by remember { mutableStateOf(false) }
             var siteSecurityInfo by remember { mutableStateOf<SiteSecurityInfo?>(null) }
             var showSiteInfoSheet by remember { mutableStateOf(false) }
+            var showBrowserConnectSheet by remember { mutableStateOf(false) }
             var isFullscreen by remember { mutableStateOf(false) }
             var isFullscreenVideoPortrait by remember { mutableStateOf(false) }
 
@@ -1245,8 +1301,22 @@ class BrowserActivity : ComponentActivity() {
                                                     { currentScreen = Screen.Remote }
                                                 }
                                                 else -> null
-                                            }
+                                            },
+                                            // Shown only when no remote is available (not connected) —
+                                            // tapping opens the device connection sheet.
+                                            onConnectClick = { showBrowserConnectSheet = true }
                                         )
+
+                                    if (showBrowserConnectSheet) {
+                                        DeviceConnectionSheet(
+                                            onDismiss = { showBrowserConnectSheet = false },
+                                            onOpenAllDevices = {
+                                                showBrowserConnectSheet = false
+                                                currentScreen = Screen.Connection
+                                            },
+                                            showThisDevice = true,
+                                        )
+                                    }
 
                                     // Find on Page Bar
                                      if (showFindBar) {
@@ -1757,7 +1827,7 @@ class BrowserActivity : ComponentActivity() {
                         forcePlaylistSheet = null
                     },
                     onDownloadVideo = { video ->
-                        DownloadUtils.enqueueDownload(this@BrowserActivity, video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer") ?: video.originUrl, pageTitle = selectedTab?.content?.title)
+                        enqueueEngineDownload(video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer") ?: video.originUrl, selectedTab?.content?.title)
                     },
                     onClearVideos = { com.playbridge.sender.cast.VideoDetector.clearTab(selectedTabId ?: "") },
                     playerMode = sheetPlayerMode,
@@ -1799,6 +1869,7 @@ class BrowserActivity : ComponentActivity() {
                     mediaflowProxyUrl = mediaflowProxyUrl ?: "",
                     mediaflowProxyPassword = mediaflowProxyPassword ?: "",
                     mediaflowAutoSelect = mediaflowAutoSelect,
+                    mediaflowProxyEnabled = mediaflowProxyEnabled,
                     onContentClick = { payload ->
                         val cmd = createSingleVideoCommandJson(
                             payload.copy(
@@ -1899,8 +1970,7 @@ class BrowserActivity : ComponentActivity() {
                 DownloadConfirmDialog(
                     pendingDownload = pendingDownload,
                     onConfirm = { download ->
-                        DownloadUtils.enqueueDownload(this@BrowserActivity, download.url, download.fileName, download.contentType, download.userAgent, download.cookie, download.referer, pageTitle = selectedTab?.content?.title)
-                        Toast.makeText(this@BrowserActivity, "Download started", Toast.LENGTH_SHORT).show()
+                        enqueueEngineDownload(download.url, download.fileName, download.contentType, download.userAgent, download.cookie, download.referer, selectedTab?.content?.title)
                         pendingDownload = null
                         pendingDownloadState.value = null
                     },
@@ -1918,12 +1988,16 @@ class BrowserActivity : ComponentActivity() {
                             headers = headers
                         )
 
+                        com.playbridge.sender.downloads.engine.BrowserResponseStore.discard(download.url)
                         forcedVideos = listOf(video)
                         showVideoSheet = true
                         pendingDownload = null
                         pendingDownloadState.value = null
                     },
-                    onDismiss = { pendingDownload = null; pendingDownloadState.value = null }
+                    onDismiss = {
+                        pendingDownload?.url?.let { com.playbridge.sender.downloads.engine.BrowserResponseStore.discard(it) }
+                        pendingDownload = null; pendingDownloadState.value = null
+                    }
                  )
 
                 pendingStremioAddon?.let { addonUri ->
