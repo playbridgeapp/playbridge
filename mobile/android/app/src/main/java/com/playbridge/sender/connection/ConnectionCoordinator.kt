@@ -28,6 +28,9 @@ class ConnectionCoordinator(
     val tvSubtitleTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvPlayerSettings = MutableStateFlow(TvPlayerSettings())
     
+    // Names of user scripts currently installed on the TV (for the management UI).
+    val installedUserScripts = MutableStateFlow<List<String>>(emptyList())
+
     // TMDb Sync & Now Playing Metadata states
     val nowPlayingTvId = MutableStateFlow<Int?>(null)
     val nowPlayingSeason = MutableStateFlow<Int?>(null)
@@ -106,6 +109,13 @@ class ConnectionCoordinator(
                             tvAudioTracks.value = parseTracks(json.optJSONArray("audio"))
                             tvSubtitleTracks.value = parseTracks(json.optJSONArray("subtitle"))
                             Log.d(TAG, "TV Audio/Subtitle tracks updated")
+                        }
+                        "user_scripts" -> {
+                            val arr = json.optJSONArray("names")
+                            installedUserScripts.value = buildList {
+                                if (arr != null) for (i in 0 until arr.length()) add(arr.optString(i))
+                            }
+                            Log.d(TAG, "TV user scripts: ${installedUserScripts.value}")
                         }
                         "player_settings" -> {
                             tvPlayerSettings.value = TvPlayerSettings(

@@ -524,6 +524,30 @@ class ServerService : Service() {
             is IncomingMessage.PairingRequest, is IncomingMessage.Auth -> {
                 // Handled inside WebSocketServer's auth loop — should never reach here.
             }
+            is IncomingMessage.UserScript -> {
+                // Persist a user-supplied browser script (e.g. the opt-in ad-skipper we
+                // don't ship) into the app's external files dir, where SystemWebViewEngine
+                // picks up any *.js on the next page load. Blank content uninstalls it.
+                // Sanitise the name to a bare *.js filename — no path traversal.
+                val safeName = msg.name.substringAfterLast('/').substringAfterLast('\\')
+                    .filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
+                    .ifBlank { "user.js" }
+                    .let { if (it.endsWith(".js")) it else "$it.js" }
+                try {
+                    val file = java.io.File(getExternalFilesDir(null), safeName)
+                    if (msg.content.isBlank()) {
+                        val removed = file.delete()
+                        FileLogger.i(TAG, "User script uninstall: $safeName removed=$removed")
+                    } else {
+                        file.writeText(msg.content)
+                        FileLogger.i(TAG, "User script installed: $safeName (${msg.content.length} chars)")
+                    }
+                } catch (e: Exception) {
+                    FileLogger.w(TAG, "Failed to write user script $safeName: ${e.message}")
+                }
+                broadcastUserScripts()   // let the phone's manager refresh
+            }
+            is IncomingMessage.UserScriptQuery -> broadcastUserScripts()
             is IncomingMessage.Unknown -> {
                 FileLogger.w(TAG, "Unknown message: ${msg.type}. Raw: ${msg.raw}")
             }
@@ -533,6 +557,22 @@ class ServerService : Service() {
     private fun broadcastContext() {
         scope.launch {
             webSocketServer?.broadcastStatus(createContextJson(activeContext))
+        }
+    }
+
+    /** Send the phone the names of installed user scripts (the *.js in external files dir). */
+    private fun broadcastUserScripts() {
+        val names = try {
+            getExternalFilesDir(null)?.listFiles { f -> f.isFile && f.name.endsWith(".js") }
+                ?.map { it.name }?.sorted() ?: emptyList()
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "Failed to list user scripts: ${e.message}")
+            emptyList()
+        }
+        scope.launch {
+            webSocketServer?.broadcastStatus(
+                com.playbridge.shared.protocol.createUserScriptsJson(names)
+            )
         }
     }
 

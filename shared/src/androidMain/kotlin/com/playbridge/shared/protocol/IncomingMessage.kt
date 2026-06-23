@@ -43,6 +43,13 @@ sealed class IncomingMessage {
     data class Browser(val payload: playbridge.BrowserPayload) : IncomingMessage()
     data class BrowserControl(val payload: playbridge.BrowserControlPayload) : IncomingMessage()
     data object ContextQuery : IncomingMessage()
+    /**
+     * User-supplied browser script the phone installs onto the TV (e.g. an ad-skipper we
+     * deliberately don't ship). [content] blank means uninstall. Plain JSON, no proto.
+     */
+    data class UserScript(val name: String, val content: String) : IncomingMessage()
+    /** Phone asks the TV which user scripts are installed; TV replies with `user_scripts`. */
+    data object UserScriptQuery : IncomingMessage()
     data class Unknown(val type: String, val raw: String) : IncomingMessage()
 }
 
@@ -152,6 +159,27 @@ fun createMouseCommandJson(event: String, dx: Float = 0f, dy: Float = 0f): Strin
 
 fun createBrowserControlCommandJson(action: String): String =
     envelope("browser_control", browserControlAdapter.toJson(BrowserControlPayload(action = action)))
+
+/**
+ * Install (or, with blank [content], uninstall) a user-supplied browser script on the TV.
+ * Standalone message (not a Wire command) so it needs no proto change.
+ */
+fun createUserScriptJson(name: String, content: String): String =
+    buildJsonObject {
+        put("type", "user_script")
+        put("name", name)
+        put("content", content)
+    }.toString()
+
+/** Phone → TV: list the installed user scripts. */
+fun createUserScriptQueryJson(): String = """{"type":"user_script_query"}"""
+
+/** TV → phone: the names of the currently-installed user scripts. */
+fun createUserScriptsJson(names: List<String>): String =
+    buildJsonObject {
+        put("type", "user_scripts")
+        put("names", buildJsonArray { names.forEach { add(it) } })
+    }.toString()
 
 fun createContextQueryJson(): String =
     buildJsonObject {
@@ -270,6 +298,11 @@ fun parseIncomingMessage(text: String): IncomingMessage {
                 val payloadJson = root["payload"]?.toString()
                 parseCommandAction(action, payloadJson, text)
             }
+            "user_script" -> IncomingMessage.UserScript(
+                name = root["name"]?.jsonPrimitive?.contentOrNull ?: "user.js",
+                content = root["content"]?.jsonPrimitive?.contentOrNull ?: ""
+            )
+            "user_script_query" -> IncomingMessage.UserScriptQuery
             else -> IncomingMessage.Unknown(type, text)
         }
     } catch (e: Exception) {
