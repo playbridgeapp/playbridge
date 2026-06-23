@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -38,14 +39,14 @@ class CastSessionService : Service(), KoinComponent {
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
+    private var currentlyPlaying = false
 
-    @android.annotation.SuppressLint("WakelockTimeout")
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        // Keep WiFi responsive and the CPU available for WS pings / queue resolution while
-        // the screen is off. Both are released in onDestroy, so they live exactly as long
-        // as the session.
+        // Keep WiFi responsive for WS pings / proxy traffic the whole time we're linked.
+        // It's cheap relative to the CPU wake lock, which we only hold while actually
+        // playing/proxying (see acquireWake/releaseWake). Released in onDestroy.
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         @Suppress("DEPRECATION") // FULL_LOW_LATENCY is only effective while the screen is on
         wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "playbridge:cast").apply {
@@ -53,18 +54,25 @@ class CastSessionService : Service(), KoinComponent {
             acquire()
         }
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        // Created but NOT acquired here — only held while actively playing/proxying.
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "playbridge:cast").apply {
             setReferenceCounted(false)
-            acquire()
         }
-        // Live notification updates (device name + now-playing title).
+        // Drive the notification, FGS type, and wake lock from session info + play/idle state.
         scope.launch {
-            manager.sessionInfo.collect { info ->
-                if (foregroundStarted) {
-                    val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    mgr.notify(NOTIF_ID, buildNotification(info))
+            combine(manager.sessionInfo, manager.isActivelyPlaying) { info, playing -> info to playing }
+                .collect { (info, playing) ->
+                    if (!foregroundStarted) return@collect
+                    if (playing != currentlyPlaying) {
+                        currentlyPlaying = playing
+                        if (playing) acquireWake() else releaseWake()
+                        // Changing the FGS type requires another startForeground() call.
+                        startForegroundWithType(info, playing)
+                    } else {
+                        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        mgr.notify(NOTIF_ID, buildNotification(info, playing))
+                    }
                 }
-            }
         }
     }
 
@@ -74,14 +82,41 @@ class CastSessionService : Service(), KoinComponent {
             stopSelf()
             return START_NOT_STICKY
         }
-        val notif = buildNotification(manager.sessionInfo.value)
+        val playing = manager.isActivelyPlaying.value
+        currentlyPlaying = playing
+        startForegroundWithType(manager.sessionInfo.value, playing)
+        foregroundStarted = true
+        if (playing) acquireWake()
+        return START_STICKY
+    }
+
+    /**
+     * (Re)enter the foreground with the FGS type that matches the current state:
+     * mediaPlayback while playing/proxying, connectedDevice while idle-but-linked. The
+     * connectedDevice type keeps us off the "media-playback FGS with nothing playing"
+     * Play Store policy edge.
+     */
+    private fun startForegroundWithType(info: CastSessionManager.SessionInfo, playing: Boolean) {
+        val notif = buildNotification(info, playing)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            val type = if (playing) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            }
+            startForeground(NOTIF_ID, notif, type)
         } else {
             startForeground(NOTIF_ID, notif)
         }
-        foregroundStarted = true
-        return START_STICKY
+    }
+
+    @android.annotation.SuppressLint("WakelockTimeout")
+    private fun acquireWake() {
+        wakeLock?.let { if (!it.isHeld) it.acquire() }
+    }
+
+    private fun releaseWake() {
+        wakeLock?.let { if (it.isHeld) runCatching { it.release() } }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -95,7 +130,7 @@ class CastSessionService : Service(), KoinComponent {
         super.onDestroy()
     }
 
-    private fun buildNotification(info: CastSessionManager.SessionInfo): Notification {
+    private fun buildNotification(info: CastSessionManager.SessionInfo, playing: Boolean): Notification {
         val stopIntent = Intent(this, CastSessionService::class.java).setAction(ACTION_STOP)
         val stopPi = PendingIntent.getService(
             this, 1, stopIntent,
@@ -107,10 +142,12 @@ class CastSessionService : Service(), KoinComponent {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
         }
+        val title = if (playing) "Casting to ${info.deviceName}" else "Connected to ${info.deviceName}"
+        val text = if (playing) (info.title ?: "Playing") else "Ready to cast"
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("Casting to ${info.deviceName}")
-            .setContentText(info.title ?: "Session active")
+            .setContentTitle(title)
+            .setContentText(text)
             .setContentIntent(contentPi)
             .addAction(0, "Stop", stopPi)
             .setOngoing(true)

@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -46,6 +47,68 @@ class CastSessionManager(
     private val scope: CoroutineScope,
 ) {
     private val TAG = "CastSessionManager"
+
+    // ------------------------------------------------------------------
+    // Routing intent (authoritative) — see CONNECTION_ROUTING_PLAN.md
+    //
+    // The single source of truth for *where playback should go*, set ONLY by explicit
+    // user action in the device picker. It is deliberately decoupled from the live
+    // connection state: connecting to a TV must never change the route, and choosing
+    // "This Device" must never be implemented as a disconnect. Screens read [route]
+    // instead of inferring a destination from connectionState / the old `watch_on_tv`
+    // SharedPreference.
+    // ------------------------------------------------------------------
+    sealed interface Route {
+        /** Play on the phone (in-app player). */
+        data object ThisDevice : Route
+        /** Cast to the saved native (WebSocket) TV receiver. */
+        data object NativeTv : Route
+        /** Cast to a third-party DLNA renderer. */
+        data class Dlna(val deviceId: String, val name: String) : Route
+    }
+
+    private val routePrefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+    private val ROUTE_KEY = "cast_route" // persisted base route: "this" | "native"
+
+    // DLNA routes are live (driven by activeDlnaTarget), so only the base (this/native)
+    // is persisted; on restart a DLNA selection collapses back to its base route.
+    private val _route = MutableStateFlow<Route>(
+        when (routePrefs.getString(ROUTE_KEY, "this")) {
+            "native" -> Route.NativeTv
+            else -> Route.ThisDevice
+        }
+    )
+    val route: StateFlow<Route> = _route.asStateFlow()
+
+    // True while the reconnect supervisor is actively retrying a dropped native link. Keeps
+    // the FGS (and thus the process + supervisor) alive across the backoff window so a slow
+    // reconnect isn't killed mid-attempt. Declared before hasActiveSession (eager combine).
+    private val _reconnecting = MutableStateFlow(false)
+
+    /** True when the active routing intent targets a TV/renderer (native or DLNA). */
+    val routeTargetsTv: StateFlow<Boolean> =
+        _route.map { it !is Route.ThisDevice }.stateIn(scope, SharingStarted.Eagerly, false)
+
+    private fun persistBaseRoute(value: String) {
+        routePrefs.edit().putString(ROUTE_KEY, value).apply()
+    }
+
+    /** User picked "This Device": route phone-local. Does NOT tear down any connection. */
+    fun selectThisDevice() {
+        _route.value = Route.ThisDevice
+        persistBaseRoute("this")
+        // Leaving the TV route: stop trying to keep the native link alive.
+        hasConnectedThisSession = false
+        reconnectAttempt = 0
+        reconnectJob?.cancel()
+        _reconnecting.value = false
+    }
+
+    /** User picked the native TV receiver. Connecting is a separate concern (caller/Stage B). */
+    fun selectNativeRoute() {
+        _route.value = Route.NativeTv
+        persistBaseRoute("native")
+    }
 
     // --- DLNA target (third-party renderer; no WS session) ---
     private val _activeDlnaTarget = MutableStateFlow<TvDevice?>(null)
@@ -87,18 +150,46 @@ class CastSessionManager(
 
     val isDlnaActive: Boolean get() = _dlnaCast.value != null
 
-    /** True while a cast session should keep the process alive (drives the FGS). */
+    /**
+     * True while a cast session should keep the process alive (drives the FGS).
+     *
+     * Stage B: keep the process alive whenever a DLNA renderer is selected, OR the routing
+     * intent is the native TV and the socket is up/connecting — regardless of whether
+     * something is actively playing. This makes an *idle* native link survive screen-off /
+     * backgrounding so it doesn't silently die, and gives the reconnect supervisor a live
+     * process to run in. (Previously this required tvActiveContext == "player".)
+     */
     val hasActiveSession: StateFlow<Boolean> = combine(
         _activeDlnaTarget,
         webSocketClient.connectionState,
         connectionCoordinator.tvActiveContext,
-    ) { dlna, state, ctx ->
-        dlna != null || (
-            ctx == "player" && (
-                state is WebSocketClient.ConnectionState.Connected ||
-                    state is WebSocketClient.ConnectionState.Connecting
-                )
-            )
+        _route,
+        _reconnecting,
+    ) { dlna, state, ctx, route, reconnecting ->
+        val connectedOrConnecting = state is WebSocketClient.ConnectionState.Connected ||
+            state is WebSocketClient.ConnectionState.Connecting
+        // Always keep alive while actually playing on the native TV (preserves the original
+        // behaviour regardless of how routing intent was set).
+        val nativePlaying = ctx == "player" && connectedOrConnecting
+        // Stage B: also keep an *idle* native link alive when that's the routing intent…
+        val nativeIdleLinked = route is Route.NativeTv && connectedOrConnecting
+        // …and across the reconnect backoff so the process survives the retry window.
+        val nativeReconnecting = route is Route.NativeTv && reconnecting
+        dlna != null || nativePlaying || nativeIdleLinked || nativeReconnecting
+    }.stateIn(scope, SharingStarted.Eagerly, false)
+
+    /**
+     * True while the phone is actually playing/proxying bytes (vs merely linked-but-idle).
+     * Drives the FGS *type* (mediaPlayback vs connectedDevice) and the CPU wake lock in
+     * [CastSessionService]: DLNA with media loaded (proxy serving), or the native TV in the
+     * "player" context.
+     */
+    val isActivelyPlaying: StateFlow<Boolean> = combine(
+        _activeDlnaTarget,
+        _dlnaMediaTitle,
+        connectionCoordinator.tvActiveContext,
+    ) { dlna, dlnaTitle, ctx ->
+        (dlna != null && dlnaTitle != null) || ctx == "player"
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /** What the session notification shows. */
@@ -161,6 +252,94 @@ class CastSessionManager(
                 }
             }
         }
+
+        // Capture native-TV routing intent from actual playback. If something starts playing
+        // on the native receiver (ctx == "player") while connected, the user clearly intends
+        // the TV — record it as the route so idle keep-alive + reconnect engage even when the
+        // socket pre-existed (e.g. cold-start auto-connect) and the picker was never used.
+        // Safe vs the Stage A bug: this only fires when content is already on the TV, and an
+        // explicit "This Device" pick still overrides it.
+        scope.launch {
+            connectionCoordinator.tvActiveContext.collect { ctx ->
+                if (ctx == "player" &&
+                    _route.value !is Route.Dlna &&
+                    _route.value !is Route.NativeTv &&
+                    webSocketClient.connectionState.value is WebSocketClient.ConnectionState.Connected
+                ) {
+                    _route.value = Route.NativeTv
+                    persistBaseRoute("native")
+                }
+            }
+        }
+
+        // Reconnect supervisor (Stage B): keep the native link alive. If a link that the
+        // user established drops unexpectedly while they still intend to watch on the TV,
+        // reconnect with capped, jittered exponential backoff. User-initiated disconnects
+        // are ignored (WebSocketClient.reconnect() checks its isUserDisconnect flag), and
+        // terminal auth/pin/pairing states stop the loop until the next explicit action.
+        scope.launch {
+            webSocketClient.connectionState.collect { state ->
+                when (state) {
+                    is WebSocketClient.ConnectionState.Connected -> {
+                        hasConnectedThisSession = true
+                        reconnectAttempt = 0
+                        reconnectJob?.cancel()
+                        _reconnecting.value = false
+                    }
+                    is WebSocketClient.ConnectionState.Error,
+                    is WebSocketClient.ConnectionState.Disconnected -> {
+                        if (_route.value is Route.NativeTv && hasConnectedThisSession) {
+                            scheduleReconnect()
+                        }
+                    }
+                    is WebSocketClient.ConnectionState.AuthFailed,
+                    is WebSocketClient.ConnectionState.PairingDenied,
+                    is WebSocketClient.ConnectionState.PinMismatch -> {
+                        hasConnectedThisSession = false
+                        reconnectJob?.cancel()
+                        _reconnecting.value = false
+                    }
+                    else -> Unit
+                }
+            }
+        }
+    }
+
+    // --- Reconnect supervisor state ---
+    private var hasConnectedThisSession = false
+    private var reconnectAttempt = 0
+    private var reconnectJob: Job? = null
+
+    private fun scheduleReconnect() {
+        if (reconnectJob?.isActive == true) return
+        // Bound the effort: after RECONNECT_GIVE_UP attempts, stand down (release the FGS so
+        // we don't pin the process / show a misleading notification while the TV is gone).
+        // The user can reconnect manually, which resets the counter.
+        if (reconnectAttempt >= RECONNECT_GIVE_UP) {
+            Log.i(TAG, "Reconnect: giving up after $reconnectAttempt attempts")
+            _reconnecting.value = false
+            return
+        }
+        _reconnecting.value = true
+        reconnectJob = scope.launch {
+            val attempt = reconnectAttempt
+            reconnectAttempt += 1
+            val step = attempt.coerceAtMost(RECONNECT_MAX_STEP)
+            val backoff = (RECONNECT_BASE_MS shl step).coerceAtMost(RECONNECT_MAX_MS)
+            val jitter = (0L..RECONNECT_JITTER_MS).random()
+            delay(backoff + jitter)
+            // Re-check: the user may have switched route or a connection may have come up.
+            if (_route.value !is Route.NativeTv) {
+                _reconnecting.value = false
+                return@launch
+            }
+            val s = webSocketClient.connectionState.value
+            if (s is WebSocketClient.ConnectionState.Connected ||
+                s is WebSocketClient.ConnectionState.Connecting
+            ) return@launch
+            Log.d(TAG, "Reconnect attempt $attempt after ${backoff + jitter}ms")
+            webSocketClient.reconnect()
+        }
     }
 
     // ------------------------------------------------------------------
@@ -181,6 +360,13 @@ class CastSessionManager(
         )
         _dlnaCast.value = target
         _activeDlnaTarget.value = device
+        // Selecting a renderer is an explicit routing choice; it also supersedes any native
+        // link, so stop the native reconnect supervisor.
+        _route.value = Route.Dlna(device.uuid, device.name)
+        hasConnectedThisSession = false
+        reconnectAttempt = 0
+        reconnectJob?.cancel()
+        _reconnecting.value = false
         dlnaStatusJob = scope.launch { target.status().collect { _dlnaStatus.value = it } }
         Log.d(TAG, "Active DLNA target: ${device.name} ($controlUrl)")
     }
@@ -194,6 +380,13 @@ class CastSessionManager(
         _dlnaMediaTitle.value = null
         _dlnaNowPlayingMeta.value = null
         _activeDlnaTarget.value = null
+        // Collapse the live DLNA route back to its persisted base (this/native).
+        if (_route.value is Route.Dlna) {
+            _route.value = when (routePrefs.getString(ROUTE_KEY, "this")) {
+                "native" -> Route.NativeTv
+                else -> Route.ThisDevice
+            }
+        }
     }
 
     /** Cast a media item to the active DLNA target (user-initiated). No-op if none selected. */
@@ -271,5 +464,13 @@ class CastSessionManager(
     companion object {
         /** How long a session may be "inactive" before the FGS is torn down. */
         private const val STOP_GRACE_MS = 3_000L
+
+        // Reconnect backoff: 1s, 2s, 4s, 8s, then capped at 10s, each with up to 0.5s jitter.
+        private const val RECONNECT_BASE_MS = 1_000L
+        private const val RECONNECT_MAX_MS = 10_000L
+        private const val RECONNECT_JITTER_MS = 500L
+        private const val RECONNECT_MAX_STEP = 4
+        // Stop retrying after this many consecutive failed attempts (~1 minute of backoff).
+        private const val RECONNECT_GIVE_UP = 8
     }
 }

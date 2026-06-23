@@ -83,6 +83,18 @@ class ConnectionViewModel(
     private val _autoConnectEnabled = MutableStateFlow(prefs.getBoolean("auto_connect_tv", true))
     val autoConnectEnabled: StateFlow<Boolean> = _autoConnectEnabled.asStateFlow()
 
+    // --- Routing intent (authoritative; owned by CastSessionManager) ---
+    // Screens read this to decide where playback goes instead of inferring from
+    // connectionState / the old `watch_on_tv` pref. See CONNECTION_ROUTING_PLAN.md.
+    val route: StateFlow<CastSessionManager.Route> = castSessionManager.route
+    val routeTargetsTv: StateFlow<Boolean> = castSessionManager.routeTargetsTv
+
+    /** User picked "This Device": route phone-local without forcing a disconnect. */
+    fun selectThisDevice() = castSessionManager.selectThisDevice()
+
+    /** User picked the saved native TV as the routing target. */
+    fun selectNativeRoute() = castSessionManager.selectNativeRoute()
+
     // --- DLNA cast target (owned by CastSessionManager so a cast survives this VM) ---
     val activeDlnaTarget: StateFlow<TvDevice?> = castSessionManager.activeDlnaTarget
     val dlnaStatus: StateFlow<PlaybackStatus?> = castSessionManager.dlnaStatus
@@ -230,6 +242,11 @@ class ConnectionViewModel(
     fun connect(device: TvDevice) {
         // Connecting natively supersedes any DLNA target.
         clearDlnaTarget()
+        // A deliberate connect is an explicit "watch on this TV" intent — record it as the
+        // authoritative route so playback routing and the foreground-service / reconnect
+        // supervisor agree (see CONNECTION_ROUTING_PLAN.md). Cold-start auto-connect goes
+        // through webSocketClient.connect() directly and intentionally does NOT set this.
+        castSessionManager.selectNativeRoute()
         // A deliberate connect (user picked or cast to a device) re-enables auto-connect, which a
         // prior manual disconnect turned off. Set the flag directly rather than via
         // setAutoConnectEnabled() — its enable side-effect would kick off a second connect.
