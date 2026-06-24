@@ -346,6 +346,11 @@ fun SessionObserverSetup(
                         }
                     }
                 } else {
+                    // Stash GeckoView's already-fetched stream (it carries the browser session,
+                    // unlike our own re-fetch) so the engine can consume it directly for
+                    // session-gated hosts like gofile.
+                    Log.d(TAG, "Download response present=${response != null} for $url")
+                    response?.let { com.playbridge.sender.downloads.engine.BrowserResponseStore.put(url, it) }
                     scope.launch(Dispatchers.Main) {
                         if (pendingDownload.value?.url != url) {
                             pendingDownload.value = PendingDownload(

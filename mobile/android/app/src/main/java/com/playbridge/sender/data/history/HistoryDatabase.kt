@@ -6,6 +6,8 @@ import com.playbridge.sender.data.collection.CollectionDao
 import com.playbridge.sender.data.collection.CollectionEntity
 import com.playbridge.sender.data.collection.CollectionItemDao
 import com.playbridge.sender.data.collection.CollectionItemEntity
+import com.playbridge.sender.data.downloads.DownloadDao
+import com.playbridge.sender.data.downloads.DownloadEntity
 import com.playbridge.sender.data.iptv.IptvChannelDao
 import com.playbridge.sender.data.iptv.IptvChannelEntity
 import com.playbridge.sender.data.iptv.IptvPlaylistDao
@@ -18,8 +20,8 @@ import com.playbridge.sender.data.library.WatchlistDao
 import com.playbridge.sender.data.library.WatchlistEntity
 
 @Database(
-    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class, SearchHistoryEntity::class, PlaybackResumeEntity::class, IptvPlaylistEntity::class, IptvChannelEntity::class, CollectionEntity::class, CollectionItemEntity::class],
-    version = 19
+    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class, SearchHistoryEntity::class, PlaybackResumeEntity::class, IptvPlaylistEntity::class, IptvChannelEntity::class, CollectionEntity::class, CollectionItemEntity::class, DownloadEntity::class],
+    version = 20
 )
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
@@ -34,4 +36,5 @@ abstract class HistoryDatabase : RoomDatabase() {
     abstract fun iptvChannelDao(): IptvChannelDao
     abstract fun collectionDao(): CollectionDao
     abstract fun collectionItemDao(): CollectionItemDao
+    abstract fun downloadDao(): DownloadDao
 }

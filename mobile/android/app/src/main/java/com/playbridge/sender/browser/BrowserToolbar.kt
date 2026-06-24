@@ -51,6 +51,7 @@ fun BrowserToolbar(
     onRefresh: () -> Unit,
     onStop: () -> Unit,
     onRemoteClick: (() -> Unit)? = null,
+    onConnectClick: (() -> Unit)? = null,
     onLogoClick: () -> Unit = {},
     isEditing: Boolean = false,
     isSecure: Boolean = false,
@@ -282,7 +283,8 @@ fun BrowserToolbar(
 
                 if (!isEditing) {
 
-                    // Remote control shortcut (only when connected to TV)
+                    // Single cast affordance: remote when a TV/DLNA target is connected,
+                    // otherwise a TV icon that opens the connection sheet. Never both.
                     if (onRemoteClick != null) {
                         IconButton(
                             onClick = onRemoteClick,
@@ -292,6 +294,19 @@ fun BrowserToolbar(
                                 Icons.Default.Gamepad,
                                 contentDescription = "Remote Control",
                                 tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(2.dp))
+                    } else if (onConnectClick != null) {
+                        IconButton(
+                            onClick = onConnectClick,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Tv,
+                                contentDescription = "Connect to TV",
+                                tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(22.dp)
                             )
                         }

@@ -51,6 +51,7 @@ val appModule = module {
     single { get<HistoryDatabase>().iptvChannelDao() }
     single { get<HistoryDatabase>().collectionDao() }
     single { get<HistoryDatabase>().collectionItemDao() }
+    single { get<HistoryDatabase>().downloadDao() }
 
     // 3. Core Repositories & Services
     single {
@@ -151,6 +152,31 @@ val appModule = module {
             connectionCoordinator = get(),
             castSessionManager = get(),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        )
+    }
+
+    // 5e. Download engine (Phase 1) — strategies + repository. The DownloadWorker
+    //     resolves these from Koin itself (KoinComponent), so they only need to be
+    //     registered here, not injected into a WorkerFactory.
+    single<com.playbridge.sender.downloads.engine.Muxer> {
+        com.playbridge.sender.downloads.engine.PlatformMuxer()
+    }
+    single {
+        com.playbridge.sender.downloads.engine.DownloadStrategies(
+            listOf(
+                com.playbridge.sender.downloads.engine.FileStrategy(client = get()),
+                com.playbridge.sender.downloads.engine.HlsStrategy(
+                    context = androidContext(),
+                    client = get(),
+                    muxer = get(),
+                ),
+            ),
+        )
+    }
+    single {
+        com.playbridge.sender.downloads.engine.DownloadRepository(
+            context = androidContext(),
+            dao = get(),
         )
     }
 

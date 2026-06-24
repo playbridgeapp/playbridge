@@ -97,6 +97,13 @@ class LibraryViewModel(
     val watchlist: StateFlow<List<WatchlistEntity>> = watchlistDao.getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** tmdbId → most recent watch time, from the resume table. Drives Continue Watching
+     *  ordering so the title you just played floats to the front. */
+    val lastWatchedByTitle: StateFlow<Map<Int, Long>> =
+        database.playbackResumeDao().observeLastWatchedPerTitle()
+            .map { rows -> rows.associate { it.tmdbId to it.lastWatchedAt } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     private val _isConfigured = MutableStateFlow(tmdb.isConfigured())
     val isConfigured: StateFlow<Boolean> = _isConfigured.asStateFlow()
 

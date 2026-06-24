@@ -31,7 +31,6 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -566,6 +565,7 @@ private fun LibraryScreenContent(
         }
 
         val watchlist by viewModel.watchlist.collectAsState()
+        val lastWatchedByTitle by viewModel.lastWatchedByTitle.collectAsState()
 
         // TrackingSheet — shown when a media card is long-pressed
         trackingTarget?.let { target ->
@@ -845,16 +845,18 @@ private fun LibraryScreenContent(
                         }
                     }
 
-                    // Continue Watching — local watchlist, always available
-                    val continueWatching = watchlist.filter {
-                        it.status == WatchlistStatus.WATCHING.value
-                    }
+                    // Continue Watching — local watchlist, always available.
+                    // Ordered by most-recent playback (resume updatedAt), falling back to
+                    // when the title was started / added so the item you just watched leads.
+                    val continueWatching = watchlist
+                        .filter { it.status == WatchlistStatus.WATCHING.value }
+                        .sortedByDescending { lastWatchedByTitle[it.tmdbId] ?: it.startedAt ?: it.addedAt }
                     if (continueWatching.isNotEmpty()) {
                         item {
                             MediaRow(
                                 title = "Continue Watching",
                                 items = continueWatching,
-                                listState = rememberLazyListState(),
+                                listState = catalogRowScrollStates.getOrPut("__continue_watching__") { LazyListState() },
                                 onItemClick = { item ->
                                     if (item.mediaType == "movie") onMovieClick(item.tmdbId)
                                     else onTvShowClick(item.tmdbId)

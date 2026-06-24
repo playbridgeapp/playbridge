@@ -1,233 +1,457 @@
 package com.playbridge.sender.downloads
 
-import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
-import android.database.Cursor
 import android.widget.Toast
-import androidx.core.net.toUri
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Downloading
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.OpenInNew
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.core.content.FileProvider
-import com.playbridge.sender.cast.HlsExportRegistry
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.offline.Download
-import androidx.media3.exoplayer.offline.DownloadCursor
-import java.io.File
-import java.io.IOException
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.delay
+import com.playbridge.sender.data.downloads.DownloadEntity
+import com.playbridge.sender.downloads.engine.DownloadRepository
+import com.playbridge.sender.downloads.engine.DownloadStatus
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
+import java.io.File
 
-@androidx.annotation.OptIn(UnstableApi::class)
-data class DownloadItem(
-    val id: Long,
-    val title: String,
-    val status: Int,
-    val uri: String?,
-    val localUri: String? = null, // Local file path for system downloads (file:// URI)
-    val mediaType: String?,
-    val totalSize: Long,
-    val bytesDownloaded: Long,
-    val lastModified: Long,
-    val isExo: Boolean = false,
-    val exoState: Int = 0,
-    val errorReason: String? = null,
-    val speedBytesPerSec: Long = 0L
-)
+/* ------------------------------------------------------------------ *
+ *  Status accents — one source of truth for colour + label + icon.   *
+ * ------------------------------------------------------------------ */
+
+private val AmberPaused = Color(0xFFF59E0B)
+private val GreenDone = Color(0xFF22C55E)
+
+private data class Accent(val color: Color, val label: String, val icon: ImageVector)
+
+@Composable
+private fun accentFor(status: String): Accent = when (status) {
+    DownloadStatus.RUNNING.name -> Accent(MaterialTheme.colorScheme.primary, "Downloading", Icons.Default.Downloading)
+    DownloadStatus.QUEUED.name -> Accent(MaterialTheme.colorScheme.primary, "Queued", Icons.Default.Downloading)
+    DownloadStatus.MERGING.name -> Accent(MaterialTheme.colorScheme.tertiary, "Finalizing", Icons.Default.Movie)
+    DownloadStatus.PAUSED.name -> Accent(AmberPaused, "Paused", Icons.Default.Pause)
+    DownloadStatus.DONE.name -> Accent(GreenDone, "Saved", Icons.Default.CheckCircle)
+    DownloadStatus.FAILED.name -> Accent(MaterialTheme.colorScheme.error, "Failed", Icons.Default.ErrorOutline)
+    else -> Accent(MaterialTheme.colorScheme.outline, status, Icons.Default.Movie)
+}
+
+private fun isActive(status: String) = status == DownloadStatus.RUNNING.name ||
+    status == DownloadStatus.QUEUED.name ||
+    status == DownloadStatus.PAUSED.name ||
+    status == DownloadStatus.MERGING.name
+
+/* ------------------------------------------------------------------ *
+ *  Screen                                                            *
+ * ------------------------------------------------------------------ */
 
 @OptIn(ExperimentalMaterial3Api::class)
-@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-fun DownloadsScreen(
-    onBack: () -> Unit
-) {
-    val context = LocalContext.current
-    val downloadManager = remember { context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager }
-    val exoDownloadManager = remember { DownloadManagerSingleton.getDownloadManager(context) }
-    var downloads by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
+fun DownloadsScreen(onBack: () -> Unit) {
+    val repository: DownloadRepository = koinInject()
     val scope = rememberCoroutineScope()
-    // Track previous bytes and last known speed per item ID
-    val prevBytes = remember { mutableMapOf<Long, Long>() }
-    val lastKnownSpeed = remember { mutableMapOf<Long, Long>() }
+    val context = LocalContext.current
+    val downloads by repository.observe().collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // Deletion state
-    var itemToDelete by remember { mutableStateOf<DownloadItem?>(null) }
-    var showDeleteDialog by remember { mutableStateOf(false) }
-
-    // Periodically refresh downloads
-    LaunchedEffect(Unit) {
-        while (true) {
-            val systemDownloads = getSystemDownloads(downloadManager)
-            val exoDownloads = getExoDownloads(exoDownloadManager)
-            val merged = (systemDownloads + exoDownloads).sortedByDescending { it.lastModified }
-            downloads = merged.map { item ->
-                val speed = if (item.status == DownloadManager.STATUS_RUNNING) {
-                    val prev = prevBytes[item.id] ?: item.bytesDownloaded
-                    val delta = (item.bytesDownloaded - prev).coerceAtLeast(0L)
-                    if (delta > 0) {
-                        lastKnownSpeed[item.id] = delta
-                        delta
-                    } else {
-                        // Underlying data hasn't updated yet — keep last reading to avoid flicker
-                        lastKnownSpeed[item.id] ?: 0L
-                    }
-                } else {
-                    lastKnownSpeed.remove(item.id)
-                    0L
-                }
-                prevBytes[item.id] = item.bytesDownloaded
-                item.copy(speedBytesPerSec = speed)
-            }
-            delay(1000)
+    // Derive per-item download speed from successive Room emissions (worker ticks ~1s).
+    val speedTracker = remember { mutableMapOf<String, Pair<Long, Long>>() }
+    val speeds = remember(downloads) {
+        downloads.associate { e ->
+            val prev = speedTracker[e.id]
+            val speed = if (e.status == DownloadStatus.RUNNING.name && prev != null && e.updatedAt > prev.second) {
+                val dt = (e.updatedAt - prev.second).coerceAtLeast(1L)
+                ((e.bytesDownloaded - prev.first) * 1000L / dt).coerceAtLeast(0L)
+            } else 0L
+            if (e.status == DownloadStatus.RUNNING.name) speedTracker[e.id] = e.bytesDownloaded to e.updatedAt
+            else speedTracker.remove(e.id)
+            e.id to speed
         }
     }
 
-    // Error dialog state
+    var toDelete by remember { mutableStateOf<DownloadEntity?>(null) }
     var errorToShow by remember { mutableStateOf<String?>(null) }
-    
-    if (showDeleteDialog && itemToDelete != null) {
+
+    val active = downloads.filter { isActive(it.status) }
+    val finished = downloads.filter { !isActive(it.status) }
+
+    toDelete?.let { item ->
+        val running = isActive(item.status)
         AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text(if (itemToDelete?.status == DownloadManager.STATUS_RUNNING) "Cancel Download" else "Delete Download") },
-            text = { Text("Are you sure you want to ${if (itemToDelete?.status == DownloadManager.STATUS_RUNNING) "cancel" else "delete"} '${itemToDelete?.title}'?") },
+            onDismissRequest = { toDelete = null },
+            icon = { Icon(if (running) Icons.Default.Close else Icons.Default.Delete, null) },
+            title = { Text(if (running) "Cancel download?" else "Delete download?") },
+            text = { Text("'${item.title}' will be ${if (running) "stopped and removed" else "deleted"}.") },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        itemToDelete?.let { item ->
-                            if (item.isExo) {
-                                item.uri?.let { url ->
-                                     exoDownloadManager.removeDownload(url)
-                                     Toast.makeText(context, "Deleted", Toast.LENGTH_SHORT).show()
-                                }
-                            } else {
-                                downloadManager.remove(item.id)
-                                Toast.makeText(context, "Deleted", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                        showDeleteDialog = false
-                        itemToDelete = null
-                    }
-                ) {
-                    Text(if (itemToDelete?.status == DownloadManager.STATUS_RUNNING) "Cancel" else "Delete", color = MaterialTheme.colorScheme.error)
-                }
+                TextButton(onClick = {
+                    scope.launch { repository.cancel(item.id, removeFiles = true) }
+                    toDelete = null
+                }) { Text(if (running) "Cancel download" else "Delete", color = MaterialTheme.colorScheme.error) }
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
-                    Text("Cancel")
-                }
-            }
+            dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Keep") } },
         )
     }
 
-    if (errorToShow != null) {
+    errorToShow?.let { msg ->
         AlertDialog(
             onDismissRequest = { errorToShow = null },
-            title = { Text("Download Failed") },
-            text = { Text(errorToShow ?: "Unknown error") },
-            confirmButton = {
-                TextButton(onClick = { errorToShow = null }) {
-                    Text("OK")
-                }
-            }
+            icon = { Icon(Icons.Default.ErrorOutline, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Download failed") },
+            text = { Text(msg) },
+            confirmButton = { TextButton(onClick = { errorToShow = null }) { Text("OK") } },
         )
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Downloads") },
+                title = { Text("Downloads", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                },
             )
-        }
-    ) { innerPadding ->
+        },
+    ) { padding ->
         if (downloads.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.Download,
-                        null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "No downloads yet",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+            EmptyState(Modifier.fillMaxSize().padding(padding))
+            return@Scaffold
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item { StatHero(active.size, finished, downloads) }
+
+            if (active.isNotEmpty()) {
+                item { SectionLabel("Active", active.size) }
+                items(active, key = { it.id }) { item ->
+                    ActiveCard(
+                        item = item,
+                        speedBytesPerSec = speeds[item.id] ?: 0L,
+                        onPause = { scope.launch { repository.pause(item.id) } },
+                        onResume = { scope.launch { repository.resume(item.id) } },
+                        onCancel = { toDelete = item },
                     )
                 }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
 
-                items(downloads) { item ->
-                    DownloadItemRow(
+            if (finished.isNotEmpty()) {
+                item { SectionLabel("Library", finished.count { it.status == DownloadStatus.DONE.name }) }
+                items(finished, key = { it.id }) { item ->
+                    FinishedRow(
                         item = item,
-                        onDelete = {
-                            itemToDelete = item
-                            showDeleteDialog = true
-                        },
-                        onErrorClick = {
-                            errorToShow = item.errorReason
-                        }
+                        onOpen = { item.filePath?.let { openInExternalPlayer(context, it, item.mimeType) } },
+                        onRetry = { scope.launch { repository.resume(item.id) } },
+                        onError = { errorToShow = item.errorReason ?: "Unknown error" },
+                        onDelete = { toDelete = item },
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
         }
     }
 }
 
-fun openInExternalPlayer(context: Context, localUri: String, mediaType: String?) {
-    try {
-        val parsedUri = localUri.toUri()
-        val mimeType = mediaType?.takeIf { it.isNotBlank() } ?: "video/*"
+/* ------------------------------------------------------------------ *
+ *  Hero + section header                                             *
+ * ------------------------------------------------------------------ */
 
-        // content:// URIs (MediaStore on Android 10+) can be used directly.
-        // file:// URIs need to go through FileProvider for cross-app sharing.
-        val contentUri = if (parsedUri.scheme == "content") {
-            parsedUri
+@Composable
+private fun StatHero(activeCount: Int, finished: List<DownloadEntity>, all: List<DownloadEntity>) {
+    val savedCount = finished.count { it.status == DownloadStatus.DONE.name }
+    val totalBytes = finished.filter { it.status == DownloadStatus.DONE.name }.sumOf { it.bytesDownloaded }
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth(),
+        color = Color.Transparent,
+    ) {
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(24.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primary,
+                            MaterialTheme.colorScheme.tertiary,
+                        ),
+                    ),
+                )
+                .padding(20.dp),
+        ) {
+            Column {
+                Text(
+                    if (activeCount > 0) "$activeCount download${if (activeCount == 1) "" else "s"} in progress"
+                    else "All caught up",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HeroChip("$savedCount saved")
+                    HeroChip(formatSize(totalBytes))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroChip(text: String) {
+    Box(
+        Modifier
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.20f))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Text(text, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String, count: Int) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp, start = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(8.dp))
+        Text("$count", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Active card                                                       *
+ * ------------------------------------------------------------------ */
+
+@Composable
+private fun ActiveCard(
+    item: DownloadEntity,
+    speedBytesPerSec: Long,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val accent = accentFor(item.status)
+    val indeterminate = item.status == DownloadStatus.MERGING.name ||
+        item.status == DownloadStatus.QUEUED.name ||
+        item.totalBytes <= 0
+    val target = if (item.totalBytes > 0) (item.bytesDownloaded.toFloat() / item.totalBytes).coerceIn(0f, 1f) else 0f
+    val fraction by animateFloatAsState(targetValue = target, animationSpec = tween(450), label = "progress")
+    val barColor by animateColorAsState(accent.color, label = "barColor")
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconTile(accent.icon, accent.color)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                    Text(accent.label, color = accent.color, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
+                if (item.status == DownloadStatus.PAUSED.name) {
+                    RoundAction(Icons.Default.PlayArrow, "Resume", accent.color, onResume)
+                } else if (item.status == DownloadStatus.RUNNING.name) {
+                    RoundAction(Icons.Default.Pause, "Pause", MaterialTheme.colorScheme.onSurfaceVariant, onPause)
+                }
+                RoundAction(Icons.Default.Close, "Cancel", MaterialTheme.colorScheme.onSurfaceVariant, onCancel)
+            }
+
+            Spacer(Modifier.height(14.dp))
+            GradientBar(fraction = fraction, color = barColor, indeterminate = indeterminate)
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                val left = if (item.totalBytes > 0)
+                    "${formatSize(item.bytesDownloaded)} / ${formatSize(item.totalBytes)}"
+                else formatSize(item.bytesDownloaded)
+                Text(left, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val right = buildString {
+                    if (speedBytesPerSec > 0) append("${formatSize(speedBytesPerSec)}/s")
+                    if (!indeterminate) {
+                        if (isNotEmpty()) append("  ·  ")
+                        append("${(fraction * 100).toInt()}%")
+                    }
+                }
+                if (right.isNotEmpty()) {
+                    Text(right, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = accent.color)
+                }
+            }
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Finished / failed row                                             *
+ * ------------------------------------------------------------------ */
+
+@Composable
+private fun FinishedRow(
+    item: DownloadEntity,
+    onOpen: () -> Unit,
+    onRetry: () -> Unit,
+    onError: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val accent = accentFor(item.status)
+    val failed = item.status == DownloadStatus.FAILED.name
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconTile(accent.icon, accent.color)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                Text(
+                    if (failed) "Tap to see why" else formatSize(item.bytesDownloaded),
+                    fontSize = 12.sp,
+                    color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (failed) {
+                RoundAction(Icons.Default.ErrorOutline, "Error", MaterialTheme.colorScheme.error, onError)
+                RoundAction(Icons.Default.Refresh, "Retry", MaterialTheme.colorScheme.primary, onRetry)
+            } else {
+                RoundAction(Icons.Default.OpenInNew, "Open", accent.color, onOpen)
+            }
+            RoundAction(Icons.Default.Delete, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete)
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Reusable bits                                                     *
+ * ------------------------------------------------------------------ */
+
+@Composable
+private fun IconTile(icon: ImageVector, color: Color) {
+    Box(
+        Modifier.size(46.dp).clip(RoundedCornerShape(14.dp)).background(color.copy(alpha = 0.16f)),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, null, tint = color) }
+}
+
+@Composable
+private fun RoundAction(icon: ImageVector, desc: String, tint: Color, onClick: () -> Unit) {
+    IconButton(onClick = onClick) { Icon(icon, desc, tint = tint) }
+}
+
+/** Custom rounded-cap progress with a soft gradient fill (or a pulsing track when indeterminate). */
+@Composable
+private fun GradientBar(fraction: Float, color: Color, indeterminate: Boolean) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(8.dp)
+            .clip(CircleShape)
+            .background(color.copy(alpha = 0.16f)),
+    ) {
+        if (indeterminate) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                color = color,
+                trackColor = Color.Transparent,
+            )
         } else {
-            val file = File(parsedUri.path ?: return)
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(fraction)
+                    .clip(CircleShape)
+                    .background(Brush.horizontalGradient(listOf(color, color.copy(alpha = 0.65f)))),
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyState(modifier: Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                Modifier.size(96.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Downloading, null,
+                    modifier = Modifier.size(44.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.height(20.dp))
+            Text("No downloads yet", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Videos you save from the browser show up here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Helpers                                                            *
+ * ------------------------------------------------------------------ */
+
+/** Opens a finished download (content:// or file://) in an external player via chooser. */
+fun openInExternalPlayer(context: Context, stored: String, mediaType: String?) {
+    try {
+        val parsed = stored.toUri()
+        val mime = mediaType?.takeIf { it.isNotBlank() } ?: "video/*"
+        val contentUri = if (parsed.scheme == "content") {
+            parsed
+        } else {
+            val file = File(parsed.path ?: return)
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         }
-
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(contentUri, mimeType)
+            setDataAndType(contentUri, mime)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(intent, "Open with"))
@@ -236,214 +460,10 @@ fun openInExternalPlayer(context: Context, localUri: String, mediaType: String?)
     }
 }
 
-@androidx.annotation.OptIn(UnstableApi::class)
-@Composable
-fun DownloadItemRow(
-    item: DownloadItem,
-    onDelete: () -> Unit,
-    onErrorClick: () -> Unit
-) {
-    val context = LocalContext.current
-    val progress = if (item.totalSize > 0) item.bytesDownloaded.toFloat() / item.totalSize.toFloat() else 0f
-
-    // Observe export registry for this item (HLS only)
-    val exportRegistry by HlsExportRegistry.exports.collectAsStateWithLifecycle()
-    val exportResult = if (item.isExo && item.uri != null) exportRegistry[item.uri] else null
-
-    ListItem(
-        headlineContent = {
-            Text(
-                item.title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        supportingContent = {
-            Column {
-                if (item.status == DownloadManager.STATUS_RUNNING) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                    )
-                    val speedStr = if (item.speedBytesPerSec > 0)
-                        "  ·  ${DownloadUtils.formatFileSize(item.speedBytesPerSec)}/s"
-                    else ""
-                    Text("${DownloadUtils.formatFileSize(item.bytesDownloaded)} / ${DownloadUtils.formatFileSize(item.totalSize)}$speedStr")
-                } else if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
-                     Text(DownloadUtils.formatFileSize(item.totalSize))
-                } else if (item.status == DownloadManager.STATUS_FAILED) {
-                    Text("Failed", color = MaterialTheme.colorScheme.error)
-                } else {
-                    Text("Pending...")
-                }
-            }
-        },
-        leadingContent = {
-            val icon = when {
-                item.mediaType?.startsWith("video/") == true -> Icons.Default.Movie
-                item.mediaType?.contains("zip") == true || item.mediaType?.contains("compressed") == true -> Icons.Default.Archive
-                else -> Icons.Default.Description
-            }
-            Icon(icon, null)
-        },
-        trailingContent = {
-            Row {
-                if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
-                    if (item.mediaType?.startsWith("video/") == true || item.isExo) {
-                        // Open in external player (system downloads with a local file)
-                        if (!item.isExo && item.localUri != null) {
-                            IconButton(onClick = {
-                                openInExternalPlayer(context, item.localUri, item.mediaType)
-                            }) {
-                                Icon(Icons.Default.OpenInNew, "Open in player", tint = MaterialTheme.colorScheme.secondary)
-                            }
-                        }
-                        // HLS export state — driven by HlsExportRegistry (auto-triggered by service)
-                        if (item.isExo) {
-                            when (exportResult?.state) {
-                                HlsExportRegistry.ExportState.DONE -> {
-                                    IconButton(onClick = {
-                                        exportResult.path?.let { openInExternalPlayer(context, it, "video/mp2t") }
-                                    }) {
-                                        Icon(Icons.Default.OpenInNew, "Open in player", tint = MaterialTheme.colorScheme.secondary)
-                                    }
-                                }
-                                HlsExportRegistry.ExportState.EXPORTING -> {
-                                    IconButton(onClick = {}, enabled = false) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(20.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                    }
-                                }
-                                else -> {
-                                    // FAILED or null — show nothing, export will be retried next time
-                                }
-                            }
-                        }
-                    } else {
-                        IconButton(onClick = {}, enabled = false) {
-                            Icon(Icons.Default.CheckCircle, "Completed", tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                } else if (item.status == DownloadManager.STATUS_FAILED) {
-                    IconButton(onClick = onErrorClick) {
-                        Icon(Icons.Default.Error, "Failed", tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-                
-                if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
-                     IconButton(onClick = onDelete) {
-                        Icon(Icons.Default.Close, "Cancel", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                } else {
-                    IconButton(onClick = onDelete) {
-                        Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-    )
-}
-
-fun getSystemDownloads(downloadManager: DownloadManager): List<DownloadItem> {
-    val downloads = mutableListOf<DownloadItem>()
-    val query = DownloadManager.Query()
-    
-    try {
-        val cursor = downloadManager.query(query)
-        cursor.use {
-            if (it.moveToFirst()) {
-                val idCol = it.getColumnIndex(DownloadManager.COLUMN_ID)
-                val titleCol = it.getColumnIndex(DownloadManager.COLUMN_TITLE)
-                val statusCol = it.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                val uriCol = it.getColumnIndex(DownloadManager.COLUMN_URI) // Remote URI
-                val localUriCol = it.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI) // Local file URI
-                val mediaTypeCol = it.getColumnIndex(DownloadManager.COLUMN_MEDIA_TYPE)
-                val totalSizeCol = it.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-                val downloadedCol = it.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-                val lastModCol = it.getColumnIndex(DownloadManager.COLUMN_LAST_MODIFIED_TIMESTAMP)
-                val reasonCol = it.getColumnIndex(DownloadManager.COLUMN_REASON)
-
-                do {
-                    val id = it.getLong(idCol)
-                    val title = it.getString(titleCol) ?: "Unknown"
-                    val status = it.getInt(statusCol)
-                    val uri = it.getString(uriCol)
-                    val localUri = if (localUriCol >= 0) it.getString(localUriCol) else null
-                    val mediaType = it.getString(mediaTypeCol)
-                    val totalSize = it.getLong(totalSizeCol)
-                    val bytesDownloaded = it.getLong(downloadedCol)
-                    val lastModified = it.getLong(lastModCol)
-
-                    val errorReason = if (status == DownloadManager.STATUS_FAILED) {
-                        val reason = it.getInt(reasonCol)
-                        DownloadUtils.getDownloadErrorString(reason)
-                    } else null
-
-                    downloads.add(DownloadItem(id, title, status, uri, localUri, mediaType, totalSize, bytesDownloaded, lastModified, errorReason = errorReason))
-                } while (it.moveToNext())
-            }
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-    return downloads
-}
-
-@androidx.annotation.OptIn(UnstableApi::class)
-fun getExoDownloads(downloadManager: androidx.media3.exoplayer.offline.DownloadManager): List<DownloadItem> {
-    val downloads = mutableListOf<DownloadItem>()
-    try {
-        val cursor: DownloadCursor = downloadManager.downloadIndex.getDownloads()
-        while (cursor.moveToNext()) {
-            val download = cursor.download
-            val id = download.request.id.hashCode().toLong() // Use hash of URL as ID
-            val title = String(download.request.data) // We stored filename in data
-            
-            val status = when (download.state) {
-                Download.STATE_COMPLETED -> DownloadManager.STATUS_SUCCESSFUL
-                Download.STATE_FAILED -> DownloadManager.STATUS_FAILED
-                Download.STATE_DOWNLOADING -> DownloadManager.STATUS_RUNNING
-                Download.STATE_QUEUED -> DownloadManager.STATUS_PENDING
-                Download.STATE_STOPPED -> DownloadManager.STATUS_PAUSED
-                else -> DownloadManager.STATUS_PENDING
-            }
-            
-            val uri = download.request.uri.toString()
-            val mediaType = "application/x-mpegurl" // Assumed HLS
-            val bytesDownloaded = download.bytesDownloaded
-            // HLS contentLength is -1 (unknown); fall back to bytesDownloaded for display
-            val totalSize = if (download.contentLength == -1L) bytesDownloaded else download.contentLength
-            val lastModified = download.updateTimeMs
-            
-            val errorReason = if (status == DownloadManager.STATUS_FAILED) {
-                 if (download.failureReason != Download.FAILURE_REASON_NONE) {
-                     "ExoPlayer Error: ${download.failureReason}" 
-                 } else {
-                     "Unknown ExoPlayer Error"
-                 }
-            } else null
-            
-            downloads.add(DownloadItem(
-                id = id,
-                title = title.ifEmpty { "HLS Video" },
-                status = status,
-                uri = uri,
-                mediaType = mediaType,
-                totalSize = totalSize,
-                bytesDownloaded = bytesDownloaded,
-                lastModified = lastModified,
-                isExo = true,
-                exoState = download.state,
-                errorReason = errorReason
-            ))
-        }
-        cursor.close()
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-    return downloads
+private fun formatSize(size: Long): String {
+    if (size <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    val group = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, units.size - 1)
+    val fmt = if (group >= 3) "%.2f %s" else "%.1f %s"
+    return String.format(java.util.Locale.US, fmt, size / Math.pow(1024.0, group.toDouble()), units[group])
 }

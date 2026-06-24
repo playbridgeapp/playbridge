@@ -2,7 +2,9 @@ package com.playbridge.sender.data.backup
 
 import android.content.Context
 import com.playbridge.sender.browser.Components
+import com.playbridge.sender.settings.ExportedAppSettings
 import com.playbridge.sender.settings.ExportedBookmark
+import com.playbridge.sender.settings.ExportedResume
 import com.playbridge.sender.settings.ExportedSettings
 import com.playbridge.sender.settings.ExportedTab
 import com.playbridge.sender.settings.ExportedWatchlist
@@ -44,9 +46,48 @@ object BackupUtils {
                 posterUrl = it.posterUrl,
                 year = it.year,
                 rating = it.rating,
-                addedAt = it.addedAt
+                addedAt = it.addedAt,
+                status = it.status,
+                userRating = it.userRating,
+                seasonProgress = it.seasonProgress,
+                episodeProgress = it.episodeProgress,
+                notes = it.notes,
+                startedAt = it.startedAt,
+                completedAt = it.completedAt,
             )
         }
+        val currentResume = database.playbackResumeDao().getAllSync().map {
+            ExportedResume(
+                contentKey = it.contentKey,
+                tmdbId = it.tmdbId,
+                mediaType = it.mediaType,
+                season = it.season,
+                episode = it.episode,
+                title = it.title,
+                positionMs = it.positionMs,
+                durationMs = it.durationMs,
+                updatedAt = it.updatedAt,
+            )
+        }
+        val appSettings = ExportedAppSettings(
+            autoSwitchToRemote = settingsRepository.autoSwitchToRemote.first(),
+            maxAliveTabs = settingsRepository.maxAliveTabs.first(),
+            preferredAudioLang = settingsRepository.preferredAudioLang.first(),
+            preferredSubtitleLang = settingsRepository.preferredSubtitleLang.first(),
+            defaultVideoQuality = settingsRepository.defaultVideoQuality.first(),
+            maxBitrateCapMbps = settingsRepository.maxBitrateCapMbps.first(),
+            tvPrefetchWindow = settingsRepository.tvPrefetchWindow.first(),
+            detectVideos = settingsRepository.detectVideos.first(),
+            trackWatchProgress = settingsRepository.trackWatchProgress.first(),
+            autoAddToWatching = settingsRepository.autoAddToWatching.first(),
+            blockPopups = settingsRepository.blockPopups.first(),
+            popupWhitelist = settingsRepository.popupWhitelist.first().toList(),
+            popupBlacklist = settingsRepository.popupBlacklist.first().toList(),
+            iptvSort = settingsRepository.iptvSort.first(),
+            iptvSortAscending = settingsRepository.iptvSortAscending.first(),
+            iptvActiveFirst = settingsRepository.iptvActiveFirst.first(),
+            sendSubtitlesToTv = settingsRepository.sendSubtitlesToTv.first(),
+        )
 
         val exported = ExportedSettings(
             debridProvider = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
@@ -62,8 +103,12 @@ object BackupUtils {
             tabs = currentTabs,
             bookmarks = currentBookmarks,
             watchlist = currentWatchlist,
+            resume = currentResume,
+            appSettings = appSettings,
             mediaflowProxyUrl = tmdbPrefs.getString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_URL, ""),
             mediaflowProxyPassword = tmdbPrefs.getString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_PASSWORD, ""),
+            mediaflowAutoSelect = tmdbPrefs.getBoolean(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_AUTO_SELECT, true),
+            mediaflowProxyEnabled = tmdbPrefs.getBoolean(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_ENABLED, true),
         )
 
         Json { prettyPrint = true; encodeDefaults = false }.encodeToString(exported)
@@ -98,7 +143,30 @@ object BackupUtils {
                 }
                 if (imported.mediaflowProxyUrl != null) putString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_URL, imported.mediaflowProxyUrl)
                 if (imported.mediaflowProxyPassword != null) putString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_PASSWORD, imported.mediaflowProxyPassword)
+                if (imported.mediaflowAutoSelect != null) putBoolean(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_AUTO_SELECT, imported.mediaflowAutoSelect)
+                if (imported.mediaflowProxyEnabled != null) putBoolean(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_ENABLED, imported.mediaflowProxyEnabled)
                 apply()
+            }
+
+            // App-level DataStore settings.
+            imported.appSettings?.let { s ->
+                s.autoSwitchToRemote?.let { settingsRepository.setAutoSwitchToRemote(it) }
+                s.maxAliveTabs?.let { settingsRepository.setMaxAliveTabs(it) }
+                s.preferredAudioLang?.let { settingsRepository.setPreferredAudioLang(it) }
+                s.preferredSubtitleLang?.let { settingsRepository.setPreferredSubtitleLang(it) }
+                s.defaultVideoQuality?.let { settingsRepository.setDefaultVideoQuality(it) }
+                s.maxBitrateCapMbps?.let { settingsRepository.setMaxBitrateCapMbps(it) }
+                s.tvPrefetchWindow?.let { settingsRepository.setTvPrefetchWindow(it) }
+                s.detectVideos?.let { settingsRepository.setDetectVideos(it) }
+                s.trackWatchProgress?.let { settingsRepository.setTrackWatchProgress(it) }
+                s.autoAddToWatching?.let { settingsRepository.setAutoAddToWatching(it) }
+                s.blockPopups?.let { settingsRepository.setBlockPopups(it) }
+                s.popupWhitelist?.let { settingsRepository.savePopupWhitelist(it.toSet()) }
+                s.popupBlacklist?.let { settingsRepository.savePopupBlacklist(it.toSet()) }
+                s.iptvSort?.let { settingsRepository.setIptvSort(it) }
+                s.iptvSortAscending?.let { settingsRepository.setIptvSortAscending(it) }
+                s.iptvActiveFirst?.let { settingsRepository.setIptvActiveFirst(it) }
+                s.sendSubtitlesToTv?.let { settingsRepository.setSendSubtitlesToTv(it) }
             }
 
             imported.addonUrls.forEach { url -> addonRepository.installAddon(url) }
@@ -113,6 +181,8 @@ object BackupUtils {
             if (imported.watchlist != null) {
                 val watchlistDao = database.watchlistDao()
                 imported.watchlist.forEach { item ->
+                    // Defaults mirror WatchlistEntity so older backups (without tracking
+                    // fields) import to a sane PLAN_TO_WATCH / unrated state.
                     watchlistDao.insert(WatchlistEntity(
                         tmdbId = item.tmdbId,
                         mediaType = item.mediaType,
@@ -120,7 +190,31 @@ object BackupUtils {
                         posterUrl = item.posterUrl,
                         year = item.year,
                         rating = item.rating,
-                        addedAt = item.addedAt
+                        addedAt = item.addedAt,
+                        status = item.status ?: com.playbridge.sender.data.library.WatchlistStatus.PLAN_TO_WATCH.value,
+                        userRating = item.userRating,
+                        seasonProgress = item.seasonProgress,
+                        episodeProgress = item.episodeProgress,
+                        notes = item.notes,
+                        startedAt = item.startedAt,
+                        completedAt = item.completedAt,
+                    ))
+                }
+            }
+
+            if (imported.resume != null) {
+                val resumeDao = database.playbackResumeDao()
+                imported.resume.forEach { item ->
+                    resumeDao.upsert(com.playbridge.sender.data.library.PlaybackResumeEntity(
+                        contentKey = item.contentKey,
+                        tmdbId = item.tmdbId,
+                        mediaType = item.mediaType,
+                        season = item.season,
+                        episode = item.episode,
+                        title = item.title,
+                        positionMs = item.positionMs,
+                        durationMs = item.durationMs,
+                        updatedAt = item.updatedAt,
                     ))
                 }
             }

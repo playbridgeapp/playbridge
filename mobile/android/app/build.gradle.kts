@@ -108,6 +108,9 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
+    // WorkManager — download engine (Phase 1)
+    implementation(libs.androidx.work.runtime.ktx)
+
     // Kotlin Serialization
     implementation(libs.kotlinx.serialization.json)
 
@@ -141,6 +144,9 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    // Phase-0 transmux spike only. The production HLS merge uses the platform MediaMuxer
+    // (PlatformMuxer), not Transformer, so this stays test-scoped and out of the APK.
+    androidTestImplementation(libs.androidx.media3.transformer)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     // Media3 (ExoPlayer)
