@@ -82,11 +82,11 @@ class BrowserActivity : ComponentActivity() {
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
 
-    // Native video-control feedback overlay (rendered over the WebView, because a DOM
-    // overlay is hidden behind the video surface in fullscreen).
-    private var videoOverlayView: android.widget.TextView? = null
-    private val videoOverlayHideHandler = Handler(Looper.getMainLooper())
-    private val videoOverlayHideRunnable = Runnable { videoOverlayView?.visibility = View.GONE }
+    // Custom overlay support controlled by user scripts
+    private var customOverlayView: android.widget.FrameLayout? = null
+    private var customOverlayTextView: android.widget.TextView? = null
+    private val customOverlayHideHandler = Handler(Looper.getMainLooper())
+    private val customOverlayHideRunnable = Runnable { customOverlayView?.visibility = android.view.View.GONE }
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -248,6 +248,11 @@ class BrowserActivity : ComponentActivity() {
         // Same "status" message the native player emits, so the phone parses it as-is.
         engine?.onVideoStatus = { json ->
             com.playbridge.player.server.ServerService.broadcastStatus(json)
+        }
+
+        // Custom overlay support controlled by user scripts
+        engine?.onVideoOverlay = { visible, text, style, bgColor, textColor, autoDismissMs ->
+            showCustomVideoOverlay(visible, text, style, bgColor, textColor, autoDismissMs)
         }
 
         // Auto-unmute: when a muted video becomes the active control target (in-page
@@ -439,7 +444,7 @@ class BrowserActivity : ComponentActivity() {
             // that lack YouTube's tap-to-unmute affordance — and resumes playback if the
             // tap paused it. Delay lets the tap's effect register before that check.
             cursorHideHandler.postDelayed({ engine?.videoUnmute() }, 150)
-            showVideoFeedback("🔊")
+            showCustomVideoOverlay(visible = true, text = "🔊", style = "minimal", bgColorStr = null, textColorStr = null, autoDismissMs = 1500)
         }
     }
 
@@ -541,42 +546,118 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
-    // ── Native video-control feedback overlay ────────────────────────────────
 
-    private fun showVideoFeedback(text: String) {
+
+    private fun showCustomVideoOverlay(
+        visible: Boolean,
+        text: String,
+        style: String,
+        bgColorStr: String?,
+        textColorStr: String?,
+        autoDismissMs: Long = 0L
+    ) {
         runOnUiThread {
+            customOverlayHideHandler.removeCallbacks(customOverlayHideRunnable)
+            if (!visible) {
+                customOverlayView?.visibility = android.view.View.GONE
+                return@runOnUiThread
+            }
+
             val density = resources.displayMetrics.density
             fun dp(v: Int) = (v * density).toInt()
-            var ov = videoOverlayView
-            if (ov == null) {
-                ov = android.widget.TextView(this).apply {
-                    setTextColor(Color.WHITE)
+
+            var ov = customOverlayView
+            var tv = customOverlayTextView
+
+            if (ov == null || tv == null) {
+                ov = android.widget.FrameLayout(this)
+                tv = android.widget.TextView(this).apply {
                     textSize = 24f
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                     gravity = android.view.Gravity.CENTER
                     setLineSpacing(dp(4).toFloat(), 1f)
                     setPadding(dp(30), dp(22), dp(30), dp(22))
-                    background = android.graphics.drawable.GradientDrawable().apply {
-                        cornerRadius = dp(18).toFloat()
-                        setColor(Color.parseColor("#D2141618"))
-                    }
-                    elevation = dp(48).toFloat()
-                    visibility = View.GONE
                 }
-                rootContainer.addView(
-                    ov,
+                ov.addView(
+                    tv,
                     FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.WRAP_CONTENT,
                         FrameLayout.LayoutParams.WRAP_CONTENT
                     ).apply { gravity = android.view.Gravity.CENTER }
                 )
-                videoOverlayView = ov
+                rootContainer.addView(ov)
+                customOverlayView = ov
+                customOverlayTextView = tv
             }
-            ov.text = text
-            ov.visibility = View.VISIBLE
+
+            val lp = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+
+            when (style) {
+                "fullscreen" -> {
+                    lp.width = FrameLayout.LayoutParams.MATCH_PARENT
+                    lp.height = FrameLayout.LayoutParams.MATCH_PARENT
+                    lp.gravity = android.view.Gravity.CENTER
+                }
+                "half-screen" -> {
+                    lp.width = FrameLayout.LayoutParams.MATCH_PARENT
+                    val displayMetrics = resources.displayMetrics
+                    lp.height = displayMetrics.heightPixels / 2
+                    lp.gravity = android.view.Gravity.BOTTOM
+                }
+                "minimal" -> {
+                    lp.width = FrameLayout.LayoutParams.WRAP_CONTENT
+                    lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
+                    lp.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
+                    lp.bottomMargin = dp(40)
+                }
+            }
+            ov.layoutParams = lp
+
+            val defaultBgColor = when (style) {
+                "fullscreen" -> android.graphics.Color.BLACK
+                "half-screen" -> android.graphics.Color.parseColor("#E6121416")
+                else -> android.graphics.Color.parseColor("#D2141618")
+            }
+            val bgColor = if (bgColorStr != null) {
+                try { android.graphics.Color.parseColor(bgColorStr) } catch (e: Exception) { defaultBgColor }
+            } else {
+                defaultBgColor
+            }
+
+            if (style == "minimal" || style == "half-screen") {
+                ov.background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(18).toFloat()
+                    setColor(bgColor)
+                }
+                if (style == "minimal") {
+                    lp.leftMargin = dp(20)
+                    lp.rightMargin = dp(20)
+                }
+            } else {
+                ov.background = null
+                ov.setBackgroundColor(bgColor)
+            }
+
+            val textColor = if (textColorStr != null) {
+                try { android.graphics.Color.parseColor(textColorStr) } catch (e: Exception) { android.graphics.Color.WHITE }
+            } else {
+                android.graphics.Color.WHITE
+            }
+            tv.setTextColor(textColor)
+            tv.text = text
+
+            ov.visibility = android.view.View.VISIBLE
             ov.bringToFront()
-            videoOverlayHideHandler.removeCallbacks(videoOverlayHideRunnable)
-            videoOverlayHideHandler.postDelayed(videoOverlayHideRunnable, 1500)
+            if (cursorView?.visibility == android.view.View.VISIBLE) {
+                cursorView?.bringToFront()
+            }
+
+            if (autoDismissMs > 0) {
+                customOverlayHideHandler.postDelayed(customOverlayHideRunnable, autoDismissMs)
+            }
         }
     }
 
@@ -600,8 +681,8 @@ class BrowserActivity : ComponentActivity() {
     private fun renderVideoResult(kind: String, value: String) {
         when (kind) {
             "toggle" -> when (value) {
-                "playing" -> showVideoFeedback("▶")
-                "paused" -> showVideoFeedback("❙❙")
+                "playing" -> showCustomVideoOverlay(visible = true, text = "▶", style = "minimal", bgColorStr = null, textColorStr = null, autoDismissMs = 1500)
+                "paused" -> showCustomVideoOverlay(visible = true, text = "❙❙", style = "minimal", bgColorStr = null, textColorStr = null, autoDismissMs = 1500)
             }
             "seek" -> {
                 val parts = value.split(",")
@@ -609,15 +690,36 @@ class BrowserActivity : ComponentActivity() {
                 val t = parts[0].toDoubleOrNull() ?: return
                 val d = parts[1].toDoubleOrNull() ?: 0.0
                 val frac = if (d > 0) t / d else 0.0
-                showVideoFeedback("${fmtTime(t)}   /   ${fmtTime(d)}\n${progressBar(frac)}")
+                showCustomVideoOverlay(
+                    visible = true,
+                    text = "${fmtTime(t)}   /   ${fmtTime(d)}\n${progressBar(frac)}",
+                    style = "minimal",
+                    bgColorStr = null,
+                    textColorStr = null,
+                    autoDismissMs = 1500
+                )
             }
             "vol" -> {
                 val vol = value.toDoubleOrNull() ?: return
-                showVideoFeedback("🔊  ${Math.round(vol * 100)}%\n${progressBar(vol)}")
+                showCustomVideoOverlay(
+                    visible = true,
+                    text = "🔊  ${Math.round(vol * 100)}%\n${progressBar(vol)}",
+                    style = "minimal",
+                    bgColorStr = null,
+                    textColorStr = null,
+                    autoDismissMs = 1500
+                )
             }
             "rate" -> {
                 val r = value.toDoubleOrNull() ?: return
-                showVideoFeedback("${r.toString().removeSuffix(".0")}×")
+                showCustomVideoOverlay(
+                    visible = true,
+                    text = "${r.toString().removeSuffix(".0")}×",
+                    style = "minimal",
+                    bgColorStr = null,
+                    textColorStr = null,
+                    autoDismissMs = 1500
+                )
             }
         }
     }
@@ -772,7 +874,7 @@ class BrowserActivity : ComponentActivity() {
                 // Manual override: pin the D-pad to the next on-screen video (main or
                 // any iframe). Auto-selection resumes when that frame goes inactive.
                 engine?.cycleVideoTarget()
-                showVideoFeedback("Switched video source")
+                showCustomVideoOverlay(visible = true, text = "Switched video source", style = "minimal", bgColorStr = null, textColorStr = null, autoDismissMs = 1500)
             }
             "toggle_play" -> engine?.videoToggle()
             "video_unmute" -> {
@@ -781,8 +883,8 @@ class BrowserActivity : ComponentActivity() {
                 // *trusted* gesture (a real tap) that injected JS can't supply.
                 when (engine?.isActiveVideoMuted()) {
                     true -> autoUnmuteActiveVideo()
-                    false -> showVideoFeedback("Audio is on")
-                    null -> showVideoFeedback("No active video")
+                    false -> showCustomVideoOverlay(visible = true, text = "Audio is on", style = "minimal", bgColorStr = null, textColorStr = null, autoDismissMs = 1500)
+                    null -> showCustomVideoOverlay(visible = true, text = "No active video", style = "minimal", bgColorStr = null, textColorStr = null, autoDismissMs = 1500)
                 }
             }
             "forward" -> engine?.goForward()
@@ -901,7 +1003,7 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onDestroy() {
         cursorHideHandler.removeCallbacks(cursorHideRunnable)
-        videoOverlayHideHandler.removeCallbacks(videoOverlayHideRunnable)
+        customOverlayHideHandler.removeCallbacks(customOverlayHideRunnable)
         unregisterReceiver(commandReceiver)
         scope.cancel()
         engine?.destroy()

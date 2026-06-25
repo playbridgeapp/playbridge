@@ -70,9 +70,13 @@ object LogcatReader {
      * When [includeNoise] is false (default) framework/OEM noise is dropped, and we request a
      * larger tail so there are still ~[maxLines] real app lines left after filtering.
      */
-    suspend fun snapshot(maxLines: Int = 1000, includeNoise: Boolean = false): List<LogLine> =
+    suspend fun snapshot(
+        maxLines: Int = 3000,
+        includeNoise: Boolean = false,
+        excludeFilters: Set<String> = emptySet()
+    ): List<LogLine> =
         withContext(Dispatchers.IO) {
-        val tail = if (includeNoise) maxLines else (maxLines * 4).coerceAtMost(5000)
+        val tail = if (includeNoise) maxLines else (maxLines * 6).coerceAtMost(20000)
         val out = ArrayList<LogLine>(tail)
         var process: java.lang.Process? = null
         try {
@@ -84,7 +88,19 @@ object LogcatReader {
             BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
-                    parse(line)?.let { out.add(it) }
+                    val parsed = parse(line)
+                    if (parsed != null) {
+                        if (out.isNotEmpty() && shouldGroup(parsed, out.last())) {
+                            val lastIdx = out.lastIndex
+                            val last = out[lastIdx]
+                            out[lastIdx] = last.copy(
+                                message = last.message + "\n" + parsed.message,
+                                raw = last.raw + "\n" + parsed.raw
+                            )
+                        } else {
+                            out.add(parsed)
+                        }
+                    }
                     line = reader.readLine()
                 }
             }
@@ -102,8 +118,13 @@ object LogcatReader {
             process?.destroy()
         }
         val filtered = if (includeNoise) out else out.filterNot { isNoise(it) }
-        if (filtered.size > maxLines) filtered.subList(filtered.size - maxLines, filtered.size).toList()
-        else filtered
+        val userFiltered = if (excludeFilters.isEmpty()) filtered else filtered.filterNot { line ->
+            excludeFilters.any { filter ->
+                line.tag.contains(filter, ignoreCase = true) || line.message.contains(filter, ignoreCase = true)
+            }
+        }
+        if (userFiltered.size > maxLines) userFiltered.subList(userFiltered.size - maxLines, userFiltered.size).toList()
+        else userFiltered
     }
 
     /** Clears the log buffer. Returns true on success. */
@@ -114,6 +135,27 @@ object LogcatReader {
         } catch (e: Exception) {
             false
         }
+    }
+
+    fun shouldGroup(parsed: LogLine, last: LogLine): Boolean {
+        if (parsed.level == Level.UNKNOWN) return true
+
+        val msg = parsed.message.trim()
+        if (msg.startsWith("at ") ||
+            msg.startsWith("Caused by:") ||
+            msg.startsWith("Suppressed:") ||
+            (msg.startsWith("...") && msg.endsWith("more"))) {
+            return true
+        }
+
+        if (parsed.tag == last.tag) {
+            if (msg.contains("Exception:") || msg.contains("Error:") ||
+                msg.endsWith("Exception") || msg.endsWith("Error")) {
+                return true
+            }
+        }
+
+        return false
     }
 
     private fun parse(line: String): LogLine? {

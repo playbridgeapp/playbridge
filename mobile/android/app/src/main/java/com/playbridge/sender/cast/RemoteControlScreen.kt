@@ -68,7 +68,18 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import kotlin.math.abs
+import kotlin.math.sin
 
 /** Live playback status synced from the TV via `status` messages. */
 data class TvPlaybackStatus(
@@ -239,13 +250,7 @@ fun RemoteControlScreen(
                                 // ── Now Playing: title only — the seek control lives down in the
                                 //    SeekVolumeBar (swipe ◄► to seek, ▲▼ for volume). ──
                                 NowPlayingPanel(
-                                    title = mediaTitle,
-                                    episodeLabel = null,
-                                    positionMs = positionMs,
-                                    durationMs = durationMs,
-                                    isLive = isLive,
-                                    onSeekTo = onSeekTo,
-                                    showProgress = false
+                                    title = mediaTitle
                                 )
 
                                 // Native-only: track pickers/settings — hidden for DLNA renderers.
@@ -273,13 +278,14 @@ fun RemoteControlScreen(
                                     positionMs = positionMs,
                                     durationMs = durationMs,
                                     isLive = isLive,
+                                    isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
                                     enableVolume = !dlnaMode,
                                     onSeekTo = onSeekTo,
                                     onVolumeUp = { onRemoteKey("volume_up") },
-                                    onVolumeDown = { onRemoteKey("volume_down") }
+                                    onVolumeDown = { onRemoteKey("volume_down") },
+                                    onPlayPauseToggle = { onPlayerControl(if (playbackState == "playing") "pause" else "play") }
                                 )
                                 MediaControlRow(
-                                    isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
                                     onPlayerControl = onPlayerControl,
                                     showLoop = !dlnaMode,
                                     showSeek = !isLive
@@ -290,6 +296,8 @@ fun RemoteControlScreen(
                                 playbackState = playbackState,
                                 positionMs = positionMs,
                                 durationMs = durationMs,
+                                isLive = isLive,
+                                dlnaMode = dlnaMode,
                                 mediaTitle = mediaTitle,
                                 onBrowserControl = onBrowserControl,
                                 onRemoteKey = onRemoteKey
@@ -498,15 +506,18 @@ private fun ProtocolBadge(text: String, accent: Color) {
 }
 
 /**
- * The browser CONTEXT view: a now-playing strip (title + scrubber + play/pause) when the
- * WebView reports a controllable video, then volume and the browser controls. The raw input
- * surfaces (touchpad/d-pad/keyboard) are now separate modes chosen from the mode chip.
+ * The browser CONTEXT view: a now-playing strip (title + SeekVolumeBar with sine wave
+ * seek/volume/play-pause) when the WebView reports a controllable video, then the
+ * browser controls. The raw input surfaces (touchpad/d-pad/keyboard) are now separate
+ * modes chosen from the mode chip.
  */
 @Composable
 private fun ColumnScope.BrowserContextView(
     playbackState: String?,
     positionMs: Long,
     durationMs: Long,
+    isLive: Boolean,
+    dlnaMode: Boolean,
     mediaTitle: String?,
     onBrowserControl: (String) -> Unit,
     onRemoteKey: (String) -> Unit
@@ -514,37 +525,34 @@ private fun ColumnScope.BrowserContextView(
     val videoActive = playbackState == "playing" || playbackState == "paused" ||
         playbackState == "buffering"
     if (videoActive) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            NowPlayingPanel(
-                title = mediaTitle,
-                episodeLabel = null,
-                positionMs = positionMs,
-                durationMs = durationMs,
-                onSeekTo = { ms -> onBrowserControl("seek_to:$ms") }
-            )
-            IconButton(onClick = { onBrowserControl("toggle_play") }) {
-                Icon(
-                    imageVector = if (playbackState == "playing") Icons.Default.Pause
-                                  else Icons.Default.PlayArrow,
-                    contentDescription = "Play/Pause",
-                    tint = MaterialTheme.colorScheme.onSurface
-                )
-            }
-        }
+        // Title only — the seek control lives in the SeekVolumeBar below.
+        NowPlayingPanel(
+            title = mediaTitle
+        )
     }
 
     // Push the controls to the bottom; the top stays calm when nothing's playing.
     Spacer(modifier = Modifier.weight(1f))
 
-    VolumeRow(
-        onVolumeUp = { onRemoteKey("volume_up") },
-        onVolumeDown = { onRemoteKey("volume_down") }
-    )
+    // ── Combined seek + volume bar (same as player context) ──
+    if (videoActive) {
+        SeekVolumeBar(
+            positionMs = positionMs,
+            durationMs = durationMs,
+            isLive = isLive,
+            isPlaying = playbackState == "playing" || playbackState == "buffering",
+            enableVolume = !dlnaMode,
+            onSeekTo = { ms -> onBrowserControl("seek_to:$ms") },
+            onVolumeUp = { onRemoteKey("volume_up") },
+            onVolumeDown = { onRemoteKey("volume_down") },
+            onPlayPauseToggle = { onBrowserControl("toggle_play") }
+        )
+    } else {
+        VolumeRow(
+            onVolumeUp = { onRemoteKey("volume_up") },
+            onVolumeDown = { onRemoteKey("volume_down") }
+        )
+    }
 
     // ── Browser Controls: Back · Refresh · Ad Block · Fullscreen · Source · Unmute · Home ──
     BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
@@ -573,7 +581,6 @@ private fun ColumnScope.ModeBottomBar(
             BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
         }
         RemoteContext.PLAYER -> MediaControlRow(
-            isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
             onPlayerControl = onPlayerControl,
             showLoop = !dlnaMode,
             showSeek = !isLive
@@ -723,10 +730,12 @@ private fun SeekVolumeBar(
     positionMs: Long,
     durationMs: Long,
     isLive: Boolean,
+    isPlaying: Boolean,
     enableVolume: Boolean,
     onSeekTo: (Long) -> Unit,
     onVolumeUp: () -> Unit,
     onVolumeDown: () -> Unit,
+    onPlayPauseToggle: () -> Unit,
 ) {
     val hasDuration = durationMs > 0L && !isLive
     val currentPosition by rememberUpdatedState(positionMs)
@@ -750,6 +759,24 @@ private fun SeekVolumeBar(
     val view = LocalView.current
     val tick: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) }
     val thud: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) }
+
+    // Sine wave playback animations
+    val phase by rememberInfiniteTransition(label = "sineWavePhase").animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "phase"
+    )
+
+    val targetAmplitude = if (isPlaying && !dragging) 5.dp else 0.dp
+    val amplitude by animateDpAsState(
+        targetValue = targetAmplitude,
+        animationSpec = tween(durationMillis = 300),
+        label = "amplitude"
+    )
 
     // The whole bar lifts (and gains a shadow) while actively seeking / adjusting volume.
     val lift by animateDpAsState(
@@ -778,6 +805,14 @@ private fun SeekVolumeBar(
             .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
             .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)), RoundedCornerShape(24.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                if (!dragging && activeAxis == null) {
+                    onPlayPauseToggle()
+                }
+            }
             .onSizeChanged { widthPx = it.width.toFloat() }
             .pointerInput(Unit) {
                 awaitEachGesture {
@@ -938,71 +973,112 @@ private fun SeekVolumeBar(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 36.dp).padding(top = 18.dp, bottom = 18.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Top Status Label Row: seek text on left half, volume text on right half
+            // Top Status Label Row
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    val seekLabel = if (activeAxis == DragAxis.HORIZONTAL) {
-                        if (isAggressive) "Fast Seeking ◄►" else "Seeking ◄►"
-                    } else "Swipe ◄► Seek"
-                    Text(
-                        text = seekLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (activeAxis == DragAxis.HORIZONTAL) primary else Color.White.copy(alpha = 0.6f)
-                    )
+                // Seek label
+                val seekLabel = if (activeAxis == DragAxis.HORIZONTAL) {
+                    if (isAggressive) "Fast Seek ◄►" else "Seeking ◄►"
+                } else {
+                    if (isPlaying) "◄► Seek · Tap ❙❙" else "◄► Seek · Tap ▶"
                 }
+                Text(
+                    text = seekLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (activeAxis == DragAxis.HORIZONTAL) primary else Color.White.copy(alpha = 0.5f),
+                    maxLines = 1
+                )
                 if (enableVolume) {
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val volumeLabel = if (activeAxis == DragAxis.VERTICAL) {
-                            if (isAggressive) "Fast Volume ▲▼" else "Adjusting Volume ▲▼"
-                        } else "Swipe ▲▼ Volume"
-                        Text(
-                            text = volumeLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (activeAxis == DragAxis.VERTICAL) primary else Color.White.copy(alpha = 0.6f)
-                        )
-                    }
+                    Text(
+                        text = "  ·  ",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = Color.White.copy(alpha = 0.2f)
+                    )
+                    // Volume label
+                    val volumeLabel = if (activeAxis == DragAxis.VERTICAL) {
+                        if (isAggressive) "Fast Vol ▲▼" else "Volume ▲▼"
+                    } else "▲▼ Volume"
+                    Text(
+                        text = volumeLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (activeAxis == DragAxis.VERTICAL) primary else Color.White.copy(alpha = 0.5f),
+                        maxLines = 1
+                    )
                 }
             }
 
             // Center Progress Bar
             if (hasDuration) {
-                Box(
+                val ampPx = with(LocalDensity.current) { amplitude.toPx() }
+                val wavelength = with(LocalDensity.current) { 60.dp.toPx() }
+                val strokeActiveWidth = with(LocalDensity.current) { 3.dp.toPx() }
+                val strokeInactiveWidth = with(LocalDensity.current) { 2.dp.toPx() }
+
+                Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(Color.White.copy(alpha = 0.12f))
+                        .padding(horizontal = 20.dp)
+                        .height(20.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .fillMaxWidth(fraction)
-                            .background(
-                                Brush.horizontalGradient(
-                                    colors = listOf(primary, primary.copy(alpha = 0.7f))
-                                )
-                            )
-                    )
+                    val width = size.width
+                    val height = size.height
+                    val centerY = height / 2f
+                    val amp = ampPx
+
+                    val activeWidth = width * fraction
+
+                    // Draw active path (0 to activeWidth)
+                    if (activeWidth > 0f) {
+                        val activePath = Path().apply {
+                            moveTo(0f, centerY + amp * sin(phase))
+                            var x = 1f
+                            while (x <= activeWidth) {
+                                val angle = (2 * Math.PI * x / wavelength).toFloat() + phase
+                                lineTo(x, centerY + amp * sin(angle))
+                                x += 2f
+                            }
+                        }
+                        drawPath(
+                            path = activePath,
+                            color = primary,
+                            style = Stroke(width = strokeActiveWidth, cap = StrokeCap.Round)
+                        )
+                    }
+
+                    // Draw inactive path (activeWidth to width)
+                    if (activeWidth < width) {
+                        val inactivePath = Path().apply {
+                            moveTo(activeWidth, centerY + amp * sin((2 * Math.PI * activeWidth / wavelength).toFloat() + phase))
+                            var x = activeWidth + 1f
+                            while (x <= width) {
+                                val angle = (2 * Math.PI * x / wavelength).toFloat() + phase
+                                lineTo(x, centerY + amp * sin(angle))
+                                x += 2f
+                            }
+                        }
+                        drawPath(
+                            path = inactivePath,
+                            color = Color.White.copy(alpha = 0.12f),
+                            style = Stroke(width = strokeInactiveWidth, cap = StrokeCap.Round)
+                        )
+                    }
                 }
             } else {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
                         .height(1.dp)
                         .background(Color.White.copy(alpha = 0.12f))
                 )
@@ -1010,18 +1086,24 @@ private fun SeekVolumeBar(
 
             // Bottom Time Row
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
                     text = if (hasDuration) formatTime(displayMs.toLong()) else formatTime(currentPosition),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.5f)
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    color = Color.White.copy(alpha = 0.6f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Visible
                 )
                 Text(
                     text = if (isLive) "LIVE" else if (durationMs > 0L) formatTime(durationMs) else "--:--",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.5f)
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    color = Color.White.copy(alpha = 0.6f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Visible
                 )
             }
         }
@@ -1302,7 +1384,6 @@ private fun DpadBtn(icon: ImageVector, desc: String, onClick: () -> Unit) {
 
 @Composable
 private fun MediaControlRow(
-    isPlaying: Boolean,
     onPlayerControl: (String) -> Unit,
     showLoop: Boolean = true,
     showSeek: Boolean = true,
@@ -1327,14 +1408,6 @@ private fun MediaControlRow(
                 onClick = { onPlayerControl("seek_back") }
             )
         }
-
-        // Play/Pause toggle — reflects the TV's actual state
-        LabeledIconButton(
-            icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-            label = if (isPlaying) "Pause" else "Play",
-            tint = MaterialTheme.colorScheme.primary,
-            onClick = { onPlayerControl(if (isPlaying) "pause" else "play") }
-        )
 
         // Seek +10s
         if (showSeek) {
@@ -1534,25 +1607,8 @@ private fun LabeledIconButton(
 @Composable
 private fun NowPlayingPanel(
     title: String?,
-    episodeLabel: String?,
-    positionMs: Long,
-    durationMs: Long,
-    isLive: Boolean = false,
-    onSeekTo: (Long) -> Unit,
-    // When false, only the title/episode label show — the seek control is rendered
-    // elsewhere (the SeekVolumeBar in the player context).
-    showProgress: Boolean = true
+    episodeLabel: String? = null
 ) {
-    val hasDuration = durationMs > 0L
-    var dragging by remember { mutableStateOf(false) }
-    var dragValue by remember { mutableFloatStateOf(0f) }
-
-    // Stop dragging once the TV's reported position catches up to where we seeked.
-    LaunchedEffect(positionMs) { if (dragging) dragging = false }
-
-    val sliderValue = (if (dragging) dragValue else positionMs.toFloat())
-        .coerceIn(0f, if (hasDuration) durationMs.toFloat() else 0f)
-
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1570,38 +1626,6 @@ private fun NowPlayingPanel(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-
-        if (showProgress) {
-            Slider(
-                value = sliderValue,
-                onValueChange = {
-                    dragging = true
-                    dragValue = it
-                },
-                onValueChangeFinished = {
-                    if (hasDuration) onSeekTo(dragValue.toLong())
-                },
-                valueRange = 0f..(if (hasDuration) durationMs.toFloat() else 1f),
-                enabled = hasDuration,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Row(modifier = Modifier.fillMaxWidth()) {
-                // Show the real elapsed position even when duration is unknown (DLNA streams that
-                // don't report a total) — sliderValue is clamped to [0,duration] and would pin to 0.
-                Text(
-                    text = formatTime(if (dragging) dragValue.toLong() else positionMs),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    text = if (isLive) "LIVE" else if (hasDuration) formatTime(durationMs) else "--:--",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isLive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
     }
 }

@@ -33,6 +33,7 @@ class SettingsRepository(
         val IPTV_SORT_ASCENDING = booleanPreferencesKey("iptv_sort_ascending")
         val IPTV_ACTIVE_FIRST = booleanPreferencesKey("iptv_active_first")
         val SEND_SUBTITLES_TO_TV = booleanPreferencesKey("send_subtitles_to_tv")
+        val LOGS_EXCLUDE_FILTERS = stringSetPreferencesKey("logs_exclude_filters")
     }
 
     // 2. Flow definitions for reactive Compose collectors
@@ -59,6 +60,7 @@ class SettingsRepository(
     /** When exploring a playlist, float probe-confirmed live channels to the top. */
     val iptvActiveFirst: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.IPTV_ACTIVE_FIRST] ?: true }
     val sendSubtitlesToTv: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.SEND_SUBTITLES_TO_TV] ?: true }
+    val logsExcludeFilters: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.LOGS_EXCLUDE_FILTERS] ?: emptySet() }
 
     // 3. Mutator methods
     suspend fun setAutoSwitchToRemote(value: Boolean) = write { it[Keys.AUTO_SWITCH_TO_REMOTE] = value }
@@ -77,6 +79,7 @@ class SettingsRepository(
     suspend fun setIptvSortAscending(value: Boolean) = write { it[Keys.IPTV_SORT_ASCENDING] = value }
     suspend fun setIptvActiveFirst(value: Boolean) = write { it[Keys.IPTV_ACTIVE_FIRST] = value }
     suspend fun setSendSubtitlesToTv(value: Boolean) = write { it[Keys.SEND_SUBTITLES_TO_TV] = value }
+    suspend fun setLogsExcludeFilters(value: Set<String>) = write { it[Keys.LOGS_EXCLUDE_FILTERS] = value }
     
     suspend fun addPopupWhitelist(host: String) = write { prefs ->
         val current = prefs[Keys.POPUP_WHITELIST] ?: emptySet()

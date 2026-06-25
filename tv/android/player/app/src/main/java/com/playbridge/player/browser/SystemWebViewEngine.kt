@@ -110,6 +110,9 @@ class SystemWebViewEngine(
     /** Periodic playback status (a `{"type":"status",…}` JSON string) for the phone scrubber. */
     var onVideoStatus: ((String) -> Unit)? = null
 
+    /** Callback for custom overlays: (visible, text, style, bgColor, textColor, autoDismissMs). */
+    var onVideoOverlay: ((Boolean, String, String, String?, String?, Long) -> Unit)? = null
+
     // Every frame (main + iframes) reporting a screen-dominating video, keyed by its
     // reply proxy. `score` is the absolute on-screen video area (comparable across
     // frames); `playing` and `isMain` feed target selection. Unified pathway: the main
@@ -311,6 +314,15 @@ class SystemWebViewEngine(
                     val kind = o.optString("kind")
                     val value = o.optString("value")
                     if (kind != "none" && value != "none") onVideoResult?.invoke(kind, value)
+                }
+                "overlay" -> {
+                    val visible = o.optBoolean("visible", false)
+                    val text = o.optString("text", "")
+                    val style = o.optString("style", "fullscreen")
+                    val bgColor = if (o.has("backgroundColor")) o.optString("backgroundColor") else null
+                    val textColor = if (o.has("textColor")) o.optString("textColor") else null
+                    val autoDismissMs = o.optLong("autoDismissMs", 0L)
+                    onVideoOverlay?.invoke(visible, text, style, bgColor, textColor, autoDismissMs)
                 }
                 "status" -> {
                     // Forward only the current target frame's status, so a background
