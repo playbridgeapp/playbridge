@@ -201,13 +201,79 @@
     }
   }
 
+  function repeatChar(char, count) {
+    var out = "";
+    for (var i = 0; i < count; i++) out += char;
+    return out;
+  }
+
+  function fmtTime(totalSec) {
+    if (!isFinite(totalSec) || totalSec < 0) return "0:00";
+    var s = Math.floor(totalSec);
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    var sec = s % 60;
+    if (h > 0) {
+      return h + ":" + (m < 10 ? "0" : "") + m + ":" + (sec < 10 ? "0" : "") + sec;
+    } else {
+      return m + ":" + (sec < 10 ? "0" : "") + sec;
+    }
+  }
+
+  function progressBar(frac) {
+    var slots = 16;
+    var filled = Math.round(Math.max(0, Math.min(1, frac)) * slots);
+    return repeatChar("█", filled) + repeatChar("░", slots - filled);
+  }
+
+  function showFeedbackOverlay(kind, value) {
+    var text = "";
+    switch (kind) {
+      case 'toggle':
+        text = (value === 'playing') ? '▶' : '❙❙';
+        break;
+      case 'seek':
+        var parts = value.split(',');
+        var t = parseFloat(parts[0]) || 0;
+        var d = parseFloat(parts[1]) || 0;
+        var frac = d > 0 ? t / d : 0;
+        text = fmtTime(t) + "   /   " + fmtTime(d) + "\n" + progressBar(frac);
+        break;
+      case 'vol':
+        var vol = parseFloat(value) || 0;
+        text = "🔊  " + Math.round(vol * 100) + "%\n" + progressBar(vol);
+        break;
+      case 'rate':
+        var r = parseFloat(value) || 1;
+        text = (r + "").replace(/\.0$/, "") + "×";
+        break;
+      default:
+        return;
+    }
+
+    if (window.pbVideoChannel) {
+      try {
+        window.pbVideoChannel.postMessage(JSON.stringify({
+          type: 'overlay',
+          visible: true,
+          text: text,
+          style: 'minimal',
+          autoDismissMs: 1500
+        }));
+      } catch (e) { /* ignore */ }
+    }
+  }
+
   // Bind the channel (any frame) so native can post commands and read results.
   function bindChannel() {
     if (channel || !window.pbVideoChannel) return;
     channel = window.pbVideoChannel;
     channel.onmessage = function (e) {
       var res = execute(e.data);
-      channel.postMessage(JSON.stringify({ type: 'result', kind: res.kind, value: res.value }));
+      if (res.kind !== 'none' && res.value !== 'none') {
+        showFeedbackOverlay(res.kind, res.value);
+      }
+      channel.postMessage(JSON.stringify({ type: 'result', kind: 'none', value: 'none' }));
     };
   }
 

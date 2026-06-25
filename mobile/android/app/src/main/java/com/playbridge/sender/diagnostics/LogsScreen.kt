@@ -34,7 +34,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -55,6 +60,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import com.playbridge.sender.data.settings.SettingsRepository
+import org.koin.compose.koinInject
 
 private enum class LogTab { PHONE, TV }
 
@@ -72,6 +79,10 @@ fun LogsScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    val settingsRepository: SettingsRepository = koinInject()
+    val excludeFilters by settingsRepository.logsExcludeFilters.collectAsState(initial = emptySet())
+    var excludeFiltersDialogOpen by remember { mutableStateOf(false) }
 
     var tab by remember { mutableStateOf(LogTab.PHONE) }
     var query by remember { mutableStateOf("") }
@@ -93,10 +104,18 @@ fun LogsScreen(
     val tvAvailable = tvIp != null && tvPort != null
 
     // Poll the phone logcat while the Phone tab is visible.
-    LaunchedEffect(tab, includeSystem) {
+    LaunchedEffect(tab, includeSystem, excludeFilters) {
         if (tab == LogTab.PHONE) {
+            phoneLines = emptyList()
             while (true) {
-                phoneLines = LogcatReader.snapshot(includeNoise = includeSystem)
+                val snap = LogcatReader.snapshot(
+                    includeNoise = includeSystem,
+                    excludeFilters = excludeFilters
+                )
+                phoneLines = if (phoneLines.isEmpty()) snap else {
+                    val merged = (phoneLines + snap).distinctBy { it.raw }
+                    if (merged.size > 3000) merged.takeLast(3000) else merged
+                }
                 delay(1500)
             }
         }
@@ -114,6 +133,15 @@ fun LogsScreen(
     }
 
     val listState = rememberLazyListState()
+    val isAtBottom = remember {
+        derivedStateOf {
+            val lastVisibleItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+            lastVisibleItem == null || lastVisibleItem.index == listState.layoutInfo.totalItemsCount - 1
+        }
+    }
+    LaunchedEffect(isAtBottom.value) {
+        autoScroll = isAtBottom.value
+    }
     LaunchedEffect(filteredPhone.size, autoScroll, tab) {
         if (tab == LogTab.PHONE && autoScroll && filteredPhone.isNotEmpty()) {
             listState.scrollToItem(filteredPhone.lastIndex)
@@ -125,6 +153,13 @@ fun LogsScreen(
     detail?.let { entry ->
         LogDetailScreen(entry = entry, onBack = { detail = null })
         return
+    }
+
+    if (excludeFiltersDialogOpen) {
+        ExcludeFiltersDialog(
+            settingsRepository = settingsRepository,
+            onDismiss = { excludeFiltersDialogOpen = false }
+        )
     }
 
     Scaffold(
@@ -151,7 +186,10 @@ fun LogsScreen(
                                 menuOpen = false
                                 scope.launch {
                                     if (tab == LogTab.PHONE) {
-                                        phoneLines = LogcatReader.snapshot(includeNoise = includeSystem)
+                                        phoneLines = LogcatReader.snapshot(
+                                            includeNoise = includeSystem,
+                                            excludeFilters = excludeFilters
+                                        )
                                     } else if (tvAvailable) {
                                         tvLoading = true
                                         tvLines = fetchTvLogs(tvIp!!, tvPort!!)
@@ -179,6 +217,14 @@ fun LogsScreen(
                             )
                         }
                         DropdownMenuItem(
+                            text = { Text("Exclude filters") },
+                            leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                            onClick = {
+                                excludeFiltersDialogOpen = true
+                                menuOpen = false
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("Share") },
                             leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
                             onClick = {
@@ -202,7 +248,10 @@ fun LogsScreen(
                                     if (tab == LogTab.PHONE) {
                                         LogcatReader.clear()
                                         CrashLogger.clear()
-                                        phoneLines = LogcatReader.snapshot(includeNoise = includeSystem)
+                                        phoneLines = LogcatReader.snapshot(
+                                            includeNoise = includeSystem,
+                                            excludeFilters = excludeFilters
+                                        )
                                         Toast.makeText(context, "Phone logs cleared", Toast.LENGTH_SHORT).show()
                                     } else if (tvAvailable) {
                                         clearTvLogs(tvIp!!, tvPort!!)
@@ -298,6 +347,7 @@ fun LogsScreen(
                             state = listState,
                             modifier = Modifier
                                 .fillMaxSize()
+                                .drawVerticalScrollbar(listState, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
                                 .padding(horizontal = 8.dp)
                         ) {
                             items(filteredPhone) { line ->
@@ -321,8 +371,29 @@ fun LogsScreen(
                             // tab and support tap-to-detail; filter separately so typing in the
                             // search box doesn't re-run the regex over every line. The combined TV
                             // log is chronological oldest→newest, so reverse it to show newest first.
-                            val tvParsed = remember(lines) {
-                                lines.filter { it.isNotBlank() }.map { parseTvLine(it) }.asReversed()
+                            val tvParsed = remember(lines, excludeFilters) {
+                                val grouped = mutableListOf<LogcatReader.LogLine>()
+                                for (line in lines) {
+                                    if (line.isBlank()) continue
+                                    val parsed = parseTvLine(line)
+                                    if (grouped.isNotEmpty() && LogcatReader.shouldGroup(parsed, grouped.last())) {
+                                        val lastIdx = grouped.lastIndex
+                                        val last = grouped[lastIdx]
+                                        grouped[lastIdx] = last.copy(
+                                            message = last.message + "\n" + parsed.message,
+                                            raw = last.raw + "\n" + parsed.raw
+                                        )
+                                    } else {
+                                        grouped.add(parsed)
+                                    }
+                                }
+                                val filtered = if (excludeFilters.isEmpty()) grouped else grouped.filterNot { entry ->
+                                    excludeFilters.any { filter ->
+                                        entry.tag.contains(filter, ignoreCase = true) ||
+                                        entry.message.contains(filter, ignoreCase = true)
+                                    }
+                                }
+                                filtered.asReversed()
                             }
                             val tvEntries = remember(tvParsed, query) {
                                 if (query.isBlank()) tvParsed
@@ -332,9 +403,12 @@ fun LogsScreen(
                             }
                             // Render each line as its own item so only on-screen lines lay out,
                             // instead of one giant Text node measuring the whole log on the main thread.
+                            val tvListState = rememberLazyListState()
                             LazyColumn(
+                                state = tvListState,
                                 modifier = Modifier
                                     .fillMaxSize()
+                                    .drawVerticalScrollbar(tvListState, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
                                     .padding(horizontal = 8.dp)
                             ) {
                                 items(tvEntries) { line ->
@@ -619,4 +693,90 @@ private suspend fun shareLogs(context: Context, text: String, source: String) {
             }
         }
     }
+}
+
+@Composable
+private fun ExcludeFiltersDialog(
+    settingsRepository: SettingsRepository,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val excludeFilters by settingsRepository.logsExcludeFilters.collectAsState(initial = emptySet())
+    var textValue by remember(excludeFilters) {
+        mutableStateOf(excludeFilters.joinToString("\n"))
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Exclude Filters") },
+        text = {
+            Column {
+                Text(
+                    text = "Specify tags or message keywords to ignore/exclude (one per line). Matches are case-insensitive.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                OutlinedTextField(
+                    value = textValue,
+                    onValueChange = { textValue = it },
+                    placeholder = { Text("e.g. OkHttp\nChromium\nViewRootImpl") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(150.dp),
+                    maxLines = 10
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val newFilters = textValue.split("\n")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .toSet()
+                    scope.launch {
+                        settingsRepository.setLogsExcludeFilters(newFilters)
+                        onDismiss()
+                    }
+                }
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+fun Modifier.drawVerticalScrollbar(
+    state: LazyListState,
+    color: Color
+): Modifier = this.drawWithContent {
+    drawContent()
+    val layoutInfo = state.layoutInfo
+    val totalItems = layoutInfo.totalItemsCount
+    val visibleItemsInfo = layoutInfo.visibleItemsInfo
+    if (visibleItemsInfo.isEmpty() || visibleItemsInfo.size >= totalItems) return@drawWithContent
+
+    val firstVisibleItem = visibleItemsInfo.first()
+    val firstVisibleIndex = firstVisibleItem.index
+    val visibleItemsCount = visibleItemsInfo.size
+
+    val sizeFraction = visibleItemsCount.toFloat() / totalItems
+    val scrollFraction = firstVisibleIndex.toFloat() / (totalItems - visibleItemsCount).coerceAtMost(1)
+
+    val thickness = 4.dp.toPx()
+    val viewportHeight = size.height
+    val knobHeight = (viewportHeight * sizeFraction).coerceIn(32.dp.toPx(), viewportHeight / 2)
+    val knobTop = (viewportHeight - knobHeight) * scrollFraction
+
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(size.width - thickness - 2.dp.toPx(), knobTop),
+        size = Size(thickness, knobHeight),
+        cornerRadius = CornerRadius(thickness / 2, thickness / 2)
+    )
 }

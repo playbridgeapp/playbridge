@@ -95,6 +95,10 @@ fun LibraryDetailScreen(
     isTvConnected: Boolean = false,
     /** A DLNA renderer is the active cast target (no WS session) — suppresses native reconnects. */
     isDlnaActive: Boolean = false,
+    /** Authoritative routing intent (reactive): true = a TV/DLNA target, false = This Device. */
+    routeTargetsTv: Boolean = false,
+    /** Change the authoritative route from this screen's Watch-on-TV / This-Device toggle. */
+    onSetWatchRoute: (Boolean) -> Unit = {},
     selectedTvDevice: TvDevice? = null,
     onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
     onOpenConnectionScreen: () -> Unit = {},
@@ -165,21 +169,12 @@ fun LibraryDetailScreen(
     // Persist watch mode preference in browser_prefs
     val browserPrefs = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
     val browserSettings = remember { context.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
-    var watchOnTv by remember {
-        mutableStateOf(
-            if (browserPrefs.contains("watch_on_tv")) {
-                browserPrefs.getBoolean("watch_on_tv", tvName != null)
-            } else {
-                tvName != null
-            }
-        )
-    }
-
-    // NOTE: routing intent is authoritative and user-controlled (see
-    // CONNECTION_ROUTING_PLAN.md). We deliberately do NOT flip watchOnTv just because a
-    // connection exists — that conflation caused "This Device" plays to jump to the TV.
-    // watchOnTv changes only via the user's explicit Watch-on-TV / This-Device choice,
-    // which the device picker mirrors into the persisted `watch_on_tv` pref + Route.
+    // Routing intent is authoritative and reactive: it follows the device picker / route
+    // live (see CONNECTION_ROUTING_PLAN.md). Deriving it from [routeTargetsTv] — rather than
+    // a one-time snapshot of the old `watch_on_tv` pref — is what fixes "switch to This
+    // Device on this screen, but it still casts to the TV": the previous local state never
+    // updated until the screen was recomposed from scratch.
+    val watchOnTv = routeTargetsTv
 
     // Player mode (mirrors CastSheet; persisted to browser_prefs/tv_player_mode)
     val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
@@ -798,10 +793,7 @@ fun LibraryDetailScreen(
                                 tvName = tvName,
                                 isTvConnected = isTvConnected,
                                 watchOnTv = watchOnTv,
-                                onWatchOnTvChange = {
-                                    watchOnTv = it
-                                    browserPrefs.edit { putBoolean("watch_on_tv", it) }
-                                },
+                                onWatchOnTvChange = { onSetWatchRoute(it) },
                                 selectedTvDevice = selectedTvDevice,
                                 onOpenConnectionScreen = onOpenConnectionScreen,
                                 onWatchOnTv = {
@@ -895,10 +887,7 @@ fun LibraryDetailScreen(
                                     tvName = tvName,
                                     isTvConnected = isTvConnected,
                                     watchOnTv = watchOnTv,
-                                    onWatchOnTvChange = {
-                                        watchOnTv = it
-                                        browserPrefs.edit { putBoolean("watch_on_tv", it) }
-                                    },
+                                    onWatchOnTvChange = { onSetWatchRoute(it) },
                                     watchLabel = epResume
                                         ?.let { "Resume $epLabel · ${formatResumeTime(it.positionMs)}" }
                                         ?: "Watch $epLabel",

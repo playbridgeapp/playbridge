@@ -90,7 +90,12 @@ class CastSessionManager(
         _route.map { it !is Route.ThisDevice }.stateIn(scope, SharingStarted.Eagerly, false)
 
     private fun persistBaseRoute(value: String) {
-        routePrefs.edit().putString(ROUTE_KEY, value).apply()
+        // Keep the legacy `watch_on_tv` mirror in lockstep so every screen that still reads
+        // it (CastSheet, PhoneFiles, …) agrees with the authoritative route.
+        routePrefs.edit()
+            .putString(ROUTE_KEY, value)
+            .putBoolean("watch_on_tv", value == "native")
+            .apply()
     }
 
     /** User picked "This Device": route phone-local. Does NOT tear down any connection. */
@@ -363,6 +368,8 @@ class CastSessionManager(
         // Selecting a renderer is an explicit routing choice; it also supersedes any native
         // link, so stop the native reconnect supervisor.
         _route.value = Route.Dlna(device.uuid, device.name)
+        // DLNA is a cast target → mirror "watch on TV" for legacy readers.
+        routePrefs.edit().putBoolean("watch_on_tv", true).apply()
         hasConnectedThisSession = false
         reconnectAttempt = 0
         reconnectJob?.cancel()

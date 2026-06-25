@@ -182,6 +182,8 @@ fun AppNavHost(
     val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
     val dlnaStatus by connectionViewModel.dlnaStatus.collectAsState()
     val dlnaMediaTitle by connectionViewModel.dlnaMediaTitle.collectAsState()
+    // Authoritative routing intent — reactive so screens follow device-picker changes live.
+    val routeTargetsTv by connectionViewModel.routeTargetsTv.collectAsState()
     val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
     val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
 
@@ -948,6 +950,10 @@ fun AppNavHost(
                         tvName = tvDevice?.name,
                         isTvConnected = connectionState is WebSocketClient.ConnectionState.Connected,
                         isDlnaActive = activeDlnaTarget != null,
+                        routeTargetsTv = routeTargetsTv,
+                        onSetWatchRoute = { toTv ->
+                            if (toTv) connectionViewModel.selectNativeRoute() else connectionViewModel.selectThisDevice()
+                        },
                         onDominantColorChange = { libraryDetailAccent = it },
                         selectedTvDevice = tvDevice,
                         onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
