@@ -2,6 +2,12 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] — 2026-06-28 (build 5)
+
+### Added
+- **SAS Pairing Handshake**: Implemented the Secure Association Service (SAS) pairing handshake, generating and displaying short authentication strings for secure out-of-band authentication. (#66)
+- **Pairing View**: Updated the pairing UI with verification screens and controls to validate connecting senders. (#66)
+
 ## [0.2.0] — 2026-06-21 (build 4)
 
 ### Added

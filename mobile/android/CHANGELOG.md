@@ -3,6 +3,15 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] — 2026-06-28 (versionCode 212)
+
+### Added
+- **SAS Pairing Handshake**: Integrated Secure Association Service (SAS) pairing handshake using cryptographically verified short authentication strings (SAS) for secure receiver pairing. (#66)
+- **Premium Glassmorphic Remote**: Redesigned the remote control UI with a modern glassmorphic aesthetic, interactive touch targets, and a segmented controller for switching control modes. (#65)
+- **WorkManager Downloads Rewrite**: Completely overhauled the download engine with a `WorkManager`-backed queue, concurrent segment downloading, on-the-fly HLS to MP4 transmuxing, and proper `MediaStore` publishing. (#63)
+- **Cast Connection Routing**: Implemented a robust reconnect supervisor, connection routing framework, and optimized Foreground Service (FGS) behaviors for background casting durability. (#62)
+- **Reactive Watch Route**: Made the watch navigation route reactive and added exclusion filters to the logs viewer. (#64)
+
 ## [0.5.0] — 2026-06-22 (versionCode 211)
 
 ### Added
