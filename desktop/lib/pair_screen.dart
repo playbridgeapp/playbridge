@@ -185,8 +185,7 @@ class _PairScreenState extends State<PairScreen> {
                       count: _devices.length, onTap: _openDevicesDialog),
                 ],
               ] else if (isAwaitingCode) ...[
-                const Icon(Icons.lock_open,
-                    size: 64, color: Colors.tealAccent),
+                const Icon(Icons.lock_open, size: 64, color: Colors.tealAccent),
                 const SizedBox(height: 20),
                 Text(
                   'Pairing Request',
@@ -200,8 +199,8 @@ class _PairScreenState extends State<PairScreen> {
                 ),
                 const SizedBox(height: 32),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 32, vertical: 16),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.05),
                     borderRadius: BorderRadius.circular(12),
@@ -255,7 +254,6 @@ class _PairScreenState extends State<PairScreen> {
                   style: TextStyle(color: Colors.white60),
                   textAlign: TextAlign.center,
                 ),
-
               ] else ...[
                 const Icon(Icons.cast, size: 64, color: Colors.white54),
                 const SizedBox(height: 20),

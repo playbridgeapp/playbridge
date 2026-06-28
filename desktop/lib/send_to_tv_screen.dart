@@ -756,7 +756,8 @@ class _PinInputViewState extends State<_PinInputView> {
                         borderSide: BorderSide(color: Colors.white24, width: 2),
                       ),
                       focusedBorder: const UnderlineInputBorder(
-                        borderSide: BorderSide(color: Colors.tealAccent, width: 2),
+                        borderSide:
+                            BorderSide(color: Colors.tealAccent, width: 2),
                       ),
                     ),
                     onChanged: (val) {
@@ -802,4 +803,3 @@ class _PinInputViewState extends State<_PinInputView> {
     );
   }
 }
-

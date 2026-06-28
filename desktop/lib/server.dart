@@ -299,7 +299,11 @@ class ReceiverServer extends ChangeNotifier {
         channel.sink.add(pongJson());
         return false;
 
-      case PairingCommitCmd(:final commit, :final deviceName, :final deviceUUID):
+      case PairingCommitCmd(
+          :final commit,
+          :final deviceName,
+          :final deviceUUID
+        ):
         return _handlePairingCommit(channel, commit, deviceName, deviceUUID);
 
       case PairingRevealCmd(:final senderEphPub, :final nonceS):
@@ -494,8 +498,7 @@ class ReceiverServer extends ChangeNotifier {
           handshake.senderEphPub! +
           handshake.nonceS!,
     );
-    final prk =
-        SasCrypto.hkdfExtract(salt: null, ikm: handshake.sharedSecret!);
+    final prk = SasCrypto.hkdfExtract(salt: null, ikm: handshake.sharedSecret!);
     final confirmationKey = SasCrypto.hkdfExpand(prk,
         info: Uint8List.fromList('confirmationKey'.codeUnits), length: 32);
     final expectedMacBytes = SasCrypto.hmacSha256(confirmationKey, transcript);
@@ -516,8 +519,7 @@ class ReceiverServer extends ChangeNotifier {
     _failedAttempts[ip] = count;
     if (count >= 3) {
       // Lock out for 60 seconds after 3 failures.
-      _lockoutUntil[ip] =
-          DateTime.now().millisecondsSinceEpoch + 60 * 1000;
+      _lockoutUntil[ip] = DateTime.now().millisecondsSinceEpoch + 60 * 1000;
       _failedAttempts.remove(ip);
       debugPrint('[server] IP $ip locked out after $count failed pairings');
     }

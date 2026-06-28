@@ -169,7 +169,8 @@ class TvSenderClient {
         _nonceS = SasCrypto.generateNonce(16);
 
         // Compute commit = SHA-256(pubKey || nonceS)
-        final commitBytes = SasCrypto.sha256(Uint8List.fromList(_senderPubKey! + _nonceS!));
+        final commitBytes =
+            SasCrypto.sha256(Uint8List.fromList(_senderPubKey! + _nonceS!));
         _commitStr = base64.encode(commitBytes);
 
         channel.sink.add(senderPairingCommitJson(
@@ -237,12 +238,7 @@ class TvSenderClient {
     // Compute transcript and SAS.
     final commitBytes = Uint8List.fromList(base64.decode(_commitStr!));
     final transcript = Uint8List.fromList(
-      commitBytes +
-      _tvEphPub! +
-      _nonceT! +
-      _senderPubKey! +
-      _nonceS!
-    );
+        commitBytes + _tvEphPub! + _nonceT! + _senderPubKey! + _nonceS!);
     _calculatedSas = SasCrypto.generateSAS(_sharedSecret!, transcript);
 
     // Send pairing_reveal.
@@ -260,12 +256,14 @@ class TvSenderClient {
   }
 
   bool submitSasCode(String code) {
-    if (_calculatedSas == null || _current != SenderConnectionState.waitingForCodeInput) {
+    if (_calculatedSas == null ||
+        _current != SenderConnectionState.waitingForCodeInput) {
       return false;
     }
 
     if (code != _calculatedSas) {
-      debugPrint('[tv-sender] SAS code mismatch: entered $code, expected $_calculatedSas');
+      debugPrint(
+          '[tv-sender] SAS code mismatch: entered $code, expected $_calculatedSas');
       _setState(SenderConnectionState.pairingDenied);
       _close();
       return false;
@@ -274,12 +272,7 @@ class TvSenderClient {
     // Match! Calculate confirmation MAC.
     final commitBytes = Uint8List.fromList(base64.decode(_commitStr!));
     final transcript = Uint8List.fromList(
-      commitBytes +
-      _tvEphPub! +
-      _nonceT! +
-      _senderPubKey! +
-      _nonceS!
-    );
+        commitBytes + _tvEphPub! + _nonceT! + _senderPubKey! + _nonceS!);
 
     final prk = SasCrypto.hkdfExtract(salt: null, ikm: _sharedSecret!);
     final confirmationKey = SasCrypto.hkdfExpand(
