@@ -4,11 +4,26 @@ import SwiftUI
 import UIKit
 import Combine
 import SwiftProtobuf
+import CryptoKit
 
 struct PairingRequest {
     let deviceName: String
     let deviceUUID: String
+    let sasCode: String
     let connection: NWConnection
+}
+
+struct ConnectionHandshake {
+    let deviceName: String
+    let deviceUUID: String
+    let commit: String
+    let tvEphPriv: Curve25519.KeyAgreement.PrivateKey
+    let tvEphPub: Data
+    let nonceT: Data
+    var senderEphPub: Data?
+    var nonceS: Data?
+    var sharedSecret: Data?
+    var sasCode: String?
 }
 
 // MARK: - Server Logic
@@ -17,6 +32,10 @@ class WebSocketServer: ObservableObject {
     private var connectedConnections: [NWConnection] = []
     private var historyStore: HistoryStore?
     var playlistStore: PlaylistStore?
+
+    private var inProgressHandshakes: [ObjectIdentifier: ConnectionHandshake] = [:]
+    private var failedAttempts: [String: Int] = [:]
+    private var lockoutUntil: [String: Date] = [:]
 
     @Published var currentPlayRequest: Playbridge_PlayPayload? {
         didSet {
@@ -108,7 +127,7 @@ class WebSocketServer: ObservableObject {
     }
 
     func start(port: UInt16 = 8765) {
-        let wssPort = port + 1
+        let wssPort = port
 
         // wss is the default and only transport. It carries the mDNS service.
         let tlsUp = startTLSListener(
@@ -296,8 +315,40 @@ class WebSocketServer: ObservableObject {
         receiveMessages(from: connection)
     }
 
+    private func getIPAddress(from connection: NWConnection) -> String {
+        if case let .hostPort(host, _) = connection.endpoint {
+            switch host {
+            case .name(let name, _):
+                return name
+            case .ipv4(let address):
+                return "\(address)"
+            case .ipv6(let address):
+                return "\(address)"
+            @unknown default:
+                return "unknown"
+            }
+        }
+        return "unknown"
+    }
+
+    private func handleHandshakeFailure(for connection: NWConnection) {
+        let connId = ObjectIdentifier(connection)
+        guard inProgressHandshakes.removeValue(forKey: connId) != nil else { return }
+        
+        DispatchQueue.main.async {
+            self.serverState = "Incorrect code or connection lost"
+            // Wait 3 seconds and reset to "Ready to Connect"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                if self.serverState == "Incorrect code or connection lost" {
+                    self.serverState = "Ready to Connect"
+                }
+            }
+        }
+    }
+
     private func removeConnection(_ connection: NWConnection) {
         connection.cancel()
+        handleHandshakeFailure(for: connection)
         DispatchQueue.main.async {
             self.connectedConnections.removeAll(where: { $0 === connection })
             self.connectedCount = self.connectedConnections.count
@@ -339,9 +390,17 @@ class WebSocketServer: ObservableObject {
         switch msgType {
         case "ping":
             send(json: ["type": "pong"], to: connection)
-        case "pairing_request":
-            if let msg = try? Playbridge_PairingRequestMessage(jsonString: jsonString) {
-                handlePairingRequest(msg, from: connection)
+        case "pairing_commit":
+            if let msg = try? Playbridge_PairingCommitMessage(jsonString: jsonString) {
+                handlePairingCommit(msg, from: connection)
+            }
+        case "pairing_reveal":
+            if let msg = try? Playbridge_PairingRevealMessage(jsonString: jsonString) {
+                handlePairingReveal(msg, from: connection)
+            }
+        case "pairing_confirmation":
+            if let msg = try? Playbridge_PairingConfirmationMessage(jsonString: jsonString) {
+                handlePairingConfirmation(msg, from: connection)
             }
         case "auth":
             if let msg = try? Playbridge_AuthMessage(jsonString: jsonString) {
@@ -356,31 +415,183 @@ class WebSocketServer: ObservableObject {
         }
     }
 
-    // MARK: - Pairing
+    // MARK: - SAS Pairing Handshake
 
-    private func handlePairingRequest(_ msg: Playbridge_PairingRequestMessage, from connection: NWConnection) {
-        if pendingPairingRequest != nil {
+    private func recordPairingFailure(ip: String) {
+        let attempts = (failedAttempts[ip] ?? 0) + 1
+        failedAttempts[ip] = attempts
+        if attempts >= 3 {
+            lockoutUntil[ip] = Date().addingTimeInterval(60) // 60s lockout
+            failedAttempts[ip] = 0
+            print("[server] IP \(ip) locked out for 60 seconds due to 3 failed pairing attempts")
+        }
+    }
+
+    private func handlePairingCommit(_ msg: Playbridge_PairingCommitMessage, from connection: NWConnection) {
+        let ip = getIPAddress(from: connection)
+        
+        // 1. Rate-limiting check
+        if let lockout = lockoutUntil[ip], lockout > Date() {
+            print("[server] IP \(ip) is locked out from pairing")
             send(json: ["type": "pairing_denied"], to: connection)
             connection.cancel()
             return
         }
-
-        let request = PairingRequest(
-            deviceName: msg.deviceName, deviceUUID: msg.deviceUuid, connection: connection)
-        DispatchQueue.main.async { self.pendingPairingRequest = request }
-
-        autoTimeoutWork?.cancel()
-        let uuid = msg.deviceUuid
-        let work = DispatchWorkItem { [weak self] in
-            guard let self = self, self.pendingPairingRequest?.deviceUUID == uuid else { return }
-            self.denyPairing()
+        
+        // 2. Concurrency check (only one pairing at a time)
+        if pendingPairingRequest != nil || !inProgressHandshakes.isEmpty {
+            send(json: ["type": "pairing_denied"], to: connection)
+            connection.cancel()
+            return
         }
-        autoTimeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: work)
+        
+        // 3. Generate TV keypair and nonceT
+        let keys = SasCrypto.generateX25519KeyPair()
+        let nonceT = SasCrypto.generateNonce(size: 16)
+        
+        let handshake = ConnectionHandshake(
+            deviceName: msg.deviceName,
+            deviceUUID: msg.deviceUuid,
+            commit: msg.commit,
+            tvEphPriv: keys.privateKey,
+            tvEphPub: keys.publicKeyBytes,
+            nonceT: nonceT
+        )
+        
+        inProgressHandshakes[ObjectIdentifier(connection)] = handshake
+        
+        // 4. Respond with challenge
+        let challenge: [String: Any] = [
+            "type": "pairing_challenge",
+            "tvEphPub": keys.publicKeyBytes.base64EncodedString(),
+            "nonceT": nonceT.base64EncodedString()
+        ]
+        send(json: challenge, to: connection)
     }
 
-    func approvePairing() {
-        guard let request = pendingPairingRequest else { return }
+    private func handlePairingReveal(_ msg: Playbridge_PairingRevealMessage, from connection: NWConnection) {
+        let connId = ObjectIdentifier(connection)
+        guard var handshake = inProgressHandshakes[connId] else {
+            send(json: ["type": "pairing_denied"], to: connection)
+            connection.cancel()
+            return
+        }
+        
+        guard let senderEphPubBytes = Data(base64Encoded: msg.senderEphPub),
+              let nonceSBytes = Data(base64Encoded: msg.nonceS) else {
+            send(json: ["type": "pairing_denied"], to: connection)
+            connection.cancel()
+            return
+        }
+        
+        // Verify commitment: commit == SHA-256(senderEphPub || nonceS)
+        var combined = Data()
+        combined.append(senderEphPubBytes)
+        combined.append(nonceSBytes)
+        let calculatedCommit = SasCrypto.sha256(combined).base64EncodedString()
+        
+        if calculatedCommit != handshake.commit {
+            print("[server] Commitment mismatch — denying pairing")
+            send(json: ["type": "pairing_denied"], to: connection)
+            removeConnection(connection)
+            recordPairingFailure(ip: getIPAddress(from: connection))
+            return
+        }
+        
+        handshake.senderEphPub = senderEphPubBytes
+        handshake.nonceS = nonceSBytes
+        
+        // Compute ECDH shared secret
+        do {
+            let sharedSecret = try SasCrypto.calculateECDH(privateKey: handshake.tvEphPriv, publicKeyBytes: senderEphPubBytes)
+            handshake.sharedSecret = sharedSecret
+            
+            // Compute transcript and SAS code
+            guard let commitBytes = Data(base64Encoded: handshake.commit) else {
+                send(json: ["type": "pairing_denied"], to: connection)
+                removeConnection(connection)
+                return
+            }
+            var transcript = Data()
+            transcript.append(commitBytes)
+            transcript.append(handshake.tvEphPub)
+            transcript.append(handshake.nonceT)
+            transcript.append(senderEphPubBytes)
+            transcript.append(nonceSBytes)
+            
+            let sas = SasCrypto.generateSAS(sharedSecret: sharedSecret, transcript: transcript)
+            handshake.sasCode = sas
+            inProgressHandshakes[connId] = handshake
+            
+            // Present the code on the screen
+            let request = PairingRequest(
+                deviceName: handshake.deviceName,
+                deviceUUID: handshake.deviceUUID,
+                sasCode: sas,
+                connection: connection
+            )
+            DispatchQueue.main.async { self.pendingPairingRequest = request }
+            
+            autoTimeoutWork?.cancel()
+            let uuid = handshake.deviceUUID
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, self.pendingPairingRequest?.deviceUUID == uuid else { return }
+                self.denyPairing()
+            }
+            autoTimeoutWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: work) // 60s timeout
+        } catch {
+            print("[server] ECDH calculation error: \(error)")
+            send(json: ["type": "pairing_denied"], to: connection)
+            removeConnection(connection)
+        }
+    }
+
+    private func handlePairingConfirmation(_ msg: Playbridge_PairingConfirmationMessage, from connection: NWConnection) {
+        let connId = ObjectIdentifier(connection)
+        guard let handshake = inProgressHandshakes[connId],
+              let pending = pendingPairingRequest,
+              pending.connection === connection else {
+            send(json: ["type": "pairing_denied"], to: connection)
+            connection.cancel()
+            return
+        }
+        
+        // Derive confirmation key and expected MAC
+        guard let commitBytes = Data(base64Encoded: handshake.commit),
+              let senderEphPub = handshake.senderEphPub,
+              let nonceS = handshake.nonceS,
+              let sharedSecret = handshake.sharedSecret else {
+            send(json: ["type": "pairing_denied"], to: connection)
+            connection.cancel()
+            return
+        }
+        
+        var transcript = Data()
+        transcript.append(commitBytes)
+        transcript.append(handshake.tvEphPub)
+        transcript.append(handshake.nonceT)
+        transcript.append(senderEphPub)
+        transcript.append(nonceS)
+        
+        let prk = SasCrypto.hkdfExtract(salt: nil, ikm: sharedSecret)
+        let confirmationKey = SasCrypto.hkdfExpand(
+            prk: prk,
+            info: "confirmationKey".data(using: .utf8),
+            length: 32
+        )
+        let expectedMac = SasCrypto.hmacSha256(key: confirmationKey, data: transcript).base64EncodedString()
+        
+        if msg.mac == expectedMac {
+            approvePairing(handshake: handshake, connection: connection)
+        } else {
+            print("[server] Confirmation MAC mismatch — denying pairing")
+            denyPairing()
+            recordPairingFailure(ip: getIPAddress(from: connection))
+        }
+    }
+
+    private func approvePairing(handshake: ConnectionHandshake, connection: NWConnection) {
         autoTimeoutWork?.cancel()
         autoTimeoutWork = nil
 
@@ -390,8 +601,8 @@ class WebSocketServer: ObservableObject {
         authorizedTokens = tokens
 
         let device = PairedDevice(
-            deviceUUID: request.deviceUUID,
-            deviceName: request.deviceName,
+            deviceUUID: handshake.deviceUUID,
+            deviceName: handshake.deviceName,
             token: token,
             lastConnected: Date()
         )
@@ -400,8 +611,14 @@ class WebSocketServer: ObservableObject {
         var approved: [String: Any] = ["type": "pairing_approved", "token": token]
         if let fp = certFingerprint { approved["certFingerprint"] = fp }
         approved["players"] = Self.capabilityPlayers
-        send(json: approved, to: request.connection)
-        completeAuth(from: request.connection, token: token)
+        send(json: approved, to: connection)
+        
+        let ip = getIPAddress(from: connection)
+        failedAttempts.removeValue(forKey: ip)
+        lockoutUntil.removeValue(forKey: ip)
+        
+        inProgressHandshakes.removeValue(forKey: ObjectIdentifier(connection))
+        completeAuth(from: connection, token: token)
         pendingPairingRequest = nil
     }
 
@@ -410,6 +627,10 @@ class WebSocketServer: ObservableObject {
         autoTimeoutWork?.cancel()
         autoTimeoutWork = nil
         send(json: ["type": "pairing_denied"], to: request.connection)
+        
+        let connId = ObjectIdentifier(request.connection)
+        inProgressHandshakes.removeValue(forKey: connId)
+        
         request.connection.cancel()
         pendingPairingRequest = nil
     }

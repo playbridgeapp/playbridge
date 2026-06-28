@@ -28,6 +28,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import java.net.URI
+import java.net.Socket
+import java.net.InetSocketAddress
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -80,6 +84,29 @@ class ConnectionViewModel(
 
     val deviceHistory: Flow<List<TvDevice>> = connectionStore.deviceHistory
 
+    private val _savedDevicesOnlineStatus = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val savedDevicesOnlineStatus: StateFlow<Map<String, Boolean>> = _savedDevicesOnlineStatus.asStateFlow()
+
+    fun pingSavedDevices(devices: List<TvDevice>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val results = devices.map { device ->
+                async {
+                    val online = try {
+                        Socket().use { socket ->
+                            val portToPing = device.wssPort ?: device.port
+                            socket.connect(InetSocketAddress(device.ip, portToPing), 600)
+                            true
+                        }
+                    } catch (_: Exception) {
+                        false
+                    }
+                    device.uuid to online
+                }
+            }.awaitAll().toMap()
+            _savedDevicesOnlineStatus.value = results
+        }
+    }
+
     private val _autoConnectEnabled = MutableStateFlow(prefs.getBoolean("auto_connect_tv", true))
     val autoConnectEnabled: StateFlow<Boolean> = _autoConnectEnabled.asStateFlow()
 
@@ -113,6 +140,7 @@ class ConnectionViewModel(
         ?: UUID.randomUUID().toString().also { prefs.edit { putString("pb_phone_uuid", it) } }
 
     private var hasAttemptedInitialConnect = false
+    private var activeConnectingDevice: TvDevice? = null
 
     // Serialises read-modify-write updates to the saved TvDevice. The credentials and
     // capabilities collectors both fire on auth and each does tvDevice.first() → copy() →
@@ -123,9 +151,14 @@ class ConnectionViewModel(
 
     private suspend fun updateSavedDevice(transform: (TvDevice) -> TvDevice) {
         deviceUpdateMutex.withLock {
-            val current = connectionStore.tvDevice.first() ?: return@withLock
+            val active = activeConnectingDevice
+            val current = active ?: connectionStore.tvDevice.first()
+            if (current == null) return@withLock
             val updated = transform(current)
-            if (updated == current) return@withLock
+            if (active != null) {
+                activeConnectingDevice = null
+            }
+            if (updated == current && current != active) return@withLock
             Log.i(TAG, "Saving TV device ${updated.ip} (players=${updated.players})")
             connectionStore.saveTvDevice(updated)
             connectionStore.addToHistory(updated)
@@ -151,16 +184,11 @@ class ConnectionViewModel(
             }
         }
 
-        // Manage discovery (mDNS + DLNA SSDP). A time-boxed scan window fires whenever we
-        // enter a not-connected state (startup, disconnect, connect failure, each retry —
-        // which also covers reconnecting a saved TV that roamed to a new IP), and stops as
-        // soon as we connect. No always-on SSDP loop in the background.
+        // Manage discovery (mDNS + DLNA SSDP). Stop discovery when we are active or connecting.
         viewModelScope.launch {
             connectionState.collect { state ->
-                if (state !is WebSocketClient.ConnectionState.Connected &&
-                    state !is WebSocketClient.ConnectionState.Connecting) {
-                    startDiscovery()
-                } else {
+                if (state is WebSocketClient.ConnectionState.Connected ||
+                    state is WebSocketClient.ConnectionState.Connecting) {
                     stopDiscovery()
                 }
             }
@@ -211,14 +239,23 @@ class ConnectionViewModel(
             }
         }
 
-        // On auth failure or pairing denial, wipe the token so the next tap triggers
-        // a fresh pairing_request instead of silently retrying the wrong token.
+        // On auth failure or pairing denial, wipe the token or clear the device from storage.
         viewModelScope.launch {
             connectionState.collect { state ->
                 if (state is WebSocketClient.ConnectionState.AuthFailed ||
                     state is WebSocketClient.ConnectionState.PairingDenied) {
-                    updateSavedDevice { device ->
-                        if (device.token.isNotEmpty()) device.copy(token = "") else device
+                    activeConnectingDevice = null
+                    val currentDevice = connectionStore.tvDevice.first()
+                    if (currentDevice != null) {
+                        if (currentDevice.token.isEmpty()) {
+                            // If the token was empty (first time pairing failed), clear it from connectionStore
+                            connectionStore.clearTvDevice()
+                        } else {
+                            // If it was already paired, wipe the token but keep the device so they can tap to re-pair.
+                            updateSavedDevice { device ->
+                                device.copy(token = "")
+                            }
+                        }
                     }
                 }
             }
@@ -258,10 +295,13 @@ class ConnectionViewModel(
             val merged = ConnectionMerge.withDiscoveredWssPort(device, discoveredDevices.value)
             Log.d(TAG, "Connecting to: ${merged.name} at ${merged.ip}:${merged.port} (wss=${merged.wssPort})")
             hasAttemptedInitialConnect = true
-            connectionStore.saveTvDevice(merged)
-            connectionStore.addToHistory(merged)
+            activeConnectingDevice = merged
             webSocketClient.connect(merged.ip, merged.port, merged.token, merged.name, phoneDeviceName, phoneDeviceUUID, merged.wssPort, merged.certFingerprint)
         }
+    }
+
+    fun submitPairingCode(code: String) {
+        webSocketClient.submitPairingCode(code)
     }
 
     /** Select a DLNA renderer as the active cast target (drops any native session). */
@@ -335,6 +375,7 @@ class ConnectionViewModel(
     }
 
     fun disconnect() {
+        activeConnectingDevice = null
         webSocketClient.disconnect()
         // Also disable auto-connect so it doesn't immediately reconnect
         setAutoConnectEnabled(false)

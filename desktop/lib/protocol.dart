@@ -104,6 +104,34 @@ class PairingRequestCmd extends Command {
   const PairingRequestCmd({required this.deviceName, required this.deviceUUID});
 }
 
+class PairingCommitCmd extends Command {
+  final String commit;
+  final String deviceName;
+  final String deviceUUID;
+  const PairingCommitCmd({
+    required this.commit,
+    required this.deviceName,
+    required this.deviceUUID,
+  });
+}
+
+class PairingChallengeCmd extends Command {
+  final String tvEphPub;
+  final String nonceT;
+  const PairingChallengeCmd({required this.tvEphPub, required this.nonceT});
+}
+
+class PairingRevealCmd extends Command {
+  final String senderEphPub;
+  final String nonceS;
+  const PairingRevealCmd({required this.senderEphPub, required this.nonceS});
+}
+
+class PairingConfirmationCmd extends Command {
+  final String mac;
+  const PairingConfirmationCmd(this.mac);
+}
+
 class PairingApprovedCmd extends Command {
   final String token;
   const PairingApprovedCmd(this.token);
@@ -144,6 +172,26 @@ Command parseCommand(String json) {
         return PairingRequestCmd(
           deviceName: (root['deviceName'] as String?) ?? '',
           deviceUUID: (root['deviceUUID'] as String?) ?? '',
+        );
+      case 'pairing_commit':
+        return PairingCommitCmd(
+          commit: (root['commit'] as String?) ?? '',
+          deviceName: (root['deviceName'] as String?) ?? '',
+          deviceUUID: (root['deviceUUID'] as String?) ?? '',
+        );
+      case 'pairing_challenge':
+        return PairingChallengeCmd(
+          tvEphPub: (root['tvEphPub'] as String?) ?? '',
+          nonceT: (root['nonceT'] as String?) ?? '',
+        );
+      case 'pairing_reveal':
+        return PairingRevealCmd(
+          senderEphPub: (root['senderEphPub'] as String?) ?? '',
+          nonceS: (root['nonceS'] as String?) ?? '',
+        );
+      case 'pairing_confirmation':
+        return PairingConfirmationCmd(
+          (root['mac'] as String?) ?? '',
         );
       case 'pairing_approved':
         return PairingApprovedCmd((root['token'] as String?) ?? '');
@@ -312,6 +360,47 @@ String senderPairingRequestJson({
       'device_name': deviceName,
       'device_uuid': deviceUUID,
     });
+
+// ==================== SAS handshake builders ====================
+
+/// Sender → TV/receiver: commit + device identity (step 1).
+String senderPairingCommitJson({
+  required String commit,
+  required String deviceName,
+  required String deviceUUID,
+}) =>
+    jsonEncode({
+      'type': 'pairing_commit',
+      'commit': commit,
+      'deviceName': deviceName,
+      'deviceUUID': deviceUUID,
+    });
+
+/// Receiver → sender: TV's ephemeral public key + nonce (step 2).
+String pairingChallengeJson({
+  required String tvEphPub,
+  required String nonceT,
+}) =>
+    jsonEncode({
+      'type': 'pairing_challenge',
+      'tvEphPub': tvEphPub,
+      'nonceT': nonceT,
+    });
+
+/// Sender → TV/receiver: reveal the committed values (step 3).
+String senderPairingRevealJson({
+  required String senderEphPub,
+  required String nonceS,
+}) =>
+    jsonEncode({
+      'type': 'pairing_reveal',
+      'senderEphPub': senderEphPub,
+      'nonceS': nonceS,
+    });
+
+/// Sender → TV/receiver: HMAC confirmation of the SAS code (step 4).
+String senderPairingConfirmationJson(String mac) =>
+    jsonEncode({'type': 'pairing_confirmation', 'mac': mac});
 
 /// `{"type":"command","action":<action>,"payload":<payload>}` — mirrors the
 /// shared `envelope(...)` builder.

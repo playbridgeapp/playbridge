@@ -15,12 +15,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.runtime.LaunchedEffect
+import com.playbridge.sender.ui.UnifiedDevice
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -214,8 +217,8 @@ fun DeviceConnectionSheet(
     val context = LocalContext.current
     val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val viewModel: ConnectionViewModel = koinViewModel()
-    val discovered by viewModel.discoveredDevices.collectAsState()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
+    val pings by viewModel.savedDevicesOnlineStatus.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
     val activeDlnaTarget by viewModel.activeDlnaTarget.collectAsState()
@@ -225,15 +228,29 @@ fun DeviceConnectionSheet(
         connectionState is WebSocketClient.ConnectionState.WaitingForApproval ||
         connectionState is WebSocketClient.ConnectionState.Retrying
     val onPhone = !isConnected && !isConnecting && activeDlnaTarget == null
-    val isScanning by viewModel.isScanning.collectAsState()
 
-    // Discover only while the sheet is open (mirrors ConnectionScreen).
-    DisposableEffect(Unit) {
-        viewModel.startDiscovery()
-        onDispose { viewModel.stopDiscovery() }
+    // Ping saved devices when history changes or sheet is opened
+    LaunchedEffect(history) {
+        viewModel.pingSavedDevices(history)
     }
 
-    val unified = buildUnifiedDevices(discovered, history, tvDevice, isConnected)
+    val unified = history.map { saved ->
+        val isOnline = pings[saved.uuid] == true
+        UnifiedDevice(
+            connectDevice = saved,
+            historyEntry = saved,
+            isOnline = isOnline,
+            lastConnected = saved.lastConnected
+        )
+    }.filterNot { u ->
+        isConnected && tvDevice?.let { c ->
+            (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
+                (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
+        } == true
+    }.sortedWith(
+        compareByDescending<UnifiedDevice> { it.isOnline }
+            .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
+    )
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -306,33 +323,18 @@ fun DeviceConnectionSheet(
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
                 )
-                if (isScanning) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                        Text(
-                            "Scanning…",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                } else {
-                    IconButton(onClick = { viewModel.rescan() }) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Rescan for TVs",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                IconButton(onClick = { viewModel.pingSavedDevices(history) }) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Refresh TV status",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
 
             if (unified.isEmpty()) {
                 Text(
-                    text = if (isScanning) "Looking for TVs on your network…"
-                    else "No TVs found. Tap the refresh icon to scan again.",
+                    text = "No saved TVs. Tap 'Set up new TV' to scan.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 8.dp)
@@ -463,21 +465,22 @@ private fun AllDevicesRow(onClick: () -> Unit) {
         color = Color.Transparent
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
             Text(
-                text = "All devices & manual connect",
-                style = MaterialTheme.typography.bodyMedium,
+                text = "Set up new TV",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f)
-            )
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.primary
             )
         }
     }

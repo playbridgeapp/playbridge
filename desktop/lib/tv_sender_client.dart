@@ -8,6 +8,7 @@ import 'package:pointycastle/asn1.dart';
 import 'package:web_socket_channel/io.dart';
 
 import 'protocol.dart';
+import 'sas_crypto.dart';
 
 /// Computes the OkHttp-style SPKI pin `sha256/<base64(SHA-256(SubjectPublicKeyInfo
 /// DER))>` from a certificate's DER bytes.
@@ -46,18 +47,12 @@ String? spkiPinFromCertDer(Uint8List der) {
 enum SenderConnectionState {
   disconnected,
   connecting,
-
-  /// `pairing_request` sent — waiting for the TV user to tap Allow.
-  waitingForApproval,
+  waitingForChallenge,
+  waitingForCodeInput,
+  verifyingCode,
   connected,
-
-  /// TV user denied (or the request timed out on the TV).
   pairingDenied,
-
-  /// Saved token rejected (e.g. TV reinstall) — caller should wipe + re-pair.
   authFailed,
-
-  /// Served cert didn't match the pinned fingerprint — possible MITM; refuse.
   pinMismatch,
   error,
 }
@@ -82,9 +77,20 @@ class TvSenderClient {
   String? _capturedPin;
   bool _pinMismatch = false;
 
+  // Cryptographic handshake state fields (sender side)
+  Uint8List? _senderPrivKey;
+  Uint8List? _senderPubKey;
+  Uint8List? _nonceS;
+  String? _commitStr;
+  Uint8List? _tvEphPub;
+  Uint8List? _nonceT;
+  Uint8List? _sharedSecret;
+  String? _calculatedSas;
+
   final _state = StreamController<SenderConnectionState>.broadcast();
   final _messages = StreamController<String>.broadcast();
   final _credentials = StreamController<TvCredentials>.broadcast();
+  final _sasCode = StreamController<String>.broadcast();
 
   SenderConnectionState _current = SenderConnectionState.disconnected;
 
@@ -94,6 +100,9 @@ class TvSenderClient {
 
   /// Non-handshake messages from the TV (status / playlist_status / tracks / …).
   Stream<String> get messages => _messages.stream;
+
+  /// Emitted when SAS code is calculated during handshake.
+  Stream<String> get sasCode => _sasCode.stream;
 
   /// Emitted whenever the TV issues a token (first pairing or token refresh) so
   /// the caller can persist it via [TvConnectionStore].
@@ -125,7 +134,7 @@ class TvSenderClient {
     _pinMismatch = false;
     _setState(SenderConnectionState.connecting);
 
-    final resolvedWssPort = wssPort ?? (port + 1);
+    final resolvedWssPort = wssPort ?? port;
     final formattedHost = host.contains(':') && !host.startsWith('[')
         ? '[${host.replaceFirst('%', '%25')}]'
         : host;
@@ -153,11 +162,22 @@ class TvSenderClient {
           channel.stream.listen(_onMessage, onError: _onError, onDone: _onDone);
 
       if (token == null || token.isEmpty) {
-        channel.sink.add(senderPairingRequestJson(
+        // Generate ephemeral X25519 keys and nonce.
+        final keys = SasCrypto.generateX25519KeyPair();
+        _senderPrivKey = keys.privateKey;
+        _senderPubKey = keys.publicKey;
+        _nonceS = SasCrypto.generateNonce(16);
+
+        // Compute commit = SHA-256(pubKey || nonceS)
+        final commitBytes = SasCrypto.sha256(Uint8List.fromList(_senderPubKey! + _nonceS!));
+        _commitStr = base64.encode(commitBytes);
+
+        channel.sink.add(senderPairingCommitJson(
+          commit: _commitStr!,
           deviceName: deviceName,
           deviceUUID: deviceUUID,
         ));
-        _setState(SenderConnectionState.waitingForApproval);
+        _setState(SenderConnectionState.waitingForChallenge);
       } else {
         channel.sink.add(senderAuthJson(token));
       }
@@ -178,6 +198,9 @@ class TvSenderClient {
       final obj = jsonDecode(text);
       if (obj is Map) {
         switch (obj['type']) {
+          case 'pairing_challenge':
+            _handlePairingChallenge(obj);
+            return;
           case 'pairing_approved':
             _handlePairingApproved(obj);
             return;
@@ -194,6 +217,83 @@ class TvSenderClient {
       // Not JSON / not a handshake frame — fall through to forward.
     }
     if (!_messages.isClosed) _messages.add(text);
+  }
+
+  void _handlePairingChallenge(Map<dynamic, dynamic> obj) {
+    final tvEphPubB64 = obj['tvEphPub'] as String?;
+    final nonceTB64 = obj['nonceT'] as String?;
+    if (tvEphPubB64 == null || nonceTB64 == null) {
+      _setState(SenderConnectionState.error);
+      _close();
+      return;
+    }
+
+    _tvEphPub = Uint8List.fromList(base64.decode(tvEphPubB64));
+    _nonceT = Uint8List.fromList(base64.decode(nonceTB64));
+
+    // Compute ECDH shared secret.
+    _sharedSecret = SasCrypto.calculateECDH(_senderPrivKey!, _tvEphPub!);
+
+    // Compute transcript and SAS.
+    final commitBytes = Uint8List.fromList(base64.decode(_commitStr!));
+    final transcript = Uint8List.fromList(
+      commitBytes +
+      _tvEphPub! +
+      _nonceT! +
+      _senderPubKey! +
+      _nonceS!
+    );
+    _calculatedSas = SasCrypto.generateSAS(_sharedSecret!, transcript);
+
+    // Send pairing_reveal.
+    _channel?.sink.add(senderPairingRevealJson(
+      senderEphPub: base64.encode(_senderPubKey!),
+      nonceS: base64.encode(_nonceS!),
+    ));
+
+    // Expose the computed SAS to listeners.
+    if (!_sasCode.isClosed) {
+      _sasCode.add(_calculatedSas!);
+    }
+
+    _setState(SenderConnectionState.waitingForCodeInput);
+  }
+
+  bool submitSasCode(String code) {
+    if (_calculatedSas == null || _current != SenderConnectionState.waitingForCodeInput) {
+      return false;
+    }
+
+    if (code != _calculatedSas) {
+      debugPrint('[tv-sender] SAS code mismatch: entered $code, expected $_calculatedSas');
+      _setState(SenderConnectionState.pairingDenied);
+      _close();
+      return false;
+    }
+
+    // Match! Calculate confirmation MAC.
+    final commitBytes = Uint8List.fromList(base64.decode(_commitStr!));
+    final transcript = Uint8List.fromList(
+      commitBytes +
+      _tvEphPub! +
+      _nonceT! +
+      _senderPubKey! +
+      _nonceS!
+    );
+
+    final prk = SasCrypto.hkdfExtract(salt: null, ikm: _sharedSecret!);
+    final confirmationKey = SasCrypto.hkdfExpand(
+      prk,
+      info: Uint8List.fromList('confirmationKey'.codeUnits),
+      length: 32,
+    );
+    final macBytes = SasCrypto.hmacSha256(confirmationKey, transcript);
+    final mac = base64.encode(macBytes);
+
+    // Send pairing_confirmation.
+    _channel?.sink.add(senderPairingConfirmationJson(mac));
+    _setState(SenderConnectionState.verifyingCode);
+    return true;
   }
 
   void _handlePairingApproved(Map<dynamic, dynamic> obj) {
@@ -282,5 +382,6 @@ class TvSenderClient {
     await _state.close();
     await _messages.close();
     await _credentials.close();
+    await _sasCode.close();
   }
 }

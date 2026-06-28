@@ -43,6 +43,7 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.wire.moshi.adapter)
+            implementation("org.bouncycastle:bcprov-jdk15to18:1.78.1")
 
             // Media3 ExoPlayer
             implementation(libs.androidx.media3.exoplayer)

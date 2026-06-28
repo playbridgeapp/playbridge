@@ -5,10 +5,13 @@ import com.playbridge.shared.protocol.IncomingMessage
 import com.playbridge.shared.protocol.createAuthResponseJson
 import com.playbridge.shared.protocol.createPairingApprovedJson
 import com.playbridge.shared.protocol.createPairingDeniedJson
+import com.playbridge.shared.protocol.createPairingChallengeJson
 import com.playbridge.shared.protocol.createPongJson
 import com.playbridge.shared.protocol.parseIncomingMessage
 import kotlinx.coroutines.CompletableDeferred
 import com.playbridge.player.logging.FileLogger
+import java.util.Base64
+import com.playbridge.shared.crypto.SasCrypto
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.cio.*
@@ -46,8 +49,28 @@ class WebSocketServer(
     data class PairingRequest(
         val deviceName: String,
         val deviceUUID: String,
+        val sasCode: String,
         internal val approval: CompletableDeferred<Boolean>
     )
+
+    private class ConnectionHandshake(
+        val deviceName: String,
+        val deviceUUID: String,
+        val commit: String,
+        val tvEphPriv: ByteArray,
+        val tvEphPub: ByteArray,
+        val nonceT: ByteArray,
+        var senderEphPub: ByteArray? = null,
+        var nonceS: ByteArray? = null,
+        var sharedSecret: ByteArray? = null,
+        var sasCode: String? = null,
+        var attemptsLeft: Int = 3
+    )
+
+    private val inProgressHandshakes = ConcurrentHashMap<org.java_websocket.WebSocket, ConnectionHandshake>()
+    private val failedAttemptsMap = ConcurrentHashMap<String, Int>()
+    private val lockoutMap = ConcurrentHashMap<String, Long>()
+
     private var server: EmbeddedServer<*, *>? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -115,7 +138,7 @@ class WebSocketServer(
                 server = null
 
                 val bindHost = "0.0.0.0"
-                server = embeddedServer(CIO, host = bindHost, port = port) {
+                server = embeddedServer(CIO, host = bindHost, port = port + 1) {
                     routing {
                         // HTTP endpoint: download log files
                         get("/logs") {
@@ -151,7 +174,7 @@ class WebSocketServer(
                 }.start(wait = false)
 
                 _connectionState.value = ConnectionState.Running(port)
-                FileLogger.i(TAG, "http log server on $bindHost:$port")
+                FileLogger.i(TAG, "http log server on $bindHost:${port + 1}")
                 startWssTransport()
                 onWssReady?.invoke(boundWssPort)
 
@@ -160,10 +183,10 @@ class WebSocketServer(
                 // If the port is in use, it's likely our own service from a previous run that hasn't fully released yet,
                 // or a separate instance. We'll mark as running for the UI.
                 _connectionState.value = ConnectionState.Running(port)
-                // The prior instance holds the ports and is serving wss on port+1; keep the
+                // The prior instance holds the ports and is serving wss on port; keep the
                 // service advertised (registerNsdService no-ops if already registered). We
                 // don't re-attempt the wss bind here — that'd just log a spurious failure.
-                onWssReady?.invoke(port + 1)
+                onWssReady?.invoke(port)
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Failed to start server", e)
                 _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
@@ -215,7 +238,7 @@ class WebSocketServer(
         try {
             val tls = TlsIdentity.loadOrCreate(dir)
             certFingerprint = tls.fingerprint
-            val wssPort = port + 1
+            val wssPort = port
             WssTransport(wssPort, tls.sslContext).also {
                 it.start()
                 wssServer = it
@@ -237,9 +260,9 @@ class WebSocketServer(
 
     // Shared pairing approval: shows the prompt and awaits the user's Allow/Deny
     // (auto-deny after 30s). Used by the wss transport; the CIO path inlines its own.
-    private suspend fun awaitPairingApproval(deviceName: String, deviceUUID: String): Boolean {
+    private suspend fun awaitPairingApproval(deviceName: String, deviceUUID: String, sasCode: String): Boolean {
         val approval = CompletableDeferred<Boolean>()
-        _pendingPairingRequest.value = PairingRequest(deviceName, deviceUUID, approval)
+        _pendingPairingRequest.value = PairingRequest(deviceName, deviceUUID, sasCode, approval)
         _connectionAttemptFlow.tryEmit(Unit)
         val timeoutJob = scope.launch {
             delay(30_000)
@@ -271,10 +294,30 @@ class WebSocketServer(
 
         override fun onOpen(conn: org.java_websocket.WebSocket, handshake: org.java_websocket.handshake.ClientHandshake) {
             FileLogger.i(TAG, "wss connection: ${conn.remoteSocketAddress}")
+            val ip = conn.remoteSocketAddress?.address?.hostAddress ?: ""
+            val lockoutUntil = lockoutMap[ip]
+            if (lockoutUntil != null && System.currentTimeMillis() < lockoutUntil) {
+                FileLogger.w(TAG, "IP $ip is locked out from pairing")
+                conn.close()
+            }
         }
 
         override fun onClose(conn: org.java_websocket.WebSocket, code: Int, reason: String?, remote: Boolean) {
             authed.remove(conn)
+            val handshake = inProgressHandshakes.remove(conn)
+            if (handshake != null) {
+                val pending = _pendingPairingRequest.value
+                if (pending != null && pending.deviceUUID == handshake.deviceUUID) {
+                    pending.approval.complete(false)
+                }
+                scope.launch {
+                    if (_connectionState.value is ConnectionState.Stopped) return@launch
+                    _connectionState.value = ConnectionState.Error("Incorrect code or connection lost")
+                    delay(3000)
+                    if (_connectionState.value is ConnectionState.Stopped) return@launch
+                    refreshCount()
+                }
+            }
             if (wssClients.remove(conn)) refreshCount()
         }
 
@@ -321,41 +364,171 @@ class WebSocketServer(
                 conn.send(createPongJson())
                 return
             }
-            if (text.contains("\"type\":\"pairing_request\"")) {
+
+            val ip = conn.remoteSocketAddress?.address?.hostAddress ?: ""
+
+            if (text.contains("\"type\":\"pairing_commit\"")) {
+                val lockoutUntil = lockoutMap[ip]
+                if (lockoutUntil != null && System.currentTimeMillis() < lockoutUntil) {
+                    FileLogger.w(TAG, "IP $ip is locked out from pairing")
+                    conn.send(createPairingDeniedJson())
+                    conn.close()
+                    return
+                }
+
                 if (_pendingPairingRequest.value != null) {
                     conn.send(createPairingDeniedJson()); conn.close(); return
                 }
-                val msg = (parseIncomingMessage(text) as? IncomingMessage.PairingRequest)?.msg
+                val msg = (parseIncomingMessage(text) as? IncomingMessage.PairingCommit)?.msg
                 if (msg == null) {
                     conn.send(createPairingDeniedJson()); conn.close(); return
                 }
+
+                // Generate TV X25519 keypair and nonce
+                val tvKey = SasCrypto.generateX25519KeyPair()
+                val nonceT = SasCrypto.generateNonce(16)
+
+                val handshake = ConnectionHandshake(
+                    deviceName = msg.device_name,
+                    deviceUUID = msg.device_uuid,
+                    commit = msg.commit,
+                    tvEphPriv = tvKey.privateKey,
+                    tvEphPub = tvKey.publicKey,
+                    nonceT = nonceT
+                )
+                inProgressHandshakes[conn] = handshake
+
+                val tvEphPubB64 = Base64.getEncoder().encodeToString(tvKey.publicKey)
+                val nonceTB64 = Base64.getEncoder().encodeToString(nonceT)
+                conn.send(createPairingChallengeJson(tvEphPub = tvEphPubB64, nonceT = nonceTB64))
+                return
+            }
+
+            if (text.contains("\"type\":\"pairing_reveal\"")) {
+                val handshake = inProgressHandshakes[conn]
+                if (handshake == null) {
+                    conn.send(createPairingDeniedJson()); conn.close(); return
+                }
+                val msg = (parseIncomingMessage(text) as? IncomingMessage.PairingReveal)?.msg
+                if (msg == null) {
+                    conn.send(createPairingDeniedJson()); conn.close(); return
+                }
+
+                val senderEphPubBytes = Base64.getDecoder().decode(msg.sender_eph_pub)
+                val nonceSBytes = Base64.getDecoder().decode(msg.nonce_s)
+
+                // Verify commitment: commit == SHA256(senderEphPub || nonceS)
+                val calculatedCommitBytes = SasCrypto.sha256(senderEphPubBytes + nonceSBytes)
+                val calculatedCommit = Base64.getEncoder().encodeToString(calculatedCommitBytes)
+                if (calculatedCommit != handshake.commit) {
+                    FileLogger.w(TAG, "Commitment mismatch on connection ${conn.remoteSocketAddress}")
+                    conn.send(createPairingDeniedJson())
+                    conn.close()
+                    inProgressHandshakes.remove(conn)
+                    recordPairingFailure(ip)
+                    return
+                }
+
+                handshake.senderEphPub = senderEphPubBytes
+                handshake.nonceS = nonceSBytes
+
+                // Compute ECDH shared secret and SAS
+                val sharedSecret = SasCrypto.calculateECDH(handshake.tvEphPriv, senderEphPubBytes)
+                handshake.sharedSecret = sharedSecret
+
+                val commitBytes = Base64.getDecoder().decode(handshake.commit)
+                val transcript = commitBytes + handshake.tvEphPub + handshake.nonceT + senderEphPubBytes + nonceSBytes
+                val sas = SasCrypto.generateSAS(sharedSecret, transcript)
+                handshake.sasCode = sas
+
+                // Show the pairing display on the TV
                 scope.launch {
-                    val approved = awaitPairingApproval(msg.device_name, msg.device_uuid)
-                    if (approved) {
-                        val token = onPairingApproved(msg.device_name, msg.device_uuid)
-                        val caps = capabilities()
-                        conn.send(createPairingApprovedJson(token, certFingerprint, caps.players, caps.browsers))
-                        registerAuthed(conn)
-                    } else {
-                        conn.send(createPairingDeniedJson()); conn.close()
+                    try {
+                        val approved = awaitPairingApproval(handshake.deviceName, handshake.deviceUUID, sas)
+                        if (approved) {
+                            failedAttemptsMap.remove(ip)
+                            val token = onPairingApproved(handshake.deviceName, handshake.deviceUUID)
+                            val caps = capabilities()
+                            if (conn.isOpen) {
+                                conn.send(createPairingApprovedJson(token, certFingerprint, caps.players, caps.browsers))
+                            }
+                            registerAuthed(conn)
+                            inProgressHandshakes.remove(conn)
+                        } else {
+                            if (conn.isOpen) {
+                                conn.send(createPairingDeniedJson())
+                                conn.close()
+                            }
+                            recordPairingFailure(ip)
+                        }
+                    } catch (e: Exception) {
+                        FileLogger.w(TAG, "Error in pairing approval coroutine", e)
                     }
                 }
                 return
             }
+
+            if (text.contains("\"type\":\"pairing_confirmation\"")) {
+                val handshake = inProgressHandshakes[conn]
+                if (handshake == null) {
+                    conn.send(createPairingDeniedJson()); conn.close(); return
+                }
+                val msg = (parseIncomingMessage(text) as? IncomingMessage.PairingConfirmation)?.msg
+                if (msg == null) {
+                    conn.send(createPairingDeniedJson()); conn.close(); return
+                }
+
+                val commitBytes = Base64.getDecoder().decode(handshake.commit)
+                val transcript = commitBytes + handshake.tvEphPub + handshake.nonceT + handshake.senderEphPub!! + handshake.nonceS!!
+
+                // Derive confirmation key and expected MAC
+                val prk = SasCrypto.hkdfExtract(salt = null, ikm = handshake.sharedSecret!!)
+                val confirmationKey = SasCrypto.hkdfExpand(prk, info = "confirmationKey".toByteArray(), length = 32)
+                val expectedMacBytes = SasCrypto.hmacSha256(confirmationKey, transcript)
+                val expectedMac = Base64.getEncoder().encodeToString(expectedMacBytes)
+
+                if (msg.mac == expectedMac) {
+                    _pendingPairingRequest.value?.approval?.complete(true)
+                } else {
+                    FileLogger.w(TAG, "Confirmation MAC mismatch on connection ${conn.remoteSocketAddress}")
+                    _pendingPairingRequest.value?.approval?.complete(false)
+                }
+                return
+            }
+
             if (text.contains("\"type\":\"auth\"")) {
                 val token = (parseIncomingMessage(text) as? IncomingMessage.Auth)?.msg?.token
                 scope.launch {
-                    if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
-                        val caps = capabilities()
-                        conn.send(createAuthResponseJson(
-                            success = true, certFingerprint = certFingerprint,
-                            players = caps.players, browsers = caps.browsers
-                        ))
-                        registerAuthed(conn)
-                    } else {
-                        conn.send(createAuthResponseJson(success = false)); conn.close()
+                    try {
+                        if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
+                            val caps = capabilities()
+                            if (conn.isOpen) {
+                                conn.send(createAuthResponseJson(
+                                    success = true, certFingerprint = certFingerprint,
+                                    players = caps.players, browsers = caps.browsers
+                                ))
+                            }
+                            registerAuthed(conn)
+                        } else {
+                            if (conn.isOpen) {
+                                conn.send(createAuthResponseJson(success = false))
+                                conn.close()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        FileLogger.w(TAG, "Error in auth coroutine", e)
                     }
                 }
+            }
+        }
+
+        private fun recordPairingFailure(ip: String) {
+            val attempts = (failedAttemptsMap[ip] ?: 0) + 1
+            failedAttemptsMap[ip] = attempts
+            if (attempts >= 3) {
+                lockoutMap[ip] = System.currentTimeMillis() + 60_000
+                failedAttemptsMap.remove(ip)
+                FileLogger.w(TAG, "IP $ip locked out for 60s due to 3 failed pairing attempts")
             }
         }
 
@@ -367,9 +540,15 @@ class WebSocketServer(
         }
 
         private fun refreshCount() {
-            _connectedClientCount.value = wssClients.size
-            if (wssClients.isEmpty()) {
+            if (_connectionState.value is ConnectionState.Stopped) return
+            val clients = wssClients.toList()
+            _connectedClientCount.value = clients.size
+            if (clients.isEmpty()) {
                 _connectionState.value = ConnectionState.Running(port)
+            } else {
+                if (_connectionState.value !is ConnectionState.Connected) {
+                    _connectionState.value = ConnectionState.Connected(clients.first().remoteSocketAddress?.toString() ?: "wss")
+                }
             }
         }
     }

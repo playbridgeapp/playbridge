@@ -45,6 +45,7 @@ class PlayBridgeApplication : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             // Persist crash to file FIRST — this may be our only chance
             FileLogger.logCrash(thread, throwable)
+            Log.e(TAG, "Background thread crash on thread ${thread.name}", throwable)
 
             val isMainThread = thread == Looper.getMainLooper().thread
 

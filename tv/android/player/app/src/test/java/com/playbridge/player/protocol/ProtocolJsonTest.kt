@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtocolJsonTest {
@@ -83,5 +84,61 @@ class ProtocolJsonTest {
             o["players"]?.jsonArray?.map { it.jsonPrimitive.content }
         )
         assertEquals(listOf("webview"), o["browsers"]?.jsonArray?.map { it.jsonPrimitive.content })
+    }
+
+    @Test
+    fun pairingCommitSerializationAndParsing() {
+        val json = com.playbridge.shared.protocol.createPairingCommitJson(
+            commit = "my-commit-hash",
+            deviceName = "My Phone",
+            deviceUUID = "uuid-1234"
+        )
+        val parsed = com.playbridge.shared.protocol.parseIncomingMessage(json)
+        assertTrue(parsed is com.playbridge.shared.protocol.IncomingMessage.PairingCommit)
+        val commitMsg = (parsed as com.playbridge.shared.protocol.IncomingMessage.PairingCommit).msg
+        assertEquals("pairing_commit", commitMsg.type)
+        assertEquals("my-commit-hash", commitMsg.commit)
+        assertEquals("My Phone", commitMsg.device_name)
+        assertEquals("uuid-1234", commitMsg.device_uuid)
+    }
+
+    @Test
+    fun pairingChallengeSerializationAndParsing() {
+        val json = com.playbridge.shared.protocol.createPairingChallengeJson(
+            tvEphPub = "tv-pubkey-bytes",
+            nonceT = "nonce-t-bytes"
+        )
+        val parsed = com.playbridge.shared.protocol.parseIncomingMessage(json)
+        assertTrue(parsed is com.playbridge.shared.protocol.IncomingMessage.PairingChallenge)
+        val challengeMsg = (parsed as com.playbridge.shared.protocol.IncomingMessage.PairingChallenge).msg
+        assertEquals("pairing_challenge", challengeMsg.type)
+        assertEquals("tv-pubkey-bytes", challengeMsg.tv_eph_pub)
+        assertEquals("nonce-t-bytes", challengeMsg.nonce_t)
+    }
+
+    @Test
+    fun pairingRevealSerializationAndParsing() {
+        val json = com.playbridge.shared.protocol.createPairingRevealJson(
+            senderEphPub = "sender-pubkey-bytes",
+            nonceS = "nonce-s-bytes"
+        )
+        val parsed = com.playbridge.shared.protocol.parseIncomingMessage(json)
+        assertTrue(parsed is com.playbridge.shared.protocol.IncomingMessage.PairingReveal)
+        val revealMsg = (parsed as com.playbridge.shared.protocol.IncomingMessage.PairingReveal).msg
+        assertEquals("pairing_reveal", revealMsg.type)
+        assertEquals("sender-pubkey-bytes", revealMsg.sender_eph_pub)
+        assertEquals("nonce-s-bytes", revealMsg.nonce_s)
+    }
+
+    @Test
+    fun pairingConfirmationSerializationAndParsing() {
+        val json = com.playbridge.shared.protocol.createPairingConfirmationJson(
+            mac = "confirmation-mac"
+        )
+        val parsed = com.playbridge.shared.protocol.parseIncomingMessage(json)
+        assertTrue(parsed is com.playbridge.shared.protocol.IncomingMessage.PairingConfirmation)
+        val confirmationMsg = (parsed as com.playbridge.shared.protocol.IncomingMessage.PairingConfirmation).msg
+        assertEquals("pairing_confirmation", confirmationMsg.type)
+        assertEquals("confirmation-mac", confirmationMsg.mac)
     }
 }

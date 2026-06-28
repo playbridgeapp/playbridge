@@ -163,6 +163,7 @@ fun RemoteControlScreen(
     var showAddSubtitle by remember { mutableStateOf(false) }
     var showSubtitlesSheet by remember { mutableStateOf(false) }
     val remoteContext = remoteContextOf(activeContext)
+    val videoActive = playbackState == "playing" || playbackState == "paused" || playbackState == "buffering"
 
     var modeByContext by remember {
         mutableStateOf(
@@ -175,6 +176,12 @@ fun RemoteControlScreen(
     }
     val selectedMode = modeByContext[remoteContext] ?: RemoteMode.CONTEXT
     fun selectMode(mode: RemoteMode) { modeByContext = modeByContext + (remoteContext to mode) }
+
+    LaunchedEffect(remoteContext, videoActive) {
+        if (remoteContext == RemoteContext.BROWSER && videoActive) {
+            selectMode(RemoteMode.CONTEXT)
+        }
+    }
 
     Scaffold(
         topBar = {

@@ -17,40 +17,44 @@ struct PairingView: View {
 struct PairingApprovalCard: View {
     let request: PairingRequest
     @EnvironmentObject var server: WebSocketServer
-    @FocusState private var allowFocused: Bool
+    @FocusState private var cancelFocused: Bool
 
     var body: some View {
         VStack(spacing: 40) {
-            Text("Allow device to connect?")
+            Text("Pairing Request")
                 .font(.system(size: 32, weight: .semibold))
                 .foregroundColor(.white.opacity(0.7))
 
-            Text(request.deviceName)
-                .font(.system(size: 72, weight: .bold))
-                .foregroundColor(.white)
+            Text("Enter this code on \"\(request.deviceName)\":")
+                .font(.system(size: 24))
+                .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
 
-            HStack(spacing: 40) {
-                Button(action: { server.approvePairing() }) {
-                    Text("Allow")
-                        .font(.system(size: 28, weight: .bold))
-                        .padding(.horizontal, 40)
-                        .padding(.vertical, 16)
-                }
-                .buttonStyle(.card)
-                .focused($allowFocused)
+            // Large 6-digit code split into 3-3 (e.g., "123  456")
+            Text(formattedCode)
+                .font(.system(size: 96, weight: .bold, design: .monospaced))
+                .foregroundColor(Theme.accent)
+                .padding(.horizontal, 48)
+                .padding(.vertical, 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.white.opacity(0.05))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                        )
+                )
 
-                Button(action: { server.denyPairing() }) {
-                    Text("Deny")
-                        .font(.system(size: 28, weight: .bold))
-                        .padding(.horizontal, 40)
-                        .padding(.vertical, 16)
-                }
-                .buttonStyle(.card)
+            Button(action: { server.denyPairing() }) {
+                Text("Cancel")
+                    .font(.system(size: 24, weight: .semibold))
+                    .padding(.horizontal, 40)
+                    .padding(.vertical, 16)
             }
-            .onAppear { allowFocused = true }
+            .buttonStyle(.card)
+            .focused($cancelFocused)
 
-            Text("Request expires in 30 seconds")
+            Text("Request expires in 60 seconds")
                 .font(.system(size: 18))
                 .foregroundColor(.white.opacity(0.4))
         }
@@ -59,6 +63,16 @@ struct PairingApprovalCard: View {
             RoundedRectangle(cornerRadius: 32)
                 .fill(.ultraThinMaterial)
         )
+        .onAppear {
+            cancelFocused = true
+        }
+    }
+
+    private var formattedCode: String {
+        let sas = request.sasCode
+        guard sas.count == 6 else { return sas }
+        let index3 = sas.index(sas.startIndex, offsetBy: 3)
+        return "\(sas.prefix(upTo: index3))  \(sas.suffix(from: index3))"
     }
 }
 

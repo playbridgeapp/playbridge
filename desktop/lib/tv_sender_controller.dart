@@ -35,12 +35,14 @@ class TvSenderController extends ChangeNotifier {
   StreamSubscription<SenderConnectionState>? _stateSub;
   StreamSubscription<TvCredentials>? _credSub;
   StreamSubscription<String>? _msgSub;
+  StreamSubscription<String>? _sasSub;
 
   List<DiscoveredTv> _discoveredRaw = const [];
   bool _allowSelfCast = false;
   SenderConnectionState _state = SenderConnectionState.disconnected;
   DiscoveredTv? _pending; // target of the in-flight / most recent connect
   TvRecord? _activeTv;
+  String? _currentSas;
 
   // Live now-casting snapshot, updated from the TV's `status` messages.
   String? _castingTitle;
@@ -74,6 +76,7 @@ class TvSenderController extends ChangeNotifier {
   SenderConnectionState get state => _state;
   TvRecord? get activeTv => _activeTv;
   bool get isConnected => _state == SenderConnectionState.connected;
+  String? get currentSas => _currentSas;
 
   String? get castingTitle => _castingTitle;
   String get remoteState => _remoteState;
@@ -98,8 +101,14 @@ class TvSenderController extends ChangeNotifier {
     _stateSub = _client.state.listen(_onState);
     _credSub = _client.credentials.listen(_onCredentials);
     _msgSub = _client.messages.listen(_onTvMessage);
+    _sasSub = _client.sasCode.listen((sas) {
+      _currentSas = sas;
+      notifyListeners();
+    });
     await _discovery.start();
   }
+
+  bool submitSasCode(String code) => _client.submitSasCode(code);
 
   /// Connect to a TV found via discovery. Reconnects silently when already
   /// paired; otherwise sends a `pairing_request` (the TV shows Allow).
@@ -323,6 +332,9 @@ class TvSenderController extends ChangeNotifier {
   // ─── Internals ──────────────────────────────────────────────────────────────
   void _onState(SenderConnectionState s) {
     _state = s;
+    if (s != SenderConnectionState.waitingForCodeInput) {
+      _currentSas = null;
+    }
     switch (s) {
       case SenderConnectionState.connected:
         final p = _pending;
@@ -433,6 +445,7 @@ class TvSenderController extends ChangeNotifier {
     _stateSub?.cancel();
     _credSub?.cancel();
     _msgSub?.cancel();
+    _sasSub?.cancel();
     _discovery.dispose();
     _client.dispose();
     _fileServer.stop();

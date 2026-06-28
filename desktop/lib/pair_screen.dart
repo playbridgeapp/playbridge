@@ -142,7 +142,8 @@ class _PairScreenState extends State<PairScreen> {
   @override
   Widget build(BuildContext context) {
     final isAuthed = widget.phase == PairingPhase.authenticated;
-    final hasPending = widget.pendingRequest != null;
+    final isAwaitingCode = widget.phase == PairingPhase.awaitingCode;
+    final isAwaitingApproval = widget.phase == PairingPhase.awaitingApproval;
 
     return Center(
       child: ConstrainedBox(
@@ -183,54 +184,78 @@ class _PairScreenState extends State<PairScreen> {
                   _ManageDevicesButton(
                       count: _devices.length, onTap: _openDevicesDialog),
                 ],
-              ] else if (hasPending) ...[
-                const Icon(Icons.phonelink_ring,
+              ] else if (isAwaitingCode) ...[
+                const Icon(Icons.lock_open,
                     size: 64, color: Colors.tealAccent),
                 const SizedBox(height: 20),
                 Text(
-                  'Allow device to connect?',
+                  'Pairing Request',
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
                 Text(
-                  widget.pendingRequest!.deviceName,
-                  style: const TextStyle(
-                    fontSize: 36,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
+                  'Enter this code on "${widget.pendingRequest?.deviceName ?? 'your phone'}":',
+                  style: const TextStyle(color: Colors.white60),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    FilledButton(
-                      autofocus: true,
-                      onPressed: widget.onAllow,
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 40, vertical: 16),
-                      ),
-                      child:
-                          const Text('Allow', style: TextStyle(fontSize: 18)),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 32, vertical: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.1),
                     ),
-                    const SizedBox(width: 24),
-                    OutlinedButton(
-                      onPressed: widget.onDeny,
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 40, vertical: 16),
-                      ),
-                      child: const Text('Deny', style: TextStyle(fontSize: 18)),
+                  ),
+                  child: Text(
+                    () {
+                      final sas = widget.pendingRequest?.sasCode ?? '000000';
+                      return sas.length == 6
+                          ? '${sas.substring(0, 3)}  ${sas.substring(3)}'
+                          : sas;
+                    }(),
+                    style: const TextStyle(
+                      fontSize: 48,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 8,
+                      color: Colors.tealAccent,
                     ),
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 32),
+                OutlinedButton(
+                  onPressed: widget.onDeny,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 40, vertical: 16),
+                  ),
+                  child: const Text('Cancel', style: TextStyle(fontSize: 18)),
+                ),
+                const SizedBox(height: 24),
                 const Text(
-                  'Request expires in 30 seconds',
+                  'Request expires in 60 seconds',
                   style: TextStyle(color: Colors.white38, fontSize: 13),
                 ),
+              ] else if (isAwaitingApproval) ...[
+                const SizedBox(
+                  width: 64,
+                  height: 64,
+                  child: CircularProgressIndicator(color: Colors.tealAccent),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Connecting…',
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Establishing secure connection',
+                  style: TextStyle(color: Colors.white60),
+                  textAlign: TextAlign.center,
+                ),
+
               ] else ...[
                 const Icon(Icons.cast, size: 64, color: Colors.white54),
                 const SizedBox(height: 20),

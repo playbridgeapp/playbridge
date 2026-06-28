@@ -58,6 +58,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -400,11 +407,13 @@ class BrowserActivity : ComponentActivity() {
             // The screen the Remote was opened from, so Back returns there (e.g. Phone Files,
             // Connection) rather than always falling back to the last main tab.
             var remoteOrigin by remember { mutableStateOf<Screen?>(null) }
+            var connectionInitialTab by remember { mutableStateOf(0) }
             // Keep the Remote's return target pointed at wherever we actually were last, even
             // when playback auto-switches into the Remote directly (which bypasses
             // onScreenChange and would otherwise leave remoteOrigin stale — e.g. stuck on IPTV).
             LaunchedEffect(currentScreen) {
                 if (currentScreen != Screen.Remote) remoteOrigin = currentScreen
+                if (currentScreen != Screen.Connection) connectionInitialTab = 0
             }
             // The screen the Dashboard was opened from, so its close (X) returns there.
             var dashboardOrigin by remember { mutableStateOf<Screen?>(null) }
@@ -1268,50 +1277,46 @@ class BrowserActivity : ComponentActivity() {
                                                 currentScreen = Screen.Dashboard
                                             },
                                             onSecurityIconClick = { showSiteInfoSheet = true },
-                                            onEditingChange = { editing ->
-                                                isEditing = editing
-                                                if (editing) {
-                                                    editUrl = currentUrl
-                                                    browserViewModel.setEditUrl(currentUrl)
-                                                }
-                                            },
-                                            onUrlChange = { url ->
-                                                editUrl = url
-                                                browserViewModel.setEditUrl(url)
-                                                urlBarTapped = false
-                                            },
-                                            onNavigate = { url ->
-                                                session.loadUrl(url)
-                                                isEditing = false
-                                            },
-                                            onMagnetDetected = { magnet ->
-                                                interceptedMagnet = magnet
-                                                isEditing = false
-                                            },
-                                            onRefresh = { session.reload() },
-                                            onStop = { session.stopLoading() },
-                                            onRemoteClick = when {
-                                                connectionState is WebSocketClient.ConnectionState.Connected -> {
-                                                    {
-                                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                                        currentScreen = Screen.Remote
-                                                    }
-                                                }
-                                                activeDlnaTarget != null -> {
-                                                    { currentScreen = Screen.Remote }
-                                                }
-                                                else -> null
-                                            },
-                                            // Shown only when no remote is available (not connected) —
-                                            // tapping opens the device connection sheet.
-                                            onConnectClick = { showBrowserConnectSheet = true }
-                                        )
+                                        onEditingChange = { editing ->
+                                            isEditing = editing
+                                            if (editing) {
+                                                editUrl = currentUrl
+                                                browserViewModel.setEditUrl(currentUrl)
+                                            }
+                                        },
+                                        onUrlChange = { url ->
+                                            editUrl = url
+                                            browserViewModel.setEditUrl(url)
+                                            urlBarTapped = false
+                                        },
+                                        onNavigate = { url ->
+                                            session.loadUrl(url)
+                                            isEditing = false
+                                        },
+                                        onMagnetDetected = { magnet ->
+                                            interceptedMagnet = magnet
+                                            isEditing = false
+                                        },
+                                        isTvConnected = (connectionState is WebSocketClient.ConnectionState.Connected || activeDlnaTarget != null),
+                                        onTvClick = { showBrowserConnectSheet = true },
+                                        onRemoteClick = {
+                                            if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                            }
+                                            currentScreen = Screen.Remote
+                                        },
+                                        isPlayEnabled = currentUrl.isNotEmpty() && currentUrl != "about:blank",
+                                        videoCount = videoCount,
+                                        onPlayClick = { showVideoSheet = true },
+                                        onPlayLongClick = { performQuickCast() }
+                                    )
 
                                     if (showBrowserConnectSheet) {
                                         DeviceConnectionSheet(
                                             onDismiss = { showBrowserConnectSheet = false },
                                             onOpenAllDevices = {
                                                 showBrowserConnectSheet = false
+                                                connectionInitialTab = 1
                                                 currentScreen = Screen.Connection
                                             },
                                             showThisDevice = true,
@@ -1489,37 +1494,15 @@ class BrowserActivity : ComponentActivity() {
                                             )
                                         }
 
-                                         val tabUrl = currentUrl
-                                         val isPlayEnabled = tabUrl.isNotEmpty() && tabUrl != "about:blank"
-                                         Box(
-                                             contentAlignment = Alignment.Center,
-                                             modifier = Modifier
-                                                 .size(48.dp)
-                                                 .clip(CircleShape)
-                                                 .combinedClickable(
-                                                     enabled = isPlayEnabled,
-                                                     onClick = { showVideoSheet = true },
-                                                     onLongClick = { performQuickCast() }
-                                                 )
+                                         IconButton(
+                                             onClick = { if (isLoading) session.stopLoading() else session.reload() }
                                          ) {
-                                             BadgedBox(
-                                                 badge = {
-                                                     if (isPlayEnabled && videoCount > 0) {
-                                                         Badge(
-                                                             containerColor = MaterialTheme.colorScheme.error,
-                                                             contentColor = MaterialTheme.colorScheme.onError
-                                                         ) {
-                                                             Text(videoCount.toString())
-                                                         }
-                                                     }
-                                                 }
-                                             ) {
-                                                 Icon(
-                                                     imageVector = Icons.Default.PlayArrow,
-                                                     contentDescription = "Play/Cast video",
-                                                     tint = if (isPlayEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                                 )
-                                             }
+                                             Icon(
+                                                 imageVector = if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
+                                                 contentDescription = if (isLoading) "Stop" else "Refresh",
+                                                 tint = MaterialTheme.colorScheme.onSurface,
+                                                 modifier = Modifier.size(24.dp)
+                                             )
                                          }
 
                                         // 4. Tab button with tab count outline box
@@ -1576,6 +1559,7 @@ class BrowserActivity : ComponentActivity() {
                             }
                             currentScreen = target
                         },
+                        connectionInitialTab = connectionInitialTab,
                         lastMainScreen = lastMainScreen,
                         onLastMainScreenChange = { lastMainScreen = it },
                         remoteReturnScreen = remoteOrigin ?: lastMainScreen,
@@ -1838,6 +1822,7 @@ class BrowserActivity : ComponentActivity() {
                     selectedTvDevice = activeDlnaTarget ?: tvDevice,
                     onOpenAllDevices = {
                         showVideoSheet = false
+                        connectionInitialTab = 1
                         currentScreen = Screen.Connection
                     },
                     browseUrl = castSheetBrowseOverride ?: currentUrl,
@@ -2045,6 +2030,109 @@ class BrowserActivity : ComponentActivity() {
                                 enabled = !isInstallingStremioAddon,
                                 onClick = { pendingStremioAddon = null }
                             ) { Text("Cancel") }
+                        }
+                    )
+                }
+
+                // Pairing/Connection Dialog Popup
+                val state = connectionState
+                if (state is WebSocketClient.ConnectionState.Connecting ||
+                    state is WebSocketClient.ConnectionState.WaitingForCodeInput ||
+                    state is WebSocketClient.ConnectionState.VerifyingCode) {
+
+                    var codeText by remember { mutableStateOf("") }
+                    val focusRequester = remember { FocusRequester() }
+
+                    LaunchedEffect(state) {
+                        if (state is WebSocketClient.ConnectionState.WaitingForCodeInput) {
+                            delay(100)
+                            focusRequester.requestFocus()
+                        }
+                    }
+
+                    AlertDialog(
+                        onDismissRequest = { connectionViewModel.disconnect() },
+                        title = {
+                            Text(
+                                text = when (state) {
+                                    is WebSocketClient.ConnectionState.WaitingForCodeInput -> "Pairing with ${state.serverName}"
+                                    is WebSocketClient.ConnectionState.VerifyingCode -> "Verifying Code"
+                                    else -> "Connecting to TV"
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        text = {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (state is WebSocketClient.ConnectionState.WaitingForCodeInput) {
+                                    Text(
+                                        text = "Enter the 6-digit code shown on your TV",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+
+                                    OutlinedTextField(
+                                        value = codeText,
+                                        onValueChange = { input ->
+                                            if (input.length <= 6 && input.all { it.isDigit() }) {
+                                                codeText = input
+                                                if (input.length == 6) {
+                                                    connectionViewModel.submitPairingCode(input)
+                                                }
+                                            }
+                                        },
+                                        placeholder = { Text("000 000") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        singleLine = true,
+                                        textStyle = LocalTextStyle.current.copy(
+                                            textAlign = TextAlign.Center,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 2.sp,
+                                            fontSize = 20.sp
+                                        ),
+                                        modifier = Modifier
+                                            .width(180.dp)
+                                            .focusRequester(focusRequester)
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(36.dp), strokeWidth = 3.dp)
+                                    }
+                                    Text(
+                                        text = if (state is WebSocketClient.ConnectionState.VerifyingCode)
+                                            "Verifying code with ${state.serverName}…"
+                                        else
+                                            "Connecting to TV…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            if (state is WebSocketClient.ConnectionState.WaitingForCodeInput) {
+                                Button(
+                                    onClick = { connectionViewModel.submitPairingCode(codeText) },
+                                    enabled = codeText.length == 6
+                                ) {
+                                    Text("Verify")
+                                }
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { connectionViewModel.disconnect() }) {
+                                Text("Cancel")
+                            }
                         }
                     )
                 }

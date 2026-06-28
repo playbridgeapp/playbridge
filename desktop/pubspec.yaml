@@ -52,6 +52,7 @@ dependencies:
 
   # Drag-and-drop of local files onto the Send to TV screen (→ playlist).
   desktop_drop: ^0.5.0
+  x25519: ^0.1.1
 
 dev_dependencies:
   flutter_test:

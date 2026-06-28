@@ -278,7 +278,7 @@ fun MainContent(
                         PairingScreen(
                             ip = serverIp ?: "unknown",
                             // Show the wss:// port — the address senders connect to.
-                            port = (serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT) + 1,
+                            port = serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT,
                             deviceName = deviceName,
                             deviceId = deviceId,
                             connectionState = connectionState,
