@@ -3,6 +3,13 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.6.0] — 2026-06-28 (versionCode 213)
+
+### Added
+- **SAS Pairing Handshake**: Implemented the Secure Association Service (SAS) pairing handshake using cryptographically verified short authentication strings (SAS) for secure, out-of-band receiver authentication. (#66)
+- **User Script Management**: Added a custom user script manager supporting dynamic JavaScript injection into the system WebView. (#61)
+- **YouTube Keep-Alive Script**: Integrated a YouTube keep-alive script to prevent media playback freezes in background WebView instances. (#61)
+
 ## Player [0.5.0] — 2026-06-22 (versionCode 212)
 
 ### Added

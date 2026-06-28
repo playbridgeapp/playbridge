@@ -2,6 +2,12 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0+18] — 2026-06-28
+
+### Added
+- **SAS Pairing Handshake**: Implemented the Secure Association Service (SAS) pairing flow, prompting the user with a short authentication string matching the phone for secure out-of-band receiver authentication. (#66)
+- **Pairing UI**: Integrated verification screens and validation flows into the pairing screen setup. (#66)
+
 ## [0.5.0+17] — 2026-06-22
 
 ### Added
