@@ -30,12 +30,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.launch
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import kotlinx.coroutines.delay
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.model.TvDevice
@@ -46,31 +51,71 @@ fun ConnectionScreen(
     viewModel: ConnectionViewModel,
     onMenuClick: () -> Unit,
     modifier: Modifier = Modifier,
-    onRemoteClick: (() -> Unit)? = null
+    onRemoteClick: (() -> Unit)? = null,
+    initialTab: Int = 0
 ) {
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
+    val pings by viewModel.savedDevicesOnlineStatus.collectAsState()
 
     val connectionState by viewModel.connectionState.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
     val activeDlnaTarget by viewModel.activeDlnaTarget.collectAsState()
 
-    // Build a single "Your TVs" list: saved devices annotated with live online
-    // status, plus any freshly-discovered TVs that aren't saved yet. This replaces
-    // the old split Discovered/Known sections, whose dedup left "Discovered" stuck
-    // on an endless "Searching…" spinner once every TV on the network was saved.
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
     val isScanning by viewModel.isScanning.collectAsState()
 
-    val unifiedDevices = buildUnifiedDevices(discoveredDevices, history, tvDevice, isConnected)
-    
-    // Start discovery when screen is visible
-    DisposableEffect(Unit) {
-        viewModel.startDiscovery()
+    var selectedTab by remember { mutableStateOf(initialTab) }
+
+    // Start discovery ONLY when the Discover tab is active
+    DisposableEffect(selectedTab) {
+        if (selectedTab == 1) {
+            viewModel.startDiscovery()
+        }
         onDispose {
             viewModel.stopDiscovery()
         }
+    }
+
+    // Ping saved devices when history changes or Your Devices tab is active
+    LaunchedEffect(history, selectedTab) {
+        if (selectedTab == 0) {
+            viewModel.pingSavedDevices(history)
+        }
+    }
+
+    val savedUnified = history.map { saved ->
+        val isOnline = pings[saved.uuid] == true
+        UnifiedDevice(
+            connectDevice = saved,
+            historyEntry = saved,
+            isOnline = isOnline,
+            lastConnected = saved.lastConnected
+        )
+    }.filterNot { u ->
+        isConnected && tvDevice?.let { c ->
+            (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
+                (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
+        } == true
+    }.sortedWith(
+        compareByDescending<UnifiedDevice> { it.isOnline }
+            .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
+    )
+
+    val discoveredUnified = discoveredDevices.map { discovered ->
+        val historyEntry = history.find { it.uuid == discovered.uuid || (it.ip == discovered.ip && it.port == discovered.port) }
+        UnifiedDevice(
+            connectDevice = discovered,
+            historyEntry = historyEntry,
+            isOnline = true,
+            lastConnected = historyEntry?.lastConnected
+        )
+    }.filterNot { u ->
+        isConnected && tvDevice?.let { c ->
+            (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
+                (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
+        } == true
     }
 
     var showManualDialog by remember { mutableStateOf(false) }
@@ -139,308 +184,362 @@ fun ConnectionScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { paddingValues ->
-        LazyColumn(
+        Column(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-
-            // Active DLNA cast target (mutually exclusive with a native connection).
-            val dlnaTarget = activeDlnaTarget
-            if (dlnaTarget != null) {
-                item {
-                    Text(
-                        text = "Casting via DLNA",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Cast,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = dlnaTarget.name,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${dlnaTarget.ip} · cast a video to play here",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                    )
-                                }
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                Button(
-                                    onClick = {
-                                        viewModel.dlnaStop()
-                                        viewModel.clearDlnaTarget()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                                ) {
-                                    Text("Disconnect")
-                                }
-                            }
-                        }
-                    }
-                }
-                item { Spacer(modifier = Modifier.height(8.dp)) }
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("Your Devices") }
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("Discover") }
+                )
             }
 
-            // Connected TV Section
-            if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                val connected = connectionState as WebSocketClient.ConnectionState.Connected
-                val serverName = connected.serverName
-                item {
-                    Text(
-                        text = "Connected TV",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Tv,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(32.dp)
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                if (selectedTab == 0) {
+                    // TAB 0: YOUR DEVICES
+                    // Active DLNA cast target (mutually exclusive with a native connection).
+                    val dlnaTarget = activeDlnaTarget
+                    if (dlnaTarget != null) {
+                        item {
+                            Text(
+                                text = "Casting via DLNA",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer
                                 )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = serverName,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                    if (tvDevice != null) {
-                                        Text(
-                                            text = "${tvDevice?.ip}:${if (connected.secure) (tvDevice?.wssPort ?: tvDevice?.port) else tvDevice?.port}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                        )
-                                    }
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        modifier = Modifier.padding(top = 2.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Icon(
-                                            imageVector = if (connected.secure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                            imageVector = Icons.Default.Cast,
                                             contentDescription = null,
-                                            modifier = Modifier.size(14.dp),
-                                            tint = if (connected.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.size(32.dp)
                                         )
-                                        Text(
-                                            text = if (connected.secure) "Secure (wss)" else "Not secure (ws)",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = if (connected.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
-                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = dlnaTarget.name,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "${dlnaTarget.ip} · cast a video to play here",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                            )
+                                        }
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                viewModel.dlnaStop()
+                                                viewModel.clearDlnaTarget()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                        ) {
+                                            Text("Disconnect")
+                                        }
                                     }
                                 }
                             }
+                        }
+                        item { Spacer(modifier = Modifier.height(8.dp)) }
+                    }
 
-                            Row(
+                    // Connected TV Section
+                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                        val connected = connectionState as WebSocketClient.ConnectionState.Connected
+                        val serverName = connected.serverName
+                        item {
+                            Text(
+                                text = "Connected TV",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        item {
+                            Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                                )
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(
-                                        checked = autoConnectEnabled,
-                                        onCheckedChange = { viewModel.setAutoConnectEnabled(it) }
-                                    )
-                                    Text("Auto-connect to this TV", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                                }
-
-                                Button(
-                                    onClick = { viewModel.disconnect() },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                    Text("Disconnect")
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Tv,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = serverName,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                            if (tvDevice != null) {
+                                                Text(
+                                                    text = "${tvDevice?.ip}:${if (connected.secure) (tvDevice?.wssPort ?: tvDevice?.port) else tvDevice?.port}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                                )
+                                            }
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (connected.secure) Icons.Default.Lock else Icons.Default.LockOpen,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(14.dp),
+                                                    tint = if (connected.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
+                                                )
+                                                Text(
+                                                    text = if (connected.secure) "Secure (wss)" else "Not secure (ws)",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = if (connected.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(
+                                                checked = autoConnectEnabled,
+                                                onCheckedChange = { viewModel.setAutoConnectEnabled(it) }
+                                            )
+                                            Text("Auto-connect to this TV", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                        }
+
+                                        Button(
+                                            onClick = { viewModel.disconnect() },
+                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                        ) {
+                                            Text("Disconnect")
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                }
 
-                item {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-            } else if (connectionState is WebSocketClient.ConnectionState.Connecting ||
-                       connectionState is WebSocketClient.ConnectionState.WaitingForApproval) {
-                item {
-                    val isWaiting = connectionState is WebSocketClient.ConnectionState.WaitingForApproval
-                    val serverName = (connectionState as? WebSocketClient.ConnectionState.WaitingForApproval)?.serverName
-
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                            Text(
-                                text = if (isWaiting && serverName != null)
-                                    "Waiting for $serverName to approve…"
-                                else
-                                    "Connecting to TV…",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            if (isWaiting) {
-                                TextButton(onClick = { viewModel.disconnect() }) {
-                                    Text("Cancel")
-                                }
-                            }
+                        item {
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
-                }
-            }
 
-            // Your TVs — unified list of saved + currently-discovered devices.
-            // Always shown so the Rescan affordance is available after a scan window
-            // elapses (discovery is time-boxed — see ConnectionViewModel.startDiscovery).
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Your TVs",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (isScanning) {
+                    // Your TVs list (Saved Devices only, online status checked via direct socket pings)
+                    item {
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                             Text(
-                                "Scanning…",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "Your TVs",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
                             )
+                            IconButton(onClick = { viewModel.pingSavedDevices(history) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Refresh TV status",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+
+                    if (savedUnified.isEmpty()) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "No saved TVs. Tap 'Discover' to scan for new TVs.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     } else {
-                        IconButton(onClick = { viewModel.rescan() }) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Rescan for TVs",
-                                tint = MaterialTheme.colorScheme.primary
+                        items(savedUnified) { device ->
+                            TvDeviceRow(
+                                device = device,
+                                onClick = {
+                                    if (device.connectDevice.isDlna) {
+                                        viewModel.selectDlnaTarget(device.connectDevice)
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                "Selected ${device.connectDevice.name} — cast a video to play here"
+                                            )
+                                        }
+                                    } else {
+                                        onDeviceSelected(
+                                            device.connectDevice.ip,
+                                            device.connectDevice.port,
+                                            device.connectDevice.name,
+                                            device.connectDevice.uuid
+                                        )
+                                    }
+                                },
+                                onRemove = device.historyEntry?.let { entry ->
+                                    { viewModel.removeDeviceFromHistory(entry) }
+                                }
                             )
                         }
                     }
-                }
-            }
-
-            if (unifiedDevices.isEmpty()) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        )
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            contentAlignment = Alignment.Center
+                } else {
+                    // TAB 1: DISCOVER
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                if (isScanning) "Looking for TVs on your network…"
-                                else "No TVs found. Tap the refresh icon to scan again.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "Discover Devices",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
                             )
-                        }
-                    }
-                }
-            } else {
-                items(unifiedDevices) { device ->
-                    TvDeviceRow(
-                        device = device,
-                        onClick = {
-                            if (device.connectDevice.isDlna) {
-                                viewModel.selectDlnaTarget(device.connectDevice)
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar(
-                                        "Selected ${device.connectDevice.name} — cast a video to play here"
+                            if (isScanning) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    Text(
+                                        "Scanning…",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             } else {
-                                onDeviceSelected(
-                                    device.connectDevice.ip,
-                                    device.connectDevice.port,
-                                    device.connectDevice.name,
-                                    device.connectDevice.uuid
-                                )
+                                IconButton(onClick = { viewModel.rescan() }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Rescan for TVs",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
-                        },
-                        onRemove = device.historyEntry?.let { entry ->
-                            { viewModel.removeDeviceFromHistory(entry) }
                         }
-                    )
+                    }
+
+                    if (discoveredUnified.isEmpty()) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        if (isScanning) "Looking for TVs on your network…"
+                                        else "No TVs found. Tap the refresh icon to scan again.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        items(discoveredUnified) { device ->
+                            TvDeviceRow(
+                                device = device,
+                                onClick = {
+                                    if (device.connectDevice.isDlna) {
+                                        viewModel.selectDlnaTarget(device.connectDevice)
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                "Selected ${device.connectDevice.name} — cast a video to play here"
+                                            )
+                                        }
+                                    } else {
+                                        onDeviceSelected(
+                                            device.connectDevice.ip,
+                                            device.connectDevice.port,
+                                            device.connectDevice.name,
+                                            device.connectDevice.uuid
+                                        )
+                                    }
+                                },
+                                onRemove = device.historyEntry?.let { entry ->
+                                    { viewModel.removeDeviceFromHistory(entry) }
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -457,6 +556,8 @@ fun ConnectionScreen(
             }
         )
     }
+
+
 }
 
 /**

@@ -36,7 +36,7 @@ class BackupTrigger(private val context: Context, private val scope: CoroutineSc
     
     private fun scheduleBackup() {
         backupJob?.cancel()
-        backupJob = scope.launch {
+        backupJob = scope.launch(Dispatchers.IO) {
             delay(DEBOUNCE_MS)
             if (isActive) {
                 try {
@@ -51,17 +51,37 @@ class BackupTrigger(private val context: Context, private val scope: CoroutineSc
                         return@launch
                     }
 
-                    Log.d(TAG, "Executing scheduled backup")
-                    val json = BackupUtils.createExportJson(context)
-                    val success = backupManager.uploadBackup(json)
-                    if (success) {
-                        backupManager.saveLastBackupTimestamp()
-                        Log.d(TAG, "Automatic backup uploaded successfully")
-                    } else {
-                        Log.e(TAG, "Automatic backup upload failed")
+                    var success = false
+                    var attempt = 1
+                    val maxAttempts = 3
+                    val retryDelayMs = 30_000L // 30 seconds
+
+                    while (attempt <= maxAttempts && !success && isActive) {
+                        try {
+                            Log.d(TAG, "Executing scheduled backup (attempt $attempt/$maxAttempts)")
+                            val json = BackupUtils.createExportJson(context)
+                            success = backupManager.uploadBackup(json)
+                            if (success) {
+                                backupManager.saveLastBackupTimestamp()
+                                Log.d(TAG, "Automatic backup uploaded successfully")
+                            } else {
+                                Log.e(TAG, "Automatic backup upload failed on attempt $attempt")
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error during automatic backup attempt $attempt", e)
+                        }
+
+                        if (!success) {
+                            if (attempt < maxAttempts && isActive) {
+                                val backoffDelay = retryDelayMs * attempt
+                                Log.i(TAG, "Retrying backup upload in ${backoffDelay / 1000} seconds...")
+                                delay(backoffDelay)
+                            }
+                            attempt++
+                        }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error during automatic backup", e)
+                    Log.e(TAG, "Error in scheduleBackup launcher", e)
                 }
             }
         }

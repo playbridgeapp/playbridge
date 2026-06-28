@@ -3,7 +3,15 @@ package com.playbridge.sender.connection
 import android.util.Log
 import com.playbridge.shared.protocol.createAuthJson
 import com.playbridge.shared.protocol.createPairingRequestJson
+import com.playbridge.shared.protocol.createPairingCommitJson
+import com.playbridge.shared.protocol.createPairingChallengeJson
+import com.playbridge.shared.protocol.createPairingRevealJson
+import com.playbridge.shared.protocol.createPairingConfirmationJson
 import com.playbridge.shared.protocol.createPingJson
+import java.util.Base64
+import com.playbridge.shared.crypto.SasCrypto
+import com.playbridge.shared.protocol.IncomingMessage
+import com.playbridge.shared.protocol.parseIncomingMessage
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -64,6 +72,14 @@ class WebSocketClient {
 
     private var targetConnection: TvConnectionInfo? = null
     private var isUserDisconnect = false
+
+    @Volatile private var senderKeyPair: SasCrypto.KeyPair? = null
+    @Volatile private var nonceS: ByteArray? = null
+    @Volatile private var commitStr: String? = null
+    @Volatile private var tvEphPub: ByteArray? = null
+    @Volatile private var nonceT: ByteArray? = null
+    @Volatile private var sharedSecret: ByteArray? = null
+    @Volatile private var calculatedSas: String? = null
     
     // Mouse delta accumulation — collapses rapid pointer events into one packet per flush
     // interval so we're not flooding the TV with a packet per display frame (especially at 120Hz).
@@ -99,14 +115,17 @@ class WebSocketClient {
     /** Players/browsers (player_mode / browser_mode ids) the TV reported it supports. */
     data class TvCapabilities(val players: List<String>, val browsers: List<String>)
 
-    sealed class ConnectionState {
-        data object Disconnected : ConnectionState()
-        data object Connecting : ConnectionState()
-        data class Connected(val serverName: String, val secure: Boolean = false) : ConnectionState()
-        // Pairing request sent — waiting for the TV user to tap Allow.
-        data class WaitingForApproval(val serverName: String) : ConnectionState()
-        // TV user tapped Deny, or the 30s timeout elapsed.
-        data class PairingDenied(val serverName: String) : ConnectionState()
+        sealed class ConnectionState {
+            data object Disconnected : ConnectionState()
+            data object Connecting : ConnectionState()
+            data class Connected(val serverName: String, val secure: Boolean = false) : ConnectionState()
+            // New SAS Handshake states
+            data class WaitingForCodeInput(val serverName: String) : ConnectionState()
+            data class VerifyingCode(val serverName: String) : ConnectionState()
+            // Pairing request sent — waiting for the TV user to tap Allow.
+            data class WaitingForApproval(val serverName: String) : ConnectionState()
+            // TV user tapped Deny, or the 30s timeout elapsed.
+            data class PairingDenied(val serverName: String) : ConnectionState()
         // Kept for UI exhaustiveness, but no longer emitted — automatic retries were
         // removed (failures go straight to Error; reconnects are on-demand).
         data class Retrying(val attempt: Int, val maxAttempts: Int, val nextRetrySeconds: Int) : ConnectionState()
@@ -147,7 +166,7 @@ class WebSocketClient {
         pinMismatch = false
 
         val conn = targetConnection
-        val wssPort = conn?.wssPort ?: (port + 1)
+        val wssPort = conn?.wssPort ?: port
         isSecure = true
         val formattedHost = LinkLocalDns.encodeIpv6ToHost(ip)
         val url = "wss://$formattedHost:$wssPort/"
@@ -177,14 +196,23 @@ class WebSocketClient {
                     try {
                         val conn = targetConnection
                         if (conn?.token.isNullOrEmpty()) {
-                            // First-time pairing — send identity and wait for TV user to approve.
-                            val json = createPairingRequestJson(
+                            // SAS Handshake Step 1: Generate keys & commitment, send pairing_commit
+                            val pair = SasCrypto.generateX25519KeyPair()
+                            val nonce = SasCrypto.generateNonce(16)
+                            senderKeyPair = pair
+                            nonceS = nonce
+
+                            val commitBytes = SasCrypto.sha256(pair.publicKey + nonce)
+                            val commit = Base64.getEncoder().encodeToString(commitBytes)
+                            commitStr = commit
+
+                            val json = createPairingCommitJson(
+                                commit = commit,
                                 deviceName = conn?.deviceName ?: "Android Phone",
                                 deviceUUID = conn?.deviceUUID ?: ""
                             )
-                            Log.d(TAG, "Sending pairing_request: $json")
+                            Log.d(TAG, "Sending pairing_commit: $json")
                             webSocket.send(json)
-                            _connectionState.value = ConnectionState.WaitingForApproval(serverName)
                         } else {
                             // Reconnect with saved token.
                             val authJson = createAuthJson(conn!!.token)
@@ -206,6 +234,44 @@ class WebSocketClient {
                     return
                 }
                 Log.d(TAG, "Received: $text")
+
+                // Handle pairing_challenge message from TV
+                if (text.contains("pairing_challenge")) {
+                    try {
+                        val parsed = parseIncomingMessage(text) as? IncomingMessage.PairingChallenge
+                        val msg = parsed?.msg
+                        if (msg != null) {
+                            val tvEphPubBytes = Base64.getDecoder().decode(msg.tv_eph_pub)
+                            val nonceTBytes = Base64.getDecoder().decode(msg.nonce_t)
+
+                            tvEphPub = tvEphPubBytes
+                            nonceT = nonceTBytes
+
+                            // Calculate ECDH shared secret
+                            val sharedSecret = SasCrypto.calculateECDH(senderKeyPair!!.privateKey, tvEphPubBytes)
+                            this@WebSocketClient.sharedSecret = sharedSecret
+
+                            // Calculate transcript and local SAS code
+                            val commitBytes = Base64.getDecoder().decode(commitStr!!)
+                            val transcript = commitBytes + tvEphPubBytes + nonceTBytes + senderKeyPair!!.publicKey + nonceS!!
+                            val sas = SasCrypto.generateSAS(sharedSecret, transcript)
+                            calculatedSas = sas
+
+                            Log.d(TAG, "Calculated SAS: $sas. Sending reveal and prompting user...")
+
+                            val senderEphPubB64 = Base64.getEncoder().encodeToString(senderKeyPair!!.publicKey)
+                            val nonceSB64 = Base64.getEncoder().encodeToString(nonceS!!)
+                            val revealJson = createPairingRevealJson(senderEphPub = senderEphPubB64, nonceS = nonceSB64)
+                            webSocket.send(revealJson)
+
+                            _connectionState.value = ConnectionState.WaitingForCodeInput(serverName)
+                            return
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error handling pairing_challenge", e)
+                        webSocket.close(1000, "Challenge failed")
+                    }
+                }
                 
                 // Handle pairing and auth responses before forwarding to command flow.
                 if (text.contains("pairing_approved")) {
@@ -338,6 +404,52 @@ class WebSocketClient {
                 }
             }
         })
+    }
+
+    /**
+     * Submit the 6-digit code typed by the user to verify the TV and complete pairing.
+     * Returns true if the code matched and reveal/confirmation messages were sent, false otherwise.
+     */
+    fun submitPairingCode(code: String): Boolean {
+        val ws = webSocket ?: return false
+        val keypair = senderKeyPair ?: return false
+        val nonce = nonceS ?: return false
+        val commit = commitStr ?: return false
+        val tvPub = tvEphPub ?: return false
+        val nonceTv = nonceT ?: return false
+        val shared = sharedSecret ?: return false
+        val expectedSas = calculatedSas ?: return false
+
+        // Check if code matches
+        val cleanCode = code.replace(" ", "")
+        if (cleanCode != expectedSas) {
+            Log.w(TAG, "User typed incorrect SAS code '$cleanCode' (expected '$expectedSas')")
+            ws.close(1000, "Incorrect code")
+            _connectionState.value = ConnectionState.PairingDenied(targetConnection?.serverName ?: "TV")
+            return false
+        }
+
+        // Code matches! Send confirmation
+        _connectionState.value = ConnectionState.VerifyingCode(targetConnection?.serverName ?: "TV")
+        scope.launch {
+            try {
+                // Calculate confirmation MAC
+                val commitBytes = Base64.getDecoder().decode(commit)
+                val transcript = commitBytes + tvPub + nonceTv + keypair.publicKey + nonce
+                val prk = SasCrypto.hkdfExtract(salt = null, ikm = shared)
+                val confirmationKey = SasCrypto.hkdfExpand(prk, info = "confirmationKey".toByteArray(), length = 32)
+                val macBytes = SasCrypto.hmacSha256(confirmationKey, transcript)
+                val mac = Base64.getEncoder().encodeToString(macBytes)
+
+                val confirmationJson = createPairingConfirmationJson(mac)
+                Log.d(TAG, "Sending pairing_confirmation: $confirmationJson")
+                ws.send(confirmationJson)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send confirmation", e)
+                ws.close(1000, "Handshake fail")
+            }
+        }
+        return true
     }
 
     /** Parse players/browsers from an auth/pairing response and publish them (if any). */

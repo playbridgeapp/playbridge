@@ -93,8 +93,9 @@ class BackupManager(private val context: Context) {
 
         try {
             val contentBody = json.toByteArray()
-            val amzDate = getAmzDate()
-            val dateStamp = getDateStamp()
+            val now = Date()
+            val amzDate = getAmzDate(now)
+            val dateStamp = getDateStamp(now)
             val canonicalUri = if (endpoint.startsWith("http")) "/$bucket/$filename" else "/$filename"
             val service = "s3"
             
@@ -168,8 +169,9 @@ class BackupManager(private val context: Context) {
         }
 
         try {
-            val amzDate = getAmzDate()
-            val dateStamp = getDateStamp()
+            val now = Date()
+            val amzDate = getAmzDate(now)
+            val dateStamp = getDateStamp(now)
             val canonicalUri = if (endpoint.startsWith("http")) "/$bucket/$filename" else "/$filename"
             val service = "s3"
             
@@ -221,16 +223,16 @@ class BackupManager(private val context: Context) {
         }
     }
 
-    private fun getAmzDate(): String {
+    private fun getAmzDate(date: Date): String {
         val dateFormat = SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", Locale.US)
         dateFormat.timeZone = TimeZone.getTimeZone("UTC")
-        return dateFormat.format(Date())
+        return dateFormat.format(date)
     }
 
-    private fun getDateStamp(): String {
+    private fun getDateStamp(date: Date): String {
         val dateFormat = SimpleDateFormat("yyyyMMdd", Locale.US)
         dateFormat.timeZone = TimeZone.getTimeZone("UTC")
-        return dateFormat.format(Date())
+        return dateFormat.format(date)
     }
 
     private fun String.sha256(): String {

@@ -90,6 +90,7 @@ class TrayController with TrayListener {
     final status = switch (phase) {
       PairingPhase.idle => '${store.deviceName}  ·  waiting for phone',
       PairingPhase.awaitingApproval => 'Approve connection on screen…',
+      PairingPhase.awaitingCode => 'Pairing code shown on screen…',
       PairingPhase.authenticated => player.queue.isNotEmpty
           ? 'Playing: ${player.currentTitle ?? '—'}'
           : 'Paired · idle',

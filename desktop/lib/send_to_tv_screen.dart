@@ -71,6 +71,20 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
   }
 
   Widget _content(BuildContext context) {
+    final state = controller.state;
+    if (state == SenderConnectionState.waitingForCodeInput ||
+        state == SenderConnectionState.verifyingCode) {
+      return _PinInputView(
+        isVerifying: state == SenderConnectionState.verifyingCode,
+        onSubmit: (code) {
+          controller.submitSasCode(code);
+        },
+        onCancel: () {
+          controller.disconnect();
+        },
+      );
+    }
+
     final discovered = controller.discovered;
     final paired = controller.pairedTvs;
     // Paired TVs not currently visible on the network (so the user can still
@@ -240,7 +254,9 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
 
   bool _isBusy(SenderConnectionState s) =>
       s == SenderConnectionState.connecting ||
-      s == SenderConnectionState.waitingForApproval;
+      s == SenderConnectionState.waitingForChallenge ||
+      s == SenderConnectionState.waitingForCodeInput ||
+      s == SenderConnectionState.verifyingCode;
 
   Future<void> _pickAndCast() async {
     final group = XTypeGroup(label: 'Media', extensions: _mediaExts.toList());
@@ -398,10 +414,20 @@ class _StatusBanner extends StatelessWidget {
           Colors.tealAccent,
           'Connecting…',
         ),
-      SenderConnectionState.waitingForApproval => (
+      SenderConnectionState.waitingForChallenge => (
           Icons.hourglass_top,
           Colors.amberAccent,
-          'Waiting for the TV — tap Allow on the TV screen.',
+          'Establishing secure pairing…',
+        ),
+      SenderConnectionState.waitingForCodeInput => (
+          Icons.lock_open,
+          Colors.amberAccent,
+          'Enter pairing code on screen.',
+        ),
+      SenderConnectionState.verifyingCode => (
+          Icons.hourglass_top,
+          Colors.tealAccent,
+          'Verifying code…',
         ),
       SenderConnectionState.connected => (
           Icons.cast_connected,
@@ -627,6 +653,152 @@ class _EmptyHint extends StatelessWidget {
                     fontSize: 13, color: Colors.white.withValues(alpha: 0.6))),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PinInputView extends StatefulWidget {
+  const _PinInputView({
+    required this.isVerifying,
+    required this.onSubmit,
+    required this.onCancel,
+  });
+
+  final bool isVerifying;
+  final ValueChanged<String> onSubmit;
+  final VoidCallback onCancel;
+
+  @override
+  State<_PinInputView> createState() => _PinInputViewState();
+}
+
+class _PinInputViewState extends State<_PinInputView> {
+  final TextEditingController _pinController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _pinController.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.all(32),
+        margin: const EdgeInsets.symmetric(horizontal: 24),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.03),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.08),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.security, size: 48, color: Colors.tealAccent),
+              const SizedBox(height: 20),
+              const Text(
+                'Enter Pairing Code',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Type the 6-digit code shown on your TV screen.',
+                style: TextStyle(fontSize: 13, color: Colors.white60),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 32),
+              if (widget.isVerifying)
+                const SizedBox(
+                  height: 80,
+                  child: Center(
+                    child: CircularProgressIndicator(color: Colors.tealAccent),
+                  ),
+                )
+              else ...[
+                SizedBox(
+                  width: 240,
+                  child: TextField(
+                    controller: _pinController,
+                    focusNode: _focusNode,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    maxLength: 6,
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 12,
+                      fontFamily: 'Courier',
+                    ),
+                    decoration: InputDecoration(
+                      counterText: '',
+                      hintText: '000000',
+                      hintStyle: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        letterSpacing: 12,
+                      ),
+                      enabledBorder: const UnderlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white24, width: 2),
+                      ),
+                      focusedBorder: const UnderlineInputBorder(
+                        borderSide:
+                            BorderSide(color: Colors.tealAccent, width: 2),
+                      ),
+                    ),
+                    onChanged: (val) {
+                      if (val.length == 6) {
+                        widget.onSubmit(val);
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(height: 32),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    OutlinedButton(
+                      onPressed: widget.onCancel,
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 12),
+                      ),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 16),
+                    FilledButton(
+                      onPressed: () {
+                        final code = _pinController.text.trim();
+                        if (code.length == 6) {
+                          widget.onSubmit(code);
+                        }
+                      },
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 12),
+                      ),
+                      child: const Text('Submit'),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

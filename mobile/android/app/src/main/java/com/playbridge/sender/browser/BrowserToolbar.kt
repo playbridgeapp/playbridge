@@ -4,6 +4,12 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -40,6 +46,7 @@ import androidx.compose.foundation.Image
 /**
  * Browser toolbar with navigation controls, URL bar, and menu.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun BrowserToolbar(
     currentUrl: String,
@@ -48,10 +55,13 @@ fun BrowserToolbar(
     onNavigate: (String) -> Unit,
     modifier: Modifier = Modifier,
     onMagnetDetected: (String) -> Unit = {},
-    onRefresh: () -> Unit,
-    onStop: () -> Unit,
-    onRemoteClick: (() -> Unit)? = null,
-    onConnectClick: (() -> Unit)? = null,
+    isTvConnected: Boolean,
+    onTvClick: () -> Unit,
+    onRemoteClick: () -> Unit,
+    isPlayEnabled: Boolean,
+    videoCount: Int,
+    onPlayClick: () -> Unit,
+    onPlayLongClick: () -> Unit,
     onLogoClick: () -> Unit = {},
     isEditing: Boolean = false,
     isSecure: Boolean = false,
@@ -282,48 +292,92 @@ fun BrowserToolbar(
                 Spacer(modifier = Modifier.width(2.dp))
 
                 if (!isEditing) {
-
-                    // Single cast affordance: remote when a TV/DLNA target is connected,
-                    // otherwise a TV icon that opens the connection sheet. Never both.
-                    if (onRemoteClick != null) {
+                    // 1. Remote button (Shown ONLY if TV is connected)
+                    if (isTvConnected) {
                         IconButton(
                             onClick = onRemoteClick,
                             modifier = Modifier.size(40.dp)
                         ) {
                             Icon(
-                                Icons.Default.Gamepad,
-                                contentDescription = "Remote Control",
+                                painter = painterResource(id = R.drawable.ic_remote),
+                                contentDescription = "TV Remote Control",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
-                        Spacer(modifier = Modifier.width(2.dp))
-                    } else if (onConnectClick != null) {
-                        IconButton(
-                            onClick = onConnectClick,
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Tv,
-                                contentDescription = "Connect to TV",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
+
                         Spacer(modifier = Modifier.width(2.dp))
                     }
 
-                    // Refresh / Stop button (in place of menu button)
-                    IconButton(
-                        onClick = { if (isLoading) onStop() else onRefresh() },
-                        modifier = Modifier.size(40.dp)
+                    // 2. TV Connection button (Permanent)
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onTvClick)
                     ) {
-                        Icon(
-                            imageVector = if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
-                            contentDescription = if (isLoading) "Refresh" else "Refresh",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            if (isTvConnected) {
+                                Icon(
+                                    imageVector = Icons.Default.Tv,
+                                    contentDescription = "TV Connection (Connected)",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                // Glowing active dot in top-right corner of TV icon
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .offset(x = 2.dp, y = (-2).dp)
+                                        .size(8.dp)
+                                        .background(Color(0xFF4CAF50), shape = CircleShape)
+                                        .border(1.5.dp, MaterialTheme.colorScheme.surfaceContainer, CircleShape)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Tv,
+                                    contentDescription = "TV Connection (Disconnected)",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(2.dp))
+
+                    // 3. Play / Cast button (Permanent)
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .combinedClickable(
+                                enabled = isPlayEnabled,
+                                onClick = onPlayClick,
+                                onLongClick = onPlayLongClick
+                            )
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (isPlayEnabled && videoCount > 0) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError
+                                    ) {
+                                        Text(videoCount.toString())
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = "Play/Cast video",
+                                tint = if (isPlayEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
                 }
             }

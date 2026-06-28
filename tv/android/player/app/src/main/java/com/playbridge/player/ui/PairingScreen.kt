@@ -47,11 +47,11 @@ fun PairingScreen(
     modifier: Modifier = Modifier
 ) {
     var showDevicesDialog by remember { mutableStateOf(false) }
-    val allowFocusRequester = remember { FocusRequester() }
+    val denyFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(pendingRequest) {
         if (pendingRequest != null) {
-            try { allowFocusRequester.requestFocus() } catch (_: Exception) {}
+            try { denyFocusRequester.requestFocus() } catch (_: Exception) {}
         }
     }
 
@@ -119,43 +119,47 @@ fun PairingScreen(
                         .padding(horizontal = 64.dp, vertical = 40.dp)
                 ) {
                     Text(
-                        text = "Allow device to connect?",
+                        text = "Pairing request from:",
                         style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
                         text = pendingRequest.deviceName,
-                        fontSize = 56.sp,
+                        style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         textAlign = TextAlign.Center
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                        Button(
-                            onClick = onAllow,
-                            modifier = Modifier.focusRequester(allowFocusRequester),
-                            colors = ButtonDefaults.colors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            )
-                        ) {
-                            Text(
-                                "Allow",
-                                fontSize = 22.sp,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                            )
-                        }
-                        OutlinedButton(onClick = onDeny) {
-                            Text(
-                                "Deny",
-                                fontSize = 22.sp,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                            )
-                        }
+                    
+                    val formattedCode = remember(pendingRequest.sasCode) {
+                        val code = pendingRequest.sasCode
+                        if (code.length == 6) "${code.substring(0, 3)} ${code.substring(3)}" else code
                     }
                     Text(
-                        text = "Request expires in 30 seconds",
+                        text = formattedCode,
+                        fontSize = 80.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFF00D9FF),
+                        textAlign = TextAlign.Center,
+                        letterSpacing = 4.sp
+                    )
+
+                    OutlinedButton(
+                        onClick = onDeny,
+                        modifier = Modifier.focusRequester(denyFocusRequester)
+                    ) {
+                        Text(
+                            "Deny / Cancel",
+                            fontSize = 20.sp,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    Text(
+                        text = "Enter this code on your device to complete pairing.\nRequest expires in 30 seconds",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        textAlign = TextAlign.Center
                     )
                 }
             } else {

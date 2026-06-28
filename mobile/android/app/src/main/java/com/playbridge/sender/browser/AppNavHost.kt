@@ -81,6 +81,7 @@ fun AppNavHost(
     onScreenChange: (Screen) -> Unit,
     lastMainScreen: Screen,
     onLastMainScreenChange: (Screen) -> Unit,
+    connectionInitialTab: Int = 0,
     // Where the Remote screen's Back should return (the screen it was opened from);
     // defaults to lastMainScreen at the call site when no origin was recorded.
     remoteReturnScreen: Screen = lastMainScreen,
@@ -692,7 +693,8 @@ fun AppNavHost(
                                 connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                 onScreenChange(Screen.Remote)
                             }
-                        } else null
+                        } else null,
+                        initialTab = connectionInitialTab
                     )
                 }
                 Screen.Downloads -> {

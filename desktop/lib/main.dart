@@ -1040,6 +1040,7 @@ class _StatusBar extends StatelessWidget {
     final phaseLabel = switch (phase) {
       PairingPhase.idle => 'waiting for phone',
       PairingPhase.awaitingApproval => 'awaiting approval…',
+      PairingPhase.awaitingCode => 'pairing…',
       PairingPhase.authenticated => 'paired',
     };
     return ClipRect(

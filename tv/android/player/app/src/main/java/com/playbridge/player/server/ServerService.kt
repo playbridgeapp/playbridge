@@ -239,8 +239,16 @@ class ServerService : Service() {
                             when (state) {
                                 is WebSocketServer.ConnectionState.Connected -> overlayWindow.show()
                                 is WebSocketServer.ConnectionState.Running,
-                                is WebSocketServer.ConnectionState.Stopped,
-                                is WebSocketServer.ConnectionState.Error -> overlayWindow.hide()
+                                is WebSocketServer.ConnectionState.Stopped -> overlayWindow.hide()
+                                is WebSocketServer.ConnectionState.Error -> {
+                                    // Delay hiding the overlay window to allow error feedback to be displayed in the foreground
+                                    launch {
+                                        delay(3000)
+                                        if (server.connectionState.value !is WebSocketServer.ConnectionState.Connected) {
+                                            overlayWindow.hide()
+                                        }
+                                    }
+                                }
                                 else -> Unit
                             }
 
@@ -521,7 +529,12 @@ class ServerService : Service() {
             is IncomingMessage.Ping -> {
                 // Handled by WebSocketServer
             }
-            is IncomingMessage.PairingRequest, is IncomingMessage.Auth -> {
+            is IncomingMessage.PairingRequest,
+            is IncomingMessage.PairingCommit,
+            is IncomingMessage.PairingChallenge,
+            is IncomingMessage.PairingReveal,
+            is IncomingMessage.PairingConfirmation,
+            is IncomingMessage.Auth -> {
                 // Handled inside WebSocketServer's auth loop — should never reach here.
             }
             is IncomingMessage.UserScript -> {

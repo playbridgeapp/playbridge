@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -14,6 +15,7 @@ import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
 import 'protocol.dart';
+import 'sas_crypto.dart';
 import 'system_volume.dart';
 
 const int kDefaultPort = 8765;
@@ -23,23 +25,53 @@ enum PairingPhase {
   /// No client connected.
   idle,
 
-  /// A phone connected and sent `pairing_request` — UI should show Allow/Deny.
+  /// A phone connected and sent `pairing_commit` — SAS handshake in progress.
   awaitingApproval,
+
+  /// SAS code computed — UI should display the 6-digit PIN.
+  awaitingCode,
 
   /// At least one authenticated client is connected.
   authenticated,
 }
 
+/// Per-connection SAS handshake state (receiver side).
+class _ConnectionHandshake {
+  final String deviceName;
+  final String deviceUUID;
+  final String commit;
+  final Uint8List tvEphPriv;
+  final Uint8List tvEphPub;
+  final Uint8List nonceT;
+  Uint8List? senderEphPub;
+  Uint8List? nonceS;
+  Uint8List? sharedSecret;
+  String? sasCode;
+
+  _ConnectionHandshake({
+    required this.deviceName,
+    required this.deviceUUID,
+    required this.commit,
+    required this.tvEphPriv,
+    required this.tvEphPub,
+    required this.nonceT,
+  });
+}
+
 class PendingPairingRequest {
   final String deviceName;
   final String deviceUUID;
+  final String sasCode;
   final WebSocketChannel channel;
+  final Completer<bool> approval;
 
-  const PendingPairingRequest({
+  PendingPairingRequest({
     required this.deviceName,
     required this.deviceUUID,
+    required this.sasCode,
     required this.channel,
-  });
+    Completer<bool>? approval,
+  }) : approval = approval ?? Completer<bool>();
 }
 
 class ReceiverServer extends ChangeNotifier {
@@ -80,13 +112,23 @@ class ReceiverServer extends ChangeNotifier {
 
   PendingPairingRequest? _pendingPairingRequest;
 
+  /// In-progress SAS handshakes keyed by WebSocket channel.
+  final Map<WebSocketChannel, _ConnectionHandshake> _inProgressHandshakes = {};
+
+  /// Rate-limiting: failed pairing attempts by IP.
+  final Map<String, int> _failedAttempts = {};
+
+  /// Rate-limiting: lockout expiry (epoch ms) by IP.
+  final Map<String, int> _lockoutUntil = {};
+
   // Dedupe rapid-fire duplicate play commands from the phone.
   String? _lastPlayUrl;
   DateTime _lastPlayAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   PairingPhase get phase {
     if (_authed.isNotEmpty) return PairingPhase.authenticated;
-    if (_pendingPairingRequest != null) return PairingPhase.awaitingApproval;
+    if (_pendingPairingRequest != null) return PairingPhase.awaitingCode;
+    if (_inProgressHandshakes.isNotEmpty) return PairingPhase.awaitingApproval;
     return PairingPhase.idle;
   }
 
@@ -110,7 +152,7 @@ class ReceiverServer extends ChangeNotifier {
   Future<void> _bindListeners() async {
     final handler = _withLogsRoute(webSocketHandler(_onClient));
 
-    // Encrypted wss:// on port+1 — the default, preferred transport.
+    // Encrypted wss:// on port — the default, preferred transport.
     var wssUp = false;
     try {
       final cert = await CertManager.loadOrCreate(commonName: store.deviceName);
@@ -118,7 +160,7 @@ class ReceiverServer extends ChangeNotifier {
       final https = await shelf_io.serve(
         handler,
         InternetAddress.anyIPv4,
-        _port + 1,
+        _port,
         securityContext: cert.securityContext,
       );
       _servers.add(https);
@@ -182,6 +224,7 @@ class ReceiverServer extends ChangeNotifier {
     _all.clear();
     _authed.clear();
     _pendingPairingRequest = null;
+    _inProgressHandshakes.clear();
     for (final s in _servers) {
       await s.close(force: true);
     }
@@ -223,6 +266,7 @@ class ReceiverServer extends ChangeNotifier {
         debugPrint('[server] client disconnected');
         _all.remove(channel);
         _authed.remove(channel);
+        _inProgressHandshakes.remove(channel);
         // Clear pending request if this was the pending channel
         if (_pendingPairingRequest?.channel == channel) {
           _approvalTimeout?.cancel();
@@ -235,6 +279,7 @@ class ReceiverServer extends ChangeNotifier {
         debugPrint('[server] client error: $e');
         _all.remove(channel);
         _authed.remove(channel);
+        _inProgressHandshakes.remove(channel);
         if (_pendingPairingRequest?.channel == channel) {
           _approvalTimeout?.cancel();
           _approvalTimeout = null;
@@ -254,22 +299,24 @@ class ReceiverServer extends ChangeNotifier {
         channel.sink.add(pongJson());
         return false;
 
-      case PairingRequestCmd(:final deviceName, :final deviceUUID):
-        // Deny immediately if another pairing is already pending.
-        if (_pendingPairingRequest != null) {
-          channel.sink.add(pairingDeniedJson());
-          channel.sink.close();
-          return false;
-        }
-        _pendingPairingRequest = PendingPairingRequest(
-          deviceName: deviceName,
-          deviceUUID: deviceUUID,
-          channel: channel,
-        );
-        // Auto-deny after 30 seconds.
-        _approvalTimeout?.cancel();
-        _approvalTimeout = Timer(const Duration(seconds: 30), denyPairing);
-        notifyListeners();
+      case PairingCommitCmd(
+          :final commit,
+          :final deviceName,
+          :final deviceUUID
+        ):
+        return _handlePairingCommit(channel, commit, deviceName, deviceUUID);
+
+      case PairingRevealCmd(:final senderEphPub, :final nonceS):
+        _handlePairingReveal(channel, senderEphPub, nonceS);
+        return false;
+
+      case PairingConfirmationCmd(:final mac):
+        _handlePairingConfirmation(channel, mac);
+        return false;
+
+      // Legacy pairing_request — treat as unknown (SAS is now required).
+      case PairingRequestCmd():
+        channel.sink.add(pairingDeniedJson());
         return false;
 
       case AuthCmd(:final token):
@@ -291,53 +338,205 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
+  /// SAS Step 1: phone sends `pairing_commit`.
+  bool _handlePairingCommit(
+    WebSocketChannel channel,
+    String commit,
+    String deviceName,
+    String deviceUUID,
+  ) {
+    // Rate-limiting: check lockout
+    final ip = channel.hashCode.toString(); // shelf doesn't expose remote IP
+    final lockout = _lockoutUntil[ip];
+    if (lockout != null && DateTime.now().millisecondsSinceEpoch < lockout) {
+      debugPrint('[server] IP $ip is locked out from pairing');
+      channel.sink.add(pairingDeniedJson());
+      return false;
+    }
+
+    // Only one pairing at a time.
+    if (_pendingPairingRequest != null || _inProgressHandshakes.isNotEmpty) {
+      channel.sink.add(pairingDeniedJson());
+      return false;
+    }
+
+    // Generate TV ephemeral keypair + nonce.
+    final tvKey = SasCrypto.generateX25519KeyPair();
+    final nonceT = SasCrypto.generateNonce(16);
+
+    _inProgressHandshakes[channel] = _ConnectionHandshake(
+      deviceName: deviceName,
+      deviceUUID: deviceUUID,
+      commit: commit,
+      tvEphPriv: tvKey.privateKey,
+      tvEphPub: tvKey.publicKey,
+      nonceT: nonceT,
+    );
+
+    // Send challenge.
+    channel.sink.add(pairingChallengeJson(
+      tvEphPub: base64.encode(tvKey.publicKey),
+      nonceT: base64.encode(nonceT),
+    ));
+    notifyListeners();
+    return false;
+  }
+
+  /// SAS Step 3: phone sends `pairing_reveal`.
+  void _handlePairingReveal(
+      WebSocketChannel channel, String senderEphPubB64, String nonceSB64) {
+    final handshake = _inProgressHandshakes[channel];
+    if (handshake == null) {
+      channel.sink.add(pairingDeniedJson());
+      return;
+    }
+
+    final senderEphPub = Uint8List.fromList(base64.decode(senderEphPubB64));
+    final nonceS = Uint8List.fromList(base64.decode(nonceSB64));
+
+    // Verify commitment: commit == SHA-256(senderEphPub || nonceS)
+    final calculatedCommitBytes =
+        SasCrypto.sha256(Uint8List.fromList(senderEphPub + nonceS));
+    final calculatedCommit = base64.encode(calculatedCommitBytes);
+    if (calculatedCommit != handshake.commit) {
+      debugPrint('[server] Commitment mismatch — denying pairing');
+      channel.sink.add(pairingDeniedJson());
+      _inProgressHandshakes.remove(channel);
+      _recordPairingFailure(channel);
+      notifyListeners();
+      return;
+    }
+
+    handshake.senderEphPub = senderEphPub;
+    handshake.nonceS = nonceS;
+
+    // Compute ECDH shared secret.
+    final sharedSecret =
+        SasCrypto.calculateECDH(handshake.tvEphPriv, senderEphPub);
+    handshake.sharedSecret = sharedSecret;
+
+    // Compute transcript and SAS.
+    final commitBytes = Uint8List.fromList(base64.decode(handshake.commit));
+    final transcript = Uint8List.fromList(
+      commitBytes +
+          handshake.tvEphPub +
+          handshake.nonceT +
+          senderEphPub +
+          nonceS,
+    );
+    final sas = SasCrypto.generateSAS(sharedSecret, transcript);
+    handshake.sasCode = sas;
+
+    // Create pending pairing request with the SAS code for the UI.
+    final approval = Completer<bool>();
+    _pendingPairingRequest = PendingPairingRequest(
+      deviceName: handshake.deviceName,
+      deviceUUID: handshake.deviceUUID,
+      sasCode: sas,
+      channel: channel,
+      approval: approval,
+    );
+
+    // Auto-deny after 60 seconds.
+    _approvalTimeout?.cancel();
+    _approvalTimeout = Timer(const Duration(seconds: 60), () {
+      if (!approval.isCompleted) approval.complete(false);
+    });
+
+    notifyListeners();
+
+    // Wait for the confirmation MAC from the phone.
+    approval.future.then((approved) {
+      _approvalTimeout?.cancel();
+      _approvalTimeout = null;
+
+      if (approved) {
+        _failedAttempts.remove(channel.hashCode.toString());
+        final token = const Uuid().v4();
+        final device = PairedDeviceRecord(
+          deviceUUID: handshake.deviceUUID,
+          deviceName: handshake.deviceName,
+          token: token,
+          lastConnected: DateTime.now(),
+        );
+        unawaited(store.addPairedDevice(device));
+
+        channel.sink.add(pairingApprovedJson(
+          token,
+          certFingerprint: _certFingerprint,
+          players: _capabilityPlayers,
+        ));
+        _authed.add(channel);
+      } else {
+        channel.sink.add(pairingDeniedJson());
+        _recordPairingFailure(channel);
+      }
+
+      _inProgressHandshakes.remove(channel);
+      _pendingPairingRequest = null;
+      notifyListeners();
+      if (approved) _sendPlaylistStatusTo(channel);
+    });
+  }
+
+  /// SAS Step 4: phone sends `pairing_confirmation` with MAC.
+  void _handlePairingConfirmation(WebSocketChannel channel, String mac) {
+    final handshake = _inProgressHandshakes[channel];
+    final pending = _pendingPairingRequest;
+    if (handshake == null || pending == null || pending.channel != channel) {
+      channel.sink.add(pairingDeniedJson());
+      return;
+    }
+    if (pending.approval.isCompleted) return;
+
+    // Derive confirmation key and expected MAC.
+    final commitBytes = Uint8List.fromList(base64.decode(handshake.commit));
+    final transcript = Uint8List.fromList(
+      commitBytes +
+          handshake.tvEphPub +
+          handshake.nonceT +
+          handshake.senderEphPub! +
+          handshake.nonceS!,
+    );
+    final prk = SasCrypto.hkdfExtract(salt: null, ikm: handshake.sharedSecret!);
+    final confirmationKey = SasCrypto.hkdfExpand(prk,
+        info: Uint8List.fromList('confirmationKey'.codeUnits), length: 32);
+    final expectedMacBytes = SasCrypto.hmacSha256(confirmationKey, transcript);
+    final expectedMac = base64.encode(expectedMacBytes);
+
+    if (mac == expectedMac) {
+      pending.approval.complete(true);
+    } else {
+      debugPrint('[server] Confirmation MAC mismatch — denying pairing');
+      pending.approval.complete(false);
+    }
+  }
+
+  /// Record a failed pairing attempt for rate-limiting.
+  void _recordPairingFailure(WebSocketChannel channel) {
+    final ip = channel.hashCode.toString();
+    final count = (_failedAttempts[ip] ?? 0) + 1;
+    _failedAttempts[ip] = count;
+    if (count >= 3) {
+      // Lock out for 60 seconds after 3 failures.
+      _lockoutUntil[ip] = DateTime.now().millisecondsSinceEpoch + 60 * 1000;
+      _failedAttempts.remove(ip);
+      debugPrint('[server] IP $ip locked out after $count failed pairings');
+    }
+  }
+
+  /// Legacy: called from old UI "Allow" button. Now the SAS confirmation MAC
+  /// drives approval automatically.
   void approvePairing() {
     final pending = _pendingPairingRequest;
-    if (pending == null) return;
-
-    _approvalTimeout?.cancel();
-    _approvalTimeout = null;
-    _pendingPairingRequest = null;
-
-    final token = const Uuid().v4();
-    final device = PairedDeviceRecord(
-      deviceUUID: pending.deviceUUID,
-      deviceName: pending.deviceName,
-      token: token,
-      lastConnected: DateTime.now(),
-    );
-    unawaited(store.addPairedDevice(device));
-
-    pending.channel.sink.add(
-      pairingApprovedJson(
-        token,
-        certFingerprint: _certFingerprint,
-        players: _capabilityPlayers,
-      ),
-    );
-    // Immediately treat as authed — phone won't send a separate auth after pairing_approved.
-    pending.channel.sink.add(authResponseJson(
-      success: true,
-      token: token,
-      certFingerprint: _certFingerprint,
-      players: _capabilityPlayers,
-    ));
-    _authed.add(pending.channel);
-    notifyListeners();
-    _sendPlaylistStatusTo(pending.channel);
+    if (pending == null || pending.approval.isCompleted) return;
+    pending.approval.complete(true);
   }
 
   void denyPairing() {
     final pending = _pendingPairingRequest;
-    if (pending == null) return;
-
-    _approvalTimeout?.cancel();
-    _approvalTimeout = null;
-    _pendingPairingRequest = null;
-
-    pending.channel.sink.add(pairingDeniedJson());
-    unawaited(pending.channel.sink.close());
-    notifyListeners();
+    if (pending == null || pending.approval.isCompleted) return;
+    pending.approval.complete(false);
   }
 
   void _handleAuthed(WebSocketChannel channel, String raw) {

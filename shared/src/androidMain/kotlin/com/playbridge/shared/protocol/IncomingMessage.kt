@@ -18,6 +18,10 @@ import playbridge.BrowserPayload
 import playbridge.ControlPayload
 import playbridge.MousePayload
 import playbridge.PairingRequestMessage
+import playbridge.PairingCommitMessage
+import playbridge.PairingChallengeMessage
+import playbridge.PairingRevealMessage
+import playbridge.PairingConfirmationMessage
 import playbridge.PlayPayload
 import playbridge.PlaylistJumpPayload
 import playbridge.PlaylistPayload
@@ -33,6 +37,10 @@ import playbridge.VisualMetadata
 sealed class IncomingMessage {
     data object Ping : IncomingMessage()
     data class PairingRequest(val msg: playbridge.PairingRequestMessage) : IncomingMessage()
+    data class PairingCommit(val msg: playbridge.PairingCommitMessage) : IncomingMessage()
+    data class PairingChallenge(val msg: playbridge.PairingChallengeMessage) : IncomingMessage()
+    data class PairingReveal(val msg: playbridge.PairingRevealMessage) : IncomingMessage()
+    data class PairingConfirmation(val msg: playbridge.PairingConfirmationMessage) : IncomingMessage()
     data class Auth(val msg: playbridge.AuthMessage) : IncomingMessage()
     data class Playlist(val payload: playbridge.PlaylistPayload) : IncomingMessage()
     data class QueueAdd(val payload: playbridge.QueueAddPayload) : IncomingMessage()
@@ -66,6 +74,10 @@ private val mouseAdapter = moshi.adapter(MousePayload::class.java)
 private val browserAdapter = moshi.adapter(BrowserPayload::class.java)
 private val browserControlAdapter = moshi.adapter(BrowserControlPayload::class.java)
 private val pairingAdapter = moshi.adapter(PairingRequestMessage::class.java)
+private val pairingCommitAdapter = moshi.adapter(PairingCommitMessage::class.java)
+private val pairingChallengeAdapter = moshi.adapter(PairingChallengeMessage::class.java)
+private val pairingRevealAdapter = moshi.adapter(PairingRevealMessage::class.java)
+private val pairingConfirmationAdapter = moshi.adapter(PairingConfirmationMessage::class.java)
 private val authAdapter = moshi.adapter(AuthMessage::class.java)
 private val visualMetadataAdapter = moshi.adapter(VisualMetadata::class.java)
 
@@ -200,6 +212,26 @@ fun createPairingRequestJson(deviceName: String, deviceUUID: String): String =
         PairingRequestMessage(type = "pairing_request", device_name = deviceName, device_uuid = deviceUUID)
     )
 
+fun createPairingCommitJson(commit: String, deviceName: String, deviceUUID: String): String =
+    pairingCommitAdapter.toJson(
+        PairingCommitMessage(type = "pairing_commit", commit = commit, device_name = deviceName, device_uuid = deviceUUID)
+    )
+
+fun createPairingChallengeJson(tvEphPub: String, nonceT: String): String =
+    pairingChallengeAdapter.toJson(
+        PairingChallengeMessage(type = "pairing_challenge", tv_eph_pub = tvEphPub, nonce_t = nonceT)
+    )
+
+fun createPairingRevealJson(senderEphPub: String, nonceS: String): String =
+    pairingRevealAdapter.toJson(
+        PairingRevealMessage(type = "pairing_reveal", sender_eph_pub = senderEphPub, nonce_s = nonceS)
+    )
+
+fun createPairingConfirmationJson(mac: String): String =
+    pairingConfirmationAdapter.toJson(
+        PairingConfirmationMessage(type = "pairing_confirmation", mac = mac)
+    )
+
 fun createPairingApprovedJson(
     token: String,
     certFingerprint: String? = null,
@@ -289,6 +321,18 @@ fun parseIncomingMessage(text: String): IncomingMessage {
             "pairing_request" -> pairingAdapter.fromJson(text)
                 ?.let { IncomingMessage.PairingRequest(it) }
                 ?: IncomingMessage.Unknown("pairing_parse_error", text)
+            "pairing_commit" -> pairingCommitAdapter.fromJson(text)
+                ?.let { IncomingMessage.PairingCommit(it) }
+                ?: IncomingMessage.Unknown("pairing_commit_parse_error", text)
+            "pairing_challenge" -> pairingChallengeAdapter.fromJson(text)
+                ?.let { IncomingMessage.PairingChallenge(it) }
+                ?: IncomingMessage.Unknown("pairing_challenge_parse_error", text)
+            "pairing_reveal" -> pairingRevealAdapter.fromJson(text)
+                ?.let { IncomingMessage.PairingReveal(it) }
+                ?: IncomingMessage.Unknown("pairing_reveal_parse_error", text)
+            "pairing_confirmation" -> pairingConfirmationAdapter.fromJson(text)
+                ?.let { IncomingMessage.PairingConfirmation(it) }
+                ?: IncomingMessage.Unknown("pairing_confirmation_parse_error", text)
             "auth" -> authAdapter.fromJson(text)
                 ?.let { IncomingMessage.Auth(it) }
                 ?: IncomingMessage.Unknown("auth_parse_error", text)
