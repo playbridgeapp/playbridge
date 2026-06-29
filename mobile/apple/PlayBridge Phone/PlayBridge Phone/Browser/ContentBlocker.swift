@@ -66,6 +66,15 @@ enum ContentBlocker {
             }
         }
 
+        // Always-on extra rules from the bundled filter list (editable without code).
+        if let extra = extraListText(), !extra.isEmpty {
+            let supId = cacheIdentifier(for: extra)
+            desired.insert(supId)
+            if let list = try? await lookupOrCompile(store: store, identifier: supId, json: parseListTextToJSON(extra), sourceName: "playbridge-extra") {
+                lists.append(list)
+            }
+        }
+
         await pruneStaleRuleLists(store: store, keeping: desired)
         return lists
     }
@@ -101,6 +110,14 @@ enum ContentBlocker {
             desired.insert(id)
             let list = try await compile(store: store, identifier: id, json: makeCuratedRulesJSON(), sourceName: "curated")
             lists.append(list)
+        }
+
+        // Always-on extra rules from the bundled filter list (editable without code).
+        if let extra = extraListText(), !extra.isEmpty {
+            let supId = cacheIdentifier(for: extra)
+            desired.insert(supId)
+            let supList = try await compile(store: store, identifier: supId, json: parseListTextToJSON(extra), sourceName: "playbridge-extra")
+            lists.append(supList)
         }
 
         await pruneStaleRuleLists(store: store, keeping: desired)
@@ -161,10 +178,14 @@ enum ContentBlocker {
         }
     }
 
-    /// Stable identifier derived from a list's content, so changed content maps to
-    /// a new identifier (and thus a fresh compilation).
+    /// Bump when the rule-generation logic changes so that existing cached
+    /// compilations are invalidated and recompiled with the new parser.
+    private static let rulesetVersion = "6"
+
+    /// Stable identifier derived from a list's content (plus the parser version),
+    /// so changed content — or a parser upgrade — maps to a fresh compilation.
     private static func cacheIdentifier(for text: String) -> String {
-        let digest = SHA256.hash(data: Data(text.utf8))
+        let digest = SHA256.hash(data: Data((rulesetVersion + "\n" + text).utf8))
         let hex = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
         return "playbridge-adblock-\(hex)"
     }
@@ -199,8 +220,10 @@ enum ContentBlocker {
     /// missing or older than `maxAge`. Safe to call on every launch; failures are
     /// ignored so a flaky network never blocks the browser from starting.
     static func ensureListsDownloaded(maxAge: TimeInterval = 24 * 60 * 60) async {
+        var urls = filterListURLs
+        if let extra = remoteExtraListURL { urls.append(extra) }
         await withTaskGroup(of: Void.self) { group in
-            for url in filterListURLs {
+            for url in urls {
                 group.addTask {
                     let fileURL = getLocalListPath(for: url)
                     let fm = FileManager.default
@@ -233,13 +256,14 @@ enum ContentBlocker {
     /// Parse EasyList text format into WebKit Content Blocker rules (with 60k rule limit and cosmetic chunking)
     private static func parseListTextToJSON(_ text: String) -> String {
         var rules: [[String: Any]] = []
+        var exceptionRules: [[String: Any]] = []
         var cosmeticSelectors: [String] = []
         var ruleCount = 0
-        
+
         let lines = text.components(separatedBy: CharacterSet.newlines)
         for line in lines {
             let trimmed = line.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-            if trimmed.isEmpty || trimmed.hasPrefix("!") { continue }
+            if trimmed.isEmpty || trimmed.hasPrefix("!") || trimmed.hasPrefix("[") { continue }
             
             // 1. Cosmetic rules
             if trimmed.contains("##") {
@@ -308,58 +332,75 @@ enum ContentBlocker {
                 continue
             }
             
-            // 2. Exception rules
-            if trimmed.hasPrefix("@@||") {
-                let rule = trimmed.dropFirst(4)
-                var domain = rule.prefix(while: { $0 != "^" && $0 != "/" && $0 != "$" })
-                if domain.hasPrefix("*") {
-                    domain = domain.dropFirst()
-                }
-                if domain.hasPrefix(".") {
-                    domain = domain.dropFirst()
-                }
-                let domainStr = String(domain).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-                if !domainStr.isEmpty && isValidRuleDomain(domainStr) {
-                    let escaped = domainStr.replacingOccurrences(of: ".", with: "\\.")
-                    rules.append([
-                        "trigger": ["url-filter": "^https?://([^/]+\\.)?\(escaped)[:/?]", "load-type": ["third-party"]],
-                        "action": ["type": "ignore-previous-rules"]
-                    ])
-                    rules.append([
-                        "trigger": ["url-filter": "^https?://([^/]+\\.)?\(escaped)$", "load-type": ["third-party"]],
-                        "action": ["type": "ignore-previous-rules"]
-                    ])
-                }
+            // Skip cosmetic-exception / extended-cosmetic / scriptlet syntaxes
+            // that have no WebKit content-rule equivalent.
+            if trimmed.contains("#@#") || trimmed.contains("#?#")
+                || trimmed.contains("#$#") || trimmed.contains("#%#") {
                 continue
             }
-            
-            // 3. Block rules starting with ||
-            if trimmed.hasPrefix("||") {
-                let rule = trimmed.dropFirst(2)
-                var domain = rule.prefix(while: { $0 != "^" && $0 != "/" && $0 != "$" })
-                if domain.hasPrefix("*") {
-                    domain = domain.dropFirst()
+
+            // 2. Network rules — block rules and `@@` exceptions, including
+            // path/substring filters, not just domain-anchored ones.
+            let isException = trimmed.hasPrefix("@@")
+            var patternPart = Substring(trimmed)
+            if isException { patternPart = patternPart.dropFirst(2) }
+
+            // EasyList regex-literal filter: /pattern/ optionally followed by $options.
+            if patternPart.hasPrefix("/"),
+               let lastSlash = patternPart.range(of: "/", options: .backwards),
+               lastSlash.lowerBound != patternPart.startIndex {
+                let optsSeg = patternPart[lastSlash.upperBound...]
+                if optsSeg.isEmpty || optsSeg.hasPrefix("$") {
+                    let inner = String(patternPart[patternPart.index(after: patternPart.startIndex)..<lastSlash.lowerBound])
+                    let o = parseOptions(optsSeg.hasPrefix("$") ? optsSeg.dropFirst() : Substring(""))
+                    // Only accept "safe" literal-ish regexes; complex ones risk failing
+                    // the entire list compilation in WebKit.
+                    let safe = !inner.isEmpty && inner.allSatisfy {
+                        $0.isLetter || $0.isNumber || "._-/".contains($0)
+                    }
+                    if !o.skip && safe, (try? NSRegularExpression(pattern: inner)) != nil {
+                        var t: [String: Any] = ["url-filter": inner]
+                        if let lt = o.loadType { t["load-type"] = lt }
+                        if !o.ifDomain.isEmpty { t["if-domain"] = o.ifDomain }
+                        else if !o.unlessDomain.isEmpty { t["unless-domain"] = o.unlessDomain }
+                        let r: [String: Any] = ["trigger": t,
+                                                "action": ["type": isException ? "ignore-previous-rules" : "block"]]
+                        if isException { exceptionRules.append(r) }
+                        else {
+                            rules.append(r); ruleCount += 1
+                            if ruleCount > 60000 { break }
+                        }
+                    }
+                    continue
                 }
-                if domain.hasPrefix(".") {
-                    domain = domain.dropFirst()
-                }
-                let domainStr = String(domain).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-                if !domainStr.isEmpty && isValidRuleDomain(domainStr) {
-                    let escaped = domainStr.replacingOccurrences(of: ".", with: "\\.")
-                    rules.append([
-                        "trigger": ["url-filter": "^https?://([^/]+\\.)?\(escaped)[:/?]", "load-type": ["third-party"]],
-                        "action": ["type": "block"]
-                    ])
-                    rules.append([
-                        "trigger": ["url-filter": "^https?://([^/]+\\.)?\(escaped)$", "load-type": ["third-party"]],
-                        "action": ["type": "block"]
-                    ])
-                    ruleCount += 2
+            }
+
+            // Separate EasyList options (everything after the last `$`).
+            var optionsPart = Substring("")
+            if let dollar = patternPart.lastIndex(of: "$") {
+                optionsPart = patternPart[patternPart.index(after: dollar)...]
+                patternPart = patternPart[..<dollar]
+            }
+
+            let opts = parseOptions(optionsPart)
+            if opts.skip { continue }
+
+            let netRules = makeNetworkRules(pattern: patternPart, options: opts, block: !isException)
+            if !netRules.isEmpty {
+                if isException {
+                    exceptionRules.append(contentsOf: netRules)
+                } else {
+                    rules.append(contentsOf: netRules)
+                    ruleCount += netRules.count
                     if ruleCount > 60000 { break }
                 }
-                continue
             }
+            continue
         }
+
+        // Exceptions go after all block rules so `ignore-previous-rules` can
+        // override the blocks they whitelist.
+        rules.append(contentsOf: exceptionRules)
         
         // Chunk cosmetic rules to prevent WebKit length limits
         let chunkSize = 1000
@@ -392,6 +433,133 @@ enum ContentBlocker {
         guard let data = try? JSONSerialization.data(withJSONObject: rules),
               let json = String(data: data, encoding: .utf8) else { return dummyRuleJSON }
         return json
+    }
+
+    /// Parsed subset of EasyList rule options that WebKit can represent.
+    private struct NetOptions {
+        var loadType: [String]? = nil      // nil = both first- and third-party
+        var ifDomain: [String] = []
+        var unlessDomain: [String] = []
+        var skip = false                   // rule uses an option we can't represent
+    }
+
+    private static func parseOptions(_ optStr: Substring) -> NetOptions {
+        var o = NetOptions()
+        if optStr.isEmpty { return o }
+        for raw in optStr.split(separator: ",") {
+            let opt = raw.trimmingCharacters(in: .whitespaces).lowercased()
+            if opt.isEmpty { continue }
+            if opt == "third-party" || opt == "3p" {
+                o.loadType = ["third-party"]
+            } else if opt == "~third-party" || opt == "first-party" || opt == "1p" || opt == "~3p" {
+                o.loadType = ["first-party"]
+            } else if opt.hasPrefix("domain=") {
+                let val = opt.dropFirst("domain=".count)
+                for d in val.split(separator: "|") {
+                    var dd = d
+                    var neg = false
+                    if dd.hasPrefix("~") { neg = true; dd = dd.dropFirst() }
+                    if dd.hasPrefix("*") { dd = dd.dropFirst() }
+                    if dd.hasPrefix(".") { dd = dd.dropFirst() }
+                    let ds = String(dd)
+                    if isValidRuleDomain(ds) {
+                        if neg { o.unlessDomain.append("*" + ds) } else { o.ifDomain.append("*" + ds) }
+                    }
+                }
+            } else if opt.hasPrefix("csp") || opt.hasPrefix("redirect") || opt.hasPrefix("rewrite")
+                || opt.hasPrefix("removeparam") || opt.hasPrefix("replace") || opt.hasPrefix("header")
+                || opt.hasPrefix("cookie") || opt.hasPrefix("permissions") || opt == "inline-script"
+                || opt == "inline-font" || opt == "generichide" || opt == "ghide" || opt == "elemhide"
+                || opt == "ehide" || opt == "specifichide" || opt == "genericblock" || opt == "empty"
+                || opt == "mp4" {
+                o.skip = true
+            }
+            // Other options (resource-type filters, important, match-case, negated
+            // types, etc.) are ignored: the rule is applied to all resource types.
+        }
+        return o
+    }
+
+    /// Translates a single EasyList network pattern (the part before `$`) into one
+    /// or more WebKit content-blocker rules. Returns [] if it can't be represented.
+    private static func makeNetworkRules(pattern rawPattern: Substring, options: NetOptions, block: Bool) -> [[String: Any]] {
+        let actionType = block ? "block" : "ignore-previous-rules"
+
+        func trigger(_ urlFilter: String) -> [String: Any]? {
+            guard (try? NSRegularExpression(pattern: urlFilter)) != nil else { return nil }
+            var t: [String: Any] = ["url-filter": urlFilter]
+            if let lt = options.loadType { t["load-type"] = lt }
+            if !options.ifDomain.isEmpty { t["if-domain"] = options.ifDomain }
+            else if !options.unlessDomain.isEmpty { t["unless-domain"] = options.unlessDomain }
+            return ["trigger": t, "action": ["type": actionType]]
+        }
+
+        var p = rawPattern
+        if p.isEmpty { return [] }
+
+        var domainAnchor = false
+        var anchorStart = false
+        var anchorEnd = false
+        if p.hasPrefix("||") { domainAnchor = true; p = p.dropFirst(2) }
+        else if p.hasPrefix("|") { anchorStart = true; p = p.dropFirst() }
+        if p.hasSuffix("|") { anchorEnd = true; p = p.dropLast() }
+        while p.hasSuffix("^") { p = p.dropLast() }
+        if p.isEmpty { return [] }
+
+        // Pure domain anchor (||domain.com^): boundary-anchored block covering BOTH
+        // first- and third-party (unless options say otherwise). Two rules handle
+        // "domain + path/port" and "bare domain".
+        if domainAnchor, !p.contains("/"), !p.contains("*"), !p.contains("^") {
+            let ds = String(p).trimmingCharacters(in: .whitespaces)
+            guard !ds.isEmpty, isValidRuleDomain(ds) else { return [] }
+            let escaped = ds.replacingOccurrences(of: ".", with: "\\.")
+            var out: [[String: Any]] = []
+            if let r = trigger("^https?://([^/]+\\.)?\(escaped)[:/?]") { out.append(r) }
+            if let r = trigger("^https?://([^/]+\\.)?\(escaped)$") { out.append(r) }
+            return out
+        }
+
+        // General pattern -> WebKit url-filter regex.
+        var body = ""
+        for ch in p {
+            switch ch {
+            case "*": body += ".*"
+            case "^": body += "[^a-zA-Z0-9._%-]"
+            case ".", "?", "+", "(", ")", "[", "]", "{", "}", "$", "\\", "|":
+                body += "\\" + String(ch)
+            default: body += String(ch)
+            }
+        }
+        // Refuse rules with no concrete token (they would match almost everything).
+        guard body.contains(where: { $0.isLetter || $0.isNumber }) else { return [] }
+
+        var urlFilter = body
+        if domainAnchor { urlFilter = "^https?://([^/]+\\.)?" + body }
+        else if anchorStart { urlFilter = "^" + body }
+        if anchorEnd { urlFilter += "$" }
+
+        if let r = trigger(urlFilter) { return [r] }
+        return []
+    }
+
+    /// Generic ad/banner keyword patterns blocked on BOTH first- and third-party
+    /// requests, independent of any downloaded list. These are compound, ad-specific
+    /// tokens (low false-positive risk) plus Flash, covering banner-image ad units
+    /// that domain-anchored rules miss when served from a site's own domain.
+    /// Single source of truth for the custom rules: one hosted file on the site
+    /// (Cloudflare). Editing the file at this URL updates the rules for all users
+    /// without an app release.
+    static let remoteExtraListURL = URL(string: "https://playbridge.app/filters/playbridge-extra.txt")
+
+    /// The custom filter list (EasyList syntax), as downloaded from
+    /// `remoteExtraListURL`. Until the first successful download (e.g. a fresh
+    /// install while offline) there are no custom rules and the in-code curated
+    /// fallback applies. Recompiled automatically whenever the file changes.
+    private static func extraListText() -> String? {
+        guard let remote = remoteExtraListURL else { return nil }
+        let local = getLocalListPath(for: remote)
+        guard let text = try? String(contentsOf: local, encoding: .utf8), !text.isEmpty else { return nil }
+        return text
     }
 
     private static func makeCuratedRulesJSON() -> String {
