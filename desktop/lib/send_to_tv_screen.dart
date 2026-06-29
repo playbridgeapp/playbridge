@@ -778,7 +778,8 @@ class _PinInputViewState extends State<_PinInputView> {
                   Text(
                     'Incorrect code — ${widget.attemptsLeft} '
                     '${widget.attemptsLeft == 1 ? 'try' : 'tries'} left',
-                    style: const TextStyle(fontSize: 13, color: Colors.redAccent),
+                    style:
+                        const TextStyle(fontSize: 13, color: Colors.redAccent),
                     textAlign: TextAlign.center,
                   ),
                 ],

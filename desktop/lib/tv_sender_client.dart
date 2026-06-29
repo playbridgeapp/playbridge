@@ -278,7 +278,8 @@ class TvSenderClient {
     if (code != _calculatedSas) {
       _sasAttemptsLeft -= 1;
       if (_sasAttemptsLeft <= 0) {
-        debugPrint('[tv-sender] SAS retries exhausted — tearing down handshake');
+        debugPrint(
+            '[tv-sender] SAS retries exhausted — tearing down handshake');
         _setState(SenderConnectionState.pairingDenied);
         _close();
         return false;
@@ -286,7 +287,8 @@ class TvSenderClient {
       // Keep the socket + handshake alive; the TV is still awaiting our confirmation
       // MAC, so re-prompt and let the user retype the code.
       _lastSasWrong = true;
-      debugPrint('[tv-sender] incorrect SAS — $_sasAttemptsLeft attempt(s) left');
+      debugPrint(
+          '[tv-sender] incorrect SAS — $_sasAttemptsLeft attempt(s) left');
       _setState(SenderConnectionState.waitingForCodeInput);
       return false;
     }

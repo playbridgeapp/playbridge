@@ -218,10 +218,11 @@ class ReceiverServer extends ChangeNotifier {
       // Capture the client IP for the upcoming ws upgrade so pairing rate-limiting
       // keys on a real address. Only ws-upgrade requests reach here (the /logs HTTP
       // routes returned above), and upgrades fire onConnection in accept order.
-      final ip = (request.context['shelf.io.connection_info'] as HttpConnectionInfo?)
-              ?.remoteAddress
-              .address ??
-          'unknown';
+      final ip =
+          (request.context['shelf.io.connection_info'] as HttpConnectionInfo?)
+                  ?.remoteAddress
+                  .address ??
+              'unknown';
       _pendingClientIps.add(ip);
       return wsHandler(request);
     };
@@ -263,7 +264,9 @@ class ReceiverServer extends ChangeNotifier {
 
   void _onClient(WebSocketChannel channel, String? subprotocol) {
     // Pair this channel with the IP captured for its upgrade (accept-order FIFO).
-    final ip = _pendingClientIps.isNotEmpty ? _pendingClientIps.removeAt(0) : 'unknown';
+    final ip = _pendingClientIps.isNotEmpty
+        ? _pendingClientIps.removeAt(0)
+        : 'unknown';
     _channelIps[channel] = ip;
     debugPrint('[server] client connected');
     _all.add(channel);
