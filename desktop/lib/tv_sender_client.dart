@@ -87,6 +87,17 @@ class TvSenderClient {
   Uint8List? _sharedSecret;
   String? _calculatedSas;
 
+  // SAS code entries remaining for the current handshake; reset on a fresh challenge.
+  static const int _maxSasAttempts = 3;
+  int _sasAttemptsLeft = _maxSasAttempts;
+  bool _lastSasWrong = false;
+
+  /// SAS code entries remaining before the handshake is torn down (UI hint).
+  int get sasAttemptsLeft => _sasAttemptsLeft;
+
+  /// True when the last [submitSasCode] was rejected, so the UI can show a hint.
+  bool get lastSasWrong => _lastSasWrong;
+
   final _state = StreamController<SenderConnectionState>.broadcast();
   final _messages = StreamController<String>.broadcast();
   final _credentials = StreamController<TvCredentials>.broadcast();
@@ -115,10 +126,10 @@ class TvSenderClient {
     if (!_state.isClosed) _state.add(s);
   }
 
-  /// Connects to a TV. Pass [token] = null/empty for first-time pairing (sends
-  /// `pairing_request`, waits for Allow); pass a saved token to reconnect
-  /// silently. [expectedPin] enforces the pinned cert on `wss://` reconnects;
-  /// null means trust-on-first-use (first pairing).
+  /// Connects to a TV. Pass [token] = null/empty for first-time pairing (runs the
+  /// SAS commit/challenge/reveal/confirmation handshake — the user enters the code
+  /// shown on the TV); pass a saved token to reconnect silently. [expectedPin]
+  /// enforces the pinned cert on `wss://` reconnects; null means trust-on-first-use.
   Future<void> connect({
     required String host,
     required int port,
@@ -252,6 +263,9 @@ class TvSenderClient {
       _sasCode.add(_calculatedSas!);
     }
 
+    // Fresh handshake → reset the retry budget for code entry.
+    _sasAttemptsLeft = _maxSasAttempts;
+    _lastSasWrong = false;
     _setState(SenderConnectionState.waitingForCodeInput);
   }
 
@@ -262,10 +276,20 @@ class TvSenderClient {
     }
 
     if (code != _calculatedSas) {
+      _sasAttemptsLeft -= 1;
+      if (_sasAttemptsLeft <= 0) {
+        debugPrint(
+            '[tv-sender] SAS retries exhausted — tearing down handshake');
+        _setState(SenderConnectionState.pairingDenied);
+        _close();
+        return false;
+      }
+      // Keep the socket + handshake alive; the TV is still awaiting our confirmation
+      // MAC, so re-prompt and let the user retype the code.
+      _lastSasWrong = true;
       debugPrint(
-          '[tv-sender] SAS code mismatch: entered $code, expected $_calculatedSas');
-      _setState(SenderConnectionState.pairingDenied);
-      _close();
+          '[tv-sender] incorrect SAS — $_sasAttemptsLeft attempt(s) left');
+      _setState(SenderConnectionState.waitingForCodeInput);
       return false;
     }
 

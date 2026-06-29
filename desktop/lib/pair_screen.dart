@@ -14,7 +14,6 @@ class PairScreen extends StatefulWidget {
     required this.discoveryError,
     this.tlsError,
     required this.pendingRequest,
-    required this.onAllow,
     required this.onDeny,
   });
 
@@ -26,7 +25,6 @@ class PairScreen extends StatefulWidget {
   final String? discoveryError;
   final String? tlsError;
   final PendingPairingRequest? pendingRequest;
-  final VoidCallback onAllow;
   final VoidCallback onDeny;
 
   @override

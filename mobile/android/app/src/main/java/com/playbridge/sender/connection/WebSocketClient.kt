@@ -2,7 +2,6 @@ package com.playbridge.sender.connection
 
 import android.util.Log
 import com.playbridge.shared.protocol.createAuthJson
-import com.playbridge.shared.protocol.createPairingRequestJson
 import com.playbridge.shared.protocol.createPairingCommitJson
 import com.playbridge.shared.protocol.createPairingChallengeJson
 import com.playbridge.shared.protocol.createPairingRevealJson
@@ -30,6 +29,9 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 
 private const val TAG = "WebSocketClient"
+
+/** Number of SAS code entries the user gets before the handshake is torn down. */
+private const val MAX_PAIR_ATTEMPTS = 3
 
 /**
  * OkHttp-based WebSocket client for connecting to TV
@@ -80,6 +82,8 @@ class WebSocketClient {
     @Volatile private var nonceT: ByteArray? = null
     @Volatile private var sharedSecret: ByteArray? = null
     @Volatile private var calculatedSas: String? = null
+    // SAS entries remaining for the current handshake; reset when a fresh challenge arrives.
+    @Volatile private var pairingAttemptsLeft: Int = MAX_PAIR_ATTEMPTS
     
     // Mouse delta accumulation — collapses rapid pointer events into one packet per flush
     // interval so we're not flooding the TV with a packet per display frame (especially at 120Hz).
@@ -119,8 +123,15 @@ class WebSocketClient {
             data object Disconnected : ConnectionState()
             data object Connecting : ConnectionState()
             data class Connected(val serverName: String, val secure: Boolean = false) : ConnectionState()
-            // New SAS Handshake states
-            data class WaitingForCodeInput(val serverName: String) : ConnectionState()
+            // New SAS Handshake states.
+            // [attemptsLeft] counts down as the user mistypes the 6-digit code; [lastCodeWrong]
+            // is true when this state was re-emitted after an incorrect entry, so the UI can
+            // show an inline "incorrect code — N left" hint and clear the field.
+            data class WaitingForCodeInput(
+                val serverName: String,
+                val attemptsLeft: Int = MAX_PAIR_ATTEMPTS,
+                val lastCodeWrong: Boolean = false,
+            ) : ConnectionState()
             data class VerifyingCode(val serverName: String) : ConnectionState()
             // Pairing request sent — waiting for the TV user to tap Allow.
             data class WaitingForApproval(val serverName: String) : ConnectionState()
@@ -235,8 +246,15 @@ class WebSocketClient {
                 }
                 Log.d(TAG, "Received: $text")
 
+                // Route on the exact envelope `type` rather than substring matching, so a
+                // value that merely contains "pairing_approved" etc. can't be misrouted.
+                val type = runCatching {
+                    (Json.parseToJsonElement(text) as? JsonObject)
+                        ?.get("type")?.jsonPrimitive?.contentOrNull
+                }.getOrNull()
+
                 // Handle pairing_challenge message from TV
-                if (text.contains("pairing_challenge")) {
+                if (type == "pairing_challenge") {
                     try {
                         val parsed = parseIncomingMessage(text) as? IncomingMessage.PairingChallenge
                         val msg = parsed?.msg
@@ -264,6 +282,8 @@ class WebSocketClient {
                             val revealJson = createPairingRevealJson(senderEphPub = senderEphPubB64, nonceS = nonceSB64)
                             webSocket.send(revealJson)
 
+                            // Fresh handshake → reset the retry budget for code entry.
+                            pairingAttemptsLeft = MAX_PAIR_ATTEMPTS
                             _connectionState.value = ConnectionState.WaitingForCodeInput(serverName)
                             return
                         }
@@ -274,7 +294,7 @@ class WebSocketClient {
                 }
                 
                 // Handle pairing and auth responses before forwarding to command flow.
-                if (text.contains("pairing_approved")) {
+                if (type == "pairing_approved") {
                     try {
                         val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
                         if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_approved") {
@@ -308,7 +328,7 @@ class WebSocketClient {
                     }
                 }
 
-                if (text.contains("pairing_denied")) {
+                if (type == "pairing_denied") {
                     try {
                         val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
                         if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_denied") {
@@ -323,7 +343,7 @@ class WebSocketClient {
                     }
                 }
 
-                if (text.contains("auth_response")) {
+                if (type == "auth_response") {
                     try {
                         val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
                         if (json is JsonObject) {
@@ -422,10 +442,21 @@ class WebSocketClient {
 
         // Check if code matches
         val cleanCode = code.replace(" ", "")
+        val serverName = targetConnection?.serverName ?: "TV"
         if (cleanCode != expectedSas) {
-            Log.w(TAG, "User typed incorrect SAS code '$cleanCode' (expected '$expectedSas')")
-            ws.close(1000, "Incorrect code")
-            _connectionState.value = ConnectionState.PairingDenied(targetConnection?.serverName ?: "TV")
+            pairingAttemptsLeft -= 1
+            if (pairingAttemptsLeft <= 0) {
+                Log.w(TAG, "SAS retries exhausted — tearing down handshake")
+                ws.close(1000, "Incorrect code")
+                _connectionState.value = ConnectionState.PairingDenied(serverName)
+                return false
+            }
+            // Keep the socket + handshake alive and re-prompt; the TV is still awaiting our
+            // confirmation MAC, so the user can simply retype the code.
+            Log.w(TAG, "Incorrect SAS code — $pairingAttemptsLeft attempt(s) left")
+            _connectionState.value = ConnectionState.WaitingForCodeInput(
+                serverName, pairingAttemptsLeft, lastCodeWrong = true
+            )
             return false
         }
 

@@ -3,6 +3,11 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.1] — 2026-06-29 (versionCode 213)
+
+### Fixed
+- **SAS Auth Connection**: Resolved client reconnection timing and verification state flags on socket reconnection.
+
 ## [0.6.0] — 2026-06-28 (versionCode 212)
 
 ### Added

@@ -46,6 +46,18 @@ final class WebSocketClient: NSObject, ObservableObject {
     private var capturedServerPin: String?
     private var pinMismatch = false
 
+    // SAS pairing handshake state (sender side). Written/read on `delegateQueue`
+    // (the receive handler and submitPairingCode both hop onto it), so no extra locking.
+    private static let maxPairAttempts = 3
+    private var senderKeyPair: SasCrypto.KeyPair?
+    private var nonceS: Data?
+    private var commitStr: String?
+    private var tvEphPub: Data?
+    private var nonceT: Data?
+    private var sharedSecret: Data?
+    private var calculatedSas: String?
+    private var pairingAttemptsLeft = WebSocketClient.maxPairAttempts
+
     private var pingTimer: DispatchSourceTimer?
 
     // Mouse-move batching (collapse rapid deltas into ~60Hz packets), as in the Kotlin client.
@@ -59,7 +71,11 @@ final class WebSocketClient: NSObject, ObservableObject {
         delegateQueue.maxConcurrentOperationCount = 1
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
-        config.timeoutIntervalForRequest = 10
+        // Generous inter-data timeout: during pairing the receiver shows a ~60s code prompt
+        // and sends nothing until we authenticate, so a short timeout would tear the idle
+        // socket down mid-pairing. TCP-level failures (refused/unreachable) still surface
+        // quickly via didCompleteWithError; keepalive pings (see onOpen) cover liveness.
+        config.timeoutIntervalForRequest = 60
         session = URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
     }
 
@@ -176,11 +192,29 @@ final class WebSocketClient: NSObject, ObservableObject {
     private func onOpen() {
         guard let conn = target, let wsTask = task else { return }
         retryCount = 0
+        // Keep the connection alive from the moment it opens — including the pre-auth pairing
+        // window, when the receiver sends no data but does answer pings. Without this the idle
+        // socket can drop while the user is reading/typing the code. startPing() is idempotent,
+        // so the later approval/auth calls just reset it.
+        startPing()
         _ = wsTask // handshake sends go through the active task
         if conn.token.isEmpty {
-            // First-time pairing — identify and wait for the TV user to approve.
-            _ = send(WireProtocol.pairingRequest(deviceName: conn.deviceName, deviceUUID: conn.deviceUUID))
-            setState(.waitingForApproval(serverName: conn.serverName))
+            // First-time pairing — run the SAS handshake. Commit to an ephemeral X25519
+            // key + nonce, then wait for the TV's challenge (commit hides our key so the
+            // TV can't pick its key adaptively).
+            let keyPair = SasCrypto.generateX25519KeyPair()
+            let nonce = SasCrypto.generateNonce(16)
+            senderKeyPair = keyPair
+            nonceS = nonce
+            let commit = SasCrypto.sha256(keyPair.publicKeyBytes + nonce).base64EncodedString()
+            commitStr = commit
+            pairingAttemptsLeft = Self.maxPairAttempts
+            _ = send(WireProtocol.pairingCommit(
+                commit: commit,
+                deviceName: conn.deviceName,
+                deviceUUID: conn.deviceUUID
+            ))
+            // Stay in .connecting until the challenge arrives (a brief round-trip).
         } else {
             // Reconnect with a saved token; the receiver replies with auth_response.
             _ = send(WireProtocol.auth(token: conn.token))
@@ -196,6 +230,8 @@ final class WebSocketClient: NSObject, ObservableObject {
         }
 
         switch type {
+        case "pairing_challenge":
+            handlePairingChallenge(json)
         case "pairing_approved":
             handlePairingApproved(json)
         case "pairing_denied":
@@ -207,6 +243,96 @@ final class WebSocketClient: NSObject, ObservableObject {
         default:
             onMessage?(text)
         }
+    }
+
+    /// SAS step 2→3: the TV revealed its ephemeral key. Derive the shared secret + SAS,
+    /// reveal our key, and prompt the user for the 6-digit code shown on the TV.
+    private func handlePairingChallenge(_ json: [String: Any]) {
+        guard let keyPair = senderKeyPair,
+              let nonce = nonceS,
+              let commit = commitStr,
+              let tvEphPubB64 = json["tvEphPub"] as? String,
+              let nonceTB64 = json["nonceT"] as? String,
+              let tvEphPubBytes = Data(base64Encoded: tvEphPubB64),
+              let nonceTBytes = Data(base64Encoded: nonceTB64),
+              let commitBytes = Data(base64Encoded: commit) else {
+            setState(.error(message: "Pairing failed"))
+            task?.cancel(with: .normalClosure, reason: nil)
+            return
+        }
+        tvEphPub = tvEphPubBytes
+        nonceT = nonceTBytes
+        do {
+            let shared = try SasCrypto.calculateECDH(privateKey: keyPair.privateKey, publicKeyBytes: tvEphPubBytes)
+            sharedSecret = shared
+            let transcript = pairingTranscript(
+                commitBytes: commitBytes, tvEphPub: tvEphPubBytes, nonceT: nonceTBytes,
+                senderEphPub: keyPair.publicKeyBytes, nonceS: nonce
+            )
+            calculatedSas = SasCrypto.generateSAS(sharedSecret: shared, transcript: transcript)
+            _ = send(WireProtocol.pairingReveal(
+                senderEphPub: keyPair.publicKeyBytes.base64EncodedString(),
+                nonceS: nonce.base64EncodedString()
+            ))
+            setState(.waitingForCodeInput(serverName: target?.serverName ?? "",
+                                          attemptsLeft: pairingAttemptsLeft, lastCodeWrong: false))
+        } catch {
+            setState(.error(message: "Pairing failed"))
+            task?.cancel(with: .normalClosure, reason: nil)
+        }
+    }
+
+    /// Submit the 6-digit code the user read off the TV. Serialized onto `delegateQueue`
+    /// so it doesn't race the receive handler that owns the handshake fields.
+    func submitPairingCode(_ code: String) {
+        delegateQueue.addOperation { [weak self] in self?.handleSubmitPairingCode(code) }
+    }
+
+    private func handleSubmitPairingCode(_ code: String) {
+        guard let keyPair = senderKeyPair, let nonce = nonceS, let commit = commitStr,
+              let tvPub = tvEphPub, let nonceTv = nonceT, let shared = sharedSecret,
+              let expected = calculatedSas, let commitBytes = Data(base64Encoded: commit) else { return }
+
+        let serverName = target?.serverName ?? ""
+        let clean = code.replacingOccurrences(of: " ", with: "")
+        if clean != expected {
+            pairingAttemptsLeft -= 1
+            if pairingAttemptsLeft <= 0 {
+                // Out of tries — tear down the handshake; the user must re-pair.
+                isUserDisconnect = true
+                setState(.pairingDenied(serverName: serverName))
+                task?.cancel(with: .normalClosure, reason: nil)
+                return
+            }
+            // Keep the socket + handshake alive (the TV is still awaiting our MAC) and re-prompt.
+            setState(.waitingForCodeInput(serverName: serverName,
+                                          attemptsLeft: pairingAttemptsLeft, lastCodeWrong: true))
+            return
+        }
+
+        // Correct — prove key possession with the confirmation MAC.
+        let transcript = pairingTranscript(
+            commitBytes: commitBytes, tvEphPub: tvPub, nonceT: nonceTv,
+            senderEphPub: keyPair.publicKeyBytes, nonceS: nonce
+        )
+        let prk = SasCrypto.hkdfExtract(salt: nil, ikm: shared)
+        let confirmationKey = SasCrypto.hkdfExpand(prk: prk, info: "confirmationKey".data(using: .utf8), length: 32)
+        let mac = SasCrypto.hmacSha256(key: confirmationKey, data: transcript).base64EncodedString()
+        _ = send(WireProtocol.pairingConfirmation(mac: mac))
+        setState(.verifyingCode(serverName: serverName))
+    }
+
+    /// The pairing transcript bound into the SAS and confirmation MAC, in the exact byte
+    /// order shared by every implementation: commit ‖ tvEphPub ‖ nonceT ‖ senderEphPub ‖ nonceS.
+    private func pairingTranscript(commitBytes: Data, tvEphPub: Data, nonceT: Data,
+                                   senderEphPub: Data, nonceS: Data) -> Data {
+        var t = Data()
+        t.append(commitBytes)
+        t.append(tvEphPub)
+        t.append(nonceT)
+        t.append(senderEphPub)
+        t.append(nonceS)
+        return t
     }
 
     private func handlePairingApproved(_ json: [String: Any]) {

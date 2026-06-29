@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.6.1] — 2026-06-29 (versionCode 214)
+
+### Fixed
+- **SAS Authentication & Protocol**: Resolved handshake state issues, socket connection drops, and keystore-related keyPassword signing configurations.
+
 ## Player [0.6.0] — 2026-06-28 (versionCode 213)
 
 ### Added

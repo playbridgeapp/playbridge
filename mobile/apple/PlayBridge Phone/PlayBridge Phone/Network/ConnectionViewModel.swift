@@ -84,6 +84,9 @@ final class ConnectionViewModel: ObservableObject {
 
     func disconnect() { ws.disconnect() }
 
+    /// Submit the 6-digit SAS code the user read off the TV during pairing.
+    func submitPairingCode(_ code: String) { ws.submitPairingCode(code) }
+
     func forgetDevice() {
         ws.disconnect()
         store.clearPairedDevice()

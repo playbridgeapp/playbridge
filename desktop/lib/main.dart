@@ -758,7 +758,6 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           discoveryError: _discoveryError,
           tlsError: _server.tlsError,
           pendingRequest: _server.pendingPairingRequest,
-          onAllow: _server.approvePairing,
           onDeny: _server.denyPairing,
         ),
       _Dest.sendToTv => SendToTvScreen(controller: _sender),

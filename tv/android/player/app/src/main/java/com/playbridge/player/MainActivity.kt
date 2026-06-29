@@ -284,7 +284,6 @@ fun MainContent(
                             connectionState = connectionState,
                             connectedCount = connectedCount,
                             pendingRequest = pendingPairingRequest,
-                            onAllow = { ServerService.approvePairing() },
                             onDeny = { ServerService.denyPairing() },
                             pairedDevices = pairedDevices,
                             onForget = { device -> scope.launch { pairingStore.forgetDevice(device) } },

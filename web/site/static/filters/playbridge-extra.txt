@@ -1,0 +1,85 @@
+! Title: PlayBridge Extra Rules
+! Description: Custom ad/tracker rules maintained by PlayBridge, bundled with the
+!   app and loaded by ContentBlocker alongside the downloaded filter lists.
+!   Uses standard Adblock Plus / EasyList syntax. Edit this file to add or remove
+!   rules — no code changes or version bumps needed (rules are re-compiled
+!   automatically whenever this file's contents change).
+!
+!   Syntax cheat-sheet:
+!     ||domain.com^         block all requests to domain.com (first + third party)
+!     /keyword              block any URL whose path contains "keyword"
+!     ##selector            hide elements matching a CSS selector
+!     @@||domain.com^       exception: allow domain.com (whitelist)
+!     !                     comment
+
+! ---------- Yandex Direct ----------
+||an.yandex.ru^
+||yabs.yandex.ru^
+||bs.yandex.ru^
+||adfox.yandex.ru^
+||awaps.yandex.ru^
+||an.yandex.com^
+
+! ---------- Adult ad networks (not covered by stock EasyList) ----------
+! TrafficJunky / TrafficFactory (MindGeek / PornHub)
+||trafficjunky.net^
+||trafficjunky.com^
+||trafficfactory.biz^
+! ExoClick / MagSrv
+||exoclick.com^
+||exosrv.com^
+||exdynsrv.com^
+||realsrv.com^
+||magsrv.com^
+! TrafficStars
+||tsyndicate.com^
+||tsyndicate.net^
+||trafficstars.com^
+! Others
+||juicyads.com^
+||ero-advertising.com^
+||plugrush.com^
+||popcash.net^
+||popads.net^
+||clickadu.com^
+||adxpansion.com^
+||hilltopads.net^
+||adsterra.com^
+||ad-maven.com^
+||onclkds.com^
+||exads.com^
+||bluetrafficstream.com^
+
+! ---------- Generic banner / ad-image keywords ----------
+_advertising_
+advertising_ads
+_ads_banner
+ads_banner
+_ad_banner
+ad_banner_
+/banner_ad
+banner_ads
+/adframe
+/adimage
+/adserver
+/popunder
+.swf
+
+! ---------- Ad scripts (incl. first-party paths) ----------
+adsbygoogle
+/pagead/
+/advert
+/ads.js
+/adscript
+/ad-script
+/adsense
+
+! ---------- Cosmetic: hide ad / popup containers ----------
+##a.removeAdLink
+##a[href*="bluetrafficstream"]
+##embed[src*=".swf"]
+##object[data*=".swf"]
+##[type="application/x-shockwave-flash"]
+! page-skin (wallpaper) ads and their click overlay
+###customSkin
+###customSkinCTA

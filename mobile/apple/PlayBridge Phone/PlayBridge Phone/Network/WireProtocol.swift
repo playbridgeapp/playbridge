@@ -25,6 +25,31 @@ enum WireProtocol {
         ])
     }
 
+    // MARK: - SAS pairing handshake (commit → challenge → reveal → confirmation)
+    // Keys match the proto `json_name` annotations so receivers decode them with
+    // SwiftProtobuf / Wire+Moshi.
+
+    static func pairingCommit(commit: String, deviceName: String, deviceUUID: String) -> String {
+        encode([
+            "type": "pairing_commit",
+            "commit": commit,
+            "deviceName": deviceName,
+            "deviceUUID": deviceUUID,
+        ])
+    }
+
+    static func pairingReveal(senderEphPub: String, nonceS: String) -> String {
+        encode([
+            "type": "pairing_reveal",
+            "senderEphPub": senderEphPub,
+            "nonceS": nonceS,
+        ])
+    }
+
+    static func pairingConfirmation(mac: String) -> String {
+        encode(["type": "pairing_confirmation", "mac": mac])
+    }
+
     // MARK: - Commands
 
     /// A single video is just a one-item playlist — there is no standalone `play` command

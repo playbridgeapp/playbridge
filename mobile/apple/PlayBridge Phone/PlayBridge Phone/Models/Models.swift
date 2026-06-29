@@ -39,7 +39,12 @@ enum ConnectionState: Equatable {
     case connected(serverName: String, secure: Bool)
     /// Pairing request sent — waiting for the TV user to tap Allow.
     case waitingForApproval(serverName: String)
-    /// TV user tapped Deny, or the 30s timeout elapsed.
+    /// SAS handshake: the TV challenged us and is displaying the 6-digit code. The user
+    /// types it here. [attemptsLeft]/[lastCodeWrong] drive the inline retry hint.
+    case waitingForCodeInput(serverName: String, attemptsLeft: Int, lastCodeWrong: Bool)
+    /// Correct code entered; confirmation MAC sent, awaiting the receiver's approval.
+    case verifyingCode(serverName: String)
+    /// TV user tapped Deny, or the 60s timeout elapsed.
     case pairingDenied(serverName: String)
     case retrying(attempt: Int, maxAttempts: Int, nextRetrySeconds: Int)
     case error(message: String)

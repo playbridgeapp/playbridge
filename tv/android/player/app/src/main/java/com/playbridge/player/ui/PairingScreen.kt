@@ -39,7 +39,6 @@ fun PairingScreen(
     connectionState: WebSocketServer.ConnectionState,
     connectedCount: Int,
     pendingRequest: WebSocketServer.PairingRequest?,
-    onAllow: () -> Unit,
     onDeny: () -> Unit,
     pairedDevices: List<PairedDevice> = emptyList(),
     onForget: (PairedDevice) -> Unit = {},
@@ -156,7 +155,7 @@ fun PairingScreen(
                     }
 
                     Text(
-                        text = "Enter this code on your device to complete pairing.\nRequest expires in 30 seconds",
+                        text = "Enter this code on your device to complete pairing.\nRequest expires in 60 seconds",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         textAlign = TextAlign.Center
