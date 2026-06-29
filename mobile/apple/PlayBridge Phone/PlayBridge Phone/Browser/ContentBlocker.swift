@@ -1,5 +1,6 @@
 import Foundation
 import WebKit
+import CryptoKit
 
 /// Ad/tracker blocking for the browser via `WKContentRuleList` — the Safari content-blocker
 /// mechanism. Supports standard curated block lists, custom filter lists (like EasyList),
@@ -36,34 +37,41 @@ enum ContentBlocker {
     }
 
     /// Compile (or fetch the cached) rule lists. Returns compiled lists.
+    /// Identifiers are derived from each list's content hash, so a list whose
+    /// contents changed recompiles automatically instead of serving a stale
+    /// cached compilation.
     @MainActor
     static func compileAll() async -> [WKContentRuleList] {
+        guard let store = WKContentRuleListStore.default() else { return [] }
         var lists: [WKContentRuleList] = []
-        let store = WKContentRuleListStore.default()
-        
+        var desired: Set<String> = []
         var compiledAnyCustom = false
-        for (index, url) in filterListURLs.enumerated() {
+
+        for url in filterListURLs {
             let fileURL = getLocalListPath(for: url)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                let identifier = "playbridge-adblock-list-\(index)"
-                if let list = try? await lookupOrCompile(store: store, identifier: identifier, fileURL: fileURL) {
-                    lists.append(list)
-                    compiledAnyCustom = true
-                }
+            guard let text = try? String(contentsOf: fileURL, encoding: .utf8), !text.isEmpty else { continue }
+            let id = cacheIdentifier(for: text)
+            desired.insert(id)
+            if let list = try? await lookupOrCompile(store: store, identifier: id, json: parseListTextToJSON(text), sourceName: url.lastPathComponent) {
+                lists.append(list)
+                compiledAnyCustom = true
             }
         }
-        
+
         if !compiledAnyCustom {
-            let identifier = "playbridge-adblock-curated"
-            if let list = try? await lookupOrCompileCurated(store: store, identifier: identifier) {
+            let id = "playbridge-adblock-curated"
+            desired.insert(id)
+            if let list = try? await lookupOrCompile(store: store, identifier: id, json: makeCuratedRulesJSON(), sourceName: "curated") {
                 lists.append(list)
             }
         }
-        
+
+        await pruneStaleRuleLists(store: store, keeping: desired)
         return lists
     }
 
-    /// Forces compilation of all downloaded rules.
+    /// Forces compilation of all downloaded rules, ignoring any cached compilation.
+    /// Throws on the first compilation failure so the UI can surface it.
     @MainActor
     static func forceCompileAll() async throws -> [WKContentRuleList] {
         lock.lock()
@@ -71,142 +79,143 @@ enum ContentBlocker {
         compiledBlockPatterns = []
         lock.unlock()
 
-        let store = WKContentRuleListStore.default()
-        guard let store = store else { return [] }
-        
+        guard let store = WKContentRuleListStore.default() else { return [] }
+
         var lists: [WKContentRuleList] = []
+        var desired: Set<String> = []
         var compiledAnyCustom = false
-        
-        for (index, url) in filterListURLs.enumerated() {
+
+        for url in filterListURLs {
             let fileURL = getLocalListPath(for: url)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                let identifier = "playbridge-adblock-list-\(index)"
-                let text = try String(contentsOf: fileURL, encoding: .utf8)
-                let json = parseListTextToJSON(text)
-                
-                let list = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<WKContentRuleList, Error>) in
-                    store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
-                        if let error {
-                            let nsError = error as NSError
-                            let errorDesc = nsError.localizedDescription
-                            let userInfoStr = nsError.userInfo.description
-                            Task { @MainActor in
-                                let details = "List: \(identifier) (URL: \(url.lastPathComponent)), Error: \(errorDesc), Info: \(userInfoStr)"
-                                ContentBlocker.lastCompilationError = details
-                                print("ContentBlocker: \(details)")
-                            }
-                            cont.resume(throwing: error)
-                        }
-                        else if let list { cont.resume(returning: list) }
-                        else { cont.resume(throwing: NSError(domain: "ContentBlocker", code: -1)) }
-                    }
-                }
-                lists.append(list)
-                compiledAnyCustom = true
-            }
+            guard let text = try? String(contentsOf: fileURL, encoding: .utf8), !text.isEmpty else { continue }
+            let id = cacheIdentifier(for: text)
+            desired.insert(id)
+            // Force a fresh compile rather than trusting any cached list.
+            let list = try await compile(store: store, identifier: id, json: parseListTextToJSON(text), sourceName: url.lastPathComponent)
+            lists.append(list)
+            compiledAnyCustom = true
         }
-        
+
         if !compiledAnyCustom {
-            let identifier = "playbridge-adblock-curated"
-            let json = makeCuratedRulesJSON()
-            let list = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<WKContentRuleList, Error>) in
-                store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
-                    if let error {
-                        let nsError = error as NSError
-                        let errorDesc = nsError.localizedDescription
-                        let userInfoStr = nsError.userInfo.description
-                        Task { @MainActor in
-                            let details = "Curated rules failed. Error: \(errorDesc), Info: \(userInfoStr)"
-                            ContentBlocker.lastCompilationError = details
-                            print("ContentBlocker: \(details)")
-                        }
-                        cont.resume(throwing: error)
-                    }
-                    else if let list { cont.resume(returning: list) }
-                    else { cont.resume(throwing: NSError(domain: "ContentBlocker", code: -1)) }
-                }
-            }
+            let id = "playbridge-adblock-curated"
+            desired.insert(id)
+            let list = try await compile(store: store, identifier: id, json: makeCuratedRulesJSON(), sourceName: "curated")
             lists.append(list)
         }
-        
+
+        await pruneStaleRuleLists(store: store, keeping: desired)
         return lists
     }
 
     @MainActor
-    private static func lookup(store: WKContentRuleListStore?, identifier: String) async throws -> WKContentRuleList? {
-        guard let store = store else { return nil }
-        return try await withCheckedThrowingContinuation { cont in
-            store.lookUpContentRuleList(forIdentifier: identifier) { list, error in
-                if let list { cont.resume(returning: list) }
-                else if let error { cont.resume(throwing: error) }
-                else { cont.resume(returning: nil) }
+    private static func lookup(store: WKContentRuleListStore, identifier: String) async -> WKContentRuleList? {
+        await withCheckedContinuation { cont in
+            store.lookUpContentRuleList(forIdentifier: identifier) { list, _ in
+                cont.resume(returning: list)
             }
         }
     }
 
     @MainActor
-    private static func lookupOrCompile(store: WKContentRuleListStore?, identifier: String, fileURL: URL) async throws -> WKContentRuleList? {
-        guard let store = store else { return nil }
-        if let cached = try? await lookup(store: store, identifier: identifier) {
-            return cached
-        }
-        let text = try String(contentsOf: fileURL, encoding: .utf8)
-        let json = parseListTextToJSON(text)
+    private static func compile(store: WKContentRuleListStore, identifier: String, json: @autoclosure () -> String, sourceName: String) async throws -> WKContentRuleList {
+        let encoded = json()
         return try await withCheckedThrowingContinuation { cont in
-            store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
+            store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: encoded) { list, error in
                 if let error {
                     let nsError = error as NSError
-                    let errorDesc = nsError.localizedDescription
-                    let userInfoStr = nsError.userInfo.description
                     Task { @MainActor in
-                        let details = "List \(identifier) lookupOrCompile failed. Error: \(errorDesc), Info: \(userInfoStr)"
+                        let details = "List \(sourceName) [\(identifier)] compile failed: \(nsError.localizedDescription) — \(nsError.userInfo)"
                         ContentBlocker.lastCompilationError = details
                         print("ContentBlocker: \(details)")
                     }
                     cont.resume(throwing: error)
+                } else if let list {
+                    cont.resume(returning: list)
+                } else {
+                    cont.resume(throwing: NSError(domain: "ContentBlocker", code: -1))
                 }
-                else if let list { cont.resume(returning: list) }
-                else { cont.resume(returning: nil) }
             }
         }
     }
 
+    /// Returns the cached compilation for `identifier`, or compiles `json` if absent.
+    /// `json` is autoclosed so the (expensive) parse only runs on a cache miss.
     @MainActor
-    private static func lookupOrCompileCurated(store: WKContentRuleListStore?, identifier: String) async throws -> WKContentRuleList? {
-        guard let store = store else { return nil }
-        if let cached = try? await lookup(store: store, identifier: identifier) {
+    private static func lookupOrCompile(store: WKContentRuleListStore, identifier: String, json: @autoclosure () -> String, sourceName: String) async throws -> WKContentRuleList {
+        if let cached = await lookup(store: store, identifier: identifier) {
             return cached
         }
-        let json = makeCuratedRulesJSON()
-        return try await withCheckedThrowingContinuation { cont in
-            store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
-                if let error {
-                    let nsError = error as NSError
-                    let errorDesc = nsError.localizedDescription
-                    let userInfoStr = nsError.userInfo.description
-                    Task { @MainActor in
-                        let details = "Curated list \(identifier) lookupOrCompile failed. Error: \(errorDesc), Info: \(userInfoStr)"
-                        ContentBlocker.lastCompilationError = details
-                        print("ContentBlocker: \(details)")
-                    }
-                    cont.resume(throwing: error)
-                }
-                else if let list { cont.resume(returning: list) }
-                else { cont.resume(returning: nil) }
-            }
+        return try await compile(store: store, identifier: identifier, json: json(), sourceName: sourceName)
+    }
+
+    /// Removes any of our previously-compiled rule lists that are no longer in use
+    /// (e.g. after a list's contents changed, or a custom list was deleted). This
+    /// prevents the store from accumulating stale compilations indefinitely.
+    @MainActor
+    private static func pruneStaleRuleLists(store: WKContentRuleListStore, keeping: Set<String>) async {
+        let identifiers: [String] = await withCheckedContinuation { cont in
+            store.getAvailableContentRuleListIdentifiers { ids in cont.resume(returning: ids ?? []) }
         }
+        for id in identifiers where id.hasPrefix("playbridge-adblock") && !keeping.contains(id) {
+            store.removeContentRuleList(forIdentifier: id) { _ in }
+        }
+    }
+
+    /// Stable identifier derived from a list's content, so changed content maps to
+    /// a new identifier (and thus a fresh compilation).
+    private static func cacheIdentifier(for text: String) -> String {
+        let digest = SHA256.hash(data: Data(text.utf8))
+        let hex = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+        return "playbridge-adblock-\(hex)"
     }
 
     // MARK: - Download & Compile Manager
 
     /// Download a list from a URL and save it to the local Documents directory.
     static func download(url: URL) async throws {
-        let (data, _) = try await URLSession.shared.data(from: url)
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        request.setValue("PlayBridge", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw NSError(domain: "ContentBlocker", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode) for \(url.lastPathComponent)"])
+        }
         guard let text = String(data: data, encoding: .utf8) else {
             throw NSError(domain: "ContentBlocker", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to decode list"])
         }
+        // Guard against saving an HTML error/redirect page as if it were a filter list.
+        let head = text.prefix(4096).lowercased()
+        if head.contains("<!doctype html") || head.contains("<html") {
+            throw NSError(domain: "ContentBlocker", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "Response was not a filter list (got HTML) for \(url.lastPathComponent)"])
+        }
         let fileURL = getLocalListPath(for: url)
         try text.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    /// Ensures all configured lists are present on disk, downloading any that are
+    /// missing or older than `maxAge`. Safe to call on every launch; failures are
+    /// ignored so a flaky network never blocks the browser from starting.
+    static func ensureListsDownloaded(maxAge: TimeInterval = 24 * 60 * 60) async {
+        await withTaskGroup(of: Void.self) { group in
+            for url in filterListURLs {
+                group.addTask {
+                    let fileURL = getLocalListPath(for: url)
+                    let fm = FileManager.default
+                    var needsDownload = !fm.fileExists(atPath: fileURL.path)
+                    if !needsDownload,
+                       let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
+                       let modDate = attrs[.modificationDate] as? Date {
+                        needsDownload = Date().timeIntervalSince(modDate) > maxAge
+                    }
+                    if needsDownload {
+                        try? await download(url: url)
+                    }
+                }
+            }
+        }
     }
 
     static func getLocalListPath(for url: URL) -> URL {
@@ -269,10 +278,13 @@ enum ContentBlocker {
                                 if domainStr.isEmpty { continue }
                                 
                                 if isValidRuleDomain(domainStr) {
+                                    // WebKit only matches subdomains when the entry is
+                                    // prefixed with `*`; EasyList domain options are
+                                    // subdomain-inclusive, so add the prefix.
                                     if isNegated {
-                                        negativeDomains.append(domainStr)
+                                        negativeDomains.append("*" + domainStr)
                                     } else {
-                                        positiveDomains.append(domainStr)
+                                        positiveDomains.append("*" + domainStr)
                                     }
                                 }
                             }

@@ -18,6 +18,13 @@ final class BrowserStore: ObservableObject {
     init() {
         newTab()
         Task { @MainActor in
+            // Compile whatever is already cached so blocking is active immediately
+            // (curated fallback on first launch).
+            ruleLists = await ContentBlocker.compileAll()
+            applyRulesToAllTabs()
+            // Then fetch/refresh the full filter lists in the background and
+            // recompile, upgrading from the curated fallback to EasyList et al.
+            await ContentBlocker.ensureListsDownloaded()
             ruleLists = await ContentBlocker.compileAll()
             applyRulesToAllTabs()
         }
