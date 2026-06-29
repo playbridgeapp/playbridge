@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.1+19] — 2026-06-29
+
+### Fixed
+- **SAS Pairing Handshake**: Resolved socket thread initialization, pairing screen controller reset states, and authentication string validation.
+
 ## [0.6.0+18] — 2026-06-28
 
 ### Added

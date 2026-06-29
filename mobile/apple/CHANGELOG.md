@@ -3,6 +3,15 @@
 All notable changes to the iOS phone app (`com.playbridge.PlayBridge-Phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0-alpha] — 2026-06-29 (build 2)
+
+### Added
+- **SAS Pairing Handshake**: Implemented full Secure Association Service (SAS) pairing flow with short authentication string rendering, verification popups, and secure socket connection state machine.
+- **SPKI SSL Pinning**: Enforced TOFU (Trust On First Use) security on WSS websocket endpoints using SHA-256 SPKI public key pinning.
+
+### Fixed
+- **Adblock compilation stability**: Resolved EasyList CSS rule compilation failures by correctly mapping negated domain filters and custom CSS pseudo-class/scriptlet exclusions.
+
 ## [0.1.0-alpha] — 2026-06-18
 
 ### Added
