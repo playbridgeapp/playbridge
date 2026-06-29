@@ -862,7 +862,6 @@ class ServerService : Service() {
         private val _pendingPairingRequest = MutableStateFlow<WebSocketServer.PairingRequest?>(null)
         val pendingPairingRequest: StateFlow<WebSocketServer.PairingRequest?> = _pendingPairingRequest.asStateFlow()
 
-        fun approvePairing() { _staticInstance?.webSocketServer?.approvePairing() }
         fun denyPairing() { _staticInstance?.webSocketServer?.denyPairing() }
 
         fun start(context: Context) {

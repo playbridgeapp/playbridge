@@ -76,6 +76,8 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
         state == SenderConnectionState.verifyingCode) {
       return _PinInputView(
         isVerifying: state == SenderConnectionState.verifyingCode,
+        lastCodeWrong: controller.lastSasWrong,
+        attemptsLeft: controller.sasAttemptsLeft,
         onSubmit: (code) {
           controller.submitSasCode(code);
         },
@@ -663,11 +665,15 @@ class _PinInputView extends StatefulWidget {
     required this.isVerifying,
     required this.onSubmit,
     required this.onCancel,
+    this.lastCodeWrong = false,
+    this.attemptsLeft = 3,
   });
 
   final bool isVerifying;
   final ValueChanged<String> onSubmit;
   final VoidCallback onCancel;
+  final bool lastCodeWrong;
+  final int attemptsLeft;
 
   @override
   State<_PinInputView> createState() => _PinInputViewState();
@@ -767,6 +773,15 @@ class _PinInputViewState extends State<_PinInputView> {
                     },
                   ),
                 ),
+                if (widget.lastCodeWrong) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Incorrect code — ${widget.attemptsLeft} '
+                    '${widget.attemptsLeft == 1 ? 'try' : 'tries'} left',
+                    style: const TextStyle(fontSize: 13, color: Colors.redAccent),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
                 const SizedBox(height: 32),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,

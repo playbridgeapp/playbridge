@@ -6,12 +6,14 @@ struct ConnectionScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @State private var manualIP: String = ""
+    @State private var pairingCode: String = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 statusBanner
+                pairingCodeSection
                 connectedSection
                 savedSection
                 discoveredSection
@@ -22,6 +24,59 @@ struct ConnectionScreen: View {
         .background(Theme.surface.ignoresSafeArea())
         .onAppear { vm.startDiscovery() }
         .onDisappear { vm.stopDiscovery() }
+        .onChange(of: vm.state) { newState in
+            // Clear the field after a rejected code so the user retypes fresh.
+            if case .waitingForCodeInput(_, _, let wrong) = newState, wrong { pairingCode = "" }
+        }
+    }
+
+    // MARK: - SAS pairing code
+
+    @ViewBuilder private var pairingCodeSection: some View {
+        switch vm.state {
+        case .waitingForCodeInput(let name, let attemptsLeft, let lastWrong):
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Enter the 6-digit code shown on \(name)")
+                    .font(.subheadline)
+                    .foregroundColor(Theme.onSurface)
+                TextField("000000", text: $pairingCode)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .font(.system(size: 28, weight: .bold, design: .monospaced))
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(Theme.onSurface)
+                    .padding(12)
+                    .background(Theme.surfaceContainerLow)
+                    .cornerRadius(12)
+                    .onChange(of: pairingCode) { newValue in
+                        let filtered = String(newValue.filter { $0.isNumber }.prefix(6))
+                        if filtered != newValue { pairingCode = filtered }
+                        if filtered.count == 6 { vm.submitPairingCode(filtered) }
+                    }
+                if lastWrong {
+                    Text("Incorrect code — \(attemptsLeft) \(attemptsLeft == 1 ? "try" : "tries") left")
+                        .font(.caption)
+                        .foregroundColor(Theme.danger)
+                }
+                HStack {
+                    Button("Verify") { vm.submitPairingCode(pairingCode) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.primaryDim)
+                        .disabled(pairingCode.count != 6)
+                    Spacer()
+                    Button("Cancel") { vm.disconnect() }
+                        .foregroundColor(Theme.danger)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surfaceContainer)
+            .cornerRadius(14)
+        case .verifyingCode(let name):
+            banner("Verifying code with \(name)…", systemImage: "hourglass", tint: Theme.primary)
+        default:
+            EmptyView()
+        }
     }
 
     private var header: some View {

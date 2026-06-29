@@ -63,8 +63,7 @@ class WebSocketServer(
         var senderEphPub: ByteArray? = null,
         var nonceS: ByteArray? = null,
         var sharedSecret: ByteArray? = null,
-        var sasCode: String? = null,
-        var attemptsLeft: Int = 3
+        var sasCode: String? = null
     )
 
     private val inProgressHandshakes = ConcurrentHashMap<org.java_websocket.WebSocket, ConnectionHandshake>()
@@ -107,10 +106,10 @@ class WebSocketServer(
     private val _pendingPairingRequest = MutableStateFlow<PairingRequest?>(null)
     val pendingPairingRequest: StateFlow<PairingRequest?> = _pendingPairingRequest.asStateFlow()
 
-    fun approvePairing() {
-        _pendingPairingRequest.value?.approval?.complete(true)
-    }
-
+    // NOTE: there is no manual "approve" entry point. Approval is driven exclusively by
+    // the SAS confirmation MAC (see handlePreAuth → pairing_confirmation): the phone proves
+    // it holds the shared secret, and only a matching MAC completes the approval. A manual
+    // Allow button would bypass key confirmation, so it was removed (Phase 1).
     fun denyPairing() {
         _pendingPairingRequest.value?.approval?.complete(false)
     }
@@ -258,14 +257,15 @@ class WebSocketServer(
         )
     }
 
-    // Shared pairing approval: shows the prompt and awaits the user's Allow/Deny
-    // (auto-deny after 30s). Used by the wss transport; the CIO path inlines its own.
+    // Shared pairing approval: displays the SAS code and awaits the phone's confirmation MAC
+    // (auto-deny after 60s). The window matches the desktop receiver and gives the user room
+    // to re-enter the code (the phone allows a few retries) before the handshake expires.
     private suspend fun awaitPairingApproval(deviceName: String, deviceUUID: String, sasCode: String): Boolean {
         val approval = CompletableDeferred<Boolean>()
         _pendingPairingRequest.value = PairingRequest(deviceName, deviceUUID, sasCode, approval)
         _connectionAttemptFlow.tryEmit(Unit)
         val timeoutJob = scope.launch {
-            delay(30_000)
+            delay(60_000)
             approval.complete(false)
         }
         val approved = approval.await()
@@ -359,165 +359,156 @@ class WebSocketServer(
             }
         }
 
+        // Routes pre-auth frames on the parsed envelope type (not substring matching), so a
+        // payload that merely contains a type literal can't be misrouted. Every pre-auth
+        // message is a variant of the shared [IncomingMessage] sealed type.
         private fun handlePreAuth(conn: org.java_websocket.WebSocket, text: String) {
-            if (text.contains("\"type\":\"ping\"") || text.contains("\"type\": \"ping\"")) {
-                conn.send(createPongJson())
-                return
+            when (val msg = parseIncomingMessage(text)) {
+                is IncomingMessage.Ping -> conn.send(createPongJson())
+                is IncomingMessage.PairingCommit -> handleCommit(conn, msg.msg)
+                is IncomingMessage.PairingReveal -> handleReveal(conn, msg.msg)
+                is IncomingMessage.PairingConfirmation -> handleConfirmation(conn, msg.msg)
+                is IncomingMessage.Auth -> handleAuth(conn, msg.msg)
+                else -> { /* Ignore anything else from an unauthenticated peer. */ }
             }
+        }
 
+        private fun handleCommit(conn: org.java_websocket.WebSocket, msg: playbridge.PairingCommitMessage) {
             val ip = conn.remoteSocketAddress?.address?.hostAddress ?: ""
+            val lockoutUntil = lockoutMap[ip]
+            if (lockoutUntil != null && System.currentTimeMillis() < lockoutUntil) {
+                FileLogger.w(TAG, "IP $ip is locked out from pairing")
+                conn.send(createPairingDeniedJson()); conn.close(); return
+            }
+            if (_pendingPairingRequest.value != null) {
+                conn.send(createPairingDeniedJson()); conn.close(); return
+            }
 
-            if (text.contains("\"type\":\"pairing_commit\"")) {
-                val lockoutUntil = lockoutMap[ip]
-                if (lockoutUntil != null && System.currentTimeMillis() < lockoutUntil) {
-                    FileLogger.w(TAG, "IP $ip is locked out from pairing")
-                    conn.send(createPairingDeniedJson())
-                    conn.close()
-                    return
-                }
+            // Generate TV X25519 keypair and nonce
+            val tvKey = SasCrypto.generateX25519KeyPair()
+            val nonceT = SasCrypto.generateNonce(16)
 
-                if (_pendingPairingRequest.value != null) {
-                    conn.send(createPairingDeniedJson()); conn.close(); return
-                }
-                val msg = (parseIncomingMessage(text) as? IncomingMessage.PairingCommit)?.msg
-                if (msg == null) {
-                    conn.send(createPairingDeniedJson()); conn.close(); return
-                }
+            val handshake = ConnectionHandshake(
+                deviceName = msg.device_name,
+                deviceUUID = msg.device_uuid,
+                commit = msg.commit,
+                tvEphPriv = tvKey.privateKey,
+                tvEphPub = tvKey.publicKey,
+                nonceT = nonceT
+            )
+            inProgressHandshakes[conn] = handshake
 
-                // Generate TV X25519 keypair and nonce
-                val tvKey = SasCrypto.generateX25519KeyPair()
-                val nonceT = SasCrypto.generateNonce(16)
+            val tvEphPubB64 = Base64.getEncoder().encodeToString(tvKey.publicKey)
+            val nonceTB64 = Base64.getEncoder().encodeToString(nonceT)
+            conn.send(createPairingChallengeJson(tvEphPub = tvEphPubB64, nonceT = nonceTB64))
+        }
 
-                val handshake = ConnectionHandshake(
-                    deviceName = msg.device_name,
-                    deviceUUID = msg.device_uuid,
-                    commit = msg.commit,
-                    tvEphPriv = tvKey.privateKey,
-                    tvEphPub = tvKey.publicKey,
-                    nonceT = nonceT
-                )
-                inProgressHandshakes[conn] = handshake
+        private fun handleReveal(conn: org.java_websocket.WebSocket, msg: playbridge.PairingRevealMessage) {
+            val ip = conn.remoteSocketAddress?.address?.hostAddress ?: ""
+            val handshake = inProgressHandshakes[conn]
+            if (handshake == null) {
+                conn.send(createPairingDeniedJson()); conn.close(); return
+            }
 
-                val tvEphPubB64 = Base64.getEncoder().encodeToString(tvKey.publicKey)
-                val nonceTB64 = Base64.getEncoder().encodeToString(nonceT)
-                conn.send(createPairingChallengeJson(tvEphPub = tvEphPubB64, nonceT = nonceTB64))
+            val senderEphPubBytes = Base64.getDecoder().decode(msg.sender_eph_pub)
+            val nonceSBytes = Base64.getDecoder().decode(msg.nonce_s)
+
+            // Verify commitment: commit == SHA256(senderEphPub || nonceS)
+            val calculatedCommitBytes = SasCrypto.sha256(senderEphPubBytes + nonceSBytes)
+            val calculatedCommit = Base64.getEncoder().encodeToString(calculatedCommitBytes)
+            if (calculatedCommit != handshake.commit) {
+                FileLogger.w(TAG, "Commitment mismatch on connection ${conn.remoteSocketAddress}")
+                conn.send(createPairingDeniedJson())
+                conn.close()
+                inProgressHandshakes.remove(conn)
+                recordPairingFailure(ip)
                 return
             }
 
-            if (text.contains("\"type\":\"pairing_reveal\"")) {
-                val handshake = inProgressHandshakes[conn]
-                if (handshake == null) {
-                    conn.send(createPairingDeniedJson()); conn.close(); return
-                }
-                val msg = (parseIncomingMessage(text) as? IncomingMessage.PairingReveal)?.msg
-                if (msg == null) {
-                    conn.send(createPairingDeniedJson()); conn.close(); return
-                }
+            handshake.senderEphPub = senderEphPubBytes
+            handshake.nonceS = nonceSBytes
 
-                val senderEphPubBytes = Base64.getDecoder().decode(msg.sender_eph_pub)
-                val nonceSBytes = Base64.getDecoder().decode(msg.nonce_s)
+            // Compute ECDH shared secret and SAS
+            val sharedSecret = SasCrypto.calculateECDH(handshake.tvEphPriv, senderEphPubBytes)
+            handshake.sharedSecret = sharedSecret
 
-                // Verify commitment: commit == SHA256(senderEphPub || nonceS)
-                val calculatedCommitBytes = SasCrypto.sha256(senderEphPubBytes + nonceSBytes)
-                val calculatedCommit = Base64.getEncoder().encodeToString(calculatedCommitBytes)
-                if (calculatedCommit != handshake.commit) {
-                    FileLogger.w(TAG, "Commitment mismatch on connection ${conn.remoteSocketAddress}")
-                    conn.send(createPairingDeniedJson())
-                    conn.close()
-                    inProgressHandshakes.remove(conn)
-                    recordPairingFailure(ip)
-                    return
-                }
+            val commitBytes = Base64.getDecoder().decode(handshake.commit)
+            val transcript = commitBytes + handshake.tvEphPub + handshake.nonceT + senderEphPubBytes + nonceSBytes
+            val sas = SasCrypto.generateSAS(sharedSecret, transcript)
+            handshake.sasCode = sas
 
-                handshake.senderEphPub = senderEphPubBytes
-                handshake.nonceS = nonceSBytes
-
-                // Compute ECDH shared secret and SAS
-                val sharedSecret = SasCrypto.calculateECDH(handshake.tvEphPriv, senderEphPubBytes)
-                handshake.sharedSecret = sharedSecret
-
-                val commitBytes = Base64.getDecoder().decode(handshake.commit)
-                val transcript = commitBytes + handshake.tvEphPub + handshake.nonceT + senderEphPubBytes + nonceSBytes
-                val sas = SasCrypto.generateSAS(sharedSecret, transcript)
-                handshake.sasCode = sas
-
-                // Show the pairing display on the TV
-                scope.launch {
-                    try {
-                        val approved = awaitPairingApproval(handshake.deviceName, handshake.deviceUUID, sas)
-                        if (approved) {
-                            failedAttemptsMap.remove(ip)
-                            val token = onPairingApproved(handshake.deviceName, handshake.deviceUUID)
-                            val caps = capabilities()
-                            if (conn.isOpen) {
-                                conn.send(createPairingApprovedJson(token, certFingerprint, caps.players, caps.browsers))
-                            }
-                            registerAuthed(conn)
-                            inProgressHandshakes.remove(conn)
-                        } else {
-                            if (conn.isOpen) {
-                                conn.send(createPairingDeniedJson())
-                                conn.close()
-                            }
-                            recordPairingFailure(ip)
+            // Show the pairing display on the TV
+            scope.launch {
+                try {
+                    val approved = awaitPairingApproval(handshake.deviceName, handshake.deviceUUID, sas)
+                    if (approved) {
+                        failedAttemptsMap.remove(ip)
+                        val token = onPairingApproved(handshake.deviceName, handshake.deviceUUID)
+                        val caps = capabilities()
+                        if (conn.isOpen) {
+                            conn.send(createPairingApprovedJson(token, certFingerprint, caps.players, caps.browsers))
                         }
-                    } catch (e: Exception) {
-                        FileLogger.w(TAG, "Error in pairing approval coroutine", e)
-                    }
-                }
-                return
-            }
-
-            if (text.contains("\"type\":\"pairing_confirmation\"")) {
-                val handshake = inProgressHandshakes[conn]
-                if (handshake == null) {
-                    conn.send(createPairingDeniedJson()); conn.close(); return
-                }
-                val msg = (parseIncomingMessage(text) as? IncomingMessage.PairingConfirmation)?.msg
-                if (msg == null) {
-                    conn.send(createPairingDeniedJson()); conn.close(); return
-                }
-
-                val commitBytes = Base64.getDecoder().decode(handshake.commit)
-                val transcript = commitBytes + handshake.tvEphPub + handshake.nonceT + handshake.senderEphPub!! + handshake.nonceS!!
-
-                // Derive confirmation key and expected MAC
-                val prk = SasCrypto.hkdfExtract(salt = null, ikm = handshake.sharedSecret!!)
-                val confirmationKey = SasCrypto.hkdfExpand(prk, info = "confirmationKey".toByteArray(), length = 32)
-                val expectedMacBytes = SasCrypto.hmacSha256(confirmationKey, transcript)
-                val expectedMac = Base64.getEncoder().encodeToString(expectedMacBytes)
-
-                if (msg.mac == expectedMac) {
-                    _pendingPairingRequest.value?.approval?.complete(true)
-                } else {
-                    FileLogger.w(TAG, "Confirmation MAC mismatch on connection ${conn.remoteSocketAddress}")
-                    _pendingPairingRequest.value?.approval?.complete(false)
-                }
-                return
-            }
-
-            if (text.contains("\"type\":\"auth\"")) {
-                val token = (parseIncomingMessage(text) as? IncomingMessage.Auth)?.msg?.token
-                scope.launch {
-                    try {
-                        if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
-                            val caps = capabilities()
-                            if (conn.isOpen) {
-                                conn.send(createAuthResponseJson(
-                                    success = true, certFingerprint = certFingerprint,
-                                    players = caps.players, browsers = caps.browsers
-                                ))
-                            }
-                            registerAuthed(conn)
-                        } else {
-                            if (conn.isOpen) {
-                                conn.send(createAuthResponseJson(success = false))
-                                conn.close()
-                            }
+                        registerAuthed(conn)
+                        inProgressHandshakes.remove(conn)
+                    } else {
+                        if (conn.isOpen) {
+                            conn.send(createPairingDeniedJson())
+                            conn.close()
                         }
-                    } catch (e: Exception) {
-                        FileLogger.w(TAG, "Error in auth coroutine", e)
+                        recordPairingFailure(ip)
                     }
+                } catch (e: Exception) {
+                    FileLogger.w(TAG, "Error in pairing approval coroutine", e)
+                }
+            }
+        }
+
+        private fun handleConfirmation(conn: org.java_websocket.WebSocket, msg: playbridge.PairingConfirmationMessage) {
+            val handshake = inProgressHandshakes[conn]
+            if (handshake == null) {
+                conn.send(createPairingDeniedJson()); conn.close(); return
+            }
+
+            val commitBytes = Base64.getDecoder().decode(handshake.commit)
+            val transcript = commitBytes + handshake.tvEphPub + handshake.nonceT + handshake.senderEphPub!! + handshake.nonceS!!
+
+            // Derive confirmation key and expected MAC
+            val prk = SasCrypto.hkdfExtract(salt = null, ikm = handshake.sharedSecret!!)
+            val confirmationKey = SasCrypto.hkdfExpand(prk, info = "confirmationKey".toByteArray(), length = 32)
+            val expectedMacBytes = SasCrypto.hmacSha256(confirmationKey, transcript)
+            val expectedMac = Base64.getEncoder().encodeToString(expectedMacBytes)
+
+            // This MAC is the *only* signal that completes approval with success — the phone
+            // proves it derived the same shared secret. There is no manual Allow bypass.
+            if (msg.mac == expectedMac) {
+                _pendingPairingRequest.value?.approval?.complete(true)
+            } else {
+                FileLogger.w(TAG, "Confirmation MAC mismatch on connection ${conn.remoteSocketAddress}")
+                _pendingPairingRequest.value?.approval?.complete(false)
+            }
+        }
+
+        private fun handleAuth(conn: org.java_websocket.WebSocket, msg: playbridge.AuthMessage) {
+            val token = msg.token
+            scope.launch {
+                try {
+                    if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
+                        val caps = capabilities()
+                        if (conn.isOpen) {
+                            conn.send(createAuthResponseJson(
+                                success = true, certFingerprint = certFingerprint,
+                                players = caps.players, browsers = caps.browsers
+                            ))
+                        }
+                        registerAuthed(conn)
+                    } else {
+                        if (conn.isOpen) {
+                            conn.send(createAuthResponseJson(success = false))
+                            conn.close()
+                        }
+                    }
+                } catch (e: Exception) {
+                    FileLogger.w(TAG, "Error in auth coroutine", e)
                 }
             }
         }

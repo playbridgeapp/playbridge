@@ -2045,6 +2045,9 @@ class BrowserActivity : ComponentActivity() {
 
                     LaunchedEffect(state) {
                         if (state is WebSocketClient.ConnectionState.WaitingForCodeInput) {
+                            // After a wrong entry the state is re-emitted; clear the field so the
+                            // user retypes fresh rather than editing the rejected code.
+                            if (state.lastCodeWrong) codeText = ""
                             delay(100)
                             focusRequester.requestFocus()
                         }
@@ -2100,6 +2103,16 @@ class BrowserActivity : ComponentActivity() {
                                             .width(180.dp)
                                             .focusRequester(focusRequester)
                                     )
+
+                                    if (state.lastCodeWrong) {
+                                        Text(
+                                            text = "Incorrect code — ${state.attemptsLeft} " +
+                                                if (state.attemptsLeft == 1) "try left" else "tries left",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
                                 } else {
                                     Box(
                                         modifier = Modifier.fillMaxWidth(),

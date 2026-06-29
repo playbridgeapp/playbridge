@@ -110,8 +110,13 @@ class TvSenderController extends ChangeNotifier {
 
   bool submitSasCode(String code) => _client.submitSasCode(code);
 
+  /// SAS retry hint surfaced to the pairing UI.
+  int get sasAttemptsLeft => _client.sasAttemptsLeft;
+  bool get lastSasWrong => _client.lastSasWrong;
+
   /// Connect to a TV found via discovery. Reconnects silently when already
-  /// paired; otherwise sends a `pairing_request` (the TV shows Allow).
+  /// paired; otherwise runs the SAS pairing handshake (the user enters the
+  /// 6-digit code shown on the TV).
   Future<void> connectToDiscovered(DiscoveredTv tv) async {
     _pending = tv;
     final known = _store.byUuid(tv.uuid);

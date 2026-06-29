@@ -6,32 +6,19 @@ import Security
 /// the pin captured at pairing — the sender side of the TOFU scheme in `protocol/README.md`.
 ///
 /// The pin is `SHA-256(DER SubjectPublicKeyInfo)`, base64, with a `sha256/` prefix (OkHttp
-/// `CertificatePinner` format). The receiver's identity is always EC P-256 (`TLSIdentity.swift`
-/// uses `P256.Signing.PrivateKey`), so we reconstruct the SPKI by prepending the fixed P-256
-/// ASN.1 header to the raw public-key bytes (`SecKeyCopyExternalRepresentation` gives the X9.63
-/// point, not the SPKI wrapper). This is the standard TrustKit approach.
+/// `CertificatePinner` format). Receivers differ in key type — Android TV / Apple TV use EC
+/// P-256, the desktop uses RSA-2048 — so rather than reconstruct the SPKI per key type we
+/// extract the SubjectPublicKeyInfo straight out of the certificate's DER (an X.509 ASN.1
+/// walk) and hash that. This matches every receiver's reported `certFingerprint` regardless
+/// of key algorithm.
 enum SPKIPinning {
 
-    /// ASN.1 DER SubjectPublicKeyInfo header for an `ecPublicKey` over `prime256v1` (P-256).
-    /// Followed by the 65-byte uncompressed point (`04 || X || Y`).
-    private static let p256SPKIHeader: [UInt8] = [
-        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86,
-        0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x08, 0x2A,
-        0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03,
-        0x42, 0x00,
-    ]
-
-    /// The leaf certificate's SPKI pin, or nil if it can't be derived (e.g. non-EC key).
+    /// The leaf certificate's SPKI pin, or nil if it can't be derived.
     static func pin(for trust: SecTrust) -> String? {
         guard let leaf = leafCertificate(of: trust),
-              let publicKey = SecCertificateCopyKey(leaf),
-              let raw = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? else {
+              let spki = subjectPublicKeyInfoDER(of: leaf) else {
             return nil
         }
-        // EC P-256 external representation is the 65-byte uncompressed point.
-        guard raw.count == 65, raw.first == 0x04 else { return nil }
-        var spki = Data(p256SPKIHeader)
-        spki.append(raw)
         let digest = SHA256.hash(data: spki)
         return "sha256/" + Data(digest).base64EncodedString()
     }
@@ -43,5 +30,50 @@ enum SPKIPinning {
             guard SecTrustGetCertificateCount(trust) > 0 else { return nil }
             return SecTrustGetCertificateAtIndex(trust, 0)
         }
+    }
+
+    /// Walks the certificate's DER to return the encoded SubjectPublicKeyInfo SEQUENCE.
+    /// `Certificate ::= SEQUENCE { tbsCertificate SEQUENCE { …, spki, … }, … }`; the SPKI is
+    /// the unique child SEQUENCE of tbsCertificate whose content is an AlgorithmIdentifier
+    /// SEQUENCE followed by a BIT STRING. Works for RSA and EC alike.
+    private static func subjectPublicKeyInfoDER(of cert: SecCertificate) -> Data? {
+        let b = [UInt8](SecCertificateCopyData(cert) as Data)
+        guard let certSeq = readTLV(b, 0), certSeq.tag == 0x30,
+              let tbs = readTLV(b, certSeq.contentOffset), tbs.tag == 0x30 else {
+            return nil
+        }
+        var off = tbs.contentOffset
+        let tbsEnd = tbs.contentOffset + tbs.length
+        while off < tbsEnd {
+            guard let el = readTLV(b, off) else { return nil }
+            if el.tag == 0x30,
+               let algId = readTLV(b, el.contentOffset), algId.tag == 0x30,
+               let bitStr = readTLV(b, algId.next), bitStr.tag == 0x03,
+               bitStr.next == el.contentOffset + el.length {
+                return Data(b[off..<el.next])
+            }
+            off = el.next
+        }
+        return nil
+    }
+
+    private struct TLV { let tag: UInt8; let contentOffset: Int; let length: Int; let next: Int }
+
+    /// Minimal DER tag-length-value reader (definite-length form only, as in X.509 certs).
+    private static func readTLV(_ b: [UInt8], _ offset: Int) -> TLV? {
+        guard offset >= 0, offset + 1 < b.count else { return nil }
+        let tag = b[offset]
+        var idx = offset + 1
+        let first = b[idx]; idx += 1
+        var length = 0
+        if first & 0x80 == 0 {
+            length = Int(first)
+        } else {
+            let count = Int(first & 0x7F)
+            guard count > 0, count <= 4, idx + count <= b.count else { return nil }
+            for _ in 0..<count { length = (length << 8) | Int(b[idx]); idx += 1 }
+        }
+        guard length >= 0, idx + length <= b.count else { return nil }
+        return TLV(tag: tag, contentOffset: idx, length: length, next: idx + length)
     }
 }

@@ -121,6 +121,15 @@ class ReceiverServer extends ChangeNotifier {
   /// Rate-limiting: lockout expiry (epoch ms) by IP.
   final Map<String, int> _lockoutUntil = {};
 
+  /// Remote IPs of pending ws upgrades, consumed in accept order by [_onClient].
+  /// shelf_web_socket's onConnection callback doesn't carry the request, so we
+  /// capture the IP in the route wrapper and hand it off here.
+  final List<String> _pendingClientIps = [];
+
+  /// Source IP per connected channel, so pairing rate-limiting/lockout keys on a
+  /// real address instead of the (per-connection, trivially-rotated) channel identity.
+  final Map<WebSocketChannel, String> _channelIps = {};
+
   // Dedupe rapid-fire duplicate play commands from the phone.
   String? _lastPlayUrl;
   DateTime _lastPlayAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -206,6 +215,14 @@ class ReceiverServer extends ChangeNotifier {
           return Response.ok('Logs cleared.');
         }
       }
+      // Capture the client IP for the upcoming ws upgrade so pairing rate-limiting
+      // keys on a real address. Only ws-upgrade requests reach here (the /logs HTTP
+      // routes returned above), and upgrades fire onConnection in accept order.
+      final ip = (request.context['shelf.io.connection_info'] as HttpConnectionInfo?)
+              ?.remoteAddress
+              .address ??
+          'unknown';
+      _pendingClientIps.add(ip);
       return wsHandler(request);
     };
   }
@@ -225,6 +242,8 @@ class ReceiverServer extends ChangeNotifier {
     _authed.clear();
     _pendingPairingRequest = null;
     _inProgressHandshakes.clear();
+    _channelIps.clear();
+    _pendingClientIps.clear();
     for (final s in _servers) {
       await s.close(force: true);
     }
@@ -243,6 +262,9 @@ class ReceiverServer extends ChangeNotifier {
   }
 
   void _onClient(WebSocketChannel channel, String? subprotocol) {
+    // Pair this channel with the IP captured for its upgrade (accept-order FIFO).
+    final ip = _pendingClientIps.isNotEmpty ? _pendingClientIps.removeAt(0) : 'unknown';
+    _channelIps[channel] = ip;
     debugPrint('[server] client connected');
     _all.add(channel);
 
@@ -267,6 +289,7 @@ class ReceiverServer extends ChangeNotifier {
         _all.remove(channel);
         _authed.remove(channel);
         _inProgressHandshakes.remove(channel);
+        _channelIps.remove(channel);
         // Clear pending request if this was the pending channel
         if (_pendingPairingRequest?.channel == channel) {
           _approvalTimeout?.cancel();
@@ -280,6 +303,7 @@ class ReceiverServer extends ChangeNotifier {
         _all.remove(channel);
         _authed.remove(channel);
         _inProgressHandshakes.remove(channel);
+        _channelIps.remove(channel);
         if (_pendingPairingRequest?.channel == channel) {
           _approvalTimeout?.cancel();
           _approvalTimeout = null;
@@ -345,8 +369,8 @@ class ReceiverServer extends ChangeNotifier {
     String deviceName,
     String deviceUUID,
   ) {
-    // Rate-limiting: check lockout
-    final ip = channel.hashCode.toString(); // shelf doesn't expose remote IP
+    // Rate-limiting: check lockout (keyed on the captured remote IP).
+    final ip = _ipFor(channel);
     final lockout = _lockoutUntil[ip];
     if (lockout != null && DateTime.now().millisecondsSinceEpoch < lockout) {
       debugPrint('[server] IP $ip is locked out from pairing');
@@ -451,7 +475,7 @@ class ReceiverServer extends ChangeNotifier {
       _approvalTimeout = null;
 
       if (approved) {
-        _failedAttempts.remove(channel.hashCode.toString());
+        _failedAttempts.remove(_ipFor(channel));
         final token = const Uuid().v4();
         final device = PairedDeviceRecord(
           deviceUUID: handshake.deviceUUID,
@@ -512,9 +536,14 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
+  /// Source IP for a channel, used for pairing rate-limiting. Falls back to the
+  /// channel identity only if the IP wasn't captured (degrades to old behavior
+  /// rather than crashing).
+  String _ipFor(WebSocketChannel c) => _channelIps[c] ?? c.hashCode.toString();
+
   /// Record a failed pairing attempt for rate-limiting.
   void _recordPairingFailure(WebSocketChannel channel) {
-    final ip = channel.hashCode.toString();
+    final ip = _ipFor(channel);
     final count = (_failedAttempts[ip] ?? 0) + 1;
     _failedAttempts[ip] = count;
     if (count >= 3) {
@@ -525,13 +554,9 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
-  /// Legacy: called from old UI "Allow" button. Now the SAS confirmation MAC
-  /// drives approval automatically.
-  void approvePairing() {
-    final pending = _pendingPairingRequest;
-    if (pending == null || pending.approval.isCompleted) return;
-    pending.approval.complete(true);
-  }
+  // No manual "approve" entry point: approval is driven exclusively by the SAS
+  // confirmation MAC (see _handleConfirmation), so a UI Allow button can't bypass
+  // key confirmation. Removed in Phase 1.
 
   void denyPairing() {
     final pending = _pendingPairingRequest;
