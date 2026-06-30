@@ -21,6 +21,30 @@ struct ContentView: View {
             case .remote:
                 RemoteControlScreen()
                     .transition(.move(edge: .bottom))
+            case .phoneFiles:
+                PhoneFilesScreen()
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .iptv:
+                IptvScreen()
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .iptvDetail(let id):
+                IptvDetailScreen(playlistId: id)
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .collections:
+                CollectionsScreen()
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .collectionDetail(let id):
+                CollectionDetailScreen(collectionId: id)
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .history:
+                HistoryScreen()
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .bookmarks:
+                BookmarksScreen()
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .browserSettings:
+                BrowserSettingsScreen()
+                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
             }
         }
         .tint(Theme.primary)

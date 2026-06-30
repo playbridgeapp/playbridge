@@ -5,6 +5,14 @@ enum AppScreen: Hashable {
     case dashboard
     case connection
     case remote
+    case phoneFiles
+    case iptv
+    case iptvDetail(UUID)
+    case collections
+    case collectionDetail(UUID)
+    case history
+    case bookmarks
+    case browserSettings
 }
 
 final class NavigationViewModel: ObservableObject {

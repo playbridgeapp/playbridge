@@ -18,11 +18,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     @Published var canGoForward: Bool = false
     @Published var isDesktopMode: Bool = false
     @Published var blockedAdMessage: String? = nil
+    /// True for a fresh tab showing the home/new-tab page (no page loaded yet).
+    @Published var isHome: Bool = false
 
     private var pageLoaded = false
 
     /// Invoked when the page calls `window.playbridge.cast(payload)`.
     var onPageCast: (([String: Any]) -> Void)?
+
+    /// Invoked when a new main-frame document commits, so the owner can re-evaluate
+    /// per-site ad blocking (e.g. exempting YouTube whose anti-adblock breaks playback).
+    var onMainFrameCommit: ((URL?) -> Void)?
+
+    /// Invoked when a page finishes loading — used to record history + persist tabs.
+    var onPageFinished: ((URL?, String?) -> Void)?
 
     private var observations: [NSKeyValueObservation] = []
     private var cancellables = Set<AnyCancellable>()
@@ -42,8 +51,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        webView.customUserAgent = VideoDetector.mediaHeaders(for: DetectedVideo(
-            url: "", detectedBy: "", headers: [:], kind: .other))["User-Agent"]
+        webView.isFindInteractionEnabled = true   // native Find-in-page bar (iOS 16+)
+        // Use WKWebView's built-in default UA for normal (mobile) browsing — the same
+        // as Safari/Chrome — so sites like YouTube serve their standard mobile player.
+        webView.customUserAgent = nil
 
         observe()
         // Surface detector changes (new videos) on the tab so views observing the tab refresh.
@@ -81,8 +92,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     func load(_ input: String) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        isHome = false
         let target = BrowserTab.resolveInput(trimmed)
         if let url = URL(string: target) { webView.load(URLRequest(url: url)) }
+    }
+
+    /// Present the system Find-in-page bar for the current page.
+    func findInPage() {
+        webView.findInteraction?.presentFindNavigator(showingReplace: false)
     }
 
     func goBack() { webView.goBack() }
@@ -90,16 +107,21 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     func reload() { webView.reload() }
     func stop() { webView.stopLoading() }
 
+    static let desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15"
+
+    /// Kept as a safety net: force desktop on YouTube if its mobile player still
+    /// misbehaves with the default UA.
+    static func isYouTube(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == "youtube.com" || host.hasSuffix(".youtube.com")
+            || host == "youtu.be" || host.hasSuffix(".youtu.be")
+            || host.hasSuffix("youtube-nocookie.com")
+    }
+
     func toggleDesktopMode() {
         isDesktopMode.toggle()
-        if isDesktopMode {
-            webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15"
-            webView.configuration.defaultWebpagePreferences.preferredContentMode = .desktop
-        } else {
-            webView.customUserAgent = VideoDetector.mediaHeaders(for: DetectedVideo(
-                url: "", detectedBy: "", headers: [:], kind: .other))["User-Agent"]
-            webView.configuration.defaultWebpagePreferences.preferredContentMode = .mobile
-        }
+        webView.customUserAgent = isDesktopMode ? BrowserTab.desktopUA : nil
+        webView.configuration.defaultWebpagePreferences.preferredContentMode = isDesktopMode ? .desktop : .mobile
         webView.reload()
     }
 
@@ -110,8 +132,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if text.contains("."), !text.contains(" ") {
             return "https://\(text)"
         }
-        let q = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? text
-        return "https://www.google.com/search?q=\(q)"
+        return SearchEngine.current.searchURL(text)
     }
 
     // MARK: - WKNavigationDelegate
@@ -124,10 +145,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         // New main-frame document — reset detections for this tab.
         detector.clear()
         pageLoaded = false
+        onMainFrameCommit?(webView.url)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pageLoaded = true
+        onPageFinished?(webView.url, webView.title)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -138,27 +161,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         pageLoaded = true
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? false
-        let isUserGesture = navigationAction.navigationType == .linkActivated ||
-                            navigationAction.navigationType == .formSubmitted ||
-                            navigationAction.navigationType == .backForward ||
-                            navigationAction.navigationType == .reload
-        
-        if isMainFrame && !isUserGesture && pageLoaded {
-            if let destURL = navigationAction.request.url,
-               let currentURL = webView.url,
-               let destHost = destURL.host,
-               let currentHost = currentURL.host,
-               destHost != currentHost {
-                // Block cross-site automatic redirect after page load has completed
-                DispatchQueue.main.async {
-                    self.blockedAdMessage = "Redirect ad blocked"
-                }
-                decisionHandler(.cancel)
-                return
-            }
-        }
-        
+        // Allow all navigations. Pop-up / new-window ad windows are still handled in the
+        // WKUIDelegate's createWebViewWith below; the old full-page cross-site redirect
+        // heuristic was removed because it cancelled real navigations (e.g. JavaScript-
+        // driven Google search results, which aren't reported as `.linkActivated`).
         decisionHandler(.allow)
     }
 

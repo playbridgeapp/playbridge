@@ -9,6 +9,7 @@ final class PairingStore {
 
     private let keychainService = "com.playbridge.phone"
     private let keychainAccount = "paired_device"
+    private let savedDevicesAccount = "saved_devices"
     private let deviceUUIDKey = "pb_device_uuid"
 
     private let defaults = UserDefaults.standard
@@ -32,31 +33,43 @@ final class PairingStore {
     // MARK: - Paired device (Keychain)
 
     func loadPairedDevice() -> PairedDevice? {
-        guard let data = keychainRead() else { return nil }
+        guard let data = keychainRead(account: keychainAccount) else { return nil }
         return try? JSONDecoder().decode(PairedDevice.self, from: data)
     }
 
     func savePairedDevice(_ device: PairedDevice) {
         guard let data = try? JSONEncoder().encode(device) else { return }
-        keychainWrite(data)
+        keychainWrite(data, account: keychainAccount)
     }
 
     func clearPairedDevice() {
-        keychainDelete()
+        keychainDelete(account: keychainAccount)
+    }
+
+    // MARK: - Saved devices (history)
+
+    func loadSavedDevices() -> [PairedDevice] {
+        guard let data = keychainRead(account: savedDevicesAccount) else { return [] }
+        return (try? JSONDecoder().decode([PairedDevice].self, from: data)) ?? []
+    }
+
+    func saveSavedDevices(_ devices: [PairedDevice]) {
+        guard let data = try? JSONEncoder().encode(devices) else { return }
+        keychainWrite(data, account: savedDevicesAccount)
     }
 
     // MARK: - Keychain primitives
 
-    private func baseQuery() -> [String: Any] {
+    private func baseQuery(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
+            kSecAttrAccount as String: account,
         ]
     }
 
-    private func keychainRead() -> Data? {
-        var query = baseQuery()
+    private func keychainRead(account: String) -> Data? {
+        var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
@@ -65,19 +78,19 @@ final class PairingStore {
         return item as? Data
     }
 
-    private func keychainWrite(_ data: Data) {
+    private func keychainWrite(_ data: Data, account: String) {
         // Upsert: try update first, fall back to add.
         let attrs: [String: Any] = [kSecValueData as String: data]
-        let status = SecItemUpdate(baseQuery() as CFDictionary, attrs as CFDictionary)
+        let status = SecItemUpdate(baseQuery(account: account) as CFDictionary, attrs as CFDictionary)
         if status == errSecItemNotFound {
-            var addQuery = baseQuery()
+            var addQuery = baseQuery(account: account)
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
             SecItemAdd(addQuery as CFDictionary, nil)
         }
     }
 
-    private func keychainDelete() {
-        SecItemDelete(baseQuery() as CFDictionary)
+    private func keychainDelete(account: String) {
+        SecItemDelete(baseQuery(account: account) as CFDictionary)
     }
 }

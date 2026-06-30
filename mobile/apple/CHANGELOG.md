@@ -3,6 +3,14 @@
 All notable changes to the iOS phone app (`com.playbridge.PlayBridge-Phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0-alpha] — 2026-06-30 (build 3)
+
+### Added
+- **Phone Files**: Added local file browser to share and cast local video and audio files from the phone, backed by a local HTTP file server (`LocalFileServer.swift`).
+- **IPTV Playlists & Channels**: Support for adding and managing IPTV playlists, channel lists, and groups, with search and direct video stream casting.
+- **Collections**: Support for custom user media collections to organize video streams.
+- **Persistent Stores**: Implemented localized Swift-based data stores (`BrowserDataStore`, `CollectionsStore`, `IptvStore`) for settings and user content persistence.
+
 ## [0.2.0-alpha] — 2026-06-29 (build 2)
 
 ### Added

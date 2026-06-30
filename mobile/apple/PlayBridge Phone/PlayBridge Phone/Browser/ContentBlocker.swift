@@ -48,30 +48,43 @@ enum ContentBlocker {
         var compiledAnyCustom = false
 
         for url in filterListURLs {
-            let fileURL = getLocalListPath(for: url)
-            guard let text = try? String(contentsOf: fileURL, encoding: .utf8), !text.isEmpty else { continue }
-            let id = cacheIdentifier(for: text)
-            desired.insert(id)
-            if let list = try? await lookupOrCompile(store: store, identifier: id, json: parseListTextToJSON(text), sourceName: url.lastPathComponent) {
-                lists.append(list)
-                compiledAnyCustom = true
+            // Read + hash off the main thread (lists can be multiple MB).
+            guard let loaded = await loadList(getLocalListPath(for: url)) else { continue }
+            desired.insert(loaded.id)
+            if let cached = await lookup(store: store, identifier: loaded.id) {
+                lists.append(cached); compiledAnyCustom = true; continue
+            }
+            // Parse off the main thread; only the WebKit compile (async) runs here.
+            let json = await parseOffMain(loaded.text)
+            if let list = try? await compile(store: store, identifier: loaded.id, json: json, sourceName: url.lastPathComponent) {
+                lists.append(list); compiledAnyCustom = true
             }
         }
 
         if !compiledAnyCustom {
             let id = "playbridge-adblock-curated"
             desired.insert(id)
-            if let list = try? await lookupOrCompile(store: store, identifier: id, json: makeCuratedRulesJSON(), sourceName: "curated") {
-                lists.append(list)
+            if let cached = await lookup(store: store, identifier: id) {
+                lists.append(cached)
+            } else {
+                let json = await Task.detached(priority: .utility) { makeCuratedRulesJSON() }.value
+                if let list = try? await compile(store: store, identifier: id, json: json, sourceName: "curated") {
+                    lists.append(list)
+                }
             }
         }
 
-        // Always-on extra rules from the bundled filter list (editable without code).
+        // Always-on extra rules from the bundled/hosted list (small; safe to read here).
         if let extra = extraListText(), !extra.isEmpty {
             let supId = cacheIdentifier(for: extra)
             desired.insert(supId)
-            if let list = try? await lookupOrCompile(store: store, identifier: supId, json: parseListTextToJSON(extra), sourceName: "playbridge-extra") {
-                lists.append(list)
+            if let cached = await lookup(store: store, identifier: supId) {
+                lists.append(cached)
+            } else {
+                let json = await parseOffMain(extra)
+                if let list = try? await compile(store: store, identifier: supId, json: json, sourceName: "playbridge-extra") {
+                    lists.append(list)
+                }
             }
         }
 
@@ -95,12 +108,11 @@ enum ContentBlocker {
         var compiledAnyCustom = false
 
         for url in filterListURLs {
-            let fileURL = getLocalListPath(for: url)
-            guard let text = try? String(contentsOf: fileURL, encoding: .utf8), !text.isEmpty else { continue }
-            let id = cacheIdentifier(for: text)
-            desired.insert(id)
+            guard let loaded = await loadList(getLocalListPath(for: url)) else { continue }
+            desired.insert(loaded.id)
             // Force a fresh compile rather than trusting any cached list.
-            let list = try await compile(store: store, identifier: id, json: parseListTextToJSON(text), sourceName: url.lastPathComponent)
+            let json = await parseOffMain(loaded.text)
+            let list = try await compile(store: store, identifier: loaded.id, json: json, sourceName: url.lastPathComponent)
             lists.append(list)
             compiledAnyCustom = true
         }
@@ -108,15 +120,17 @@ enum ContentBlocker {
         if !compiledAnyCustom {
             let id = "playbridge-adblock-curated"
             desired.insert(id)
-            let list = try await compile(store: store, identifier: id, json: makeCuratedRulesJSON(), sourceName: "curated")
+            let json = await Task.detached(priority: .utility) { makeCuratedRulesJSON() }.value
+            let list = try await compile(store: store, identifier: id, json: json, sourceName: "curated")
             lists.append(list)
         }
 
-        // Always-on extra rules from the bundled filter list (editable without code).
+        // Always-on extra rules from the bundled/hosted list.
         if let extra = extraListText(), !extra.isEmpty {
             let supId = cacheIdentifier(for: extra)
             desired.insert(supId)
-            let supList = try await compile(store: store, identifier: supId, json: parseListTextToJSON(extra), sourceName: "playbridge-extra")
+            let json = await parseOffMain(extra)
+            let supList = try await compile(store: store, identifier: supId, json: json, sourceName: "playbridge-extra")
             lists.append(supList)
         }
 
@@ -134,10 +148,9 @@ enum ContentBlocker {
     }
 
     @MainActor
-    private static func compile(store: WKContentRuleListStore, identifier: String, json: @autoclosure () -> String, sourceName: String) async throws -> WKContentRuleList {
-        let encoded = json()
+    private static func compile(store: WKContentRuleListStore, identifier: String, json: String, sourceName: String) async throws -> WKContentRuleList {
         return try await withCheckedThrowingContinuation { cont in
-            store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: encoded) { list, error in
+            store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
                 if let error {
                     let nsError = error as NSError
                     Task { @MainActor in
@@ -155,14 +168,17 @@ enum ContentBlocker {
         }
     }
 
-    /// Returns the cached compilation for `identifier`, or compiles `json` if absent.
-    /// `json` is autoclosed so the (expensive) parse only runs on a cache miss.
-    @MainActor
-    private static func lookupOrCompile(store: WKContentRuleListStore, identifier: String, json: @autoclosure () -> String, sourceName: String) async throws -> WKContentRuleList {
-        if let cached = await lookup(store: store, identifier: identifier) {
-            return cached
-        }
-        return try await compile(store: store, identifier: identifier, json: json(), sourceName: sourceName)
+    /// Reads a list file and computes its cache identifier off the main thread.
+    private static func loadList(_ fileURL: URL) async -> (text: String, id: String)? {
+        await Task.detached(priority: .utility) {
+            guard let text = try? String(contentsOf: fileURL, encoding: .utf8), !text.isEmpty else { return nil }
+            return (text, cacheIdentifier(for: text))
+        }.value
+    }
+
+    /// Parses EasyList text into WebKit JSON off the main thread (CPU-heavy).
+    private static func parseOffMain(_ text: String) async -> String {
+        await Task.detached(priority: .utility) { parseListTextToJSON(text) }.value
     }
 
     /// Removes any of our previously-compiled rule lists that are no longer in use
@@ -180,7 +196,13 @@ enum ContentBlocker {
 
     /// Bump when the rule-generation logic changes so that existing cached
     /// compilations are invalidated and recompiled with the new parser.
-    private static let rulesetVersion = "6"
+    private static let rulesetVersion = "7"
+
+    /// Every WKContentRuleList resource type except `document`, so a block rule can
+    /// never cancel a page the user navigated to — only its sub-resources (scripts,
+    /// images, trackers, media, pop-ups). Prevents "blocked by content blocker" (104)
+    /// failures on normal navigation.
+    private static let blockResourceTypes = ["image", "style-sheet", "script", "font", "raw", "svg-document", "media", "popup"]
 
     /// Stable identifier derived from a list's content (plus the parser version),
     /// so changed content — or a parser upgrade — maps to a fresh compilation.
@@ -360,6 +382,7 @@ enum ContentBlocker {
                     }
                     if !o.skip && safe, (try? NSRegularExpression(pattern: inner)) != nil {
                         var t: [String: Any] = ["url-filter": inner]
+                        if !isException { t["resource-type"] = blockResourceTypes }
                         if let lt = o.loadType { t["load-type"] = lt }
                         if !o.ifDomain.isEmpty { t["if-domain"] = o.ifDomain }
                         else if !o.unlessDomain.isEmpty { t["unless-domain"] = o.unlessDomain }
@@ -488,6 +511,7 @@ enum ContentBlocker {
         func trigger(_ urlFilter: String) -> [String: Any]? {
             guard (try? NSRegularExpression(pattern: urlFilter)) != nil else { return nil }
             var t: [String: Any] = ["url-filter": urlFilter]
+            if block { t["resource-type"] = blockResourceTypes }
             if let lt = options.loadType { t["load-type"] = lt }
             if !options.ifDomain.isEmpty { t["if-domain"] = options.ifDomain }
             else if !options.unlessDomain.isEmpty { t["unless-domain"] = options.unlessDomain }
@@ -566,7 +590,7 @@ enum ContentBlocker {
         var rules: [[String: Any]] = blockedDomains.map { domain in
             let escaped = domain.replacingOccurrences(of: ".", with: "\\.")
             return [
-                "trigger": ["url-filter": "^https?://([^/]+\\.)?\(escaped)", "load-type": ["third-party"]],
+                "trigger": ["url-filter": "^https?://([^/]+\\.)?\(escaped)", "load-type": ["third-party"], "resource-type": blockResourceTypes],
                 "action": ["type": "block"],
             ]
         }
@@ -608,38 +632,44 @@ enum ContentBlocker {
 
     private static var compiledBlockPatterns: [NSRegularExpression] = []
     private static var isPatternsCompiled = false
+    private static var isCompilingPatterns = false
     private static let lock = NSLock()
 
-    /// Checks if a URL matches any blocked domain or EasyList pattern in memory.
+    /// Checks if a URL matches any blocked domain (fast) or a precompiled EasyList
+    /// pattern. The heavy regex compilation runs once on a background thread; until
+    /// it's ready only the fast domain check is used, so the caller (often the main
+    /// thread, via video detection) never blocks.
     static func shouldBlock(urlString: String) -> Bool {
         guard isEnabled else { return false }
-        
+
         let lowerUrl = urlString.lowercased()
-        
-        // Fast domain check
-        for domain in blockedDomains {
-            if lowerUrl.contains(domain) {
-                return true
-            }
-        }
-        
-        // Thread-safe regex check
+        for domain in blockedDomains where lowerUrl.contains(domain) { return true }
+
         lock.lock()
-        if !isPatternsCompiled {
-            compileInMemoryRules()
-        }
+        let ready = isPatternsCompiled
         let patterns = compiledBlockPatterns
         lock.unlock()
-        
+
+        guard ready else {
+            warmInMemoryRulesIfNeeded()
+            return false
+        }
+
         let nsString = urlString as NSString
         let range = NSRange(location: 0, length: nsString.length)
-        for regex in patterns {
-            if regex.firstMatch(in: urlString, options: [], range: range) != nil {
-                return true
-            }
+        for regex in patterns where regex.firstMatch(in: urlString, options: [], range: range) != nil {
+            return true
         }
-        
         return false
+    }
+
+    /// Starts background compilation of the in-memory patterns exactly once.
+    private static func warmInMemoryRulesIfNeeded() {
+        lock.lock()
+        if isPatternsCompiled || isCompilingPatterns { lock.unlock(); return }
+        isCompilingPatterns = true
+        lock.unlock()
+        Task.detached(priority: .utility) { compileInMemoryRules() }
     }
 
     private static func compileInMemoryRules() {
@@ -678,8 +708,11 @@ enum ContentBlocker {
                 compiled.append(regex)
             }
         }
+        lock.lock()
         compiledBlockPatterns = compiled
         isPatternsCompiled = true
+        isCompilingPatterns = false
+        lock.unlock()
     }
 
     private static func isValidCSSSelector(_ selector: String) -> Bool {
