@@ -60,7 +60,6 @@ struct CastSheet: View {
     @State private var attachedSubtitles = Set<String>()
     @State private var qualities: [VideoQuality] = []
     @State private var loadingQualities = false
-    @State private var player: AVPlayer?
     @State private var thumbnail: UIImage?
     @State private var isThumbnailLoading = false
     @State private var castAction = "play"
@@ -131,9 +130,6 @@ struct CastSheet: View {
                 if !options.contains(where: { $0.id == playerMode }) {
                     playerMode = "tv"
                 }
-            }
-            .onDisappear {
-                player?.pause()
             }
         }
     }
@@ -340,7 +336,6 @@ struct CastSheet: View {
                         attachedSubtitles: attachedSubtitles,
                         qualities: qualities,
                         loadingQualities: loadingQualities,
-                        player: player,
                         isThumbnailLoading: isThumbnailLoading,
                         thumbnail: thumbnail,
                         onSelect: {
@@ -424,10 +419,8 @@ struct CastSheet: View {
         selectedVideo = video
         selectedQuality = nil
         qualities = []
-        player?.pause()
-        player = nil
         thumbnail = nil
-        
+
         let headers = VideoDetector.mediaHeaders(for: video)
         isThumbnailLoading = true
         loadingQualities = true
@@ -511,7 +504,6 @@ struct VideoCard: View {
     let attachedSubtitles: Set<String>
     let qualities: [VideoQuality]
     let loadingQualities: Bool
-    let player: AVPlayer?
     let isThumbnailLoading: Bool
     let thumbnail: UIImage?
     
@@ -561,12 +553,7 @@ struct VideoCard: View {
                     .fill(Color.black.opacity(0.4))
                 
                 if isSelected {
-                    if let player = player {
-                        VideoPlayer(player: player)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .onAppear { player.play() }
-                            .onDisappear { player.pause() }
-                    } else if isThumbnailLoading {
+                    if isThumbnailLoading {
                         ProgressView().tint(Theme.primary)
                     } else if let thumbnail = thumbnail {
                         Image(uiImage: thumbnail)

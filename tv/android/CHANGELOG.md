@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.6.2] — 2026-06-30 (versionCode 215)
+
+### Added
+- **Overlay Permission Rationale**: Created a custom `OverlayPermissionDialog` explaining the requirement for "Display over other apps" permission prior to launching system settings.
+
 ## Player [0.6.1] — 2026-06-29 (versionCode 214)
 
 ### Fixed

@@ -60,6 +60,27 @@ final class BrowserStore: ObservableObject {
             if let finishedURL { self.data.recordVisit(url: finishedURL.absoluteString, title: title) }
             self.saveTabs()
         }
+        tab.onElementPicked = { [weak self] selector, host in
+            guard let self else { return }
+            ContentBlocker.addUserRule(domain: host, selector: selector)
+            Task { @MainActor in await self.recompileAndApply() }
+        }
+        tab.onResourceBlock = { [weak self] domain in
+            guard let self else { return }
+            ContentBlocker.addUserBlockedDomain(domain)
+            // Reload so the now-blocked resource request is actually dropped.
+            Task { @MainActor in await self.updateAdBlockRules() }
+        }
+        tab.onResourcesBlock = { [weak self] domains in
+            guard let self else { return }
+            domains.forEach { ContentBlocker.addUserBlockedDomain($0) }
+            Task { @MainActor in await self.updateAdBlockRules() }
+        }
+        tab.onOpenNewTab = { [weak self] url, background in
+            guard let self else { return }
+            if background { self.openInBackground(url.absoluteString) }
+            else { self.newTab(loading: url.absoluteString) }
+        }
         tabs.append(tab)
         activeID = tab.id
         applyRules(to: tab)
@@ -143,6 +164,14 @@ final class BrowserStore: ObservableObject {
         activeTab?.reload()
     }
 
+    /// Re-compiles + applies rules without reloading (used after an element-picker block,
+    /// where the element is already hidden inline on the current page).
+    @MainActor
+    func recompileAndApply() async {
+        ruleLists = await ContentBlocker.compileAll()
+        applyRulesToAllTabs()
+    }
+
     private func applyRulesToAllTabs() { tabs.forEach { applyRules(to: $0) } }
 
     private func applyRules(to tab: BrowserTab) {
@@ -153,6 +182,14 @@ final class BrowserStore: ObservableObject {
         for list in ruleLists {
             cc.add(list)
         }
+    }
+
+    /// Open a URL in a new tab without switching away from the current one.
+    func openInBackground(_ url: String) {
+        let previous = activeID
+        makeTab(url: url)
+        if let previous { activeID = previous }
+        saveTabs()
     }
 
     func select(_ id: UUID) { activeID = id; saveTabs() }
@@ -190,6 +227,18 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
             tab?.detector.ingest(body)
         case "cast":
             if let payload = body["payload"] as? [String: Any] { tab?.onPageCast?(payload) }
+        case "pickedElement":
+            if let selector = body["selector"] as? String, !selector.isEmpty {
+                tab?.onElementPicked?(selector, (body["host"] as? String) ?? "")
+            }
+        case "pickedResource":
+            if let host = body["host"] as? String, !host.isEmpty {
+                tab?.onResourceBlock?(host)
+            }
+        case "pickedResources":
+            if let hosts = body["hosts"] as? [String], !hosts.isEmpty {
+                tab?.onResourcesBlock?(hosts)
+            }
         default:
             break
         }
